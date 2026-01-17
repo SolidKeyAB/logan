@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';">
+  <title>Log Analyzer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <button id="btn-open-file" class="toolbar-btn" title="Open file">
+          <span class="icon">&#128194;</span> Open File
+        </button>
+        <div class="separator"></div>
+        <div class="search-container">
+          <input type="text" id="search-input" placeholder="Search..." class="toolbar-input">
+          <label class="checkbox-label">
+            <input type="checkbox" id="search-regex"> Regex
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="search-case"> Match Case
+          </label>
+          <button id="btn-search" class="toolbar-btn" title="Search">Search</button>
+          <button id="btn-prev-result" class="toolbar-btn small" title="Previous result" disabled>&lt;</button>
+          <span id="search-result-count" class="result-count"></span>
+          <button id="btn-next-result" class="toolbar-btn small" title="Next result" disabled>&gt;</button>
+        </div>
+        <div class="separator"></div>
+        <button id="btn-filter" class="toolbar-btn" title="Filter settings">Filter</button>
+        <button id="btn-analyze" class="toolbar-btn" title="Analyze file" disabled>Analyze</button>
+      </div>
+      <div class="toolbar-right">
+        <button id="btn-toggle-sidebar" class="toolbar-btn small" title="Toggle sidebar">&#9776;</button>
+      </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+      <!-- Sidebar -->
+      <aside id="sidebar" class="sidebar">
+        <!-- File Stats Section -->
+        <div class="sidebar-section" id="section-stats">
+          <div class="section-header" data-section="stats">
+            <span class="section-title">File Stats</span>
+            <span class="section-toggle">&#9660;</span>
+          </div>
+          <div class="section-content">
+            <div id="file-stats" class="stats-content">
+              <p class="placeholder">No file loaded</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Analysis Results Section -->
+        <div class="sidebar-section" id="section-analysis">
+          <div class="section-header" data-section="analysis">
+            <span class="section-title">Analysis</span>
+            <span class="section-toggle">&#9660;</span>
+          </div>
+          <div class="section-content">
+            <div id="analysis-results" class="analysis-content">
+              <p class="placeholder">Run analysis to see results</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Patterns Section -->
+        <div class="sidebar-section" id="section-patterns">
+          <div class="section-header" data-section="patterns">
+            <span class="section-title">Patterns</span>
+            <span class="section-toggle">&#9660;</span>
+          </div>
+          <div class="section-content">
+            <div id="patterns-list" class="patterns-content">
+              <p class="placeholder">No patterns detected</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Duplicates Section -->
+        <div class="sidebar-section" id="section-duplicates">
+          <div class="section-header" data-section="duplicates">
+            <span class="section-title">Duplicates</span>
+            <span class="section-toggle">&#9660;</span>
+          </div>
+          <div class="section-content">
+            <div id="duplicates-list" class="duplicates-content">
+              <p class="placeholder">No duplicates found</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bookmarks Section -->
+        <div class="sidebar-section" id="section-bookmarks">
+          <div class="section-header" data-section="bookmarks">
+            <span class="section-title">Bookmarks</span>
+            <span class="section-toggle">&#9660;</span>
+          </div>
+          <div class="section-content">
+            <div id="bookmarks-list" class="bookmarks-content">
+              <p class="placeholder">No bookmarks</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Highlights Section -->
+        <div class="sidebar-section" id="section-highlights">
+          <div class="section-header" data-section="highlights">
+            <span class="section-title">Highlights</span>
+            <span class="section-toggle">&#9660;</span>
+          </div>
+          <div class="section-content">
+            <div id="highlights-list" class="highlights-content">
+              <p class="placeholder">No highlight rules</p>
+            </div>
+            <button id="btn-add-highlight" class="add-btn">+ Add Highlight Rule</button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Log Viewer -->
+      <main class="log-viewer">
+        <div id="editor-container" class="editor-container">
+          <div id="welcome-message" class="welcome-message">
+            <h2>Log Analyzer</h2>
+            <p>Open a log file to get started</p>
+            <button id="btn-open-welcome" class="primary-btn">Open File</button>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <!-- Status Bar -->
+    <footer class="status-bar">
+      <div class="status-left">
+        <span id="status-file">No file</span>
+        <span class="status-separator">|</span>
+        <span id="status-lines">0 lines</span>
+        <span id="status-filtered" class="hidden">(<span id="filtered-count">0</span> filtered)</span>
+      </div>
+      <div class="status-center">
+        <div id="progress-container" class="progress-container hidden">
+          <div id="progress-bar" class="progress-bar"></div>
+          <span id="progress-text" class="progress-text">0%</span>
+        </div>
+      </div>
+      <div class="status-right">
+        <span id="status-cursor">Ln 1, Col 1</span>
+        <span class="status-separator">|</span>
+        <span id="status-size">0 B</span>
+      </div>
+    </footer>
+
+    <!-- Filter Modal -->
+    <div id="filter-modal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Filter Settings</h3>
+          <button class="modal-close" data-modal="filter-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="filter-group">
+            <label>Log Levels</label>
+            <div class="checkbox-group">
+              <label class="checkbox-label"><input type="checkbox" name="level" value="error" checked> Error</label>
+              <label class="checkbox-label"><input type="checkbox" name="level" value="warning" checked> Warning</label>
+              <label class="checkbox-label"><input type="checkbox" name="level" value="info" checked> Info</label>
+              <label class="checkbox-label"><input type="checkbox" name="level" value="debug"> Debug</label>
+              <label class="checkbox-label"><input type="checkbox" name="level" value="trace"> Trace</label>
+            </div>
+          </div>
+          <div class="filter-group">
+            <label for="include-patterns">Include Patterns (one per line)</label>
+            <textarea id="include-patterns" class="filter-textarea" placeholder="e.g., error\nfailed"></textarea>
+          </div>
+          <div class="filter-group">
+            <label for="exclude-patterns">Exclude Patterns (one per line)</label>
+            <textarea id="exclude-patterns" class="filter-textarea" placeholder="e.g., heartbeat\nhealth"></textarea>
+          </div>
+          <div class="filter-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="collapse-duplicates"> Collapse duplicate lines
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-clear-filter" class="secondary-btn">Clear Filter</button>
+          <button id="btn-apply-filter" class="primary-btn">Apply Filter</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Highlight Modal -->
+    <div id="highlight-modal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Add Highlight Rule</h3>
+          <button class="modal-close" data-modal="highlight-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="filter-group">
+            <label for="highlight-pattern">Pattern</label>
+            <input type="text" id="highlight-pattern" class="modal-input" placeholder="Enter pattern...">
+          </div>
+          <div class="filter-group">
+            <div class="checkbox-group">
+              <label class="checkbox-label"><input type="checkbox" id="highlight-regex"> Regex</label>
+              <label class="checkbox-label"><input type="checkbox" id="highlight-case"> Match Case</label>
+              <label class="checkbox-label"><input type="checkbox" id="highlight-whole-word"> Whole Word</label>
+            </div>
+          </div>
+          <div class="filter-group">
+            <label for="highlight-bg-color">Background Color</label>
+            <input type="color" id="highlight-bg-color" class="color-input" value="#ffff00">
+          </div>
+          <div class="filter-group">
+            <label for="highlight-text-color">Text Color (optional)</label>
+            <input type="color" id="highlight-text-color" class="color-input" value="#000000">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-cancel-highlight" class="secondary-btn">Cancel</button>
+          <button id="btn-save-highlight" class="primary-btn">Add Rule</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

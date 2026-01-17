@@ -1,0 +1,125 @@
+interface FileStats {
+  path: string;
+  size: number;
+  totalLines: number;
+  indexedAt: number;
+}
+
+interface FileInfo {
+  path: string;
+  size: number;
+  totalLines: number;
+}
+
+interface LogLine {
+  lineNumber: number;
+  text: string;
+  level?: string;
+  timestamp?: string;
+  filtered?: boolean;
+  duplicateCount?: number;
+}
+
+interface SearchResult {
+  lineNumber: number;
+  column: number;
+  length: number;
+  text: string;
+  lineText: string;
+}
+
+interface SearchOptions {
+  pattern: string;
+  isRegex: boolean;
+  matchCase: boolean;
+  wholeWord: boolean;
+}
+
+interface PatternGroup {
+  pattern: string;
+  template: string;
+  count: number;
+  sampleLines: number[];
+  category: 'noise' | 'error' | 'warning' | 'info' | 'debug' | 'unknown';
+}
+
+interface DuplicateGroup {
+  hash: string;
+  text: string;
+  count: number;
+  lineNumbers: number[];
+}
+
+interface AnalysisResult {
+  stats: FileStats;
+  patterns: PatternGroup[];
+  levelCounts: Record<string, number>;
+  duplicateGroups: DuplicateGroup[];
+  timeRange?: { start: string; end: string };
+}
+
+interface FilterConfig {
+  minFrequency?: number;
+  maxFrequency?: number;
+  excludePatterns: string[];
+  includePatterns: string[];
+  levels: string[];
+  collapseDuplicates: boolean;
+  timeRange?: { start: string; end: string };
+}
+
+interface Bookmark {
+  id: string;
+  lineNumber: number;
+  label?: string;
+  color?: string;
+  createdAt: number;
+}
+
+interface HighlightConfig {
+  id: string;
+  pattern: string;
+  isRegex: boolean;
+  matchCase: boolean;
+  wholeWord: boolean;
+  backgroundColor: string;
+  textColor?: string;
+  includeWhitespace: boolean;
+}
+
+interface Api {
+  // File operations
+  openFileDialog: () => Promise<string | null>;
+  openFile: (path: string) => Promise<{ success: boolean; info?: FileInfo; error?: string }>;
+  getLines: (startLine: number, count: number) => Promise<{ success: boolean; lines?: LogLine[]; error?: string }>;
+  getFileInfo: () => Promise<{ success: boolean; info?: FileInfo; error?: string }>;
+
+  // Search
+  search: (options: SearchOptions) => Promise<{ success: boolean; matches?: SearchResult[]; error?: string }>;
+  cancelSearch: () => Promise<{ success: boolean }>;
+
+  // Bookmarks
+  addBookmark: (bookmark: Bookmark) => Promise<{ success: boolean }>;
+  removeBookmark: (id: string) => Promise<{ success: boolean }>;
+  listBookmarks: () => Promise<{ success: boolean; bookmarks?: Bookmark[] }>;
+  clearBookmarks: () => Promise<{ success: boolean }>;
+
+  // Highlights
+  addHighlight: (highlight: HighlightConfig) => Promise<{ success: boolean }>;
+  removeHighlight: (id: string) => Promise<{ success: boolean }>;
+  listHighlights: () => Promise<{ success: boolean; highlights?: HighlightConfig[] }>;
+  clearHighlights: () => Promise<{ success: boolean }>;
+
+  // Analysis
+  analyzeFile: (path: string) => Promise<{ success: boolean; result?: AnalysisResult; error?: string }>;
+  applyFilter: (config: FilterConfig) => Promise<{ success: boolean; stats?: { filteredLines: number }; error?: string }>;
+
+  // Events
+  onIndexingProgress: (callback: (percent: number) => void) => () => void;
+  onSearchProgress: (callback: (data: { percent: number; matchCount: number }) => void) => () => void;
+  onAnalyzeProgress: (callback: (data: { phase: string; percent: number }) => void) => () => void;
+}
+
+interface Window {
+  api: Api;
+}
