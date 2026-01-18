@@ -7,8 +7,12 @@ dist/
 # OS files
 .DS_Store
 
-# Log files (test data)
+# Test data (may contain sensitive information)
+test/
+tests/
+test-data/
 *.log
+*.txt.gz
 
 # IDE
 .idea/
