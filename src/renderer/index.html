@@ -3,15 +3,31 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';">
-  <title>Log Analyzer</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src 'self';">
+  <title>LOGAN - Log Analyzer</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div id="app">
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+      <video id="loading-video" autoplay loop muted playsinline>
+        <source src="assets/loading.mp4" type="video/mp4">
+      </video>
+      <div class="loading-info">
+        <span id="loading-text">Loading...</span>
+        <div class="loading-progress-bar">
+          <div id="loading-progress-fill" class="loading-progress-fill"></div>
+        </div>
+        <span id="loading-percent">0%</span>
+      </div>
+    </div>
+
     <!-- Toolbar -->
     <div class="toolbar">
       <div class="toolbar-left">
+        <img src="assets/logo.png" alt="LOGAN" class="toolbar-logo" title="LOGAN - Log Analyzer">
+        <div class="separator"></div>
         <button id="btn-open-file" class="toolbar-btn" title="Open file">
           <span class="icon">&#128194;</span> Open File
         </button>
@@ -37,6 +53,12 @@
       <div class="toolbar-right">
         <button id="btn-toggle-sidebar" class="toolbar-btn small" title="Toggle sidebar">&#9776;</button>
       </div>
+    </div>
+
+    <!-- Tab Bar -->
+    <div id="tab-bar" class="tab-bar hidden">
+      <div id="tabs-container" class="tabs-container"></div>
+      <button id="btn-new-tab" class="tab-new-btn" title="Open new file">+</button>
     </div>
 
     <!-- Main Content -->
@@ -127,8 +149,9 @@
       <main class="log-viewer">
         <div id="editor-container" class="editor-container">
           <div id="welcome-message" class="welcome-message">
-            <h2>Log Analyzer</h2>
-            <p>Open a log file to get started</p>
+            <img src="assets/logo.png" alt="LOGAN" class="welcome-logo">
+            <h2>LOGAN</h2>
+            <p>Log Analyzer - Open a log file to get started</p>
             <button id="btn-open-welcome" class="primary-btn">Open File</button>
           </div>
         </div>

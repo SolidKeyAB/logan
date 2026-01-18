@@ -480,11 +480,16 @@ body {
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
   font-size: 13px;
   line-height: 1.5;
+  /* Optimize scroll performance */
+  overflow-anchor: none; /* Prevent scroll anchoring issues */
+  overscroll-behavior: contain; /* Prevent scroll chaining */
+  scroll-behavior: auto; /* Use instant scrolling for programmatic scrolls */
 }
 
 .log-content {
   position: relative;
-  min-width: fit-content;
+  min-width: 100%;
+  /* Don't use contain: layout as it breaks horizontal scroll */
 }
 
 .log-line {
@@ -492,6 +497,11 @@ body {
   padding: 0 10px;
   white-space: pre;
   min-height: 20px;
+  /* GPU acceleration hints */
+  will-change: transform;
+  contain: layout style paint;
+  /* Prevent layout thrashing */
+  box-sizing: border-box;
 }
 
 .log-line:hover {
@@ -952,4 +962,198 @@ body {
   right: 0;
   height: 2px;
   background-color: rgba(255, 255, 0, 0.8);
+}
+
+/* Tab Bar */
+.tab-bar {
+  display: flex;
+  align-items: center;
+  background-color: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+  height: 35px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.tab-bar.hidden {
+  display: none;
+}
+
+.tabs-container {
+  display: flex;
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  height: 100%;
+}
+
+.tabs-container::-webkit-scrollbar {
+  height: 4px;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 100%;
+  background-color: var(--bg-tertiary);
+  border-right: 1px solid var(--border-color);
+  cursor: pointer;
+  min-width: 120px;
+  max-width: 200px;
+  flex-shrink: 0;
+  transition: background-color 0.15s;
+}
+
+.tab:hover {
+  background-color: var(--bg-hover);
+}
+
+.tab.active {
+  background-color: var(--bg-primary);
+  border-bottom: 2px solid var(--accent-color);
+}
+
+.tab-title {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab.active .tab-title {
+  color: var(--text-primary);
+}
+
+.tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  opacity: 0;
+  transition: opacity 0.15s, background-color 0.15s;
+}
+
+.tab:hover .tab-close,
+.tab.active .tab-close {
+  opacity: 1;
+}
+
+.tab-close:hover {
+  background-color: rgba(241, 76, 76, 0.3);
+  color: var(--error-color);
+}
+
+.tab-new-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: 0 4px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 18px;
+  border-radius: 4px;
+}
+
+.tab-new-btn:hover {
+  background-color: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Tab indicator for split files */
+.tab-split-indicator {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-left: -4px;
+}
+
+/* Toolbar Logo */
+.toolbar-logo {
+  height: 28px;
+  width: auto;
+  border-radius: 4px;
+  cursor: default;
+}
+
+/* Welcome Logo */
+.welcome-logo {
+  width: 150px;
+  height: auto;
+  margin-bottom: 16px;
+  border-radius: 12px;
+}
+
+/* Loading Overlay */
+.loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(30, 30, 30, 0.95);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  z-index: 2000;
+  gap: 20px;
+}
+
+.loading-overlay.hidden {
+  display: none;
+}
+
+.loading-overlay video {
+  width: 200px;
+  height: auto;
+  border-radius: 16px;
+}
+
+.loading-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 250px;
+}
+
+#loading-text {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.loading-progress-bar {
+  width: 100%;
+  height: 6px;
+  background-color: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.loading-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #3a7bd5, #00d2ff);
+  border-radius: 3px;
+  transition: width 0.2s ease;
+}
+
+#loading-percent {
+  color: var(--text-secondary);
+  font-size: 12px;
 }

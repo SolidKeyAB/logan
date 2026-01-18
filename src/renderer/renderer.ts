@@ -81,8 +81,28 @@ interface HighlightConfig {
   highlightAll: boolean; // true = all occurrences, false = first only per line
 }
 
-// Application State
+// Tab State - stores per-file state for inactive tabs
+interface TabState {
+  id: string;
+  filePath: string;
+  fileStats: FileStats | null;
+  totalLines: number;
+  scrollTop: number;
+  scrollLeft: number;
+  selectedLine: number | null;
+  selectionStart: number | null;
+  selectionEnd: number | null;
+  searchResults: SearchResult[];
+  currentSearchIndex: number;
+  bookmarks: Bookmark[];
+  cachedLines: Map<number, LogLine>;
+  splitFiles: string[];
+  currentSplitIndex: number;
+}
+
+// Application State - maintains current file state for backward compatibility
 interface AppState {
+  // Current file state (active tab)
   filePath: string | null;
   fileStats: FileStats | null;
   analysisResult: AnalysisResult | null;
@@ -98,9 +118,11 @@ interface AppState {
   selectedLine: number | null;
   selectionStart: number | null;
   selectionEnd: number | null;
-  // Split file navigation
   splitFiles: string[];
   currentSplitIndex: number;
+  // Tab management
+  tabs: TabState[];
+  activeTabId: string | null;
 }
 
 const state: AppState = {
@@ -121,12 +143,24 @@ const state: AppState = {
   selectionEnd: null,
   splitFiles: [],
   currentSplitIndex: -1,
+  tabs: [],
+  activeTabId: null,
 };
 
 // Constants
 const LINE_HEIGHT = 20;
 const BUFFER_LINES = 50;
 const MAX_SCROLL_HEIGHT = 10000000; // 10 million pixels - safe for all browsers
+const CACHE_SIZE = 5000; // Max lines to keep in cache
+const SCROLL_DEBOUNCE_MS = 16; // ~60fps
+const PREFETCH_LINES = 100; // Lines to prefetch ahead of scroll direction
+
+// Scroll state for optimizations
+let lastScrollTop = 0;
+let scrollDirection: 'up' | 'down' = 'down';
+let scrollRAF: number | null = null;
+let isScrolling = false;
+let scrollEndTimer: ReturnType<typeof setTimeout> | null = null;
 
 // DOM Elements
 const elements = {
@@ -185,6 +219,16 @@ const elements = {
   highlightTextColor: document.getElementById('highlight-text-color') as HTMLInputElement,
   btnSaveHighlight: document.getElementById('btn-save-highlight') as HTMLButtonElement,
   btnCancelHighlight: document.getElementById('btn-cancel-highlight') as HTMLButtonElement,
+  // Tab bar
+  tabBar: document.getElementById('tab-bar') as HTMLDivElement,
+  tabsContainer: document.getElementById('tabs-container') as HTMLDivElement,
+  btnNewTab: document.getElementById('btn-new-tab') as HTMLButtonElement,
+  // Loading overlay
+  loadingOverlay: document.getElementById('loading-overlay') as HTMLDivElement,
+  loadingVideo: document.getElementById('loading-video') as HTMLVideoElement,
+  loadingText: document.getElementById('loading-text') as HTMLSpanElement,
+  loadingProgressFill: document.getElementById('loading-progress-fill') as HTMLDivElement,
+  loadingPercent: document.getElementById('loading-percent') as HTMLSpanElement,
 };
 
 // Virtual Log Viewer
@@ -194,9 +238,120 @@ let logViewerWrapper: HTMLDivElement | null = null;
 let minimapElement: HTMLDivElement | null = null;
 let minimapContentElement: HTMLDivElement | null = null;
 let minimapViewportElement: HTMLDivElement | null = null;
-let cachedLines: Map<number, LogLine> = new Map();
 let minimapData: Array<{ level: string | undefined }> = [];
 const MINIMAP_SAMPLE_RATE = 1000; // Sample every N lines for minimap
+
+// LRU Cache for lines - better memory management
+class LRUCache<K, V> {
+  private cache = new Map<K, V>();
+  private maxSize: number;
+
+  constructor(maxSize: number) {
+    this.maxSize = maxSize;
+  }
+
+  get(key: K): V | undefined {
+    const value = this.cache.get(key);
+    if (value !== undefined) {
+      // Move to end (most recently used)
+      this.cache.delete(key);
+      this.cache.set(key, value);
+    }
+    return value;
+  }
+
+  set(key: K, value: V): void {
+    if (this.cache.has(key)) {
+      this.cache.delete(key);
+    } else if (this.cache.size >= this.maxSize) {
+      // Remove oldest (first item)
+      const firstKey = this.cache.keys().next().value;
+      if (firstKey !== undefined) {
+        this.cache.delete(firstKey);
+      }
+    }
+    this.cache.set(key, value);
+  }
+
+  has(key: K): boolean {
+    return this.cache.has(key);
+  }
+
+  clear(): void {
+    this.cache.clear();
+  }
+
+  size(): number {
+    return this.cache.size;
+  }
+
+  // Get range of keys that exist in cache
+  getExistingRange(start: number, end: number): number[] {
+    const existing: number[] = [];
+    for (let i = start; i <= end; i++) {
+      if (this.cache.has(i as unknown as K)) {
+        existing.push(i);
+      }
+    }
+    return existing;
+  }
+
+  forEach(fn: (value: V, key: K) => void): void {
+    this.cache.forEach(fn);
+  }
+
+  // Return a copy of internal map for serialization
+  toMap(): Map<K, V> {
+    return new Map(this.cache);
+  }
+
+  // Create from existing map
+  static fromMap<K, V>(map: Map<K, V>, maxSize: number): LRUCache<K, V> {
+    const cache = new LRUCache<K, V>(maxSize);
+    map.forEach((value, key) => cache.set(key, value));
+    return cache;
+  }
+}
+
+let cachedLines = new LRUCache<number, LogLine>(CACHE_SIZE);
+
+// DOM Element Pool for recycling
+class ElementPool {
+  private pool: HTMLDivElement[] = [];
+  private inUse = new Set<HTMLDivElement>();
+
+  acquire(): HTMLDivElement {
+    let element = this.pool.pop();
+    if (!element) {
+      element = document.createElement('div');
+      element.className = 'log-line';
+    }
+    this.inUse.add(element);
+    return element;
+  }
+
+  release(element: HTMLDivElement): void {
+    if (this.inUse.has(element)) {
+      this.inUse.delete(element);
+      element.innerHTML = '';
+      element.className = 'log-line';
+      element.removeAttribute('style');
+      this.pool.push(element);
+    }
+  }
+
+  releaseAll(): void {
+    this.inUse.forEach(el => {
+      el.innerHTML = '';
+      el.className = 'log-line';
+      el.removeAttribute('style');
+      this.pool.push(el);
+    });
+    this.inUse.clear();
+  }
+}
+
+const lineElementPool = new ElementPool();
 
 function createLogViewer(): void {
   // Remove existing wrapper if any
@@ -237,12 +392,26 @@ function createLogViewer(): void {
   logViewerWrapper.appendChild(minimapElement);
   elements.editorContainer.appendChild(logViewerWrapper);
 
-  // Event listeners
-  logViewerElement.addEventListener('scroll', handleScroll);
+  // Event listeners with passive flag for better scroll performance
+  logViewerElement.addEventListener('scroll', handleScroll, { passive: true });
   logViewerElement.addEventListener('click', handleLogClick);
   logViewerElement.addEventListener('contextmenu', handleContextMenu);
   minimapElement.addEventListener('click', handleMinimapClick);
   minimapElement.addEventListener('mousedown', handleMinimapDrag);
+
+  // Use ResizeObserver for responsive updates
+  const resizeObserver = new ResizeObserver(() => {
+    if (state.totalLines > 0) {
+      // Recalculate visible range on resize
+      const containerHeight = logViewerElement!.clientHeight;
+      const visibleLines = Math.ceil(containerHeight / LINE_HEIGHT);
+      const startLine = scrollTopToLine(logViewerElement!.scrollTop);
+      state.visibleStartLine = Math.max(0, startLine - BUFFER_LINES);
+      state.visibleEndLine = Math.min(startLine + visibleLines + BUFFER_LINES, state.totalLines - 1);
+      loadVisibleLines();
+    }
+  });
+  resizeObserver.observe(logViewerElement);
 }
 
 function getVirtualHeight(): number {
@@ -283,24 +452,63 @@ function lineToScrollTop(lineNumber: number): number {
 function handleScroll(): void {
   if (!logViewerElement || !logContentElement) return;
 
+  // Cancel any pending RAF
+  if (scrollRAF !== null) {
+    cancelAnimationFrame(scrollRAF);
+  }
+
+  // Use RAF for smooth 60fps scrolling
+  scrollRAF = requestAnimationFrame(() => {
+    scrollRAF = null;
+    performScrollUpdate();
+  });
+}
+
+function performScrollUpdate(): void {
+  if (!logViewerElement || !logContentElement) return;
+
   const scrollTop = logViewerElement.scrollTop;
   const containerHeight = logViewerElement.clientHeight;
+
+  // Track scroll direction for predictive prefetching
+  scrollDirection = scrollTop > lastScrollTop ? 'down' : 'up';
+  lastScrollTop = scrollTop;
 
   const startLine = scrollTopToLine(scrollTop);
   const visibleLines = Math.ceil(containerHeight / LINE_HEIGHT);
   const endLine = startLine + visibleLines;
 
-  const bufferStart = Math.max(0, startLine - BUFFER_LINES);
-  const bufferEnd = Math.min(getTotalLines() - 1, endLine + BUFFER_LINES);
+  // Add extra buffer in scroll direction (predictive prefetching)
+  const prefetchUp = scrollDirection === 'up' ? PREFETCH_LINES : BUFFER_LINES;
+  const prefetchDown = scrollDirection === 'down' ? PREFETCH_LINES : BUFFER_LINES;
 
-  if (bufferStart !== state.visibleStartLine || bufferEnd !== state.visibleEndLine) {
+  const bufferStart = Math.max(0, startLine - prefetchUp);
+  const bufferEnd = Math.min(getTotalLines() - 1, endLine + prefetchDown);
+
+  // Only update if range changed significantly (reduces unnecessary loads)
+  const rangeChanged = Math.abs(bufferStart - state.visibleStartLine) > 10 ||
+                       Math.abs(bufferEnd - state.visibleEndLine) > 10;
+
+  if (rangeChanged) {
     state.visibleStartLine = bufferStart;
     state.visibleEndLine = bufferEnd;
     loadVisibleLines();
+  } else {
+    // Just re-render with existing cache (fast path)
+    renderVisibleLines();
   }
 
   // Update minimap viewport
   updateMinimapViewport();
+
+  // Mark scrolling state for UI optimizations
+  isScrolling = true;
+  if (scrollEndTimer) clearTimeout(scrollEndTimer);
+  scrollEndTimer = setTimeout(() => {
+    isScrolling = false;
+    // Do a final render when scrolling stops for any missed updates
+    renderVisibleLines();
+  }, 150);
 }
 
 function getTotalLines(): number {
@@ -315,77 +523,181 @@ async function loadVisibleLines(): Promise<void> {
   const totalLines = getTotalLines();
   const start = state.visibleStartLine;
   const end = Math.min(state.visibleEndLine, totalLines - 1);
-  const count = end - start + 1;
+
+  // Find gaps in cache - only load what we don't have (incremental loading)
+  const gaps = findCacheGaps(start, end);
+
+  if (gaps.length === 0) {
+    // All lines already cached, just render
+    renderVisibleLines();
+    return;
+  }
 
   try {
-    const result = await window.api.getLines(start, count);
-
-    if (result.success && result.lines) {
-      for (const line of result.lines) {
-        cachedLines.set(line.lineNumber, line);
+    // Load all gaps in parallel for faster loading
+    const loadPromises = gaps.map(async (gap) => {
+      const count = gap.end - gap.start + 1;
+      const result = await window.api.getLines(gap.start, count);
+      if (result.success && result.lines) {
+        for (const line of result.lines) {
+          cachedLines.set(line.lineNumber, line);
+        }
       }
-      renderVisibleLines();
-    }
+    });
+
+    await Promise.all(loadPromises);
+    renderVisibleLines();
   } catch (error) {
     console.error('Failed to load lines:', error);
   }
+}
+
+// Find gaps in cache that need to be loaded
+function findCacheGaps(start: number, end: number): Array<{ start: number; end: number }> {
+  const gaps: Array<{ start: number; end: number }> = [];
+  let gapStart: number | null = null;
+
+  for (let i = start; i <= end; i++) {
+    if (!cachedLines.has(i)) {
+      if (gapStart === null) {
+        gapStart = i;
+      }
+    } else {
+      if (gapStart !== null) {
+        gaps.push({ start: gapStart, end: i - 1 });
+        gapStart = null;
+      }
+    }
+  }
+
+  // Close final gap if open
+  if (gapStart !== null) {
+    gaps.push({ start: gapStart, end });
+  }
+
+  // Merge small gaps to reduce API calls (batch optimization)
+  return mergeSmallGaps(gaps, 50);
+}
+
+// Merge gaps that are close together to reduce API calls
+function mergeSmallGaps(gaps: Array<{ start: number; end: number }>, threshold: number): Array<{ start: number; end: number }> {
+  if (gaps.length <= 1) return gaps;
+
+  const merged: Array<{ start: number; end: number }> = [gaps[0]];
+
+  for (let i = 1; i < gaps.length; i++) {
+    const last = merged[merged.length - 1];
+    const current = gaps[i];
+
+    // If gap between them is small, merge
+    if (current.start - last.end <= threshold) {
+      last.end = current.end;
+    } else {
+      merged.push(current);
+    }
+  }
+
+  return merged;
 }
 
 function renderVisibleLines(): void {
   if (!logContentElement || !logViewerElement) return;
 
   const totalLines = getTotalLines();
+  if (totalLines === 0) return;
+
   const virtualHeight = getVirtualHeight();
 
   // Preserve horizontal scroll position
   const scrollLeft = logViewerElement.scrollLeft;
 
-  logContentElement.style.height = `${virtualHeight}px`;
-  logContentElement.style.position = 'relative';
+  // Release all pooled elements back
+  lineElementPool.releaseAll();
 
-  // Clear existing lines
-  logContentElement.innerHTML = '';
+  // Use DocumentFragment for batch DOM insertion (reduces reflows)
+  const fragment = document.createDocumentFragment();
 
   const scrollTop = logViewerElement.scrollTop;
-  const containerHeight = logViewerElement.clientHeight;
 
-  // Use scroll mapping for large files
-  const centerLine = scrollTopToLine(scrollTop + containerHeight / 2);
-  const visibleCount = Math.ceil(containerHeight / LINE_HEIGHT);
-  const startLine = Math.max(0, centerLine - Math.floor(visibleCount / 2) - BUFFER_LINES);
-  const endLine = Math.min(totalLines - 1, startLine + visibleCount + BUFFER_LINES * 2);
+  // Calculate visible range for rendering
+  const startLine = state.visibleStartLine;
+  const endLine = state.visibleEndLine;
 
-  // Calculate the visual offset for positioning lines
-  // For scaled scroll, we position lines relative to scroll position
+  // For scaled scroll positioning
   const usingScaled = isUsingScaledScroll();
+  const firstVisibleLine = scrollTopToLine(scrollTop);
 
+  // Track max content width for horizontal scrolling
+  let maxContentWidth = 0;
+
+  // Batch create all line elements
   for (let i = startLine; i <= endLine; i++) {
     const line = cachedLines.get(i);
     if (line) {
-      const lineElement = createLineElement(line);
-      lineElement.style.position = 'absolute';
+      const lineElement = createLineElementPooled(line);
 
+      // Calculate position
+      let top: number;
       if (usingScaled) {
-        // For scaled scroll, position lines relative to the scroll position
-        // startLine corresponds to scrollTop, so offset from there
-        const lineOffset = i - startLine;
-        const baseTop = scrollTop + lineOffset * LINE_HEIGHT;
-        lineElement.style.top = `${baseTop}px`;
+        const lineOffset = i - firstVisibleLine;
+        top = scrollTop + lineOffset * LINE_HEIGHT;
       } else {
-        // Normal positioning for small files
-        lineElement.style.top = `${i * LINE_HEIGHT}px`;
+        top = i * LINE_HEIGHT;
       }
 
-      lineElement.style.left = '0';
-      lineElement.style.right = '0';
-      logContentElement.appendChild(lineElement);
+      // Use transform for GPU-accelerated positioning (smoother scrolling)
+      // Note: no right:0 to allow horizontal scroll expansion
+      lineElement.style.cssText = `position:absolute;top:0;left:0;transform:translateY(${top}px);will-change:transform;white-space:pre;`;
+
+      fragment.appendChild(lineElement);
+
+      // Estimate width based on text length (rough calculation for performance)
+      // 8px per character is a reasonable estimate for monospace font at 13px
+      const estimatedWidth = 70 + (line.text.length * 8); // 70 = line number width + padding
+      if (estimatedWidth > maxContentWidth) {
+        maxContentWidth = estimatedWidth;
+      }
     }
   }
+
+  // Single DOM operation to replace all content
+  logContentElement.innerHTML = '';
+  logContentElement.appendChild(fragment);
+
+  // Set content size for scrolling
+  logContentElement.style.height = `${virtualHeight}px`;
+  logContentElement.style.minWidth = `${Math.max(maxContentWidth, logViewerElement.clientWidth)}px`;
 
   // Restore horizontal scroll position
   if (scrollLeft > 0) {
     logViewerElement.scrollLeft = scrollLeft;
   }
+}
+
+// Pooled line element creation - reuses DOM elements
+function createLineElementPooled(line: LogLine): HTMLDivElement {
+  const div = lineElementPool.acquire();
+  div.dataset.lineNumber = String(line.lineNumber);
+
+  // Build class list
+  let className = 'log-line';
+  if (line.level) className += ` level-${line.level}`;
+  if (state.selectedLine === line.lineNumber) className += ' selected';
+  if (state.selectionStart !== null && state.selectionEnd !== null &&
+      line.lineNumber >= state.selectionStart && line.lineNumber <= state.selectionEnd) {
+    className += ' range-selected';
+  }
+  if (state.bookmarks.some(b => b.lineNumber === line.lineNumber)) {
+    className += ' bookmarked';
+  }
+  div.className = className;
+
+  // Create content using innerHTML for speed (single parse)
+  const lineNumHtml = `<span class="line-number">${line.lineNumber + 1}</span>`;
+  const contentHtml = `<span class="line-content">${applyHighlights(line.text)}</span>`;
+  div.innerHTML = lineNumHtml + contentHtml;
+
+  return div;
 }
 
 function createLineElement(line: LogLine): HTMLDivElement {
@@ -515,12 +827,97 @@ function applyHighlights(text: string): string {
 }
 
 function escapeHtml(text: string): string {
-  return text
+  return sanitizeText(text)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+// Check if character is normal printable text
+function isNormalChar(code: number): boolean {
+  const isPrintableAscii = code >= 32 && code <= 126;
+  const isTab = code === 9;
+  const isNewline = code === 10 || code === 13;
+  const isLatinExtended = code >= 160 && code <= 255;
+  return isPrintableAscii || isTab || isNewline || isLatinExtended;
+}
+
+// Sanitize text by detecting and replacing binary/corrupted sections
+function sanitizeText(text: string): string {
+  // Safety limit for very long lines (corrupted files can have huge "lines")
+  const MAX_LINE_LENGTH = 5000;
+  const MAX_DISPLAY_LENGTH = 2000;
+
+  if (text.length === 0) return text;
+
+  // Truncate extremely long lines
+  if (text.length > MAX_LINE_LENGTH) {
+    text = text.substring(0, MAX_LINE_LENGTH);
+  }
+
+  // First, count non-printable characters to detect if this is mostly binary
+  let nonPrintableCount = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (!isNormalChar(text.charCodeAt(i))) {
+      nonPrintableCount++;
+    }
+  }
+
+  const binaryRatio = nonPrintableCount / text.length;
+
+  // If very few non-printable chars (< 2%), just return as-is
+  if (binaryRatio < 0.02) {
+    return text.length > MAX_DISPLAY_LENGTH
+      ? text.substring(0, MAX_DISPLAY_LENGTH) + '... [truncated]'
+      : text;
+  }
+
+  // If more than 15% non-printable, this line likely contains binary/corrupted data
+  if (binaryRatio > 0.15) {
+    // Find where the good text ends and binary begins
+    let lastGoodIndex = 0;
+    let badCount = 0;
+
+    for (let i = 0; i < text.length; i++) {
+      if (!isNormalChar(text.charCodeAt(i))) {
+        badCount++;
+        // If we've seen 3+ bad chars in recent stretch, binary starts here
+        if (badCount >= 3) {
+          lastGoodIndex = Math.max(0, i - badCount);
+          break;
+        }
+      } else {
+        badCount = 0;
+        lastGoodIndex = i + 1;
+      }
+    }
+
+    const goodPart = text.substring(0, lastGoodIndex);
+    if (goodPart.length > 0) {
+      return goodPart + ' [binary/corrupted data - ' + (text.length - lastGoodIndex) + ' bytes]';
+    } else {
+      return '[binary/corrupted data - ' + text.length + ' bytes]';
+    }
+  }
+
+  // Low ratio of bad chars - just replace them with dots
+  let result = '';
+  for (let i = 0; i < text.length && result.length < MAX_DISPLAY_LENGTH; i++) {
+    const code = text.charCodeAt(i);
+    if (isNormalChar(code)) {
+      result += text[i];
+    } else {
+      result += '\u00B7';
+    }
+  }
+
+  if (text.length > MAX_DISPLAY_LENGTH) {
+    result += '... [truncated]';
+  }
+
+  return result;
 }
 
 function escapeRegex(str: string): string {
@@ -566,7 +963,7 @@ function handleMinimapClick(event: MouseEvent): void {
 
 let isDraggingMinimap = false;
 
-function handleMinimapDrag(event: MouseEvent): void {
+function handleMinimapDrag(_event: MouseEvent): void {
   if (!logViewerElement || !minimapElement) return;
 
   isDraggingMinimap = true;
@@ -606,48 +1003,73 @@ async function buildMinimap(onProgress?: (percent: number) => void): Promise<voi
   minimapContentElement.innerHTML = '';
 
   const minimapHeight = minimapElement.clientHeight;
-  const maxLines = Math.min(totalLines, minimapHeight * 2); // Max 2 lines per pixel
-  const sampleRate = Math.max(1, Math.floor(totalLines / maxLines));
+  // Limit to reasonable number of samples for performance
+  const maxSamples = Math.min(300, minimapHeight);
+  const sampleRate = Math.max(1, Math.floor(totalLines / maxSamples));
 
   // Sample lines for minimap
   const samplesToFetch: number[] = [];
   for (let i = 0; i < totalLines; i += sampleRate) {
     samplesToFetch.push(i);
-    if (samplesToFetch.length >= 500) break; // Limit samples
+    if (samplesToFetch.length >= maxSamples) break;
   }
 
-  // Fetch samples in batches
-  const batchSize = 100;
-  const totalBatches = Math.ceil(samplesToFetch.length / batchSize);
-
-  for (let i = 0; i < samplesToFetch.length; i += batchSize) {
-    const batch = samplesToFetch.slice(i, i + batchSize);
-    const start = batch[0];
-    const end = batch[batch.length - 1];
-
-    try {
-      const count = end - start + 1;
-      const result = await window.api.getLines(start, count);
-
-      if (result.success && result.lines) {
-        for (const line of result.lines) {
-          if (batch.includes(line.lineNumber)) {
-            minimapData.push({ level: line.level });
-          }
-        }
-      }
-
-      // Report progress
-      if (onProgress) {
-        const batchIndex = Math.floor(i / batchSize) + 1;
-        const percent = Math.round((batchIndex / totalBatches) * 100);
-        onProgress(percent);
-      }
-    } catch (error) {
-      console.error('Failed to build minimap:', error);
+  // First, check what we already have in cache
+  for (const lineNum of samplesToFetch) {
+    const cached = cachedLines.get(lineNum);
+    if (cached) {
+      minimapData.push({ level: cached.level });
+    } else {
+      minimapData.push({ level: undefined });
     }
   }
 
+  // Report initial progress
+  if (onProgress) onProgress(30);
+
+  // Fetch missing samples in small batches (fetch only 1 line per sample)
+  const missingIndices: number[] = [];
+  for (let i = 0; i < samplesToFetch.length; i++) {
+    if (minimapData[i].level === undefined) {
+      missingIndices.push(i);
+    }
+  }
+
+  if (missingIndices.length > 0) {
+    // Batch fetch: group consecutive or nearby samples
+    const FETCH_BATCH = 50; // Fetch this many individual lines at a time
+    const totalMissingBatches = Math.ceil(missingIndices.length / FETCH_BATCH);
+
+    for (let b = 0; b < missingIndices.length; b += FETCH_BATCH) {
+      const batchIndices = missingIndices.slice(b, b + FETCH_BATCH);
+
+      // Fetch each sampled line individually (just 1 line each)
+      const fetchPromises = batchIndices.map(async (idx) => {
+        const lineNum = samplesToFetch[idx];
+        try {
+          const result = await window.api.getLines(lineNum, 1);
+          if (result.success && result.lines && result.lines.length > 0) {
+            const line = result.lines[0];
+            minimapData[idx] = { level: line.level };
+            cachedLines.set(lineNum, line);
+          }
+        } catch {
+          // Ignore fetch errors for minimap
+        }
+      });
+
+      await Promise.all(fetchPromises);
+
+      // Report progress
+      if (onProgress) {
+        const batchNum = Math.floor(b / FETCH_BATCH) + 1;
+        const percent = 30 + Math.round((batchNum / totalMissingBatches) * 70);
+        onProgress(Math.min(percent, 100));
+      }
+    }
+  }
+
+  if (onProgress) onProgress(100);
   renderMinimap();
 }
 
@@ -926,18 +1348,40 @@ async function openFile(): Promise<void> {
   await loadFile(filePath);
 }
 
-async function loadFile(filePath: string): Promise<void> {
+async function loadFile(filePath: string, createNewTab: boolean = true): Promise<void> {
   showProgress('Indexing file...');
 
   const unsubscribe = window.api.onIndexingProgress((progress) => {
     updateProgress(progress);
-    elements.progressText.textContent = `Indexing file... ${progress}%`;
+    updateProgressText(`Indexing file... ${progress}%`);
   });
 
   try {
     const result = await window.api.openFile(filePath);
 
     if (result.success && result.info) {
+      // Check if file is already open in a tab
+      const existingTab = findTabByFilePath(filePath);
+      if (existingTab && existingTab.id !== state.activeTabId) {
+        // Switch to existing tab instead of opening new one
+        unsubscribe();
+        hideProgress();
+        await switchToTab(existingTab.id);
+        return;
+      }
+
+      // Save current tab state before switching (if there's an active tab)
+      if (state.activeTabId && createNewTab) {
+        saveCurrentTabState();
+      }
+
+      // Create new tab or update current one
+      if (createNewTab && !existingTab) {
+        const newTab = createTab(filePath);
+        state.tabs.push(newTab);
+        state.activeTabId = newTab.id;
+      }
+
       state.filePath = filePath;
       state.fileStats = {
         path: result.info.path,
@@ -967,11 +1411,33 @@ async function loadFile(filePath: string): Promise<void> {
         state.currentSplitIndex = -1;
       }
 
+      // Update the current tab with the loaded data
+      if (state.activeTabId) {
+        const currentTab = state.tabs.find(t => t.id === state.activeTabId);
+        if (currentTab) {
+          currentTab.filePath = filePath;
+          currentTab.fileStats = state.fileStats;
+          currentTab.totalLines = state.totalLines;
+          currentTab.splitFiles = state.splitFiles;
+          currentTab.currentSplitIndex = state.currentSplitIndex;
+        }
+      }
+
       updateFileStatsUI();
       createLogViewer();
+      renderTabBar();
 
       // Wait for DOM layout before loading lines
       await new Promise(resolve => requestAnimationFrame(resolve));
+
+      // Initialize visible range based on container size
+      if (logViewerElement) {
+        const containerHeight = logViewerElement.clientHeight;
+        const visibleLines = Math.ceil(containerHeight / LINE_HEIGHT);
+        state.visibleStartLine = 0;
+        state.visibleEndLine = Math.min(visibleLines + BUFFER_LINES * 2, state.totalLines - 1);
+      }
+
       await loadVisibleLines();
 
       elements.btnAnalyze.disabled = true; // Analysis not implemented yet
@@ -984,7 +1450,7 @@ async function loadFile(filePath: string): Promise<void> {
       showProgress('Building minimap...');
       await buildMinimap((percent) => {
         updateProgress(percent);
-        elements.progressText.textContent = `Building minimap... ${percent}%`;
+        updateProgressText(`Building minimap... ${percent}%`);
       });
     } else {
       alert(`Failed to open file: ${result.error}`);
@@ -1226,7 +1692,8 @@ async function loadNextSplitFile(): Promise<void> {
   if (state.currentSplitIndex >= state.splitFiles.length - 1) return;
 
   state.currentSplitIndex++;
-  await loadFile(state.splitFiles[state.currentSplitIndex]);
+  // Don't create a new tab when navigating split files - update current tab
+  await loadFile(state.splitFiles[state.currentSplitIndex], false);
 }
 
 async function loadPreviousSplitFile(): Promise<void> {
@@ -1234,7 +1701,8 @@ async function loadPreviousSplitFile(): Promise<void> {
   if (state.currentSplitIndex <= 0) return;
 
   state.currentSplitIndex--;
-  await loadFile(state.splitFiles[state.currentSplitIndex]);
+  // Don't create a new tab when navigating split files - update current tab
+  await loadFile(state.splitFiles[state.currentSplitIndex], false);
 }
 
 // Bookmarks
@@ -1620,18 +2088,45 @@ function updateSelectionStatus(): void {
 }
 
 function showProgress(text: string): void {
+  // Show both status bar progress and loading overlay
   elements.progressContainer.classList.remove('hidden');
   elements.progressText.textContent = text;
   elements.progressBar.style.setProperty('--progress', '0%');
+
+  // Show loading overlay with video
+  elements.loadingOverlay.classList.remove('hidden');
+  elements.loadingText.textContent = text;
+  elements.loadingProgressFill.style.width = '0%';
+  elements.loadingPercent.textContent = '0%';
+
+  // Play video
+  elements.loadingVideo.play().catch(() => {
+    // Ignore autoplay errors
+  });
 }
 
 function updateProgress(percent: number): void {
+  // Update status bar progress
   elements.progressBar.style.setProperty('--progress', `${percent}%`);
   elements.progressText.textContent = `${percent}%`;
+
+  // Update loading overlay
+  elements.loadingProgressFill.style.width = `${percent}%`;
+  elements.loadingPercent.textContent = `${percent}%`;
+}
+
+function updateProgressText(text: string): void {
+  elements.progressText.textContent = text;
+  elements.loadingText.textContent = text;
 }
 
 function hideProgress(): void {
+  // Hide status bar progress
   elements.progressContainer.classList.add('hidden');
+
+  // Hide loading overlay
+  elements.loadingOverlay.classList.add('hidden');
+  elements.loadingVideo.pause();
 }
 
 // Utility functions
@@ -1787,6 +2282,41 @@ function setupKeyboardShortcuts(): void {
         saveSelectedLinesToFile();
       }
     }
+
+    // Tab navigation
+    // Ctrl/Cmd + Tab: Next tab
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Tab' && !e.shiftKey) {
+      e.preventDefault();
+      if (state.tabs.length > 1 && state.activeTabId) {
+        const currentIndex = state.tabs.findIndex(t => t.id === state.activeTabId);
+        const nextIndex = (currentIndex + 1) % state.tabs.length;
+        switchToTab(state.tabs[nextIndex].id);
+      }
+    }
+
+    // Ctrl/Cmd + Shift + Tab: Previous tab
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Tab' && e.shiftKey) {
+      e.preventDefault();
+      if (state.tabs.length > 1 && state.activeTabId) {
+        const currentIndex = state.tabs.findIndex(t => t.id === state.activeTabId);
+        const prevIndex = (currentIndex - 1 + state.tabs.length) % state.tabs.length;
+        switchToTab(state.tabs[prevIndex].id);
+      }
+    }
+
+    // Ctrl/Cmd + W: Close current tab
+    if ((e.ctrlKey || e.metaKey) && e.key === 'w') {
+      e.preventDefault();
+      if (state.activeTabId) {
+        closeTab(state.activeTabId);
+      }
+    }
+
+    // Ctrl/Cmd + T: Open new file (new tab)
+    if ((e.ctrlKey || e.metaKey) && e.key === 't') {
+      e.preventDefault();
+      openFile();
+    }
   });
 }
 
@@ -1840,6 +2370,9 @@ function init(): void {
   elements.btnSaveHighlight.addEventListener('click', saveHighlight);
   elements.btnCancelHighlight.addEventListener('click', hideHighlightModal);
 
+  // Tab bar
+  elements.btnNewTab.addEventListener('click', openFile);
+
   // Setup utilities
   setupSectionToggles();
   setupModalCloseHandlers();
@@ -1864,6 +2397,234 @@ async function loadHighlights(): Promise<void> {
     state.highlights = result.highlights;
     updateHighlightsUI();
   }
+}
+
+// === Tab Management ===
+
+function generateTabId(): string {
+  return `tab-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+}
+
+function saveCurrentTabState(): void {
+  if (!state.activeTabId) return;
+
+  const tabIndex = state.tabs.findIndex(t => t.id === state.activeTabId);
+  if (tabIndex === -1) return;
+
+  // Save current state to the tab
+  state.tabs[tabIndex] = {
+    ...state.tabs[tabIndex],
+    filePath: state.filePath || '',
+    fileStats: state.fileStats,
+    totalLines: state.totalLines,
+    scrollTop: logViewerElement?.scrollTop || 0,
+    scrollLeft: logViewerElement?.scrollLeft || 0,
+    selectedLine: state.selectedLine,
+    selectionStart: state.selectionStart,
+    selectionEnd: state.selectionEnd,
+    searchResults: state.searchResults,
+    currentSearchIndex: state.currentSearchIndex,
+    bookmarks: [...state.bookmarks],
+    cachedLines: cachedLines.toMap(),
+    splitFiles: state.splitFiles,
+    currentSplitIndex: state.currentSplitIndex,
+  };
+}
+
+function restoreTabState(tab: TabState): void {
+  state.filePath = tab.filePath;
+  state.fileStats = tab.fileStats;
+  state.totalLines = tab.totalLines;
+  state.selectedLine = tab.selectedLine;
+  state.selectionStart = tab.selectionStart;
+  state.selectionEnd = tab.selectionEnd;
+  state.searchResults = tab.searchResults;
+  state.currentSearchIndex = tab.currentSearchIndex;
+  state.bookmarks = [...tab.bookmarks];
+  state.splitFiles = tab.splitFiles;
+  state.currentSplitIndex = tab.currentSplitIndex;
+  state.isFiltered = false;
+  state.filteredLines = null;
+
+  // Restore cached lines
+  cachedLines.clear();
+  tab.cachedLines.forEach((line, key) => cachedLines.set(key, line));
+
+  // Update UI
+  updateFileStatsUI();
+  updateStatusBar();
+  updateBookmarksUI();
+  updateSearchUI();
+}
+
+function createTab(filePath: string): TabState {
+  const tab: TabState = {
+    id: generateTabId(),
+    filePath,
+    fileStats: null,
+    totalLines: 0,
+    scrollTop: 0,
+    scrollLeft: 0,
+    selectedLine: null,
+    selectionStart: null,
+    selectionEnd: null,
+    searchResults: [],
+    currentSearchIndex: -1,
+    bookmarks: [],
+    cachedLines: new Map(),
+    splitFiles: [],
+    currentSplitIndex: -1,
+  };
+  return tab;
+}
+
+async function switchToTab(tabId: string): Promise<void> {
+  if (tabId === state.activeTabId) return;
+
+  const tab = state.tabs.find(t => t.id === tabId);
+  if (!tab || !tab.filePath) return;
+
+  // Save current tab state
+  saveCurrentTabState();
+
+  // Set new active tab
+  state.activeTabId = tabId;
+
+  // Re-open the file in the backend (needed for getLines to work)
+  showProgress('Opening file...');
+
+  try {
+    const result = await window.api.openFile(tab.filePath);
+
+    if (result.success && result.info) {
+      // Restore tab state
+      restoreTabState(tab);
+
+      // Update with fresh info from backend
+      state.totalLines = result.info.totalLines;
+
+      createLogViewer();
+
+      // Wait for DOM layout
+      await new Promise(resolve => requestAnimationFrame(resolve));
+
+      // Initialize visible range and restore scroll position
+      if (logViewerElement) {
+        const containerHeight = logViewerElement.clientHeight;
+        const visibleLines = Math.ceil(containerHeight / LINE_HEIGHT);
+
+        // Calculate visible range from saved scroll position
+        const startLine = scrollTopToLine(tab.scrollTop);
+        state.visibleStartLine = Math.max(0, startLine - BUFFER_LINES);
+        state.visibleEndLine = Math.min(startLine + visibleLines + BUFFER_LINES, state.totalLines - 1);
+
+        logViewerElement.scrollTop = tab.scrollTop;
+        logViewerElement.scrollLeft = tab.scrollLeft;
+      }
+
+      await loadVisibleLines();
+      updateSplitNavigation();
+
+      // Rebuild minimap
+      await buildMinimap();
+    }
+  } finally {
+    hideProgress();
+  }
+
+  renderTabBar();
+}
+
+function closeTab(tabId: string): void {
+  const tabIndex = state.tabs.findIndex(t => t.id === tabId);
+  if (tabIndex === -1) return;
+
+  // Remove the tab
+  state.tabs.splice(tabIndex, 1);
+
+  // If closing the active tab, switch to another
+  if (tabId === state.activeTabId) {
+    if (state.tabs.length > 0) {
+      // Switch to the previous tab, or the first one
+      const newIndex = Math.min(tabIndex, state.tabs.length - 1);
+      switchToTab(state.tabs[newIndex].id);
+    } else {
+      // No more tabs - reset to welcome state
+      state.activeTabId = null;
+      state.filePath = null;
+      state.fileStats = null;
+      state.totalLines = 0;
+      state.searchResults = [];
+      state.currentSearchIndex = -1;
+      cachedLines.clear();
+      state.splitFiles = [];
+      state.currentSplitIndex = -1;
+
+      // Show welcome message
+      if (logViewerWrapper) {
+        logViewerWrapper.remove();
+        logViewerWrapper = null;
+        logViewerElement = null;
+        logContentElement = null;
+      }
+      elements.welcomeMessage.classList.remove('hidden');
+      elements.tabBar.classList.add('hidden');
+      updateStatusBar();
+      updateFileStatsUI();
+    }
+  }
+
+  renderTabBar();
+}
+
+function renderTabBar(): void {
+  if (state.tabs.length === 0) {
+    elements.tabBar.classList.add('hidden');
+    return;
+  }
+
+  elements.tabBar.classList.remove('hidden');
+  elements.tabsContainer.innerHTML = '';
+
+  for (const tab of state.tabs) {
+    const tabElement = document.createElement('div');
+    tabElement.className = `tab${tab.id === state.activeTabId ? ' active' : ''}`;
+    tabElement.dataset.tabId = tab.id;
+
+    const fileName = getFileName(tab.filePath);
+    let displayName = fileName;
+
+    // Add split indicator if part of a split set
+    if (tab.splitFiles.length > 0 && tab.currentSplitIndex >= 0) {
+      displayName += ` [${tab.currentSplitIndex + 1}/${tab.splitFiles.length}]`;
+    }
+
+    tabElement.innerHTML = `
+      <span class="tab-title" title="${tab.filePath}">${displayName}</span>
+      <button class="tab-close" data-tab-id="${tab.id}" title="Close">&times;</button>
+    `;
+
+    // Tab click - switch to tab
+    tabElement.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      if (!target.classList.contains('tab-close')) {
+        switchToTab(tab.id);
+      }
+    });
+
+    // Close button click
+    const closeBtn = tabElement.querySelector('.tab-close') as HTMLButtonElement;
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeTab(tab.id);
+    });
+
+    elements.tabsContainer.appendChild(tabElement);
+  }
+}
+
+function findTabByFilePath(filePath: string): TabState | undefined {
+  return state.tabs.find(t => t.filePath === filePath);
 }
 
 // Start the app

@@ -75,7 +75,7 @@ function createWindow() {
       contextIsolation: true,
       preload: path.join(__dirname, '../preload/index.js'),
     },
-    title: 'Log Analyzer',
+    title: 'LOGAN - Log Analyzer',
   });
 
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
