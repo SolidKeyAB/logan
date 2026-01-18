@@ -2863,6 +2863,18 @@ async function switchToTab(tabId: string): Promise<void> {
       // Update with fresh info from backend
       state.totalLines = result.info.totalLines;
 
+      // Load bookmarks and highlights from backend (persisted per-file)
+      if (result.bookmarks && Array.isArray(result.bookmarks)) {
+        state.bookmarks = result.bookmarks;
+        tab.bookmarks = result.bookmarks;
+      }
+      updateBookmarksUI();
+
+      if (result.highlights && Array.isArray(result.highlights)) {
+        state.highlights = result.highlights;
+      }
+      updateHighlightsUI();
+
       createLogViewer();
 
       // Wait for DOM layout
@@ -2916,6 +2928,8 @@ function closeTab(tabId: string): void {
       state.totalLines = 0;
       state.searchResults = [];
       state.currentSearchIndex = -1;
+      state.bookmarks = [];
+      state.highlights = [];
       cachedLines.clear();
       state.splitFiles = [];
       state.currentSplitIndex = -1;
@@ -2931,6 +2945,8 @@ function closeTab(tabId: string): void {
       elements.tabBar.classList.add('hidden');
       updateStatusBar();
       updateFileStatsUI();
+      updateBookmarksUI();
+      updateHighlightsUI();
     }
   }
 
