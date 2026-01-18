@@ -909,7 +909,9 @@ function applyHighlights(text: string): string {
     const style = `background-color: ${match.config.backgroundColor}; ${
       match.config.textColor ? `color: ${match.config.textColor}` : ''
     }`;
-    result += `<span style="${style}">${escapeHtml(text.slice(match.start, match.end))}</span>`;
+    // Convert spaces to &nbsp; in highlighted text so background color is visible
+    const highlightedText = escapeHtml(text.slice(match.start, match.end)).replace(/ /g, '&nbsp;');
+    result += `<span style="${style}">${highlightedText}</span>`;
     lastEnd = match.end;
   }
 
