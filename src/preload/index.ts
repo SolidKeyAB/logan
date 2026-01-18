@@ -58,6 +58,9 @@ const api = {
   clearHighlights: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('highlight-clear'),
 
+  getNextHighlightColor: (): Promise<{ success: boolean; color?: string }> =>
+    ipcRenderer.invoke('highlight-get-next-color'),
+
   // Event listeners
   onIndexingProgress: (callback: (percent: number) => void): (() => void) => {
     const handler = (_: any, percent: number) => callback(percent);

@@ -78,6 +78,7 @@ interface HighlightConfig {
   backgroundColor: string;
   textColor?: string;
   includeWhitespace: boolean;
+  highlightAll: boolean; // true = all occurrences, false = first only per line
 }
 
 // Application State
@@ -161,6 +162,8 @@ const elements = {
   highlightRegex: document.getElementById('highlight-regex') as HTMLInputElement,
   highlightCase: document.getElementById('highlight-case') as HTMLInputElement,
   highlightWholeWord: document.getElementById('highlight-whole-word') as HTMLInputElement,
+  highlightIncludeWhitespace: document.getElementById('highlight-include-whitespace') as HTMLInputElement,
+  highlightAll: document.getElementById('highlight-all') as HTMLInputElement,
   highlightBgColor: document.getElementById('highlight-bg-color') as HTMLInputElement,
   highlightTextColor: document.getElementById('highlight-text-color') as HTMLInputElement,
   btnSaveHighlight: document.getElementById('btn-save-highlight') as HTMLButtonElement,
@@ -282,6 +285,9 @@ function renderVisibleLines(): void {
   const totalLines = getTotalLines();
   const totalHeight = totalLines * LINE_HEIGHT;
 
+  // Preserve horizontal scroll position
+  const scrollLeft = logViewerElement.scrollLeft;
+
   logContentElement.style.height = `${totalHeight}px`;
   logContentElement.style.position = 'relative';
 
@@ -305,6 +311,11 @@ function renderVisibleLines(): void {
       lineElement.style.right = '0';
       logContentElement.appendChild(lineElement);
     }
+  }
+
+  // Restore horizontal scroll position
+  if (scrollLeft > 0) {
+    logViewerElement.scrollLeft = scrollLeft;
   }
 }
 
@@ -358,26 +369,42 @@ function applyHighlights(text: string): string {
 
   for (const config of state.highlights) {
     try {
-      let flags = 'g';
+      let flags = config.highlightAll ? 'g' : '';
       if (!config.matchCase) flags += 'i';
 
       let pattern = config.pattern;
       if (!config.isRegex) {
         pattern = escapeRegex(pattern);
       }
-      if (config.wholeWord) {
+
+      // Handle includeWhitespace - capture surrounding whitespace
+      if (config.includeWhitespace) {
+        pattern = `(\\s*)${pattern}(\\s*)`;
+      }
+
+      if (config.wholeWord && !config.includeWhitespace) {
         pattern = `\\b${pattern}\\b`;
       }
 
-      const regex = new RegExp(pattern, flags);
+      const regex = new RegExp(pattern, flags || undefined);
       let match;
 
-      while ((match = regex.exec(text)) !== null) {
-        matches.push({
-          start: match.index,
-          end: match.index + match[0].length,
-          config,
-        });
+      if (config.highlightAll) {
+        while ((match = regex.exec(text)) !== null) {
+          let start = match.index;
+          let end = match.index + match[0].length;
+
+          matches.push({ start, end, config });
+        }
+      } else {
+        // Only first match
+        match = regex.exec(text);
+        if (match) {
+          let start = match.index;
+          let end = match.index + match[0].length;
+
+          matches.push({ start, end, config });
+        }
       }
     } catch {
       // Invalid regex, skip
@@ -596,14 +623,23 @@ function renderMinimapMarkers(): void {
 }
 
 function handleLogClick(event: MouseEvent): void {
+  // Don't interfere with text selection
+  const selection = window.getSelection();
+  if (selection && selection.toString().length > 0) {
+    return;
+  }
+
   const target = event.target as HTMLElement;
   const lineElement = target.closest('.log-line') as HTMLDivElement;
 
   if (lineElement) {
     const lineNumber = parseInt(lineElement.dataset.lineNumber || '0', 10);
-    state.selectedLine = lineNumber;
-    updateCursorStatus(lineNumber);
-    renderVisibleLines();
+    // Only re-render if selection changed
+    if (state.selectedLine !== lineNumber) {
+      state.selectedLine = lineNumber;
+      updateCursorStatus(lineNumber);
+      renderVisibleLines();
+    }
   }
 }
 
@@ -617,6 +653,10 @@ function handleContextMenu(event: MouseEvent): void {
 
   const lineNumber = parseInt(lineElement.dataset.lineNumber || '0', 10);
 
+  // Get selected text
+  const selection = window.getSelection();
+  const selectedText = selection?.toString().trim() || '';
+
   // Remove existing context menu
   const existing = document.querySelector('.context-menu');
   if (existing) existing.remove();
@@ -625,6 +665,44 @@ function handleContextMenu(event: MouseEvent): void {
   menu.className = 'context-menu';
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
+
+  // If text is selected, show highlight options first
+  if (selectedText) {
+    const highlightThis = document.createElement('div');
+    highlightThis.className = 'context-menu-item';
+    highlightThis.textContent = `Highlight "${selectedText.substring(0, 20)}${selectedText.length > 20 ? '...' : ''}"`;
+    highlightThis.addEventListener('click', () => {
+      createHighlightFromSelection(selectedText, false);
+      menu.remove();
+    });
+    menu.appendChild(highlightThis);
+
+    const highlightAll = document.createElement('div');
+    highlightAll.className = 'context-menu-item';
+    highlightAll.textContent = 'Highlight All Occurrences';
+    highlightAll.addEventListener('click', () => {
+      createHighlightFromSelection(selectedText, true);
+      menu.remove();
+    });
+    menu.appendChild(highlightAll);
+
+    const separator1 = document.createElement('div');
+    separator1.className = 'context-menu-separator';
+    menu.appendChild(separator1);
+
+    const copySelection = document.createElement('div');
+    copySelection.className = 'context-menu-item';
+    copySelection.textContent = 'Copy Selection';
+    copySelection.addEventListener('click', () => {
+      navigator.clipboard.writeText(selectedText);
+      menu.remove();
+    });
+    menu.appendChild(copySelection);
+
+    const separator2 = document.createElement('div');
+    separator2.className = 'context-menu-separator';
+    menu.appendChild(separator2);
+  }
 
   const hasBookmark = state.bookmarks.some((b) => b.lineNumber === lineNumber);
 
@@ -674,6 +752,31 @@ function handleContextMenu(event: MouseEvent): void {
     }
   };
   setTimeout(() => document.addEventListener('click', closeMenu), 0);
+}
+
+async function createHighlightFromSelection(text: string, highlightAll: boolean): Promise<void> {
+  // Get next auto-assigned color
+  const colorResult = await window.api.getNextHighlightColor();
+  const backgroundColor = colorResult.success && colorResult.color ? colorResult.color : '#ffff00';
+
+  const highlight: HighlightConfig = {
+    id: `highlight-${Date.now()}`,
+    pattern: text,
+    isRegex: false,
+    matchCase: true, // Exact match for selection
+    wholeWord: false,
+    backgroundColor,
+    textColor: '#000000',
+    includeWhitespace: false,
+    highlightAll,
+  };
+
+  const result = await window.api.addHighlight(highlight);
+  if (result.success) {
+    state.highlights.push(highlight);
+    updateHighlightsUI();
+    renderVisibleLines();
+  }
 }
 
 // File Operations
@@ -959,13 +1062,23 @@ async function removeBookmarkById(id: string): Promise<void> {
 }
 
 // Highlights
-function showHighlightModal(): void {
+async function showHighlightModal(): Promise<void> {
   elements.highlightPattern.value = '';
   elements.highlightRegex.checked = false;
   elements.highlightCase.checked = false;
   elements.highlightWholeWord.checked = false;
-  elements.highlightBgColor.value = '#ffff00';
+  elements.highlightIncludeWhitespace.checked = false;
+  elements.highlightAll.checked = true;
   elements.highlightTextColor.value = '#000000';
+
+  // Auto-assign next color
+  const colorResult = await window.api.getNextHighlightColor();
+  if (colorResult.success && colorResult.color) {
+    elements.highlightBgColor.value = colorResult.color;
+  } else {
+    elements.highlightBgColor.value = '#ffff00';
+  }
+
   elements.highlightModal.classList.remove('hidden');
 }
 
@@ -985,7 +1098,8 @@ async function saveHighlight(): Promise<void> {
     wholeWord: elements.highlightWholeWord.checked,
     backgroundColor: elements.highlightBgColor.value,
     textColor: elements.highlightTextColor.value,
-    includeWhitespace: false,
+    includeWhitespace: elements.highlightIncludeWhitespace.checked,
+    highlightAll: elements.highlightAll.checked,
   };
 
   const result = await window.api.addHighlight(highlight);

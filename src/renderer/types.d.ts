@@ -85,6 +85,7 @@ interface HighlightConfig {
   backgroundColor: string;
   textColor?: string;
   includeWhitespace: boolean;
+  highlightAll: boolean; // true = all occurrences, false = first only per line
 }
 
 interface Api {
@@ -109,6 +110,7 @@ interface Api {
   removeHighlight: (id: string) => Promise<{ success: boolean }>;
   listHighlights: () => Promise<{ success: boolean; highlights?: HighlightConfig[] }>;
   clearHighlights: () => Promise<{ success: boolean }>;
+  getNextHighlightColor: () => Promise<{ success: boolean; color?: string }>;
 
   // Analysis
   analyzeFile: (path: string) => Promise<{ success: boolean; result?: AnalysisResult; error?: string }>;

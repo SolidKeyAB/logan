@@ -476,7 +476,7 @@ body {
 .virtual-log-viewer {
   flex: 1;
   height: 100%;
-  overflow-y: auto;
+  overflow: auto;
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
   font-size: 13px;
   line-height: 1.5;
@@ -484,7 +484,7 @@ body {
 
 .log-content {
   position: relative;
-  width: 100%;
+  min-width: fit-content;
 }
 
 .log-line {
@@ -519,7 +519,8 @@ body {
 
 .line-content {
   flex: 1;
-  overflow-x: auto;
+  user-select: text;
+  cursor: text;
 }
 
 /* Log Level Colors */

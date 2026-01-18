@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import * as path from 'path';
+import * as fs from 'fs';
 import { FileHandler } from './fileHandler';
 import { IPC, SearchOptions, Bookmark, Highlight } from '../shared/types';
 
@@ -10,6 +11,60 @@ let searchSignal: { cancelled: boolean } = { cancelled: false };
 // In-memory storage
 const bookmarks = new Map<string, Bookmark>();
 const highlights = new Map<string, Highlight>();
+
+// Config file path
+const getConfigPath = () => path.join(app.getPath('userData'), 'highlights.json');
+
+// Color palette for auto-assignment
+const COLOR_PALETTE = [
+  '#ffff00', // Yellow
+  '#ff9900', // Orange
+  '#00ff00', // Green
+  '#00ffff', // Cyan
+  '#ff00ff', // Magenta
+  '#ff6b6b', // Coral
+  '#4ecdc4', // Teal
+  '#a55eea', // Purple
+  '#26de81', // Mint
+  '#fd79a8', // Pink
+];
+
+function getNextColor(): string {
+  const usedColors = Array.from(highlights.values()).map(h => h.backgroundColor);
+  for (const color of COLOR_PALETTE) {
+    if (!usedColors.includes(color)) {
+      return color;
+    }
+  }
+  // If all colors used, return random from palette
+  return COLOR_PALETTE[Math.floor(Math.random() * COLOR_PALETTE.length)];
+}
+
+function loadHighlightsFromConfig(): void {
+  try {
+    const configPath = getConfigPath();
+    if (fs.existsSync(configPath)) {
+      const data = fs.readFileSync(configPath, 'utf-8');
+      const savedHighlights: Highlight[] = JSON.parse(data);
+      highlights.clear();
+      for (const h of savedHighlights) {
+        highlights.set(h.id, h);
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load highlights config:', error);
+  }
+}
+
+function saveHighlightsToConfig(): void {
+  try {
+    const configPath = getConfigPath();
+    const data = JSON.stringify(Array.from(highlights.values()), null, 2);
+    fs.writeFileSync(configPath, data, 'utf-8');
+  } catch (error) {
+    console.error('Failed to save highlights config:', error);
+  }
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -32,7 +87,10 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  loadHighlightsFromConfig();
+  createWindow();
+});
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
@@ -128,11 +186,13 @@ ipcMain.handle('bookmark-clear', async () => {
 
 ipcMain.handle('highlight-add', async (_, highlight: Highlight) => {
   highlights.set(highlight.id, highlight);
+  saveHighlightsToConfig();
   return { success: true };
 });
 
 ipcMain.handle('highlight-remove', async (_, id: string) => {
   highlights.delete(id);
+  saveHighlightsToConfig();
   return { success: true };
 });
 
@@ -142,7 +202,12 @@ ipcMain.handle('highlight-list', async () => {
 
 ipcMain.handle('highlight-clear', async () => {
   highlights.clear();
+  saveHighlightsToConfig();
   return { success: true };
+});
+
+ipcMain.handle('highlight-get-next-color', async () => {
+  return { success: true, color: getNextColor() };
 });
 
 // === Utility ===

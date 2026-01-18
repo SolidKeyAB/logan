@@ -39,7 +39,9 @@ export interface Highlight {
   isRegex: boolean;
   matchCase: boolean;
   backgroundColor: string;
+  textColor?: string;
   includeWhitespace: boolean;
+  highlightAll: boolean; // true = all occurrences, false = first only per line
 }
 
 export interface ChunkRequest {
