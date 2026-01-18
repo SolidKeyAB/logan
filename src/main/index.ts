@@ -123,11 +123,100 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
     const info = await fileHandler.open(filePath, (percent) => {
       mainWindow?.webContents.send('indexing-progress', percent);
     });
-    return { success: true, info };
+
+    // Check for split metadata in file header (preferred)
+    const splitMeta = fileHandler.getSplitMetadata();
+    let splitInfo: { files: string[]; currentIndex: number } | undefined;
+
+    if (splitMeta) {
+      // Build file list from header metadata
+      const dir = path.dirname(filePath);
+      const files: string[] = [];
+      let currentIndex = splitMeta.part - 1;
+
+      // We need to find all parts - scan directory for matching files
+      const baseMatch = path.basename(filePath).match(/^(.+)_part\d+(\.[^.]+)?$/);
+      if (baseMatch) {
+        const baseName = baseMatch[1];
+        const ext = baseMatch[2] || '';
+        const dirFiles = fs.readdirSync(dir);
+
+        for (let i = 1; i <= splitMeta.total; i++) {
+          const partNum = String(i).padStart(String(splitMeta.total).length, '0');
+          const expectedName = `${baseName}_part${partNum}${ext}`;
+          if (dirFiles.includes(expectedName)) {
+            files.push(path.join(dir, expectedName));
+          }
+        }
+
+        if (files.length > 0) {
+          splitInfo = { files, currentIndex };
+        }
+      }
+    } else {
+      // Fall back to filename-based detection
+      const splitFiles = detectSplitFiles(filePath);
+      if (splitFiles) {
+        splitInfo = {
+          files: splitFiles,
+          currentIndex: splitFiles.indexOf(filePath)
+        };
+      }
+    }
+
+    return {
+      success: true,
+      info,
+      splitFiles: splitInfo?.files,
+      splitIndex: splitInfo?.currentIndex
+    };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 });
+
+// Detect if a file is part of a split set and find all related parts
+function detectSplitFiles(filePath: string): string[] | undefined {
+  const fileName = path.basename(filePath);
+  const dir = path.dirname(filePath);
+
+  // Match pattern: name_part01.ext, name_part1.ext, etc.
+  const partMatch = fileName.match(/^(.+)_part(\d+)(\.[^.]+)?$/);
+  if (!partMatch) return undefined;
+
+  const baseName = partMatch[1];
+  const ext = partMatch[3] || '';
+
+  // Find all files matching the pattern in the same directory
+  try {
+    const files = fs.readdirSync(dir);
+    const partFiles: { path: string; num: number }[] = [];
+
+    for (const file of files) {
+      const match = file.match(new RegExp(`^${escapeRegex(baseName)}_part(\\d+)${escapeRegex(ext)}$`));
+      if (match) {
+        partFiles.push({
+          path: path.join(dir, file),
+          num: parseInt(match[1], 10)
+        });
+      }
+    }
+
+    // Sort by part number and return paths
+    if (partFiles.length > 1) {
+      partFiles.sort((a, b) => a.num - b.num);
+      return partFiles.map(p => p.path);
+    }
+  } catch {
+    // Ignore errors reading directory
+  }
+
+  return undefined;
+}
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 ipcMain.handle(IPC.GET_LINES, async (_, startLine: number, count: number) => {
   if (!fileHandler) return { success: false, error: 'No file open' };
@@ -294,12 +383,23 @@ ipcMain.handle('split-file', async (_, options: SplitOptions) => {
     const createdFiles: string[] = [];
     const BATCH_SIZE = 10000;
 
+    // First, generate all filenames
+    const partFileNames: string[] = [];
+    for (let i = 0; i < numParts; i++) {
+      const partNum = String(i + 1).padStart(String(numParts).length, '0');
+      partFileNames.push(`${baseName}_part${partNum}${ext}`);
+    }
+
     for (let part = 0; part < numParts; part++) {
       const startLine = part * linesPerFile;
       const endLine = Math.min(startLine + linesPerFile, totalLines);
-      const partNum = String(part + 1).padStart(String(numParts).length, '0');
-      const partFileName = `${baseName}_part${partNum}${ext}`;
+      const partFileName = partFileNames[part];
       const partFilePath = path.join(splitDir, partFileName);
+
+      // Build hidden header with navigation info (viewer will skip this line)
+      const prevFile = part > 0 ? partFileNames[part - 1] : '';
+      const nextFile = part < numParts - 1 ? partFileNames[part + 1] : '';
+      const header = `#SPLIT:part=${part + 1},total=${numParts},prev=${prevFile},next=${nextFile}\n`;
 
       // Write in batches to handle large parts
       await new Promise<void>((resolve, reject) => {
@@ -307,6 +407,9 @@ ipcMain.handle('split-file', async (_, options: SplitOptions) => {
 
         writeStream.on('finish', resolve);
         writeStream.on('error', reject);
+
+        // Write header first (will be hidden by viewer)
+        writeStream.write(header);
 
         for (let batchStart = startLine; batchStart < endLine; batchStart += BATCH_SIZE) {
           const batchEnd = Math.min(batchStart + BATCH_SIZE, endLine);

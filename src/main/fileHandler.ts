@@ -7,11 +7,20 @@ interface LineOffset {
   length: number;
 }
 
+export interface SplitMetadata {
+  part: number;
+  total: number;
+  prev: string;
+  next: string;
+}
+
 export class FileHandler {
   private filePath: string | null = null;
   private lineOffsets: LineOffset[] = [];
   private fileInfo: FileInfo | null = null;
   private fd: number | null = null;
+  private splitMetadata: SplitMetadata | null = null;
+  private headerLineCount: number = 0; // Lines to skip (hidden header)
 
   async open(
     filePath: string,
@@ -19,6 +28,8 @@ export class FileHandler {
   ): Promise<FileInfo> {
     this.close();
     this.filePath = filePath;
+    this.splitMetadata = null;
+    this.headerLineCount = 0;
 
     const stat = fs.statSync(filePath);
     const fileSize = stat.size;
@@ -27,12 +38,25 @@ export class FileHandler {
     this.lineOffsets = [];
     let offset = 0;
     let lineNumber = 0;
+    let firstLine = true;
 
     const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
     const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
     for await (const line of rl) {
       const length = Buffer.byteLength(line, 'utf-8');
+
+      // Check first line for split header
+      if (firstLine) {
+        firstLine = false;
+        const splitInfo = this.parseSplitHeader(line);
+        if (splitInfo) {
+          this.splitMetadata = splitInfo;
+          this.headerLineCount = 1;
+          // Still store the offset but we'll skip it when returning lines
+        }
+      }
+
       this.lineOffsets.push({ offset, length });
       offset += length + 1; // +1 for newline
       lineNumber++;
@@ -42,10 +66,13 @@ export class FileHandler {
       }
     }
 
+    // Adjust total lines to exclude hidden header
+    const visibleLines = lineNumber - this.headerLineCount;
+
     this.fileInfo = {
       path: filePath,
       size: fileSize,
-      totalLines: lineNumber,
+      totalLines: visibleLines,
     };
 
     // Open file descriptor for random access
@@ -55,19 +82,51 @@ export class FileHandler {
     return this.fileInfo;
   }
 
+  private parseSplitHeader(line: string): SplitMetadata | null {
+    if (!line.startsWith('#SPLIT:')) return null;
+
+    const data = line.substring(7); // Remove '#SPLIT:'
+    const params: Record<string, string> = {};
+
+    for (const pair of data.split(',')) {
+      const [key, value] = pair.split('=');
+      if (key && value !== undefined) {
+        params[key] = value;
+      }
+    }
+
+    if (params.part && params.total) {
+      return {
+        part: parseInt(params.part, 10),
+        total: parseInt(params.total, 10),
+        prev: params.prev || '',
+        next: params.next || '',
+      };
+    }
+
+    return null;
+  }
+
+  getSplitMetadata(): SplitMetadata | null {
+    return this.splitMetadata;
+  }
+
   getLines(startLine: number, count: number): LineData[] {
     if (!this.fd || !this.filePath) return [];
 
     const lines: LineData[] = [];
-    const endLine = Math.min(startLine + count, this.lineOffsets.length);
+    // Offset by header lines to skip hidden metadata
+    const actualStart = startLine + this.headerLineCount;
+    const actualEnd = Math.min(actualStart + count, this.lineOffsets.length);
 
-    for (let i = startLine; i < endLine; i++) {
+    for (let i = actualStart; i < actualEnd; i++) {
       const { offset, length } = this.lineOffsets[i];
       const buffer = Buffer.alloc(length);
       fs.readSync(this.fd, buffer, 0, length, offset);
       const text = buffer.toString('utf-8');
       lines.push({
-        lineNumber: i,
+        // Return visible line number (without header offset)
+        lineNumber: i - this.headerLineCount,
         text,
         level: this.detectLevel(text),
       });
@@ -165,7 +224,7 @@ export class FileHandler {
   }
 
   getTotalLines(): number {
-    return this.lineOffsets.length;
+    return this.lineOffsets.length - this.headerLineCount;
   }
 
   close(): void {
@@ -176,5 +235,7 @@ export class FileHandler {
     this.filePath = null;
     this.lineOffsets = [];
     this.fileInfo = null;
+    this.splitMetadata = null;
+    this.headerLineCount = 0;
   }
 }

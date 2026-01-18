@@ -366,9 +366,10 @@ function renderVisibleLines(): void {
       lineElement.style.position = 'absolute';
 
       if (usingScaled) {
-        // For scaled scroll, position lines relative to the visible window
+        // For scaled scroll, position lines relative to the scroll position
+        // startLine corresponds to scrollTop, so offset from there
         const lineOffset = i - startLine;
-        const baseTop = scrollTop + (lineOffset - BUFFER_LINES) * LINE_HEIGHT;
+        const baseTop = scrollTop + lineOffset * LINE_HEIGHT;
         lineElement.style.top = `${baseTop}px`;
       } else {
         // Normal positioning for small files
@@ -951,6 +952,21 @@ async function loadFile(filePath: string): Promise<void> {
       state.currentSearchIndex = -1;
       cachedLines.clear();
 
+      // Handle split file detection (from opening an existing split file or header metadata)
+      if (result.splitFiles && result.splitFiles.length > 0) {
+        // Only update split state if not already navigating within the same split set
+        if (state.splitFiles.length === 0 || !state.splitFiles.includes(filePath)) {
+          state.splitFiles = result.splitFiles;
+        }
+        // Use the index from backend if available, otherwise find it
+        state.currentSplitIndex = result.splitIndex ?? result.splitFiles.indexOf(filePath);
+        if (state.currentSplitIndex === -1) state.currentSplitIndex = 0;
+      } else {
+        // Clear split state if opening a non-split file
+        state.splitFiles = [];
+        state.currentSplitIndex = -1;
+      }
+
       updateFileStatsUI();
       createLogViewer();
 
@@ -1531,22 +1547,23 @@ function updateSplitNavigation(): void {
 
   if (state.splitFiles.length === 0 || state.currentSplitIndex < 0) return;
 
-  // Add navigation indicator to the log viewer
-  if (!logContentElement) return;
+  // Add navigation indicator to the log viewer wrapper
+  if (!logViewerWrapper) return;
 
-  // Create navigation container at the end
+  // Create navigation container fixed at bottom of viewer
   const navContainer = document.createElement('div');
   navContainer.className = 'split-nav-indicator';
   navContainer.style.cssText = `
     position: absolute;
-    bottom: -60px;
+    bottom: 0;
     left: 0;
-    right: 0;
+    right: 100px;
     display: flex;
     justify-content: center;
     gap: 20px;
-    padding: 15px;
-    background: linear-gradient(to bottom, transparent, var(--bg-secondary));
+    padding: 10px 15px;
+    background: linear-gradient(to bottom, transparent, var(--bg-secondary) 30%);
+    z-index: 100;
   `;
 
   // Previous file button
@@ -1587,11 +1604,7 @@ function updateSplitNavigation(): void {
 
   // Only add if there are navigation buttons
   if (navContainer.children.length > 0) {
-    logContentElement.appendChild(navContainer);
-
-    // Add extra height to log content to make room for navigation
-    const currentHeight = parseInt(logContentElement.style.height) || 0;
-    logContentElement.style.height = `${currentHeight + 80}px`;
+    logViewerWrapper.appendChild(navContainer);
   }
 }
 

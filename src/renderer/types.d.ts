@@ -91,7 +91,7 @@ interface HighlightConfig {
 interface Api {
   // File operations
   openFileDialog: () => Promise<string | null>;
-  openFile: (path: string) => Promise<{ success: boolean; info?: FileInfo; error?: string }>;
+  openFile: (path: string) => Promise<{ success: boolean; info?: FileInfo; error?: string; splitFiles?: string[]; splitIndex?: number }>;
   getLines: (startLine: number, count: number) => Promise<{ success: boolean; lines?: LogLine[]; error?: string }>;
   getFileInfo: () => Promise<{ success: boolean; info?: FileInfo; error?: string }>;
 
