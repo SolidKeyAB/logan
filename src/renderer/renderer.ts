@@ -96,6 +96,11 @@ interface AppState {
   visibleStartLine: number;
   visibleEndLine: number;
   selectedLine: number | null;
+  selectionStart: number | null;
+  selectionEnd: number | null;
+  // Split file navigation
+  splitFiles: string[];
+  currentSplitIndex: number;
 }
 
 const state: AppState = {
@@ -112,11 +117,16 @@ const state: AppState = {
   visibleStartLine: 0,
   visibleEndLine: 100,
   selectedLine: null,
+  selectionStart: null,
+  selectionEnd: null,
+  splitFiles: [],
+  currentSplitIndex: -1,
 };
 
 // Constants
 const LINE_HEIGHT = 20;
 const BUFFER_LINES = 50;
+const MAX_SCROLL_HEIGHT = 10000000; // 10 million pixels - safe for all browsers
 
 // DOM Elements
 const elements = {
@@ -155,6 +165,13 @@ const elements = {
   highlightModal: document.getElementById('highlight-modal') as HTMLDivElement,
   btnApplyFilter: document.getElementById('btn-apply-filter') as HTMLButtonElement,
   btnClearFilter: document.getElementById('btn-clear-filter') as HTMLButtonElement,
+  btnSplit: document.getElementById('btn-split') as HTMLButtonElement,
+  splitModal: document.getElementById('split-modal') as HTMLDivElement,
+  splitValue: document.getElementById('split-value') as HTMLInputElement,
+  splitHint: document.getElementById('split-hint') as HTMLSpanElement,
+  splitPreview: document.getElementById('split-preview') as HTMLDivElement,
+  btnDoSplit: document.getElementById('btn-do-split') as HTMLButtonElement,
+  btnCancelSplit: document.getElementById('btn-cancel-split') as HTMLButtonElement,
   includePatterns: document.getElementById('include-patterns') as HTMLTextAreaElement,
   excludePatterns: document.getElementById('exclude-patterns') as HTMLTextAreaElement,
   collapseDuplicates: document.getElementById('collapse-duplicates') as HTMLInputElement,
@@ -228,13 +245,48 @@ function createLogViewer(): void {
   minimapElement.addEventListener('mousedown', handleMinimapDrag);
 }
 
+function getVirtualHeight(): number {
+  const totalLines = getTotalLines();
+  const naturalHeight = totalLines * LINE_HEIGHT;
+  return Math.min(naturalHeight, MAX_SCROLL_HEIGHT);
+}
+
+function isUsingScaledScroll(): boolean {
+  const totalLines = getTotalLines();
+  return totalLines * LINE_HEIGHT > MAX_SCROLL_HEIGHT;
+}
+
+function scrollTopToLine(scrollTop: number): number {
+  const totalLines = getTotalLines();
+  if (!isUsingScaledScroll()) {
+    return Math.floor(scrollTop / LINE_HEIGHT);
+  }
+  // Proportional mapping for large files
+  const virtualHeight = getVirtualHeight();
+  const scrollRatio = scrollTop / (virtualHeight - (logViewerElement?.clientHeight || 0));
+  const maxLine = totalLines - Math.ceil((logViewerElement?.clientHeight || 0) / LINE_HEIGHT);
+  return Math.floor(scrollRatio * maxLine);
+}
+
+function lineToScrollTop(lineNumber: number): number {
+  const totalLines = getTotalLines();
+  if (!isUsingScaledScroll()) {
+    return lineNumber * LINE_HEIGHT;
+  }
+  // Proportional mapping for large files
+  const virtualHeight = getVirtualHeight();
+  const maxLine = totalLines - Math.ceil((logViewerElement?.clientHeight || 0) / LINE_HEIGHT);
+  const scrollRatio = lineNumber / maxLine;
+  return scrollRatio * (virtualHeight - (logViewerElement?.clientHeight || 0));
+}
+
 function handleScroll(): void {
   if (!logViewerElement || !logContentElement) return;
 
   const scrollTop = logViewerElement.scrollTop;
   const containerHeight = logViewerElement.clientHeight;
 
-  const startLine = Math.floor(scrollTop / LINE_HEIGHT);
+  const startLine = scrollTopToLine(scrollTop);
   const visibleLines = Math.ceil(containerHeight / LINE_HEIGHT);
   const endLine = startLine + visibleLines;
 
@@ -283,12 +335,12 @@ function renderVisibleLines(): void {
   if (!logContentElement || !logViewerElement) return;
 
   const totalLines = getTotalLines();
-  const totalHeight = totalLines * LINE_HEIGHT;
+  const virtualHeight = getVirtualHeight();
 
   // Preserve horizontal scroll position
   const scrollLeft = logViewerElement.scrollLeft;
 
-  logContentElement.style.height = `${totalHeight}px`;
+  logContentElement.style.height = `${virtualHeight}px`;
   logContentElement.style.position = 'relative';
 
   // Clear existing lines
@@ -297,16 +349,32 @@ function renderVisibleLines(): void {
   const scrollTop = logViewerElement.scrollTop;
   const containerHeight = logViewerElement.clientHeight;
 
-  const startLine = Math.max(0, Math.floor(scrollTop / LINE_HEIGHT) - BUFFER_LINES);
-  const visibleCount = Math.ceil(containerHeight / LINE_HEIGHT) + BUFFER_LINES * 2;
-  const endLine = Math.min(totalLines - 1, startLine + visibleCount);
+  // Use scroll mapping for large files
+  const centerLine = scrollTopToLine(scrollTop + containerHeight / 2);
+  const visibleCount = Math.ceil(containerHeight / LINE_HEIGHT);
+  const startLine = Math.max(0, centerLine - Math.floor(visibleCount / 2) - BUFFER_LINES);
+  const endLine = Math.min(totalLines - 1, startLine + visibleCount + BUFFER_LINES * 2);
+
+  // Calculate the visual offset for positioning lines
+  // For scaled scroll, we position lines relative to scroll position
+  const usingScaled = isUsingScaledScroll();
 
   for (let i = startLine; i <= endLine; i++) {
     const line = cachedLines.get(i);
     if (line) {
       const lineElement = createLineElement(line);
       lineElement.style.position = 'absolute';
-      lineElement.style.top = `${i * LINE_HEIGHT}px`;
+
+      if (usingScaled) {
+        // For scaled scroll, position lines relative to the visible window
+        const lineOffset = i - startLine;
+        const baseTop = scrollTop + (lineOffset - BUFFER_LINES) * LINE_HEIGHT;
+        lineElement.style.top = `${baseTop}px`;
+      } else {
+        // Normal positioning for small files
+        lineElement.style.top = `${i * LINE_HEIGHT}px`;
+      }
+
       lineElement.style.left = '0';
       lineElement.style.right = '0';
       logContentElement.appendChild(lineElement);
@@ -330,6 +398,13 @@ function createLineElement(line: LogLine): HTMLDivElement {
 
   if (state.selectedLine === line.lineNumber) {
     div.classList.add('selected');
+  }
+
+  // Range selection highlight
+  if (state.selectionStart !== null && state.selectionEnd !== null) {
+    if (line.lineNumber >= state.selectionStart && line.lineNumber <= state.selectionEnd) {
+      div.classList.add('range-selected');
+    }
   }
 
   const bookmark = state.bookmarks.find((b) => b.lineNumber === line.lineNumber);
@@ -459,13 +534,15 @@ function updateMinimapViewport(): void {
   if (totalLines === 0) return;
 
   const scrollTop = logViewerElement.scrollTop;
-  const scrollHeight = logViewerElement.scrollHeight;
   const clientHeight = logViewerElement.clientHeight;
   const minimapHeight = minimapElement.clientHeight;
 
-  // Calculate viewport position and size in minimap
-  const viewportTop = (scrollTop / scrollHeight) * minimapHeight;
-  const viewportHeight = (clientHeight / scrollHeight) * minimapHeight;
+  // For scaled scroll, use line-based mapping instead of scroll-based
+  const currentLine = scrollTopToLine(scrollTop);
+  const visibleLines = Math.ceil(clientHeight / LINE_HEIGHT);
+
+  const viewportTop = (currentLine / totalLines) * minimapHeight;
+  const viewportHeight = (visibleLines / totalLines) * minimapHeight;
 
   minimapViewportElement.style.top = `${viewportTop}px`;
   minimapViewportElement.style.height = `${Math.max(20, viewportHeight)}px`;
@@ -478,8 +555,10 @@ function handleMinimapClick(event: MouseEvent): void {
   const clickY = event.clientY - rect.top;
   const minimapHeight = minimapElement.clientHeight;
 
-  const scrollRatio = clickY / minimapHeight;
-  const targetScrollTop = scrollRatio * logViewerElement.scrollHeight - logViewerElement.clientHeight / 2;
+  // Map click position to line number
+  const totalLines = getTotalLines();
+  const targetLine = Math.floor((clickY / minimapHeight) * totalLines);
+  const targetScrollTop = lineToScrollTop(targetLine);
 
   logViewerElement.scrollTop = Math.max(0, targetScrollTop);
 }
@@ -498,8 +577,10 @@ function handleMinimapDrag(event: MouseEvent): void {
     const clickY = e.clientY - rect.top;
     const minimapHeight = minimapElement.clientHeight;
 
-    const scrollRatio = clickY / minimapHeight;
-    const targetScrollTop = scrollRatio * logViewerElement.scrollHeight - logViewerElement.clientHeight / 2;
+    // Map drag position to line number
+    const totalLines = getTotalLines();
+    const targetLine = Math.floor((clickY / minimapHeight) * totalLines);
+    const targetScrollTop = lineToScrollTop(targetLine);
 
     logViewerElement.scrollTop = Math.max(0, targetScrollTop);
   };
@@ -623,6 +704,11 @@ function renderMinimapMarkers(): void {
 }
 
 function handleLogClick(event: MouseEvent): void {
+  // Ignore right-clicks (they're handled by contextmenu)
+  if (event.button === 2) {
+    return;
+  }
+
   // Don't interfere with text selection
   const selection = window.getSelection();
   if (selection && selection.toString().length > 0) {
@@ -634,6 +720,22 @@ function handleLogClick(event: MouseEvent): void {
 
   if (lineElement) {
     const lineNumber = parseInt(lineElement.dataset.lineNumber || '0', 10);
+
+    // Shift+Click for range selection
+    if (event.shiftKey && state.selectedLine !== null) {
+      const start = Math.min(state.selectedLine, lineNumber);
+      const end = Math.max(state.selectedLine, lineNumber);
+      state.selectionStart = start;
+      state.selectionEnd = end;
+      renderVisibleLines();
+      updateSelectionStatus();
+      return;
+    }
+
+    // Clear range selection on regular click
+    state.selectionStart = null;
+    state.selectionEnd = null;
+
     // Only re-render if selection changed
     if (state.selectedLine !== lineNumber) {
       state.selectedLine = lineNumber;
@@ -702,6 +804,23 @@ function handleContextMenu(event: MouseEvent): void {
     const separator2 = document.createElement('div');
     separator2.className = 'context-menu-separator';
     menu.appendChild(separator2);
+  }
+
+  // Save range selection to file
+  if (state.selectionStart !== null && state.selectionEnd !== null) {
+    const lineCount = state.selectionEnd - state.selectionStart + 1;
+    const saveSelection = document.createElement('div');
+    saveSelection.className = 'context-menu-item';
+    saveSelection.textContent = `Save ${lineCount} Lines to File`;
+    saveSelection.addEventListener('click', () => {
+      saveSelectedLinesToFile();
+      menu.remove();
+    });
+    menu.appendChild(saveSelection);
+
+    const separatorSave = document.createElement('div');
+    separatorSave.className = 'context-menu-separator';
+    menu.appendChild(separatorSave);
   }
 
   const hasBookmark = state.bookmarks.some((b) => b.lineNumber === lineNumber);
@@ -779,6 +898,25 @@ async function createHighlightFromSelection(text: string, highlightAll: boolean)
   }
 }
 
+async function saveSelectedLinesToFile(): Promise<void> {
+  if (state.selectionStart === null || state.selectionEnd === null) {
+    alert('No lines selected. Use Shift+Click to select a range of lines.');
+    return;
+  }
+
+  const result = await window.api.saveSelectedLines(state.selectionStart, state.selectionEnd);
+
+  if (result.success) {
+    alert(`Saved ${result.lineCount} lines to:\n${result.filePath}`);
+    // Clear selection after saving
+    state.selectionStart = null;
+    state.selectionEnd = null;
+    renderVisibleLines();
+  } else {
+    alert(`Failed to save: ${result.error}`);
+  }
+}
+
 // File Operations
 async function openFile(): Promise<void> {
   const filePath = await window.api.openFileDialog();
@@ -821,7 +959,9 @@ async function loadFile(filePath: string): Promise<void> {
       await loadVisibleLines();
 
       elements.btnAnalyze.disabled = true; // Analysis not implemented yet
+      elements.btnSplit.disabled = false;
       updateStatusBar();
+      updateSplitNavigation();
 
       // Build minimap with progress
       unsubscribe(); // Stop listening to indexing progress
@@ -921,8 +1061,9 @@ function goToLine(lineNumber: number): void {
   if (!logViewerElement) return;
 
   state.selectedLine = lineNumber;
-  const scrollTop = lineNumber * LINE_HEIGHT - logViewerElement.clientHeight / 2;
-  logViewerElement.scrollTop = Math.max(0, scrollTop);
+  // Use scroll mapping for large files
+  const targetScrollTop = lineToScrollTop(lineNumber);
+  logViewerElement.scrollTop = Math.max(0, targetScrollTop);
   updateCursorStatus(lineNumber);
 }
 
@@ -986,6 +1127,98 @@ async function clearFilter(): Promise<void> {
   hideFilterModal();
   await loadVisibleLines();
   updateStatusBar();
+}
+
+// Split File
+function showSplitModal(): void {
+  if (!state.filePath) return;
+  updateSplitPreview();
+  elements.splitModal.classList.remove('hidden');
+}
+
+function hideSplitModal(): void {
+  elements.splitModal.classList.add('hidden');
+}
+
+function getSplitMode(): 'lines' | 'parts' {
+  const checked = document.querySelector('input[name="split-mode"]:checked') as HTMLInputElement;
+  return (checked?.value as 'lines' | 'parts') || 'lines';
+}
+
+function updateSplitPreview(): void {
+  const mode = getSplitMode();
+  const value = parseInt(elements.splitValue.value) || 1;
+  const totalLines = state.totalLines;
+
+  if (mode === 'lines') {
+    elements.splitHint.textContent = 'Lines per output file';
+    const numParts = Math.ceil(totalLines / value);
+    elements.splitPreview.innerHTML = `
+      Will create <strong>${numParts}</strong> files<br>
+      ~${value.toLocaleString()} lines each
+    `;
+  } else {
+    elements.splitHint.textContent = 'Number of output files';
+    const linesPerFile = Math.ceil(totalLines / value);
+    elements.splitPreview.innerHTML = `
+      Will create <strong>${value}</strong> files<br>
+      ~${linesPerFile.toLocaleString()} lines each
+    `;
+  }
+}
+
+async function doSplit(): Promise<void> {
+  const mode = getSplitMode();
+  const value = parseInt(elements.splitValue.value) || 1;
+
+  hideSplitModal();
+  showProgress('Splitting file...');
+
+  const unsubscribe = window.api.onSplitProgress((data) => {
+    updateProgress(data.percent);
+    elements.progressText.textContent = `Splitting... Part ${data.currentPart}/${data.totalParts}`;
+  });
+
+  try {
+    const result = await window.api.splitFile({ mode, value });
+
+    if (result.success && result.files) {
+      // Store split files for connected navigation
+      state.splitFiles = result.files;
+      state.currentSplitIndex = 0;
+
+      const loadFirst = confirm(
+        `Split complete!\n\n` +
+        `Created ${result.partCount} files in:\n${result.outputDir}\n\n` +
+        `Would you like to open the first part with connected navigation?`
+      );
+
+      if (loadFirst && result.files.length > 0) {
+        await loadFile(result.files[0]);
+      }
+    } else {
+      alert(`Split failed: ${result.error}`);
+    }
+  } finally {
+    unsubscribe();
+    hideProgress();
+  }
+}
+
+async function loadNextSplitFile(): Promise<void> {
+  if (state.splitFiles.length === 0) return;
+  if (state.currentSplitIndex >= state.splitFiles.length - 1) return;
+
+  state.currentSplitIndex++;
+  await loadFile(state.splitFiles[state.currentSplitIndex]);
+}
+
+async function loadPreviousSplitFile(): Promise<void> {
+  if (state.splitFiles.length === 0) return;
+  if (state.currentSplitIndex <= 0) return;
+
+  state.currentSplitIndex--;
+  await loadFile(state.splitFiles[state.currentSplitIndex]);
 }
 
 // Bookmarks
@@ -1267,7 +1500,14 @@ function updateAnalysisUI(): void {
 
 function updateStatusBar(): void {
   if (state.filePath) {
-    elements.statusFile.textContent = getFileName(state.filePath);
+    let fileName = getFileName(state.filePath);
+
+    // Show split navigation info in status bar
+    if (state.splitFiles.length > 0 && state.currentSplitIndex >= 0) {
+      fileName = `${fileName} [${state.currentSplitIndex + 1}/${state.splitFiles.length}]`;
+    }
+
+    elements.statusFile.textContent = fileName;
     elements.statusLines.textContent = `${state.totalLines.toLocaleString()} lines`;
     elements.statusSize.textContent = formatBytes(state.fileStats?.size || 0);
 
@@ -1285,8 +1525,85 @@ function updateStatusBar(): void {
   }
 }
 
+function updateSplitNavigation(): void {
+  // Remove existing navigation elements
+  document.querySelectorAll('.split-nav-indicator').forEach(el => el.remove());
+
+  if (state.splitFiles.length === 0 || state.currentSplitIndex < 0) return;
+
+  // Add navigation indicator to the log viewer
+  if (!logContentElement) return;
+
+  // Create navigation container at the end
+  const navContainer = document.createElement('div');
+  navContainer.className = 'split-nav-indicator';
+  navContainer.style.cssText = `
+    position: absolute;
+    bottom: -60px;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    padding: 15px;
+    background: linear-gradient(to bottom, transparent, var(--bg-secondary));
+  `;
+
+  // Previous file button
+  if (state.currentSplitIndex > 0) {
+    const prevBtn = document.createElement('button');
+    prevBtn.className = 'split-nav-btn';
+    prevBtn.innerHTML = `&larr; Previous: ${getFileName(state.splitFiles[state.currentSplitIndex - 1])}`;
+    prevBtn.style.cssText = `
+      padding: 8px 16px;
+      background-color: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--text-primary);
+      cursor: pointer;
+      font-size: 12px;
+    `;
+    prevBtn.addEventListener('click', loadPreviousSplitFile);
+    navContainer.appendChild(prevBtn);
+  }
+
+  // Next file button
+  if (state.currentSplitIndex < state.splitFiles.length - 1) {
+    const nextBtn = document.createElement('button');
+    nextBtn.className = 'split-nav-btn';
+    nextBtn.innerHTML = `Next: ${getFileName(state.splitFiles[state.currentSplitIndex + 1])} &rarr;`;
+    nextBtn.style.cssText = `
+      padding: 8px 16px;
+      background-color: var(--accent-color);
+      border: none;
+      border-radius: 4px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 12px;
+    `;
+    nextBtn.addEventListener('click', loadNextSplitFile);
+    navContainer.appendChild(nextBtn);
+  }
+
+  // Only add if there are navigation buttons
+  if (navContainer.children.length > 0) {
+    logContentElement.appendChild(navContainer);
+
+    // Add extra height to log content to make room for navigation
+    const currentHeight = parseInt(logContentElement.style.height) || 0;
+    logContentElement.style.height = `${currentHeight + 80}px`;
+  }
+}
+
 function updateCursorStatus(lineNumber: number): void {
   elements.statusCursor.textContent = `Ln ${lineNumber + 1}`;
+}
+
+function updateSelectionStatus(): void {
+  if (state.selectionStart !== null && state.selectionEnd !== null) {
+    const count = state.selectionEnd - state.selectionStart + 1;
+    elements.statusCursor.textContent = `Ln ${state.selectionStart + 1}-${state.selectionEnd + 1} (${count} lines selected)`;
+  }
 }
 
 function showProgress(text: string): void {
@@ -1400,6 +1717,19 @@ function setupKeyboardShortcuts(): void {
     if (e.key === 'Escape') {
       hideFilterModal();
       hideHighlightModal();
+      hideSplitModal();
+    }
+
+    // Ctrl/Cmd + PageDown: Next split file
+    if ((e.ctrlKey || e.metaKey) && e.key === 'PageDown') {
+      e.preventDefault();
+      loadNextSplitFile();
+    }
+
+    // Ctrl/Cmd + PageUp: Previous split file
+    if ((e.ctrlKey || e.metaKey) && e.key === 'PageUp') {
+      e.preventDefault();
+      loadPreviousSplitFile();
     }
 
     // Ctrl/Cmd + B: Toggle bookmark
@@ -1436,6 +1766,14 @@ function setupKeyboardShortcuts(): void {
         createHighlightFromSelection(selectedText, false);
       }
     }
+
+    // Ctrl/Cmd + Shift + S: Save selected lines to file
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'S') {
+      e.preventDefault();
+      if (state.selectionStart !== null && state.selectionEnd !== null) {
+        saveSelectedLinesToFile();
+      }
+    }
   });
 }
 
@@ -1469,6 +1807,17 @@ function init(): void {
 
   // Analysis
   elements.btnAnalyze.addEventListener('click', analyzeFile);
+
+  // Split
+  elements.btnSplit.addEventListener('click', showSplitModal);
+  elements.btnDoSplit.addEventListener('click', doSplit);
+  elements.btnCancelSplit.addEventListener('click', hideSplitModal);
+
+  // Split mode and value change handlers
+  document.querySelectorAll('input[name="split-mode"]').forEach((radio) => {
+    radio.addEventListener('change', updateSplitPreview);
+  });
+  elements.splitValue.addEventListener('input', updateSplitPreview);
 
   // Sidebar
   elements.btnToggleSidebar.addEventListener('click', toggleSidebar);

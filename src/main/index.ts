@@ -216,3 +216,117 @@ ipcMain.handle('get-file-info', async () => {
   if (!fileHandler) return { success: false, error: 'No file open' };
   return { success: true, info: fileHandler.getFileInfo() };
 });
+
+// === Save Selected Lines ===
+
+ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: number) => {
+  if (!fileHandler) return { success: false, error: 'No file open' };
+
+  try {
+    // Get the lines
+    const count = endLine - startLine + 1;
+    const lines = fileHandler.getLines(startLine, count);
+
+    if (lines.length === 0) {
+      return { success: false, error: 'No lines to save' };
+    }
+
+    // Get current file's directory
+    const fileInfo = fileHandler.getFileInfo();
+    if (!fileInfo) return { success: false, error: 'No file info' };
+
+    const currentDir = path.dirname(fileInfo.path);
+    const selectedDir = path.join(currentDir, 'selected');
+
+    // Create 'selected' folder if it doesn't exist
+    if (!fs.existsSync(selectedDir)) {
+      fs.mkdirSync(selectedDir, { recursive: true });
+    }
+
+    // Create filename with timestamp
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `${timestamp}.log`;
+    const filePath = path.join(selectedDir, filename);
+
+    // Write lines to file
+    const content = lines.map(l => l.text).join('\n');
+    fs.writeFileSync(filePath, content, 'utf-8');
+
+    return { success: true, filePath, lineCount: lines.length };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// === Split File ===
+
+interface SplitOptions {
+  mode: 'lines' | 'parts';
+  value: number; // lines per file or number of parts
+}
+
+ipcMain.handle('split-file', async (_, options: SplitOptions) => {
+  if (!fileHandler) return { success: false, error: 'No file open' };
+
+  try {
+    const fileInfo = fileHandler.getFileInfo();
+    if (!fileInfo) return { success: false, error: 'No file info' };
+
+    const totalLines = fileHandler.getTotalLines();
+    const currentDir = path.dirname(fileInfo.path);
+    const baseName = path.basename(fileInfo.path, path.extname(fileInfo.path));
+    const ext = path.extname(fileInfo.path);
+    const splitDir = path.join(currentDir, `${baseName}_split`);
+
+    // Create split folder
+    if (!fs.existsSync(splitDir)) {
+      fs.mkdirSync(splitDir, { recursive: true });
+    }
+
+    let linesPerFile: number;
+    if (options.mode === 'lines') {
+      linesPerFile = options.value;
+    } else {
+      linesPerFile = Math.ceil(totalLines / options.value);
+    }
+
+    const numParts = Math.ceil(totalLines / linesPerFile);
+    const createdFiles: string[] = [];
+    const BATCH_SIZE = 10000;
+
+    for (let part = 0; part < numParts; part++) {
+      const startLine = part * linesPerFile;
+      const endLine = Math.min(startLine + linesPerFile, totalLines);
+      const partNum = String(part + 1).padStart(String(numParts).length, '0');
+      const partFileName = `${baseName}_part${partNum}${ext}`;
+      const partFilePath = path.join(splitDir, partFileName);
+
+      // Write in batches to handle large parts
+      await new Promise<void>((resolve, reject) => {
+        const writeStream = fs.createWriteStream(partFilePath, { encoding: 'utf-8' });
+
+        writeStream.on('finish', resolve);
+        writeStream.on('error', reject);
+
+        for (let batchStart = startLine; batchStart < endLine; batchStart += BATCH_SIZE) {
+          const batchEnd = Math.min(batchStart + BATCH_SIZE, endLine);
+          const lines = fileHandler!.getLines(batchStart, batchEnd - batchStart);
+          const content = lines.map(l => l.text).join('\n');
+          writeStream.write(batchStart > startLine ? '\n' + content : content);
+        }
+
+        writeStream.end();
+      });
+
+      createdFiles.push(partFilePath);
+
+      // Report progress
+      const progress = Math.round(((part + 1) / numParts) * 100);
+      mainWindow?.webContents.send('split-progress', { percent: progress, currentPart: part + 1, totalParts: numParts });
+    }
+
+    return { success: true, outputDir: splitDir, files: createdFiles, partCount: numParts };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});

@@ -31,6 +31,7 @@
         </div>
         <div class="separator"></div>
         <button id="btn-filter" class="toolbar-btn" title="Filter settings">Filter</button>
+        <button id="btn-split" class="toolbar-btn" title="Split file into parts" disabled>Split</button>
         <button id="btn-analyze" class="toolbar-btn" title="Analyze file" disabled>Analyze</button>
       </div>
       <div class="toolbar-right">
@@ -190,6 +191,41 @@
         <div class="modal-footer">
           <button id="btn-clear-filter" class="secondary-btn">Clear Filter</button>
           <button id="btn-apply-filter" class="primary-btn">Apply Filter</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Split Modal -->
+    <div id="split-modal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>Split File</h3>
+          <button class="modal-close" data-modal="split-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="filter-group">
+            <label>Split Mode</label>
+            <div class="radio-group">
+              <label class="radio-label">
+                <input type="radio" name="split-mode" value="lines" checked> By lines per file
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="split-mode" value="parts"> By number of parts
+              </label>
+            </div>
+          </div>
+          <div class="filter-group">
+            <label for="split-value">Value</label>
+            <input type="number" id="split-value" class="modal-input" value="1000000" min="1">
+            <span id="split-hint" class="hint">Lines per output file</span>
+          </div>
+          <div class="filter-group">
+            <div id="split-preview" class="split-preview"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-cancel-split" class="secondary-btn">Cancel</button>
+          <button id="btn-do-split" class="primary-btn">Split File</button>
         </div>
       </div>
     </div>

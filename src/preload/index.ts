@@ -61,6 +61,20 @@ const api = {
   getNextHighlightColor: (): Promise<{ success: boolean; color?: string }> =>
     ipcRenderer.invoke('highlight-get-next-color'),
 
+  // Save selected lines
+  saveSelectedLines: (startLine: number, endLine: number): Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }> =>
+    ipcRenderer.invoke('save-selected-lines', startLine, endLine),
+
+  // Split file
+  splitFile: (options: { mode: 'lines' | 'parts'; value: number }): Promise<{ success: boolean; outputDir?: string; files?: string[]; partCount?: number; error?: string }> =>
+    ipcRenderer.invoke('split-file', options),
+
+  onSplitProgress: (callback: (data: { percent: number; currentPart: number; totalParts: number }) => void): (() => void) => {
+    const handler = (_: any, data: { percent: number; currentPart: number; totalParts: number }) => callback(data);
+    ipcRenderer.on('split-progress', handler);
+    return () => ipcRenderer.removeListener('split-progress', handler);
+  },
+
   // Event listeners
   onIndexingProgress: (callback: (percent: number) => void): (() => void) => {
     const handler = (_: any, percent: number) => callback(percent);

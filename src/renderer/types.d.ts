@@ -112,6 +112,13 @@ interface Api {
   clearHighlights: () => Promise<{ success: boolean }>;
   getNextHighlightColor: () => Promise<{ success: boolean; color?: string }>;
 
+  // Save selected lines
+  saveSelectedLines: (startLine: number, endLine: number) => Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }>;
+
+  // Split file
+  splitFile: (options: { mode: 'lines' | 'parts'; value: number }) => Promise<{ success: boolean; outputDir?: string; files?: string[]; partCount?: number; error?: string }>;
+  onSplitProgress: (callback: (data: { percent: number; currentPart: number; totalParts: number }) => void) => () => void;
+
   // Analysis
   analyzeFile: (path: string) => Promise<{ success: boolean; result?: AnalysisResult; error?: string }>;
   applyFilter: (config: FilterConfig) => Promise<{ success: boolean; stats?: { filteredLines: number }; error?: string }>;

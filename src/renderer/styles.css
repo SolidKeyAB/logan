@@ -502,6 +502,11 @@ body {
   background-color: var(--bg-active);
 }
 
+.log-line.range-selected {
+  background-color: rgba(0, 122, 204, 0.2);
+  border-left: 2px solid var(--accent-color);
+}
+
 .log-line.bookmarked {
   border-left: 3px solid var(--accent-color);
   padding-left: 7px;
@@ -704,6 +709,40 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.radio-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.radio-label input[type="radio"] {
+  cursor: pointer;
+}
+
+.hint {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.split-preview {
+  padding: 10px;
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .filter-textarea {
