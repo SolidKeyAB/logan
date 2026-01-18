@@ -32,6 +32,13 @@ interface BookmarksStore {
   [filePath: string]: Bookmark[];
 }
 
+// Highlights storage structure: { "_global": [...], "/path/to/file.log": [...] }
+// _global key stores highlights that apply to all files
+const GLOBAL_HIGHLIGHTS_KEY = '_global';
+interface HighlightsStore {
+  [key: string]: Highlight[]; // key is either "_global" or file path
+}
+
 // Color palette for auto-assignment
 const COLOR_PALETTE = [
   '#ffff00', // Yellow
@@ -57,32 +64,92 @@ function getNextColor(): string {
   return COLOR_PALETTE[Math.floor(Math.random() * COLOR_PALETTE.length)];
 }
 
-function loadHighlightsFromConfig(): void {
+// Load all highlights from config file
+function loadHighlightsStore(): HighlightsStore {
   try {
     ensureConfigDir();
     const configPath = getHighlightsPath();
     if (fs.existsSync(configPath)) {
       const data = fs.readFileSync(configPath, 'utf-8');
-      const savedHighlights: Highlight[] = JSON.parse(data);
-      highlights.clear();
-      for (const h of savedHighlights) {
-        highlights.set(h.id, h);
+      const parsed = JSON.parse(data);
+      // Handle migration from old format (array) to new format (object)
+      if (Array.isArray(parsed)) {
+        // Old format: treat all as global
+        return { [GLOBAL_HIGHLIGHTS_KEY]: parsed };
       }
+      return parsed;
     }
   } catch (error) {
     console.error('Failed to load highlights config:', error);
   }
+  return {};
 }
 
-function saveHighlightsToConfig(): void {
+// Save all highlights to config file
+function saveHighlightsStore(store: HighlightsStore): void {
   try {
     ensureConfigDir();
     const configPath = getHighlightsPath();
-    const data = JSON.stringify(Array.from(highlights.values()), null, 2);
+    // Clean up empty arrays
+    const cleanStore: HighlightsStore = {};
+    for (const [key, value] of Object.entries(store)) {
+      if (value.length > 0) {
+        cleanStore[key] = value;
+      }
+    }
+    const data = JSON.stringify(cleanStore, null, 2);
     fs.writeFileSync(configPath, data, 'utf-8');
   } catch (error) {
     console.error('Failed to save highlights config:', error);
   }
+}
+
+// Load highlights for a specific file (combines global + file-specific)
+function loadHighlightsForFile(filePath: string): void {
+  highlights.clear();
+  const store = loadHighlightsStore();
+
+  // Load global highlights first
+  const globalHighlights = store[GLOBAL_HIGHLIGHTS_KEY] || [];
+  for (const h of globalHighlights) {
+    highlights.set(h.id, { ...h, isGlobal: true });
+  }
+
+  // Load file-specific highlights
+  const fileHighlights = store[filePath] || [];
+  for (const h of fileHighlights) {
+    highlights.set(h.id, { ...h, isGlobal: false });
+  }
+}
+
+// Save a highlight (to global or file-specific storage)
+function saveHighlight(highlight: Highlight): void {
+  if (!currentFilePath && !highlight.isGlobal) return;
+
+  const store = loadHighlightsStore();
+  const key = highlight.isGlobal ? GLOBAL_HIGHLIGHTS_KEY : currentFilePath!;
+
+  if (!store[key]) {
+    store[key] = [];
+  }
+
+  // Remove old version if exists (in case of update or global toggle change)
+  for (const k of Object.keys(store)) {
+    store[k] = store[k].filter(h => h.id !== highlight.id);
+  }
+
+  // Add to appropriate location
+  store[key].push(highlight);
+  saveHighlightsStore(store);
+}
+
+// Remove a highlight from storage
+function removeHighlightFromStore(highlightId: string): void {
+  const store = loadHighlightsStore();
+  for (const key of Object.keys(store)) {
+    store[key] = store[key].filter(h => h.id !== highlightId);
+  }
+  saveHighlightsStore(store);
 }
 
 // Load all bookmarks from config file
@@ -159,7 +226,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  loadHighlightsFromConfig();
+  ensureConfigDir();
   createWindow();
 });
 
@@ -195,8 +262,9 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
       mainWindow?.webContents.send('indexing-progress', percent);
     });
 
-    // Load bookmarks for this file
+    // Load bookmarks and highlights for this file
     loadBookmarksForFile(filePath);
+    loadHighlightsForFile(filePath);
 
     // Check for split metadata in file header (preferred)
     const splitMeta = fileHandler.getSplitMetadata();
@@ -243,7 +311,8 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
       info,
       splitFiles: splitInfo?.files,
       splitIndex: splitInfo?.currentIndex,
-      bookmarks: Array.from(bookmarks.values())
+      bookmarks: Array.from(bookmarks.values()),
+      highlights: Array.from(highlights.values())
     };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -363,14 +432,23 @@ ipcMain.handle('bookmark-update', async (_, bookmark: Bookmark) => {
 
 ipcMain.handle('highlight-add', async (_, highlight: Highlight) => {
   highlights.set(highlight.id, highlight);
-  saveHighlightsToConfig();
+  saveHighlight(highlight);
   return { success: true };
 });
 
 ipcMain.handle('highlight-remove', async (_, id: string) => {
   highlights.delete(id);
-  saveHighlightsToConfig();
+  removeHighlightFromStore(id);
   return { success: true };
+});
+
+ipcMain.handle('highlight-update', async (_, highlight: Highlight) => {
+  if (highlights.has(highlight.id)) {
+    highlights.set(highlight.id, highlight);
+    saveHighlight(highlight);
+    return { success: true };
+  }
+  return { success: false, error: 'Highlight not found' };
 });
 
 ipcMain.handle('highlight-list', async () => {
@@ -378,8 +456,23 @@ ipcMain.handle('highlight-list', async () => {
 });
 
 ipcMain.handle('highlight-clear', async () => {
+  // Only clear file-specific highlights for current file, not global ones
+  const store = loadHighlightsStore();
+  if (currentFilePath && store[currentFilePath]) {
+    delete store[currentFilePath];
+    saveHighlightsStore(store);
+  }
+  // Reload to keep global highlights
+  if (currentFilePath) {
+    loadHighlightsForFile(currentFilePath);
+  }
+  return { success: true, highlights: Array.from(highlights.values()) };
+});
+
+ipcMain.handle('highlight-clear-all', async () => {
+  // Clear all highlights including global
   highlights.clear();
-  saveHighlightsToConfig();
+  saveHighlightsStore({});
   return { success: true };
 });
 

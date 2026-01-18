@@ -416,6 +416,48 @@ body {
   border: 1px solid var(--border-color);
 }
 
+.highlight-item .highlight-scope {
+  font-size: 9px;
+  font-weight: bold;
+  padding: 1px 4px;
+  border-radius: 3px;
+  margin-left: 4px;
+}
+
+.highlight-item .highlight-scope.global {
+  background-color: rgba(55, 148, 255, 0.3);
+  color: var(--info-color);
+}
+
+.highlight-item .highlight-scope.local {
+  background-color: rgba(106, 153, 85, 0.3);
+  color: var(--debug-color);
+}
+
+.highlight-item .highlight-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.highlight-item:hover .highlight-actions {
+  opacity: 1;
+}
+
+.highlight-item .highlight-toggle-global {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+.highlight-item .highlight-toggle-global:hover {
+  background-color: var(--bg-hover);
+}
+
 .add-btn {
   width: 100%;
   padding: 6px;

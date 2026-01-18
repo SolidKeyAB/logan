@@ -42,6 +42,7 @@ export interface Highlight {
   textColor?: string;
   includeWhitespace: boolean;
   highlightAll: boolean; // true = all occurrences, false = first only per line
+  isGlobal?: boolean; // true = applies to all files, false = file-specific
 }
 
 export interface ChunkRequest {

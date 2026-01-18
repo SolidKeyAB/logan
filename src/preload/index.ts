@@ -55,11 +55,17 @@ const api = {
   removeHighlight: (id: string): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('highlight-remove', id),
 
+  updateHighlight: (highlight: any): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('highlight-update', highlight),
+
   listHighlights: (): Promise<{ success: boolean; highlights?: any[] }> =>
     ipcRenderer.invoke('highlight-list'),
 
-  clearHighlights: (): Promise<{ success: boolean }> =>
+  clearHighlights: (): Promise<{ success: boolean; highlights?: any[] }> =>
     ipcRenderer.invoke('highlight-clear'),
+
+  clearAllHighlights: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('highlight-clear-all'),
 
   getNextHighlightColor: (): Promise<{ success: boolean; color?: string }> =>
     ipcRenderer.invoke('highlight-get-next-color'),

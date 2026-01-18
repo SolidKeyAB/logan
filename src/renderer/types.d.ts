@@ -86,12 +86,13 @@ interface HighlightConfig {
   textColor?: string;
   includeWhitespace: boolean;
   highlightAll: boolean; // true = all occurrences, false = first only per line
+  isGlobal?: boolean; // true = applies to all files, false = file-specific
 }
 
 interface Api {
   // File operations
   openFileDialog: () => Promise<string | null>;
-  openFile: (path: string) => Promise<{ success: boolean; info?: FileInfo; error?: string; splitFiles?: string[]; splitIndex?: number; bookmarks?: Bookmark[] }>;
+  openFile: (path: string) => Promise<{ success: boolean; info?: FileInfo; error?: string; splitFiles?: string[]; splitIndex?: number; bookmarks?: Bookmark[]; highlights?: HighlightConfig[] }>;
   getLines: (startLine: number, count: number) => Promise<{ success: boolean; lines?: LogLine[]; error?: string }>;
   getFileInfo: () => Promise<{ success: boolean; info?: FileInfo; error?: string }>;
 
@@ -109,8 +110,10 @@ interface Api {
   // Highlights
   addHighlight: (highlight: HighlightConfig) => Promise<{ success: boolean }>;
   removeHighlight: (id: string) => Promise<{ success: boolean }>;
+  updateHighlight: (highlight: HighlightConfig) => Promise<{ success: boolean }>;
   listHighlights: () => Promise<{ success: boolean; highlights?: HighlightConfig[] }>;
-  clearHighlights: () => Promise<{ success: boolean }>;
+  clearHighlights: () => Promise<{ success: boolean; highlights?: HighlightConfig[] }>;
+  clearAllHighlights: () => Promise<{ success: boolean }>;
   getNextHighlightColor: () => Promise<{ success: boolean; color?: string }>;
 
   // Save selected lines

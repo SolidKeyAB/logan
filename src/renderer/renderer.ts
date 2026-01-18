@@ -236,6 +236,7 @@ const elements = {
   highlightWholeWord: document.getElementById('highlight-whole-word') as HTMLInputElement,
   highlightIncludeWhitespace: document.getElementById('highlight-include-whitespace') as HTMLInputElement,
   highlightAll: document.getElementById('highlight-all') as HTMLInputElement,
+  highlightGlobal: document.getElementById('highlight-global') as HTMLInputElement,
   highlightBgColor: document.getElementById('highlight-bg-color') as HTMLInputElement,
   highlightTextColor: document.getElementById('highlight-text-color') as HTMLInputElement,
   btnSaveHighlight: document.getElementById('btn-save-highlight') as HTMLButtonElement,
@@ -1494,6 +1495,14 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       }
       updateBookmarksUI();
 
+      // Load highlights from file open response (global + file-specific)
+      if (result.highlights && Array.isArray(result.highlights)) {
+        state.highlights = result.highlights;
+      } else {
+        state.highlights = [];
+      }
+      updateHighlightsUI();
+
       // Handle split file detection (from opening an existing split file or header metadata)
       if (result.splitFiles && result.splitFiles.length > 0) {
         // Only update split state if not already navigating within the same split set
@@ -1955,6 +1964,7 @@ async function showHighlightModal(): Promise<void> {
   elements.highlightWholeWord.checked = false;
   elements.highlightIncludeWhitespace.checked = false;
   elements.highlightAll.checked = true;
+  elements.highlightGlobal.checked = false;
   elements.highlightTextColor.value = '#000000';
 
   // Auto-assign next color
@@ -1986,6 +1996,7 @@ async function saveHighlight(): Promise<void> {
     textColor: elements.highlightTextColor.value,
     includeWhitespace: elements.highlightIncludeWhitespace.checked,
     highlightAll: elements.highlightAll.checked,
+    isGlobal: elements.highlightGlobal.checked,
   };
 
   const result = await window.api.addHighlight(highlight);
@@ -1994,6 +2005,18 @@ async function saveHighlight(): Promise<void> {
     updateHighlightsUI();
     renderVisibleLines();
     hideHighlightModal();
+  }
+}
+
+// Toggle highlight between global and file-specific
+async function toggleHighlightGlobal(highlightId: string): Promise<void> {
+  const highlight = state.highlights.find(h => h.id === highlightId);
+  if (!highlight) return;
+
+  highlight.isGlobal = !highlight.isGlobal;
+  const result = await window.api.updateHighlight(highlight);
+  if (result.success) {
+    updateHighlightsUI();
   }
 }
 
@@ -2007,20 +2030,25 @@ function updateHighlightsUI(): void {
   elements.highlightsList.innerHTML = state.highlights
     .map(
       (h) => `
-      <div class="highlight-item" data-id="${h.id}">
+      <div class="highlight-item" data-id="${h.id}" title="${h.isGlobal ? 'Global - applies to all files' : 'Local - applies to this file only'}">
         <div class="highlight-preview">
           <span class="highlight-color" style="background-color: ${h.backgroundColor}"></span>
           <span>${escapeHtml(h.pattern)}</span>
+          <span class="highlight-scope ${h.isGlobal ? 'global' : 'local'}">${h.isGlobal ? 'G' : 'L'}</span>
         </div>
-        <button class="highlight-delete" data-id="${h.id}">&times;</button>
+        <div class="highlight-actions">
+          <button class="highlight-toggle-global" data-id="${h.id}" title="${h.isGlobal ? 'Make local (this file only)' : 'Make global (all files)'}">${h.isGlobal ? '🌐' : '📄'}</button>
+          <button class="highlight-delete" data-id="${h.id}" title="Delete">&times;</button>
+        </div>
       </div>
     `
     )
     .join('');
 
-  // Add click handlers
+  // Add click handlers for delete
   elements.highlightsList.querySelectorAll('.highlight-delete').forEach((btn) => {
     btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
       const id = (e.target as HTMLElement).dataset.id!;
       const result = await window.api.removeHighlight(id);
       if (result.success) {
@@ -2028,6 +2056,15 @@ function updateHighlightsUI(): void {
         updateHighlightsUI();
         renderVisibleLines();
       }
+    });
+  });
+
+  // Add click handlers for toggle global
+  elements.highlightsList.querySelectorAll('.highlight-toggle-global').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = (e.target as HTMLElement).dataset.id!;
+      await toggleHighlightGlobal(id);
     });
   });
 }
