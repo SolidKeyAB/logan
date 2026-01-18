@@ -295,6 +295,34 @@ body {
   font-weight: 500;
 }
 
+/* Analysis Progress (inline, non-blocking) */
+.analysis-progress {
+  padding: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+.analysis-progress-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.analysis-progress-bar {
+  height: 4px;
+  background: var(--border-color);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.analysis-progress-fill {
+  height: 100%;
+  background: var(--accent-color);
+  width: 0%;
+  transition: width 0.2s ease;
+}
+
 /* Level Counts */
 .level-counts {
   display: flex;

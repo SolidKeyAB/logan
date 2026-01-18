@@ -51,11 +51,25 @@ interface DuplicateGroup {
 }
 
 interface AnalysisResult {
-  stats: FileStats;
+  stats: {
+    totalLines: number;
+    analyzedLines: number;
+    uniquePatterns: number;
+    duplicateLines: number;
+  };
   patterns: PatternGroup[];
   levelCounts: Record<string, number>;
   duplicateGroups: DuplicateGroup[];
   timeRange?: { start: string; end: string };
+  analyzerName: string;
+  analyzedAt: number;
+}
+
+interface AnalyzerOptions {
+  maxPatterns?: number;
+  maxDuplicates?: number;
+  sampleSize?: number;
+  includeLineText?: boolean;
 }
 
 interface FilterConfig {
@@ -128,13 +142,15 @@ interface Api {
   onSplitProgress: (callback: (data: { percent: number; currentPart: number; totalParts: number }) => void) => () => void;
 
   // Analysis
-  analyzeFile: (path: string) => Promise<{ success: boolean; result?: AnalysisResult; error?: string }>;
+  listAnalyzers: () => Promise<{ success: boolean; analyzers?: Array<{ name: string; description: string }> }>;
+  analyzeFile: (analyzerName?: string, options?: AnalyzerOptions) => Promise<{ success: boolean; result?: AnalysisResult; error?: string }>;
+  cancelAnalysis: () => Promise<{ success: boolean }>;
   applyFilter: (config: FilterConfig) => Promise<{ success: boolean; stats?: { filteredLines: number }; error?: string }>;
 
   // Events
   onIndexingProgress: (callback: (percent: number) => void) => () => void;
   onSearchProgress: (callback: (data: { percent: number; matchCount: number }) => void) => () => void;
-  onAnalyzeProgress: (callback: (data: { phase: string; percent: number }) => void) => () => void;
+  onAnalyzeProgress: (callback: (data: { phase: string; percent: number; message?: string }) => void) => () => void;
 }
 
 interface Window {

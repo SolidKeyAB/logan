@@ -106,14 +106,20 @@ const api = {
   },
 
   // Analysis
-  analyzeFile: (path: string): Promise<{ success: boolean; result?: any; error?: string }> =>
-    ipcRenderer.invoke('analyze-file', path),
+  listAnalyzers: (): Promise<{ success: boolean; analyzers?: Array<{ name: string; description: string }> }> =>
+    ipcRenderer.invoke('list-analyzers'),
+
+  analyzeFile: (analyzerName?: string, options?: any): Promise<{ success: boolean; result?: any; error?: string }> =>
+    ipcRenderer.invoke('analyze-file', analyzerName, options),
+
+  cancelAnalysis: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('cancel-analysis'),
 
   applyFilter: (config: any): Promise<{ success: boolean; stats?: { filteredLines: number }; error?: string }> =>
     ipcRenderer.invoke('apply-filter', config),
 
-  onAnalyzeProgress: (callback: (data: { phase: string; percent: number }) => void): (() => void) => {
-    const handler = (_: any, data: { phase: string; percent: number }) => callback(data);
+  onAnalyzeProgress: (callback: (data: { phase: string; percent: number; message?: string }) => void): (() => void) => {
+    const handler = (_: any, data: { phase: string; percent: number; message?: string }) => callback(data);
     ipcRenderer.on('analyze-progress', handler);
     return () => ipcRenderer.removeListener('analyze-progress', handler);
   },

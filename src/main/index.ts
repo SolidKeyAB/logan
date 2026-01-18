@@ -5,6 +5,7 @@ import * as os from 'os';
 import { spawn } from 'child_process';
 import { FileHandler } from './fileHandler';
 import { IPC, SearchOptions, Bookmark, Highlight } from '../shared/types';
+import { analyzerRegistry, AnalyzerOptions } from './analyzers';
 
 let mainWindow: BrowserWindow | null = null;
 let searchSignal: { cancelled: boolean } = { cancelled: false };
@@ -643,6 +644,58 @@ ipcMain.handle('save-to-notes', async (_, startLine: number, endLine: number, no
   } catch (error) {
     return { success: false, error: String(error) };
   }
+});
+
+// === Analysis ===
+
+let analyzeSignal: { cancelled: boolean } = { cancelled: false };
+
+// List available analyzers
+ipcMain.handle('list-analyzers', async () => {
+  const analyzers = await analyzerRegistry.getAvailable();
+  return {
+    success: true,
+    analyzers: analyzers.map(a => ({ name: a.name, description: a.description }))
+  };
+});
+
+// Run analysis
+ipcMain.handle('analyze-file', async (_, analyzerName?: string, options?: AnalyzerOptions) => {
+  if (!currentFilePath) {
+    return { success: false, error: 'No file open' };
+  }
+
+  // Get analyzer (default to first available if not specified)
+  const analyzer = analyzerName
+    ? analyzerRegistry.get(analyzerName)
+    : analyzerRegistry.getDefault();
+
+  if (!analyzer) {
+    return { success: false, error: 'Analyzer not found' };
+  }
+
+  analyzeSignal = { cancelled: false };
+
+  try {
+    const result = await analyzer.analyze(
+      currentFilePath,
+      options || {},
+      (progress) => {
+        mainWindow?.webContents.send('analyze-progress', progress);
+      },
+      analyzeSignal
+    );
+
+    return { success: true, result };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// Cancel analysis
+ipcMain.handle('cancel-analysis', async () => {
+  analyzeSignal.cancelled = true;
+  return { success: true };
 });
 
 // === Split File ===

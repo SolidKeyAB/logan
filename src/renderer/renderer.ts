@@ -207,6 +207,9 @@ const elements = {
   welcomeMessage: document.getElementById('welcome-message') as HTMLDivElement,
   fileStats: document.getElementById('file-stats') as HTMLDivElement,
   analysisResults: document.getElementById('analysis-results') as HTMLDivElement,
+  analysisProgress: document.getElementById('analysis-progress') as HTMLDivElement,
+  analysisProgressText: document.querySelector('.analysis-progress-text') as HTMLDivElement,
+  analysisProgressFill: document.querySelector('.analysis-progress-fill') as HTMLDivElement,
   patternsList: document.getElementById('patterns-list') as HTMLDivElement,
   duplicatesList: document.getElementById('duplicates-list') as HTMLDivElement,
   bookmarksList: document.getElementById('bookmarks-list') as HTMLDivElement,
@@ -1626,7 +1629,7 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
 
       await loadVisibleLines();
 
-      elements.btnAnalyze.disabled = true; // Analysis not implemented yet
+      elements.btnAnalyze.disabled = false;
       elements.btnSplit.disabled = false;
       updateStatusBar();
       updateSplitNavigation();
@@ -1664,25 +1667,34 @@ async function loadFileAsInactiveTab(filePath: string): Promise<void> {
 async function analyzeFile(): Promise<void> {
   if (!state.filePath) return;
 
-  showProgress('Analyzing...');
+  // Show inline progress (non-blocking)
+  elements.analysisProgress.style.display = 'block';
+  elements.analysisProgressText.textContent = 'Analyzing...';
+  elements.analysisProgressFill.style.width = '0%';
+  elements.btnAnalyze.disabled = true;
 
   const unsubscribe = window.api.onAnalyzeProgress((progress) => {
-    elements.progressText.textContent = `${progress.phase} ${progress.percent}%`;
-    elements.progressBar.style.setProperty('--progress', `${progress.percent}%`);
+    const message = progress.message || progress.phase;
+    elements.analysisProgressText.textContent = `${message} ${progress.percent}%`;
+    elements.analysisProgressFill.style.width = `${progress.percent}%`;
   });
 
   try {
-    const result = await window.api.analyzeFile(state.filePath);
+    // Use default analyzer (rule-based) - runs async without blocking UI
+    const result = await window.api.analyzeFile();
 
     if (result.success && result.result) {
       state.analysisResult = result.result;
       updateAnalysisUI();
     } else {
-      alert(`Analysis failed: ${result.error}`);
+      elements.analysisResults.innerHTML = `<p class="placeholder" style="color: var(--error-color);">Analysis failed: ${result.error}</p>`;
     }
+  } catch (error) {
+    elements.analysisResults.innerHTML = `<p class="placeholder" style="color: var(--error-color);">Analysis error: ${error}</p>`;
   } finally {
     unsubscribe();
-    hideProgress();
+    elements.analysisProgress.style.display = 'none';
+    elements.btnAnalyze.disabled = false;
   }
 }
 
