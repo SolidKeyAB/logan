@@ -1,6 +1,25 @@
 import * as fs from 'fs';
 import * as readline from 'readline';
+import { spawn } from 'child_process';
 import { FileInfo, LineData, SearchMatch, SearchOptions } from '../shared/types';
+
+// Check if ripgrep is available
+let ripgrepAvailable: boolean | null = null;
+async function checkRipgrep(): Promise<boolean> {
+  if (ripgrepAvailable !== null) return ripgrepAvailable;
+
+  return new Promise((resolve) => {
+    const proc = spawn('rg', ['--version']);
+    proc.on('error', () => {
+      ripgrepAvailable = false;
+      resolve(false);
+    });
+    proc.on('close', (code) => {
+      ripgrepAvailable = code === 0;
+      resolve(ripgrepAvailable);
+    });
+  });
+}
 
 interface LineOffset {
   offset: number;
@@ -165,6 +184,141 @@ export class FileHandler {
   ): Promise<SearchMatch[]> {
     if (!this.filePath) return [];
 
+    // Try ripgrep first for much faster search
+    const hasRipgrep = await checkRipgrep();
+    if (hasRipgrep) {
+      return this.searchWithRipgrep(options, onProgress, signal);
+    }
+
+    // Fall back to stream-based search
+    return this.searchWithStream(options, onProgress, signal);
+  }
+
+  private async searchWithRipgrep(
+    options: SearchOptions,
+    onProgress?: (percent: number, matchCount: number) => void,
+    signal?: { cancelled: boolean }
+  ): Promise<SearchMatch[]> {
+    if (!this.filePath) return [];
+
+    const matches: SearchMatch[] = [];
+    const MAX_MATCHES = 50000;
+
+    // Build ripgrep arguments
+    const args: string[] = [
+      '--line-number',
+      '--column',
+      '--no-heading',
+      '--with-filename',
+    ];
+
+    if (!options.matchCase) {
+      args.push('--ignore-case');
+    }
+
+    if (options.wholeWord) {
+      args.push('--word-regexp');
+    }
+
+    if (!options.isRegex) {
+      args.push('--fixed-strings');
+    }
+
+    // Limit matches
+    args.push('--max-count', String(MAX_MATCHES));
+
+    // Add pattern and file
+    args.push('--', options.pattern, this.filePath);
+
+    return new Promise((resolve) => {
+      const proc = spawn('rg', args);
+      let buffer = '';
+      let lastProgressUpdate = Date.now();
+
+      proc.stdout.on('data', (data: Buffer) => {
+        if (signal?.cancelled) {
+          proc.kill();
+          return;
+        }
+
+        buffer += data.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (!line) continue;
+
+          // Parse ripgrep output: filename:line:column:text
+          const colonIndex1 = line.indexOf(':');
+          if (colonIndex1 === -1) continue;
+
+          const colonIndex2 = line.indexOf(':', colonIndex1 + 1);
+          if (colonIndex2 === -1) continue;
+
+          const colonIndex3 = line.indexOf(':', colonIndex2 + 1);
+          if (colonIndex3 === -1) continue;
+
+          const lineNum = parseInt(line.substring(colonIndex1 + 1, colonIndex2), 10);
+          const column = parseInt(line.substring(colonIndex2 + 1, colonIndex3), 10);
+          const lineText = line.substring(colonIndex3 + 1);
+
+          // Adjust for header offset
+          const adjustedLineNum = lineNum - 1 - this.headerLineCount;
+          if (adjustedLineNum < 0) continue;
+
+          matches.push({
+            lineNumber: adjustedLineNum,
+            column: column - 1, // ripgrep uses 1-based columns
+            length: options.pattern.length,
+            lineText,
+          });
+
+          if (matches.length >= MAX_MATCHES) {
+            proc.kill();
+            break;
+          }
+        }
+
+        // Throttle progress updates
+        const now = Date.now();
+        if (onProgress && now - lastProgressUpdate > 100) {
+          lastProgressUpdate = now;
+          // Estimate progress based on matches (ripgrep doesn't report %)
+          onProgress(Math.min(90, matches.length / 100), matches.length);
+        }
+      });
+
+      proc.on('error', () => {
+        // Ripgrep failed, resolve with what we have
+        resolve(matches);
+      });
+
+      proc.on('close', () => {
+        onProgress?.(100, matches.length);
+        resolve(matches);
+      });
+
+      // Handle cancellation
+      if (signal) {
+        const checkCancel = setInterval(() => {
+          if (signal.cancelled) {
+            proc.kill();
+            clearInterval(checkCancel);
+          }
+        }, 100);
+
+        proc.on('close', () => clearInterval(checkCancel));
+      }
+    });
+  }
+
+  private async searchWithStream(
+    options: SearchOptions,
+    onProgress?: (percent: number, matchCount: number) => void,
+    signal?: { cancelled: boolean }
+  ): Promise<SearchMatch[]> {
+    if (!this.filePath) return [];
+
     const matches: SearchMatch[] = [];
     let regex: RegExp;
 
@@ -183,39 +337,60 @@ export class FileHandler {
       return [];
     }
 
-    const totalLines = this.lineOffsets.length;
-    const BATCH_SIZE = 10000;
+    const fileSize = fs.statSync(this.filePath).size;
+    let bytesRead = 0;
+    let lineNumber = 0;
+    let lastProgressUpdate = Date.now();
 
-    for (let start = 0; start < totalLines; start += BATCH_SIZE) {
-      if (signal?.cancelled) break;
+    const stream = fs.createReadStream(this.filePath, { encoding: 'utf-8' });
+    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
-      const lines = this.getLines(start, BATCH_SIZE);
+    for await (const line of rl) {
+      if (signal?.cancelled) {
+        rl.close();
+        stream.destroy();
+        break;
+      }
 
-      for (const line of lines) {
-        let match;
-        regex.lastIndex = 0;
+      bytesRead += Buffer.byteLength(line, 'utf-8') + 1;
 
-        while ((match = regex.exec(line.text)) !== null) {
-          matches.push({
-            lineNumber: line.lineNumber,
-            column: match.index,
-            length: match[0].length,
-            lineText: line.text,
-          });
+      // Skip header lines
+      if (lineNumber < this.headerLineCount) {
+        lineNumber++;
+        continue;
+      }
 
-          // Limit to 50000 matches
-          if (matches.length >= 50000) {
-            return matches;
-          }
+      const visibleLineNum = lineNumber - this.headerLineCount;
+      let match;
+      regex.lastIndex = 0;
+
+      while ((match = regex.exec(line)) !== null) {
+        matches.push({
+          lineNumber: visibleLineNum,
+          column: match.index,
+          length: match[0].length,
+          lineText: line,
+        });
+
+        if (matches.length >= 50000) {
+          rl.close();
+          stream.destroy();
+          return matches;
         }
       }
 
-      if (onProgress) {
-        const progress = Math.round(((start + BATCH_SIZE) / totalLines) * 100);
-        onProgress(Math.min(progress, 100), matches.length);
+      lineNumber++;
+
+      // Throttle progress updates
+      const now = Date.now();
+      if (onProgress && now - lastProgressUpdate > 100) {
+        lastProgressUpdate = now;
+        const progress = Math.round((bytesRead / fileSize) * 100);
+        onProgress(Math.min(progress, 99), matches.length);
       }
     }
 
+    onProgress?.(100, matches.length);
     return matches;
   }
 

@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import { spawn } from 'child_process';
 import { FileHandler } from './fileHandler';
 import { IPC, SearchOptions, Bookmark, Highlight } from '../shared/types';
 
@@ -526,6 +527,31 @@ ipcMain.handle('get-file-info', async () => {
   const handler = getFileHandler();
   if (!handler) return { success: false, error: 'No file open' };
   return { success: true, info: handler.getFileInfo() };
+});
+
+// Check if ripgrep is available
+ipcMain.handle('check-search-engine', async () => {
+  return new Promise((resolve) => {
+    const proc = spawn('rg', ['--version']);
+    let version = '';
+
+    proc.stdout.on('data', (data: Buffer) => {
+      version += data.toString();
+    });
+
+    proc.on('error', () => {
+      resolve({ engine: 'stream', version: null });
+    });
+
+    proc.on('close', (code) => {
+      if (code === 0) {
+        const match = version.match(/ripgrep\s+([\d.]+)/);
+        resolve({ engine: 'ripgrep', version: match ? match[1] : 'unknown' });
+      } else {
+        resolve({ engine: 'stream', version: null });
+      }
+    });
+  });
 });
 
 // === Save Selected Lines ===

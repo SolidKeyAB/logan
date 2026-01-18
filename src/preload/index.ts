@@ -25,6 +25,10 @@ const api = {
   getFileInfo: (): Promise<{ success: boolean; info?: any; error?: string }> =>
     ipcRenderer.invoke('get-file-info'),
 
+  // System info
+  checkSearchEngine: (): Promise<{ engine: 'ripgrep' | 'stream'; version: string | null }> =>
+    ipcRenderer.invoke('check-search-engine'),
+
   // Search
   search: (options: { pattern: string; isRegex: boolean; matchCase: boolean; wholeWord: boolean }): Promise<{ success: boolean; matches?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.SEARCH, options),

@@ -200,6 +200,8 @@ const elements = {
   searchRegex: document.getElementById('search-regex') as HTMLInputElement,
   searchCase: document.getElementById('search-case') as HTMLInputElement,
   searchResultCount: document.getElementById('search-result-count') as HTMLSpanElement,
+  searchEngineBadge: document.getElementById('search-engine-badge') as HTMLSpanElement,
+  searchEngineInfo: document.getElementById('search-engine-info') as HTMLParagraphElement,
   sidebar: document.getElementById('sidebar') as HTMLElement,
   editorContainer: document.getElementById('editor-container') as HTMLDivElement,
   welcomeMessage: document.getElementById('welcome-message') as HTMLDivElement,
@@ -2740,8 +2742,40 @@ function setupKeyboardShortcuts(): void {
   });
 }
 
+// Check and display search engine status
+async function checkSearchEngine(): Promise<void> {
+  try {
+    const result = await window.api.checkSearchEngine();
+    const badge = elements.searchEngineBadge;
+    const info = elements.searchEngineInfo;
+
+    if (result.engine === 'ripgrep') {
+      badge.textContent = `rg ${result.version}`;
+      badge.className = 'search-engine-badge ripgrep';
+      badge.title = `Using ripgrep ${result.version} for fast search`;
+      if (info) {
+        info.textContent = `Using ripgrep ${result.version} for fast search`;
+        info.style.color = '#7fff7f';
+      }
+    } else {
+      badge.textContent = 'stream';
+      badge.className = 'search-engine-badge stream';
+      badge.title = 'Using stream-based search (install ripgrep for faster search)';
+      if (info) {
+        info.textContent = 'Using stream-based search. Install ripgrep for 10-100x faster search.';
+        info.style.color = '#ffd27f';
+      }
+    }
+  } catch {
+    elements.searchEngineBadge.textContent = '';
+  }
+}
+
 // Initialize event listeners
 function init(): void {
+  // Check search engine on startup
+  checkSearchEngine();
+
   // File operations
   elements.btnOpenFile.addEventListener('click', openFile);
   elements.btnOpenWelcome.addEventListener('click', openFile);

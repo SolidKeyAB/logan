@@ -96,6 +96,9 @@ interface Api {
   getLines: (startLine: number, count: number) => Promise<{ success: boolean; lines?: LogLine[]; error?: string }>;
   getFileInfo: () => Promise<{ success: boolean; info?: FileInfo; error?: string }>;
 
+  // System info
+  checkSearchEngine: () => Promise<{ engine: 'ripgrep' | 'stream'; version: string | null }>;
+
   // Search
   search: (options: SearchOptions) => Promise<{ success: boolean; matches?: SearchResult[]; error?: string }>;
   cancelSearch: () => Promise<{ success: boolean }>;

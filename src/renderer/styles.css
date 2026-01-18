@@ -163,6 +163,43 @@ body {
   text-align: center;
 }
 
+.search-engine-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  margin-left: 4px;
+  font-weight: 500;
+}
+
+.search-engine-badge.ripgrep {
+  background: #2d5a27;
+  color: #7fff7f;
+}
+
+.search-engine-badge.stream {
+  background: #5a4a27;
+  color: #ffd27f;
+}
+
+.version-info {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-right: auto;
+}
+
+.help-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.help-text code {
+  background: var(--bg-tertiary);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: monospace;
+}
+
 /* Main Content */
 .main-content {
   display: flex;

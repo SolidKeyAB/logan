@@ -29,6 +29,7 @@
           <button id="btn-search" class="toolbar-btn" title="Search">Search</button>
           <button id="btn-prev-result" class="toolbar-btn small" title="Previous result" disabled>&lt;</button>
           <span id="search-result-count" class="result-count"></span>
+          <span id="search-engine-badge" class="search-engine-badge" title="Search engine"></span>
           <button id="btn-next-result" class="toolbar-btn small" title="Next result" disabled>&gt;</button>
         </div>
         <div class="separator"></div>
@@ -366,8 +367,18 @@
               <li>Binary/corrupted data is automatically detected and hidden</li>
             </ul>
           </div>
+          <div class="help-section">
+            <h4>Search Performance</h4>
+            <p class="help-text" id="search-engine-info">Checking search engine...</p>
+            <ul class="tips-list">
+              <li><strong>ripgrep</strong> - 10-100x faster search (recommended)</li>
+              <li>Install: <code>brew install ripgrep</code> (macOS) or <code>apt install ripgrep</code> (Linux)</li>
+              <li>Falls back to stream-based search if ripgrep is not available</li>
+            </ul>
+          </div>
         </div>
         <div class="modal-footer">
+          <span class="version-info">LOGAN v0.1.0</span>
           <button id="btn-close-help" class="primary-btn">Got it!</button>
         </div>
       </div>
