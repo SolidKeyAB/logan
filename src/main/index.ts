@@ -598,6 +598,8 @@ ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: numb
 });
 
 // === Save to Notes ===
+// TODO: Simplify note file creation - append to single file instead of creating new file for each entry
+// TODO: Simplify naming convention for notes file
 
 ipcMain.handle('save-to-notes', async (_, startLine: number, endLine: number, note?: string) => {
   const handler = getFileHandler();
