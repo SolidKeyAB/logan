@@ -39,6 +39,9 @@ const api = {
   removeBookmark: (id: string): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('bookmark-remove', id),
 
+  updateBookmark: (bookmark: any): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('bookmark-update', bookmark),
+
   listBookmarks: (): Promise<{ success: boolean; bookmarks?: any[] }> =>
     ipcRenderer.invoke('bookmark-list'),
 

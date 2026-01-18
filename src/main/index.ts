@@ -1,19 +1,36 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import { FileHandler } from './fileHandler';
 import { IPC, SearchOptions, Bookmark, Highlight } from '../shared/types';
 
 let mainWindow: BrowserWindow | null = null;
 let fileHandler: FileHandler | null = null;
 let searchSignal: { cancelled: boolean } = { cancelled: false };
+let currentFilePath: string | null = null;
 
 // In-memory storage
 const bookmarks = new Map<string, Bookmark>();
 const highlights = new Map<string, Highlight>();
 
-// Config file path
-const getConfigPath = () => path.join(app.getPath('userData'), 'highlights.json');
+// Config folder path (~/.logan/)
+const getConfigDir = () => path.join(os.homedir(), '.logan');
+const getHighlightsPath = () => path.join(getConfigDir(), 'highlights.json');
+const getBookmarksPath = () => path.join(getConfigDir(), 'bookmarks.json');
+
+// Ensure config directory exists
+function ensureConfigDir(): void {
+  const configDir = getConfigDir();
+  if (!fs.existsSync(configDir)) {
+    fs.mkdirSync(configDir, { recursive: true });
+  }
+}
+
+// Bookmarks storage structure: { "/path/to/file.log": [bookmark1, bookmark2, ...] }
+interface BookmarksStore {
+  [filePath: string]: Bookmark[];
+}
 
 // Color palette for auto-assignment
 const COLOR_PALETTE = [
@@ -42,7 +59,8 @@ function getNextColor(): string {
 
 function loadHighlightsFromConfig(): void {
   try {
-    const configPath = getConfigPath();
+    ensureConfigDir();
+    const configPath = getHighlightsPath();
     if (fs.existsSync(configPath)) {
       const data = fs.readFileSync(configPath, 'utf-8');
       const savedHighlights: Highlight[] = JSON.parse(data);
@@ -58,12 +76,65 @@ function loadHighlightsFromConfig(): void {
 
 function saveHighlightsToConfig(): void {
   try {
-    const configPath = getConfigPath();
+    ensureConfigDir();
+    const configPath = getHighlightsPath();
     const data = JSON.stringify(Array.from(highlights.values()), null, 2);
     fs.writeFileSync(configPath, data, 'utf-8');
   } catch (error) {
     console.error('Failed to save highlights config:', error);
   }
+}
+
+// Load all bookmarks from config file
+function loadBookmarksStore(): BookmarksStore {
+  try {
+    ensureConfigDir();
+    const configPath = getBookmarksPath();
+    if (fs.existsSync(configPath)) {
+      const data = fs.readFileSync(configPath, 'utf-8');
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    console.error('Failed to load bookmarks config:', error);
+  }
+  return {};
+}
+
+// Save all bookmarks to config file
+function saveBookmarksStore(store: BookmarksStore): void {
+  try {
+    ensureConfigDir();
+    const configPath = getBookmarksPath();
+    const data = JSON.stringify(store, null, 2);
+    fs.writeFileSync(configPath, data, 'utf-8');
+  } catch (error) {
+    console.error('Failed to save bookmarks config:', error);
+  }
+}
+
+// Load bookmarks for a specific file into memory
+function loadBookmarksForFile(filePath: string): void {
+  bookmarks.clear();
+  const store = loadBookmarksStore();
+  const fileBookmarks = store[filePath] || [];
+  for (const b of fileBookmarks) {
+    bookmarks.set(b.id, b);
+  }
+  currentFilePath = filePath;
+}
+
+// Save current bookmarks to the store for the current file
+function saveBookmarksForCurrentFile(): void {
+  if (!currentFilePath) return;
+  const store = loadBookmarksStore();
+  const currentBookmarks = Array.from(bookmarks.values());
+  if (currentBookmarks.length > 0) {
+    store[currentFilePath] = currentBookmarks;
+  } else {
+    // Remove empty bookmark arrays to keep config clean
+    delete store[currentFilePath];
+  }
+  saveBookmarksStore(store);
 }
 
 function createWindow() {
@@ -124,6 +195,9 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
       mainWindow?.webContents.send('indexing-progress', percent);
     });
 
+    // Load bookmarks for this file
+    loadBookmarksForFile(filePath);
+
     // Check for split metadata in file header (preferred)
     const splitMeta = fileHandler.getSplitMetadata();
     let splitInfo: { files: string[]; currentIndex: number } | undefined;
@@ -168,7 +242,8 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
       success: true,
       info,
       splitFiles: splitInfo?.files,
-      splitIndex: splitInfo?.currentIndex
+      splitIndex: splitInfo?.currentIndex,
+      bookmarks: Array.from(bookmarks.values())
     };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -254,11 +329,13 @@ ipcMain.handle(IPC.SEARCH_CANCEL, async () => {
 
 ipcMain.handle('bookmark-add', async (_, bookmark: Bookmark) => {
   bookmarks.set(bookmark.id, bookmark);
+  saveBookmarksForCurrentFile();
   return { success: true };
 });
 
 ipcMain.handle('bookmark-remove', async (_, id: string) => {
   bookmarks.delete(id);
+  saveBookmarksForCurrentFile();
   return { success: true };
 });
 
@@ -268,7 +345,18 @@ ipcMain.handle('bookmark-list', async () => {
 
 ipcMain.handle('bookmark-clear', async () => {
   bookmarks.clear();
+  saveBookmarksForCurrentFile();
   return { success: true };
+});
+
+// Update bookmark (for editing comments)
+ipcMain.handle('bookmark-update', async (_, bookmark: Bookmark) => {
+  if (bookmarks.has(bookmark.id)) {
+    bookmarks.set(bookmark.id, bookmark);
+    saveBookmarksForCurrentFile();
+    return { success: true };
+  }
+  return { success: false, error: 'Bookmark not found' };
 });
 
 // === Highlights ===

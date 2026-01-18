@@ -91,7 +91,7 @@ interface HighlightConfig {
 interface Api {
   // File operations
   openFileDialog: () => Promise<string | null>;
-  openFile: (path: string) => Promise<{ success: boolean; info?: FileInfo; error?: string; splitFiles?: string[]; splitIndex?: number }>;
+  openFile: (path: string) => Promise<{ success: boolean; info?: FileInfo; error?: string; splitFiles?: string[]; splitIndex?: number; bookmarks?: Bookmark[] }>;
   getLines: (startLine: number, count: number) => Promise<{ success: boolean; lines?: LogLine[]; error?: string }>;
   getFileInfo: () => Promise<{ success: boolean; info?: FileInfo; error?: string }>;
 
@@ -102,6 +102,7 @@ interface Api {
   // Bookmarks
   addBookmark: (bookmark: Bookmark) => Promise<{ success: boolean }>;
   removeBookmark: (id: string) => Promise<{ success: boolean }>;
+  updateBookmark: (bookmark: Bookmark) => Promise<{ success: boolean }>;
   listBookmarks: () => Promise<{ success: boolean; bookmarks?: Bookmark[] }>;
   clearBookmarks: () => Promise<{ success: boolean }>;
 

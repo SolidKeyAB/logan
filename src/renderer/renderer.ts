@@ -1486,6 +1486,14 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       state.currentSearchIndex = -1;
       cachedLines.clear();
 
+      // Load bookmarks from file open response (persisted per-file)
+      if (result.bookmarks && Array.isArray(result.bookmarks)) {
+        state.bookmarks = result.bookmarks;
+      } else {
+        state.bookmarks = [];
+      }
+      updateBookmarksUI();
+
       // Handle split file detection (from opening an existing split file or header metadata)
       if (result.splitFiles && result.splitFiles.length > 0) {
         // Only update split state if not already navigating within the same split set
@@ -1863,9 +1871,8 @@ async function editBookmarkComment(bookmarkId: string): Promise<void> {
 
   bookmark.label = newComment || undefined;
 
-  // Update in backend (remove and re-add)
-  await window.api.removeBookmark(bookmarkId);
-  await window.api.addBookmark(bookmark);
+  // Update in backend
+  await window.api.updateBookmark(bookmark);
 
   updateBookmarksUI();
   renderVisibleLines();
