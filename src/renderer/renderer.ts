@@ -258,6 +258,13 @@ const elements = {
   btnHelp: document.getElementById('btn-help') as HTMLButtonElement,
   helpModal: document.getElementById('help-modal') as HTMLDivElement,
   btnCloseHelp: document.getElementById('btn-close-help') as HTMLButtonElement,
+  // Bookmark modal
+  bookmarkModal: document.getElementById('bookmark-modal') as HTMLDivElement,
+  bookmarkModalTitle: document.getElementById('bookmark-modal-title') as HTMLHeadingElement,
+  bookmarkComment: document.getElementById('bookmark-comment') as HTMLInputElement,
+  bookmarkLineInfo: document.getElementById('bookmark-line-info') as HTMLParagraphElement,
+  btnSaveBookmark: document.getElementById('btn-save-bookmark') as HTMLButtonElement,
+  btnCancelBookmark: document.getElementById('btn-cancel-bookmark') as HTMLButtonElement,
 };
 
 // Virtual Log Viewer
@@ -764,8 +771,14 @@ function createLineElementPooled(line: LogLine): HTMLDivElement {
       line.lineNumber >= state.selectionStart && line.lineNumber <= state.selectionEnd) {
     className += ' range-selected';
   }
-  if (state.bookmarks.some(b => b.lineNumber === line.lineNumber)) {
+
+  // Check for bookmark and get comment
+  const bookmark = state.bookmarks.find(b => b.lineNumber === line.lineNumber);
+  if (bookmark) {
     className += ' bookmarked';
+    div.title = bookmark.label ? `Bookmark: ${bookmark.label}` : 'Bookmarked line';
+  } else {
+    div.title = '';
   }
   div.className = className;
 
@@ -1782,20 +1795,80 @@ async function loadPreviousSplitFile(): Promise<void> {
   await loadFile(state.splitFiles[state.currentSplitIndex], false);
 }
 
+// Bookmark modal state
+let pendingBookmarkResolve: ((comment: string | null) => void) | null = null;
+let pendingBookmarkLineNumber: number | null = null;
+let pendingBookmarkId: string | null = null;
+
+function showBookmarkModal(lineNumber: number, existingComment?: string, isEdit: boolean = false): Promise<string | null> {
+  return new Promise((resolve) => {
+    pendingBookmarkResolve = resolve;
+    pendingBookmarkLineNumber = lineNumber;
+
+    elements.bookmarkModalTitle.textContent = isEdit ? 'Edit Bookmark' : 'Add Bookmark';
+    elements.bookmarkComment.value = existingComment || '';
+    elements.bookmarkLineInfo.textContent = `Line ${lineNumber + 1}`;
+    elements.bookmarkModal.classList.remove('hidden');
+    elements.bookmarkComment.focus();
+  });
+}
+
+function hideBookmarkModal(save: boolean): void {
+  const comment = save ? elements.bookmarkComment.value : null;
+  elements.bookmarkModal.classList.add('hidden');
+  elements.bookmarkComment.value = '';
+
+  if (pendingBookmarkResolve) {
+    pendingBookmarkResolve(comment);
+    pendingBookmarkResolve = null;
+  }
+  pendingBookmarkLineNumber = null;
+  pendingBookmarkId = null;
+}
+
 // Bookmarks
-async function addBookmarkAtLine(lineNumber: number): Promise<void> {
+async function addBookmarkAtLine(lineNumber: number, comment?: string): Promise<void> {
+  // Show modal for comment if not provided
+  let label: string | undefined;
+  if (comment !== undefined) {
+    label = comment || undefined;
+  } else {
+    const result = await showBookmarkModal(lineNumber);
+    if (result === null) return; // User cancelled
+    label = result || undefined;
+  }
+
   const bookmark: Bookmark = {
     id: `bookmark-${Date.now()}`,
     lineNumber,
+    label,
     createdAt: Date.now(),
   };
 
-  const result = await window.api.addBookmark(bookmark);
-  if (result.success) {
+  const apiResult = await window.api.addBookmark(bookmark);
+  if (apiResult.success) {
     state.bookmarks.push(bookmark);
     updateBookmarksUI();
     renderVisibleLines();
   }
+}
+
+async function editBookmarkComment(bookmarkId: string): Promise<void> {
+  const bookmark = state.bookmarks.find(b => b.id === bookmarkId);
+  if (!bookmark) return;
+
+  pendingBookmarkId = bookmarkId;
+  const newComment = await showBookmarkModal(bookmark.lineNumber, bookmark.label, true);
+  if (newComment === null) return; // User cancelled
+
+  bookmark.label = newComment || undefined;
+
+  // Update in backend (remove and re-add)
+  await window.api.removeBookmark(bookmarkId);
+  await window.api.addBookmark(bookmark);
+
+  updateBookmarksUI();
+  renderVisibleLines();
 }
 
 async function removeBookmarkAtLine(lineNumber: number): Promise<void> {
@@ -1820,12 +1893,15 @@ function updateBookmarksUI(): void {
     .sort((a, b) => a.lineNumber - b.lineNumber)
     .map(
       (b) => `
-      <div class="bookmark-item" data-id="${b.id}" data-line="${b.lineNumber}">
+      <div class="bookmark-item" data-id="${b.id}" data-line="${b.lineNumber}" title="${b.label ? escapeHtml(b.label) : 'Click to go to line, double-click to edit comment'}">
         <div class="bookmark-info">
           <span class="bookmark-line">Line ${b.lineNumber + 1}</span>
-          ${b.label ? `<span class="bookmark-label">${escapeHtml(b.label)}</span>` : ''}
+          ${b.label ? `<span class="bookmark-label">${escapeHtml(b.label)}</span>` : '<span class="bookmark-label placeholder-text">No comment</span>'}
         </div>
-        <button class="bookmark-delete" data-id="${b.id}">&times;</button>
+        <div class="bookmark-actions">
+          <button class="bookmark-edit" data-id="${b.id}" title="Edit comment">&#9998;</button>
+          <button class="bookmark-delete" data-id="${b.id}" title="Delete bookmark">&times;</button>
+        </div>
       </div>
     `
     )
@@ -1838,10 +1914,19 @@ function updateBookmarksUI(): void {
       if (target.classList.contains('bookmark-delete')) {
         const id = target.dataset.id!;
         removeBookmarkById(id);
+      } else if (target.classList.contains('bookmark-edit')) {
+        const id = target.dataset.id!;
+        editBookmarkComment(id);
       } else {
         const line = parseInt((item as HTMLElement).dataset.line || '0', 10);
         goToLine(line);
       }
+    });
+
+    // Double-click to edit comment
+    item.addEventListener('dblclick', () => {
+      const id = (item as HTMLElement).dataset.id!;
+      editBookmarkComment(id);
     });
   });
 }
@@ -2584,6 +2669,18 @@ function init(): void {
   });
   elements.btnCloseHelp.addEventListener('click', () => {
     elements.helpModal.classList.add('hidden');
+  });
+
+  // Bookmark modal
+  elements.btnSaveBookmark.addEventListener('click', () => hideBookmarkModal(true));
+  elements.btnCancelBookmark.addEventListener('click', () => hideBookmarkModal(false));
+  elements.bookmarkComment.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      hideBookmarkModal(true);
+    } else if (e.key === 'Escape') {
+      hideBookmarkModal(false);
+    }
   });
 
   // Setup utilities

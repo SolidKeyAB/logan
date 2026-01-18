@@ -356,19 +356,45 @@ body {
 .bookmark-item .bookmark-label {
   color: var(--text-secondary);
   font-size: 10px;
+  word-break: break-word;
 }
 
-.bookmark-item .bookmark-delete, .highlight-item .highlight-delete {
+.bookmark-item .bookmark-label.placeholder-text {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.bookmark-item .bookmark-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.bookmark-item:hover .bookmark-actions {
+  opacity: 1;
+}
+
+.bookmark-item .bookmark-edit,
+.bookmark-item .bookmark-delete,
+.highlight-item .highlight-delete {
   background: none;
   border: none;
   color: var(--text-muted);
   cursor: pointer;
   font-size: 14px;
   padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.bookmark-item .bookmark-edit:hover {
+  color: var(--accent-color);
+  background-color: var(--bg-hover);
 }
 
 .bookmark-item .bookmark-delete:hover, .highlight-item .highlight-delete:hover {
   color: var(--error-color);
+  background-color: var(--bg-hover);
 }
 
 .highlight-item {

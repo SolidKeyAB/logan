@@ -365,6 +365,27 @@
         </div>
       </div>
     </div>
+
+    <!-- Bookmark Comment Modal -->
+    <div id="bookmark-modal" class="modal hidden">
+      <div class="modal-content" style="width: 400px;">
+        <div class="modal-header">
+          <h3 id="bookmark-modal-title">Add Bookmark</h3>
+          <button class="modal-close" data-modal="bookmark-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="filter-group">
+            <label for="bookmark-comment">Comment (optional)</label>
+            <input type="text" id="bookmark-comment" class="modal-input" placeholder="Enter a comment for this bookmark...">
+          </div>
+          <p id="bookmark-line-info" class="hint"></p>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-cancel-bookmark" class="secondary-btn">Cancel</button>
+          <button id="btn-save-bookmark" class="primary-btn">Save</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="renderer.js"></script>
