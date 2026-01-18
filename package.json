@@ -40,21 +40,21 @@
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
-      "icon": "logo.png",
+      "icon": "assets/logo.png",
       "target": [
         "dmg",
         "zip"
       ]
     },
     "win": {
-      "icon": "logo.png",
+      "icon": "assets/logo.png",
       "target": [
         "nsis",
         "portable"
       ]
     },
     "linux": {
-      "icon": "logo.png",
+      "icon": "assets/logo.png",
       "target": [
         "AppImage",
         "deb"
