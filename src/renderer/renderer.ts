@@ -1416,6 +1416,26 @@ function setupKeyboardShortcuts(): void {
         }
       }
     }
+
+    // Ctrl/Cmd + H: Highlight all occurrences of selected text
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'h') {
+      e.preventDefault();
+      const selection = window.getSelection();
+      const selectedText = selection?.toString().trim();
+      if (selectedText) {
+        createHighlightFromSelection(selectedText, true);
+      }
+    }
+
+    // Ctrl/Cmd + Shift + H: Highlight single occurrence of selected text
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'H') {
+      e.preventDefault();
+      const selection = window.getSelection();
+      const selectedText = selection?.toString().trim();
+      if (selectedText) {
+        createHighlightFromSelection(selectedText, false);
+      }
+    }
   });
 }
 
