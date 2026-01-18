@@ -98,6 +98,10 @@ interface TabState {
   cachedLines: Map<number, LogLine>;
   splitFiles: string[];
   currentSplitIndex: number;
+  // Loading state
+  isLoading: boolean;
+  loadingText: string;
+  loadingPercent: number;
 }
 
 // Application State - maintains current file state for backward compatibility
@@ -148,12 +152,29 @@ const state: AppState = {
 };
 
 // Constants
-const LINE_HEIGHT = 20;
+const BASE_LINE_HEIGHT = 20;
+const BASE_FONT_SIZE = 13;
 const BUFFER_LINES = 50;
 const MAX_SCROLL_HEIGHT = 10000000; // 10 million pixels - safe for all browsers
 const CACHE_SIZE = 5000; // Max lines to keep in cache
 const SCROLL_DEBOUNCE_MS = 16; // ~60fps
 const PREFETCH_LINES = 100; // Lines to prefetch ahead of scroll direction
+
+// Zoom settings
+const ZOOM_MIN = 50;
+const ZOOM_MAX = 200;
+const ZOOM_STEP = 10;
+let zoomLevel = 100; // Percentage (100 = default)
+
+// Get current line height based on zoom
+function getLineHeight(): number {
+  return Math.round(BASE_LINE_HEIGHT * (zoomLevel / 100));
+}
+
+// Get current font size based on zoom
+function getFontSize(): number {
+  return Math.round(BASE_FONT_SIZE * (zoomLevel / 100));
+}
 
 // Scroll state for optimizations
 let lastScrollTop = 0;
@@ -229,6 +250,14 @@ const elements = {
   loadingText: document.getElementById('loading-text') as HTMLSpanElement,
   loadingProgressFill: document.getElementById('loading-progress-fill') as HTMLDivElement,
   loadingPercent: document.getElementById('loading-percent') as HTMLSpanElement,
+  // Zoom controls
+  btnZoomIn: document.getElementById('btn-zoom-in') as HTMLButtonElement,
+  btnZoomOut: document.getElementById('btn-zoom-out') as HTMLButtonElement,
+  statusZoom: document.getElementById('status-zoom') as HTMLSpanElement,
+  // Help
+  btnHelp: document.getElementById('btn-help') as HTMLButtonElement,
+  helpModal: document.getElementById('help-modal') as HTMLDivElement,
+  btnCloseHelp: document.getElementById('btn-close-help') as HTMLButtonElement,
 };
 
 // Virtual Log Viewer
@@ -369,6 +398,13 @@ function createLogViewer(): void {
   logViewerElement = document.createElement('div');
   logViewerElement.className = 'virtual-log-viewer';
 
+  // Apply current zoom settings
+  const lineHeight = getLineHeight();
+  const fontSize = getFontSize();
+  logViewerElement.style.setProperty('--line-height', `${lineHeight}px`);
+  logViewerElement.style.setProperty('--font-size', `${fontSize}px`);
+  logViewerElement.style.fontSize = `${fontSize}px`;
+
   logContentElement = document.createElement('div');
   logContentElement.className = 'log-content';
 
@@ -396,6 +432,18 @@ function createLogViewer(): void {
   logViewerElement.addEventListener('scroll', handleScroll, { passive: true });
   logViewerElement.addEventListener('click', handleLogClick);
   logViewerElement.addEventListener('contextmenu', handleContextMenu);
+
+  // Mouse wheel zoom (Ctrl + scroll)
+  logViewerElement.addEventListener('wheel', (e: WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      if (e.deltaY < 0) {
+        zoomIn();
+      } else {
+        zoomOut();
+      }
+    }
+  }, { passive: false });
   minimapElement.addEventListener('click', handleMinimapClick);
   minimapElement.addEventListener('mousedown', handleMinimapDrag);
 
@@ -404,7 +452,7 @@ function createLogViewer(): void {
     if (state.totalLines > 0) {
       // Recalculate visible range on resize
       const containerHeight = logViewerElement!.clientHeight;
-      const visibleLines = Math.ceil(containerHeight / LINE_HEIGHT);
+      const visibleLines = Math.ceil(containerHeight / getLineHeight());
       const startLine = scrollTopToLine(logViewerElement!.scrollTop);
       state.visibleStartLine = Math.max(0, startLine - BUFFER_LINES);
       state.visibleEndLine = Math.min(startLine + visibleLines + BUFFER_LINES, state.totalLines - 1);
@@ -416,35 +464,35 @@ function createLogViewer(): void {
 
 function getVirtualHeight(): number {
   const totalLines = getTotalLines();
-  const naturalHeight = totalLines * LINE_HEIGHT;
+  const naturalHeight = totalLines * getLineHeight();
   return Math.min(naturalHeight, MAX_SCROLL_HEIGHT);
 }
 
 function isUsingScaledScroll(): boolean {
   const totalLines = getTotalLines();
-  return totalLines * LINE_HEIGHT > MAX_SCROLL_HEIGHT;
+  return totalLines * getLineHeight() > MAX_SCROLL_HEIGHT;
 }
 
 function scrollTopToLine(scrollTop: number): number {
   const totalLines = getTotalLines();
   if (!isUsingScaledScroll()) {
-    return Math.floor(scrollTop / LINE_HEIGHT);
+    return Math.floor(scrollTop / getLineHeight());
   }
   // Proportional mapping for large files
   const virtualHeight = getVirtualHeight();
   const scrollRatio = scrollTop / (virtualHeight - (logViewerElement?.clientHeight || 0));
-  const maxLine = totalLines - Math.ceil((logViewerElement?.clientHeight || 0) / LINE_HEIGHT);
+  const maxLine = totalLines - Math.ceil((logViewerElement?.clientHeight || 0) / getLineHeight());
   return Math.floor(scrollRatio * maxLine);
 }
 
 function lineToScrollTop(lineNumber: number): number {
   const totalLines = getTotalLines();
   if (!isUsingScaledScroll()) {
-    return lineNumber * LINE_HEIGHT;
+    return lineNumber * getLineHeight();
   }
   // Proportional mapping for large files
   const virtualHeight = getVirtualHeight();
-  const maxLine = totalLines - Math.ceil((logViewerElement?.clientHeight || 0) / LINE_HEIGHT);
+  const maxLine = totalLines - Math.ceil((logViewerElement?.clientHeight || 0) / getLineHeight());
   const scrollRatio = lineNumber / maxLine;
   return scrollRatio * (virtualHeight - (logViewerElement?.clientHeight || 0));
 }
@@ -452,16 +500,45 @@ function lineToScrollTop(lineNumber: number): number {
 function handleScroll(): void {
   if (!logViewerElement || !logContentElement) return;
 
-  // Cancel any pending RAF
+  // Render immediately with cached data for responsive feel
+  // Only defer the data loading part
+  const scrollTop = logViewerElement.scrollTop;
+  const containerHeight = logViewerElement.clientHeight;
+
+  // Track scroll direction for predictive prefetching
+  scrollDirection = scrollTop > lastScrollTop ? 'down' : 'up';
+  lastScrollTop = scrollTop;
+
+  const startLine = scrollTopToLine(scrollTop);
+  const visibleLines = Math.ceil(containerHeight / getLineHeight());
+
+  // Immediately update visible range and render cached content
+  const prefetchUp = scrollDirection === 'up' ? PREFETCH_LINES : BUFFER_LINES;
+  const prefetchDown = scrollDirection === 'down' ? PREFETCH_LINES : BUFFER_LINES;
+
+  state.visibleStartLine = Math.max(0, startLine - prefetchUp);
+  state.visibleEndLine = Math.min(getTotalLines() - 1, startLine + visibleLines + prefetchDown);
+
+  // Immediate render with cached data (synchronous, no delay)
+  renderVisibleLines();
+  updateMinimapViewport();
+
+  // Defer data loading to RAF to avoid blocking scroll
   if (scrollRAF !== null) {
     cancelAnimationFrame(scrollRAF);
   }
-
-  // Use RAF for smooth 60fps scrolling
   scrollRAF = requestAnimationFrame(() => {
     scrollRAF = null;
-    performScrollUpdate();
+    // Load any missing data in background
+    loadVisibleLines();
   });
+
+  // Mark scrolling state
+  isScrolling = true;
+  if (scrollEndTimer) clearTimeout(scrollEndTimer);
+  scrollEndTimer = setTimeout(() => {
+    isScrolling = false;
+  }, 150);
 }
 
 function performScrollUpdate(): void {
@@ -475,7 +552,7 @@ function performScrollUpdate(): void {
   lastScrollTop = scrollTop;
 
   const startLine = scrollTopToLine(scrollTop);
-  const visibleLines = Math.ceil(containerHeight / LINE_HEIGHT);
+  const visibleLines = Math.ceil(containerHeight / getLineHeight());
   const endLine = startLine + visibleLines;
 
   // Add extra buffer in scroll direction (predictive prefetching)
@@ -640,9 +717,9 @@ function renderVisibleLines(): void {
       let top: number;
       if (usingScaled) {
         const lineOffset = i - firstVisibleLine;
-        top = scrollTop + lineOffset * LINE_HEIGHT;
+        top = scrollTop + lineOffset * getLineHeight();
       } else {
-        top = i * LINE_HEIGHT;
+        top = i * getLineHeight();
       }
 
       // Use transform for GPU-accelerated positioning (smoother scrolling)
@@ -937,7 +1014,7 @@ function updateMinimapViewport(): void {
 
   // For scaled scroll, use line-based mapping instead of scroll-based
   const currentLine = scrollTopToLine(scrollTop);
-  const visibleLines = Math.ceil(clientHeight / LINE_HEIGHT);
+  const visibleLines = Math.ceil(clientHeight / getLineHeight());
 
   const viewportTop = (currentLine / totalLines) * minimapHeight;
   const viewportHeight = (visibleLines / totalLines) * minimapHeight;
@@ -1433,7 +1510,7 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       // Initialize visible range based on container size
       if (logViewerElement) {
         const containerHeight = logViewerElement.clientHeight;
-        const visibleLines = Math.ceil(containerHeight / LINE_HEIGHT);
+        const visibleLines = Math.ceil(containerHeight / getLineHeight());
         state.visibleStartLine = 0;
         state.visibleEndLine = Math.min(visibleLines + BUFFER_LINES * 2, state.totalLines - 1);
       }
@@ -2087,46 +2164,140 @@ function updateSelectionStatus(): void {
   }
 }
 
-function showProgress(text: string): void {
-  // Show both status bar progress and loading overlay
-  elements.progressContainer.classList.remove('hidden');
-  elements.progressText.textContent = text;
-  elements.progressBar.style.setProperty('--progress', '0%');
-
-  // Show loading overlay with video
-  elements.loadingOverlay.classList.remove('hidden');
-  elements.loadingText.textContent = text;
-  elements.loadingProgressFill.style.width = '0%';
-  elements.loadingPercent.textContent = '0%';
-
-  // Play video
-  elements.loadingVideo.play().catch(() => {
-    // Ignore autoplay errors
-  });
+// Helper to get tab by ID (DRY principle)
+function getTab(tabId?: string): TabState | undefined {
+  const id = tabId || state.activeTabId;
+  return id ? state.tabs.find(t => t.id === id) : undefined;
 }
 
-function updateProgress(percent: number): void {
-  // Update status bar progress
-  elements.progressBar.style.setProperty('--progress', `${percent}%`);
-  elements.progressText.textContent = `${percent}%`;
+// Global loading state for when no tab exists yet
+let globalLoading = { isLoading: false, text: '', percent: 0 };
 
-  // Update loading overlay
-  elements.loadingProgressFill.style.width = `${percent}%`;
-  elements.loadingPercent.textContent = `${percent}%`;
+// Sync loading UI with current state (Single Responsibility)
+function syncLoadingOverlay(): void {
+  const tab = getTab();
+
+  // Get loading state - prefer tab state, fall back to global
+  const isLoading = tab ? tab.isLoading : globalLoading.isLoading;
+  const text = tab ? tab.loadingText : globalLoading.text;
+  const percent = tab ? tab.loadingPercent : globalLoading.percent;
+
+  if (isLoading) {
+    // Show loading
+    elements.progressContainer.classList.remove('hidden');
+    elements.progressBar.style.setProperty('--progress', `${percent}%`);
+    elements.progressText.textContent = text || `${percent}%`;
+
+    elements.loadingOverlay.classList.remove('hidden');
+    elements.loadingText.textContent = text;
+    elements.loadingProgressFill.style.width = `${percent}%`;
+    elements.loadingPercent.textContent = `${percent}%`;
+
+    elements.loadingVideo.play().catch(() => {});
+  } else {
+    // Hide loading
+    elements.loadingOverlay.classList.add('hidden');
+    elements.progressContainer.classList.add('hidden');
+    elements.loadingVideo.pause();
+  }
 }
 
-function updateProgressText(text: string): void {
-  elements.progressText.textContent = text;
-  elements.loadingText.textContent = text;
+// Simple state updates - then sync UI (KISS principle)
+function showProgress(text: string, tabId?: string): void {
+  const tab = getTab(tabId);
+  if (tab) {
+    tab.isLoading = true;
+    tab.loadingText = text;
+    tab.loadingPercent = 0;
+  } else {
+    // No tab yet - use global loading state
+    globalLoading = { isLoading: true, text, percent: 0 };
+  }
+  syncLoadingOverlay();
 }
 
-function hideProgress(): void {
-  // Hide status bar progress
-  elements.progressContainer.classList.add('hidden');
+function updateProgress(percent: number, tabId?: string): void {
+  const tab = getTab(tabId);
+  if (tab) {
+    tab.loadingPercent = percent;
+  } else {
+    globalLoading.percent = percent;
+  }
+  // Only sync if this is the active tab (avoid unnecessary DOM updates)
+  if (!tabId || tabId === state.activeTabId || !tab) {
+    syncLoadingOverlay();
+  }
+}
 
-  // Hide loading overlay
-  elements.loadingOverlay.classList.add('hidden');
-  elements.loadingVideo.pause();
+function updateProgressText(text: string, tabId?: string): void {
+  const tab = getTab(tabId);
+  if (tab) {
+    tab.loadingText = text;
+  } else {
+    globalLoading.text = text;
+  }
+  if (!tabId || tabId === state.activeTabId || !tab) {
+    syncLoadingOverlay();
+  }
+}
+
+function hideProgress(tabId?: string): void {
+  const tab = getTab(tabId);
+  if (tab) {
+    tab.isLoading = false;
+    tab.loadingText = '';
+    tab.loadingPercent = 0;
+  }
+  // Always reset global loading
+  globalLoading = { isLoading: false, text: '', percent: 0 };
+  syncLoadingOverlay();
+}
+
+// === Zoom Functions ===
+
+function zoomIn(): void {
+  if (zoomLevel < ZOOM_MAX) {
+    zoomLevel = Math.min(ZOOM_MAX, zoomLevel + ZOOM_STEP);
+    applyZoom();
+  }
+}
+
+function zoomOut(): void {
+  if (zoomLevel > ZOOM_MIN) {
+    zoomLevel = Math.max(ZOOM_MIN, zoomLevel - ZOOM_STEP);
+    applyZoom();
+  }
+}
+
+function resetZoom(): void {
+  zoomLevel = 100;
+  applyZoom();
+}
+
+function applyZoom(): void {
+  // Update status bar
+  elements.statusZoom.textContent = `${zoomLevel}%`;
+
+  // Update CSS custom properties on container for efficient styling
+  // This avoids setting inline styles on each line element
+  if (logViewerElement) {
+    const lineHeight = getLineHeight();
+    const fontSize = getFontSize();
+    logViewerElement.style.setProperty('--line-height', `${lineHeight}px`);
+    logViewerElement.style.setProperty('--font-size', `${fontSize}px`);
+    logViewerElement.style.fontSize = `${fontSize}px`;
+  }
+
+  // Recalculate and re-render if file is loaded
+  if (state.totalLines > 0 && logViewerElement) {
+    const containerHeight = logViewerElement.clientHeight;
+    const visibleLines = Math.ceil(containerHeight / getLineHeight());
+    const startLine = scrollTopToLine(logViewerElement.scrollTop);
+    state.visibleStartLine = Math.max(0, startLine - BUFFER_LINES);
+    state.visibleEndLine = Math.min(startLine + visibleLines + BUFFER_LINES, state.totalLines - 1);
+    renderVisibleLines();
+    updateMinimapViewport();
+  }
 }
 
 // Utility functions
@@ -2317,6 +2488,35 @@ function setupKeyboardShortcuts(): void {
       e.preventDefault();
       openFile();
     }
+
+    // Zoom: Ctrl/Cmd + Plus or Ctrl/Cmd + =
+    if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '=')) {
+      e.preventDefault();
+      zoomIn();
+    }
+
+    // Zoom: Ctrl/Cmd + Minus
+    if ((e.ctrlKey || e.metaKey) && e.key === '-') {
+      e.preventDefault();
+      zoomOut();
+    }
+
+    // Zoom: Ctrl/Cmd + 0 (reset)
+    if ((e.ctrlKey || e.metaKey) && e.key === '0') {
+      e.preventDefault();
+      resetZoom();
+    }
+
+    // Help: F1 or ?
+    if (e.key === 'F1' || (e.key === '?' && !e.ctrlKey && !e.metaKey)) {
+      e.preventDefault();
+      elements.helpModal.classList.toggle('hidden');
+    }
+
+    // Escape: Close help modal
+    if (e.key === 'Escape' && !elements.helpModal.classList.contains('hidden')) {
+      elements.helpModal.classList.add('hidden');
+    }
   });
 }
 
@@ -2372,6 +2572,19 @@ function init(): void {
 
   // Tab bar
   elements.btnNewTab.addEventListener('click', openFile);
+
+  // Zoom controls
+  elements.btnZoomIn.addEventListener('click', zoomIn);
+  elements.btnZoomOut.addEventListener('click', zoomOut);
+  elements.statusZoom.addEventListener('click', resetZoom); // Click on percentage to reset
+
+  // Help modal
+  elements.btnHelp.addEventListener('click', () => {
+    elements.helpModal.classList.remove('hidden');
+  });
+  elements.btnCloseHelp.addEventListener('click', () => {
+    elements.helpModal.classList.add('hidden');
+  });
 
   // Setup utilities
   setupSectionToggles();
@@ -2474,6 +2687,9 @@ function createTab(filePath: string): TabState {
     cachedLines: new Map(),
     splitFiles: [],
     currentSplitIndex: -1,
+    isLoading: false,
+    loadingText: '',
+    loadingPercent: 0,
   };
   return tab;
 }
@@ -2489,6 +2705,9 @@ async function switchToTab(tabId: string): Promise<void> {
 
   // Set new active tab
   state.activeTabId = tabId;
+
+  // Sync loading overlay for new tab (may already be loading)
+  syncLoadingOverlay();
 
   // Re-open the file in the backend (needed for getLines to work)
   showProgress('Opening file...');
@@ -2511,7 +2730,7 @@ async function switchToTab(tabId: string): Promise<void> {
       // Initialize visible range and restore scroll position
       if (logViewerElement) {
         const containerHeight = logViewerElement.clientHeight;
-        const visibleLines = Math.ceil(containerHeight / LINE_HEIGHT);
+        const visibleLines = Math.ceil(containerHeight / getLineHeight());
 
         // Calculate visible range from saved scroll position
         const startLine = scrollTopToLine(tab.scrollTop);

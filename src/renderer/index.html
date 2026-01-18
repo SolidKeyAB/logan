@@ -9,20 +9,6 @@
 </head>
 <body>
   <div id="app">
-    <!-- Loading Overlay -->
-    <div id="loading-overlay" class="loading-overlay hidden">
-      <video id="loading-video" autoplay loop muted playsinline>
-        <source src="assets/loading.mp4" type="video/mp4">
-      </video>
-      <div class="loading-info">
-        <span id="loading-text">Loading...</span>
-        <div class="loading-progress-bar">
-          <div id="loading-progress-fill" class="loading-progress-fill"></div>
-        </div>
-        <span id="loading-percent">0%</span>
-      </div>
-    </div>
-
     <!-- Toolbar -->
     <div class="toolbar">
       <div class="toolbar-left">
@@ -51,6 +37,7 @@
         <button id="btn-analyze" class="toolbar-btn" title="Analyze file" disabled>Analyze</button>
       </div>
       <div class="toolbar-right">
+        <button id="btn-help" class="toolbar-btn small" title="Keyboard shortcuts & help">?</button>
         <button id="btn-toggle-sidebar" class="toolbar-btn small" title="Toggle sidebar">&#9776;</button>
       </div>
     </div>
@@ -154,6 +141,20 @@
             <p>Log Analyzer - Open a log file to get started</p>
             <button id="btn-open-welcome" class="primary-btn">Open File</button>
           </div>
+          <!-- Loading Overlay - inside editor so toolbar/tabs remain accessible -->
+          <div id="loading-overlay" class="loading-overlay hidden">
+            <video id="loading-video" autoplay loop muted playsinline>
+              <source src="assets/loading.mp4" type="video/mp4">
+            </video>
+            <div class="loading-info">
+              <span id="loading-text">Loading...</span>
+              <div class="loading-progress-bar">
+                <div id="loading-progress-fill" class="loading-progress-fill"></div>
+              </div>
+              <span id="loading-percent">0%</span>
+              <span class="loading-hint">You can switch tabs or open other files while loading</span>
+            </div>
+          </div>
         </div>
       </main>
     </div>
@@ -176,6 +177,12 @@
         <span id="status-cursor">Ln 1, Col 1</span>
         <span class="status-separator">|</span>
         <span id="status-size">0 B</span>
+        <span class="status-separator">|</span>
+        <span class="zoom-controls">
+          <button id="btn-zoom-out" class="zoom-btn" title="Zoom Out (Ctrl+-)">−</button>
+          <span id="status-zoom" title="Zoom level (Ctrl+0 to reset)">100%</span>
+          <button id="btn-zoom-in" class="zoom-btn" title="Zoom In (Ctrl++)">+</button>
+        </span>
       </div>
     </footer>
 
@@ -290,6 +297,71 @@
         <div class="modal-footer">
           <button id="btn-cancel-highlight" class="secondary-btn">Cancel</button>
           <button id="btn-save-highlight" class="primary-btn">Add Rule</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Help Modal -->
+    <div id="help-modal" class="modal hidden">
+      <div class="modal-content help-modal-content">
+        <div class="modal-header">
+          <h3>Keyboard Shortcuts & Tips</h3>
+          <button class="modal-close" data-modal="help-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="help-section">
+            <h4>File Operations</h4>
+            <div class="shortcut-list">
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>O</kbd><span>Open file</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>T</kbd><span>Open in new tab</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>W</kbd><span>Close current tab</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Tab</kbd><span>Next tab</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd><span>Previous tab</span></div>
+            </div>
+          </div>
+          <div class="help-section">
+            <h4>Navigation & Search</h4>
+            <div class="shortcut-list">
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>F</kbd><span>Focus search</span></div>
+              <div class="shortcut-item"><kbd>Enter</kbd><span>Search (when in search box)</span></div>
+              <div class="shortcut-item"><kbd>F3</kbd> or <kbd>Ctrl</kbd>+<kbd>G</kbd><span>Next search result</span></div>
+              <div class="shortcut-item"><kbd>Shift</kbd>+<kbd>F3</kbd><span>Previous search result</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>PageDown</kbd><span>Next split file</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>PageUp</kbd><span>Previous split file</span></div>
+            </div>
+          </div>
+          <div class="help-section">
+            <h4>Zoom</h4>
+            <div class="shortcut-list">
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>+</kbd><span>Zoom in</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>-</kbd><span>Zoom out</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>0</kbd><span>Reset zoom (100%)</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Scroll</kbd><span>Mouse wheel zoom</span></div>
+            </div>
+          </div>
+          <div class="help-section">
+            <h4>Bookmarks & Highlights</h4>
+            <div class="shortcut-list">
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>B</kbd><span>Toggle bookmark on selected line</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>H</kbd><span>Highlight all occurrences of selection</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd><span>Highlight single occurrence</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd><span>Save selected lines to file</span></div>
+            </div>
+          </div>
+          <div class="help-section">
+            <h4>Tips</h4>
+            <ul class="tips-list">
+              <li><strong>Shift+Click</strong> to select a range of lines</li>
+              <li><strong>Right-click</strong> for context menu (bookmark, copy, highlight)</li>
+              <li><strong>Click minimap</strong> to jump to that position</li>
+              <li><strong>Drag minimap viewport</strong> to scroll quickly</li>
+              <li>Split large files using the <strong>Split</strong> button for better performance</li>
+              <li>Binary/corrupted data is automatically detected and hidden</li>
+            </ul>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-close-help" class="primary-btn">Got it!</button>
         </div>
       </div>
     </div>

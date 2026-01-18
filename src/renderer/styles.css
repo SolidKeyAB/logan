@@ -496,7 +496,8 @@ body {
   display: flex;
   padding: 0 10px;
   white-space: pre;
-  min-height: 20px;
+  min-height: var(--line-height, 20px);
+  height: var(--line-height, 20px);
   /* GPU acceleration hints */
   will-change: transform;
   contain: layout style paint;
@@ -625,6 +626,43 @@ body {
 .progress-text {
   min-width: 40px;
   text-align: right;
+}
+
+/* Zoom Controls */
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.zoom-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background-color: rgba(255, 255, 255, 0.1);
+  border: none;
+  border-radius: 3px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: bold;
+  line-height: 1;
+  transition: background-color 0.15s;
+}
+
+.zoom-btn:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+.zoom-btn:active {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+
+#status-zoom {
+  min-width: 40px;
+  text-align: center;
+  font-size: 11px;
+  cursor: default;
 }
 
 .hidden {
@@ -1097,24 +1135,33 @@ body {
   border-radius: 12px;
 }
 
-/* Loading Overlay */
+/* Loading Overlay - covers only the editor area, not toolbar/tabs */
 .loading-overlay {
-  position: fixed;
+  position: absolute;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: rgba(30, 30, 30, 0.95);
+  background-color: rgba(30, 30, 30, 0.92);
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  z-index: 2000;
+  z-index: 100;
   gap: 20px;
+  border-radius: 4px;
 }
 
 .loading-overlay.hidden {
   display: none;
+}
+
+/* Hint text for loading overlay */
+.loading-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-top: 10px;
+  text-align: center;
 }
 
 .loading-overlay video {
@@ -1156,4 +1203,82 @@ body {
 #loading-percent {
   color: var(--text-secondary);
   font-size: 12px;
+}
+
+/* Help Modal */
+.help-modal-content {
+  width: 550px;
+  max-height: 80vh;
+}
+
+.help-section {
+  margin-bottom: 20px;
+}
+
+.help-section:last-child {
+  margin-bottom: 0;
+}
+
+.help-section h4 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-color);
+  margin-bottom: 10px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.shortcut-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.shortcut-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.shortcut-item span {
+  color: var(--text-secondary);
+}
+
+kbd {
+  display: inline-block;
+  padding: 3px 6px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 11px;
+  color: var(--text-primary);
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  box-shadow: 0 1px 0 var(--border-color);
+  margin: 0 2px;
+}
+
+.tips-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.tips-list li {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 4px 0;
+  padding-left: 16px;
+  position: relative;
+}
+
+.tips-list li::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  color: var(--accent-color);
+}
+
+.tips-list li strong {
+  color: var(--text-primary);
 }
