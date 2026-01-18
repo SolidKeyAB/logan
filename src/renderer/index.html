@@ -393,6 +393,27 @@
         </div>
       </div>
     </div>
+
+    <!-- Save to Notes Modal -->
+    <div id="notes-modal" class="modal hidden">
+      <div class="modal-content" style="width: 450px;">
+        <div class="modal-header">
+          <h3>Save to Notes</h3>
+          <button class="modal-close" data-modal="notes-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="filter-group">
+            <label for="notes-description">Description (optional)</label>
+            <input type="text" id="notes-description" class="modal-input" placeholder="e.g., Memory leak at startup, Connection timeout...">
+          </div>
+          <p id="notes-line-info" class="hint"></p>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-cancel-notes" class="secondary-btn">Cancel</button>
+          <button id="btn-save-notes" class="primary-btn">Save to Notes</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="renderer.js"></script>

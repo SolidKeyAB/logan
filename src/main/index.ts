@@ -6,9 +6,28 @@ import { FileHandler } from './fileHandler';
 import { IPC, SearchOptions, Bookmark, Highlight } from '../shared/types';
 
 let mainWindow: BrowserWindow | null = null;
-let fileHandler: FileHandler | null = null;
 let searchSignal: { cancelled: boolean } = { cancelled: false };
 let currentFilePath: string | null = null;
+
+// Cache FileHandlers by path to avoid re-indexing when switching tabs
+const fileHandlerCache = new Map<string, FileHandler>();
+const MAX_CACHED_FILES = 10; // Limit cache size to prevent memory issues
+
+function getFileHandler(): FileHandler | null {
+  if (!currentFilePath) return null;
+  return fileHandlerCache.get(currentFilePath) || null;
+}
+
+function addToCache(filePath: string, handler: FileHandler): void {
+  // If cache is full, remove oldest entry
+  if (fileHandlerCache.size >= MAX_CACHED_FILES) {
+    const firstKey = fileHandlerCache.keys().next().value;
+    if (firstKey) {
+      fileHandlerCache.delete(firstKey);
+    }
+  }
+  fileHandlerCache.set(filePath, handler);
+}
 
 // In-memory storage
 const bookmarks = new Map<string, Bookmark>();
@@ -221,7 +240,11 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
-    fileHandler?.close();
+    // Close all cached file handlers
+    for (const handler of fileHandlerCache.values()) {
+      handler.close();
+    }
+    fileHandlerCache.clear();
   });
 }
 
@@ -257,10 +280,25 @@ ipcMain.handle(IPC.OPEN_FILE_DIALOG, async () => {
 
 ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
   try {
-    fileHandler = new FileHandler();
-    const info = await fileHandler.open(filePath, (percent) => {
-      mainWindow?.webContents.send('indexing-progress', percent);
-    });
+    // Check if file is already cached
+    let fileHandler = fileHandlerCache.get(filePath);
+    let info;
+
+    if (fileHandler) {
+      // File already indexed - just switch to it
+      currentFilePath = filePath;
+      info = fileHandler.getFileInfo();
+      // Send 100% progress immediately since no indexing needed
+      mainWindow?.webContents.send('indexing-progress', 100);
+    } else {
+      // New file - index it
+      fileHandler = new FileHandler();
+      info = await fileHandler.open(filePath, (percent) => {
+        mainWindow?.webContents.send('indexing-progress', percent);
+      });
+      addToCache(filePath, fileHandler);
+      currentFilePath = filePath;
+    }
 
     // Load bookmarks and highlights for this file
     loadBookmarksForFile(filePath);
@@ -363,20 +401,22 @@ function escapeRegex(str: string): string {
 }
 
 ipcMain.handle(IPC.GET_LINES, async (_, startLine: number, count: number) => {
-  if (!fileHandler) return { success: false, error: 'No file open' };
-  const lines = fileHandler.getLines(startLine, count);
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+  const lines = handler.getLines(startLine, count);
   return { success: true, lines };
 });
 
 // === Search ===
 
 ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
-  if (!fileHandler) return { success: false, error: 'No file open' };
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
 
   searchSignal = { cancelled: false };
 
   try {
-    const matches = await fileHandler.search(
+    const matches = await handler.search(
       options,
       (percent, matchCount) => {
         mainWindow?.webContents.send(IPC.SEARCH_PROGRESS, { percent, matchCount });
@@ -483,26 +523,28 @@ ipcMain.handle('highlight-get-next-color', async () => {
 // === Utility ===
 
 ipcMain.handle('get-file-info', async () => {
-  if (!fileHandler) return { success: false, error: 'No file open' };
-  return { success: true, info: fileHandler.getFileInfo() };
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+  return { success: true, info: handler.getFileInfo() };
 });
 
 // === Save Selected Lines ===
 
 ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: number) => {
-  if (!fileHandler) return { success: false, error: 'No file open' };
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
 
   try {
     // Get the lines
     const count = endLine - startLine + 1;
-    const lines = fileHandler.getLines(startLine, count);
+    const lines = handler.getLines(startLine, count);
 
     if (lines.length === 0) {
       return { success: false, error: 'No lines to save' };
     }
 
     // Get current file's directory
-    const fileInfo = fileHandler.getFileInfo();
+    const fileInfo = handler.getFileInfo();
     if (!fileInfo) return { success: false, error: 'No file info' };
 
     const currentDir = path.dirname(fileInfo.path);
@@ -528,6 +570,55 @@ ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: numb
   }
 });
 
+// === Save to Notes ===
+
+ipcMain.handle('save-to-notes', async (_, startLine: number, endLine: number, note?: string) => {
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+
+  try {
+    // Get the lines
+    const count = endLine - startLine + 1;
+    const lines = handler.getLines(startLine, count);
+
+    if (lines.length === 0) {
+      return { success: false, error: 'No lines to save' };
+    }
+
+    // Get current file info
+    const fileInfo = handler.getFileInfo();
+    if (!fileInfo) return { success: false, error: 'No file info' };
+
+    const currentDir = path.dirname(fileInfo.path);
+    const originalFileName = path.basename(fileInfo.path, path.extname(fileInfo.path));
+    const notesFileName = `notes_from-${originalFileName}.log`;
+    const notesFilePath = path.join(currentDir, notesFileName);
+
+    // Build the note entry
+    const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const separator = '='.repeat(80);
+    const noteText = note ? `Note: ${note}` : 'Note: (no description)';
+    const lineInfo = `Lines: ${startLine + 1}-${endLine + 1} | Saved: ${timestamp}`;
+
+    const entry = [
+      '',
+      separator,
+      noteText,
+      lineInfo,
+      separator,
+      ...lines.map(l => l.text),
+      ''
+    ].join('\n');
+
+    // Append to notes file (create if doesn't exist)
+    fs.appendFileSync(notesFilePath, entry, 'utf-8');
+
+    return { success: true, filePath: notesFilePath, lineCount: lines.length };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
 // === Split File ===
 
 interface SplitOptions {
@@ -536,13 +627,14 @@ interface SplitOptions {
 }
 
 ipcMain.handle('split-file', async (_, options: SplitOptions) => {
-  if (!fileHandler) return { success: false, error: 'No file open' };
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
 
   try {
-    const fileInfo = fileHandler.getFileInfo();
+    const fileInfo = handler.getFileInfo();
     if (!fileInfo) return { success: false, error: 'No file info' };
 
-    const totalLines = fileHandler.getTotalLines();
+    const totalLines = handler.getTotalLines();
     const currentDir = path.dirname(fileInfo.path);
     const baseName = path.basename(fileInfo.path, path.extname(fileInfo.path));
     const ext = path.extname(fileInfo.path);
@@ -594,7 +686,7 @@ ipcMain.handle('split-file', async (_, options: SplitOptions) => {
 
         for (let batchStart = startLine; batchStart < endLine; batchStart += BATCH_SIZE) {
           const batchEnd = Math.min(batchStart + BATCH_SIZE, endLine);
-          const lines = fileHandler!.getLines(batchStart, batchEnd - batchStart);
+          const lines = handler.getLines(batchStart, batchEnd - batchStart);
           const content = lines.map(l => l.text).join('\n');
           writeStream.write(batchStart > startLine ? '\n' + content : content);
         }

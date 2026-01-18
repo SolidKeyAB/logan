@@ -102,6 +102,9 @@ interface TabState {
   isLoading: boolean;
   loadingText: string;
   loadingPercent: number;
+  // Minimap cache
+  minimapData: Array<{ level: string | undefined }> | null;
+  isLoaded: boolean; // true if file was fully loaded (skip re-indexing progress)
 }
 
 // Application State - maintains current file state for backward compatibility
@@ -266,6 +269,12 @@ const elements = {
   bookmarkLineInfo: document.getElementById('bookmark-line-info') as HTMLParagraphElement,
   btnSaveBookmark: document.getElementById('btn-save-bookmark') as HTMLButtonElement,
   btnCancelBookmark: document.getElementById('btn-cancel-bookmark') as HTMLButtonElement,
+  // Notes modal
+  notesModal: document.getElementById('notes-modal') as HTMLDivElement,
+  notesDescription: document.getElementById('notes-description') as HTMLInputElement,
+  notesLineInfo: document.getElementById('notes-line-info') as HTMLParagraphElement,
+  btnSaveNotes: document.getElementById('btn-save-notes') as HTMLButtonElement,
+  btnCancelNotes: document.getElementById('btn-cancel-notes') as HTMLButtonElement,
 };
 
 // Virtual Log Viewer
@@ -1225,26 +1234,28 @@ function handleLogClick(event: MouseEvent): void {
     return;
   }
 
-  // Don't interfere with text selection
-  const selection = window.getSelection();
-  if (selection && selection.toString().length > 0) {
-    return;
-  }
-
   const target = event.target as HTMLElement;
   const lineElement = target.closest('.log-line') as HTMLDivElement;
 
   if (lineElement) {
     const lineNumber = parseInt(lineElement.dataset.lineNumber || '0', 10);
 
-    // Shift+Click for range selection
+    // Shift+Click for range selection (takes priority over text selection)
     if (event.shiftKey && state.selectedLine !== null) {
+      // Clear browser text selection
+      window.getSelection()?.removeAllRanges();
       const start = Math.min(state.selectedLine, lineNumber);
       const end = Math.max(state.selectedLine, lineNumber);
       state.selectionStart = start;
       state.selectionEnd = end;
       renderVisibleLines();
       updateSelectionStatus();
+      return;
+    }
+
+    // Don't interfere with text selection (for non-shift clicks)
+    const selection = window.getSelection();
+    if (selection && selection.toString().length > 0) {
       return;
     }
 
@@ -1322,22 +1333,26 @@ function handleContextMenu(event: MouseEvent): void {
     menu.appendChild(separator2);
   }
 
-  // Save range selection to file
-  if (state.selectionStart !== null && state.selectionEnd !== null) {
-    const lineCount = state.selectionEnd - state.selectionStart + 1;
-    const saveSelection = document.createElement('div');
-    saveSelection.className = 'context-menu-item';
-    saveSelection.textContent = `Save ${lineCount} Lines to File`;
-    saveSelection.addEventListener('click', () => {
-      saveSelectedLinesToFile();
-      menu.remove();
-    });
-    menu.appendChild(saveSelection);
+  // Save to Notes - always available (single line or range)
+  const hasRange = state.selectionStart !== null && state.selectionEnd !== null;
+  const saveStartLine = hasRange ? state.selectionStart! : lineNumber;
+  const saveEndLine = hasRange ? state.selectionEnd! : lineNumber;
+  const lineCount = saveEndLine - saveStartLine + 1;
 
-    const separatorSave = document.createElement('div');
-    separatorSave.className = 'context-menu-separator';
-    menu.appendChild(separatorSave);
-  }
+  const saveToNotesItem = document.createElement('div');
+  saveToNotesItem.className = 'context-menu-item';
+  saveToNotesItem.textContent = lineCount === 1
+    ? `Save Line to Notes`
+    : `Save ${lineCount} Lines to Notes`;
+  saveToNotesItem.addEventListener('click', () => {
+    menu.remove();
+    saveToNotesWithRange(saveStartLine, saveEndLine);
+  });
+  menu.appendChild(saveToNotesItem);
+
+  const separatorSave = document.createElement('div');
+  separatorSave.className = 'context-menu-separator';
+  menu.appendChild(separatorSave);
 
   const hasBookmark = state.bookmarks.some((b) => b.lineNumber === lineNumber);
 
@@ -1431,6 +1446,66 @@ async function saveSelectedLinesToFile(): Promise<void> {
   } else {
     alert(`Failed to save: ${result.error}`);
   }
+}
+
+// Notes modal state
+let pendingNotesResolve: ((note: string | null) => void) | null = null;
+
+function showNotesModal(startLine: number, endLine: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    pendingNotesResolve = resolve;
+    const lineCount = endLine - startLine + 1;
+    elements.notesDescription.value = '';
+    elements.notesLineInfo.textContent = lineCount === 1
+      ? `Line ${startLine + 1}`
+      : `Lines ${startLine + 1}-${endLine + 1} (${lineCount} lines)`;
+    elements.notesModal.classList.remove('hidden');
+    elements.notesDescription.focus();
+  });
+}
+
+function hideNotesModal(save: boolean): void {
+  const note = save ? elements.notesDescription.value : null;
+  elements.notesModal.classList.add('hidden');
+  elements.notesDescription.value = '';
+
+  if (pendingNotesResolve) {
+    pendingNotesResolve(note);
+    pendingNotesResolve = null;
+  }
+}
+
+async function saveToNotesWithRange(startLine: number, endLine: number): Promise<void> {
+  const note = await showNotesModal(startLine, endLine);
+  if (note === null) return; // User cancelled
+
+  const result = await window.api.saveToNotes(startLine, endLine, note || undefined);
+
+  if (result.success) {
+    // Clear selection after saving
+    state.selectionStart = null;
+    state.selectionEnd = null;
+    renderVisibleLines();
+
+    // Open notes file as inactive tab
+    if (result.filePath) {
+      const existingTab = findTabByFilePath(result.filePath);
+      if (!existingTab) {
+        // Open as new tab but don't switch to it
+        await loadFileAsInactiveTab(result.filePath);
+      }
+    }
+  } else {
+    alert(`Failed to save: ${result.error}`);
+  }
+}
+
+async function saveToNotes(): Promise<void> {
+  if (state.selectionStart === null || state.selectionEnd === null) {
+    alert('No lines selected. Use Shift+Click to select a range of lines.');
+    return;
+  }
+  await saveToNotesWithRange(state.selectionStart, state.selectionEnd);
 }
 
 // File Operations
@@ -1567,6 +1642,20 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
   } finally {
     hideProgress();
   }
+}
+
+// Add a tab for a file without loading it (tab loads when clicked)
+async function loadFileAsInactiveTab(filePath: string): Promise<void> {
+  // Check if already open
+  const existingTab = findTabByFilePath(filePath);
+  if (existingTab) {
+    return; // Already has a tab
+  }
+
+  // Create tab entry without loading
+  const newTab = createTab(filePath);
+  state.tabs.push(newTab);
+  renderTabBar();
 }
 
 // Analysis
@@ -2577,11 +2666,11 @@ function setupKeyboardShortcuts(): void {
       }
     }
 
-    // Ctrl/Cmd + Shift + S: Save selected lines to file
+    // Ctrl/Cmd + Shift + S: Save selected lines to notes
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'S') {
       e.preventDefault();
       if (state.selectionStart !== null && state.selectionEnd !== null) {
-        saveSelectedLinesToFile();
+        saveToNotes();
       }
     }
 
@@ -2729,6 +2818,18 @@ function init(): void {
     }
   });
 
+  // Notes modal
+  elements.btnSaveNotes.addEventListener('click', () => hideNotesModal(true));
+  elements.btnCancelNotes.addEventListener('click', () => hideNotesModal(false));
+  elements.notesDescription.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      hideNotesModal(true);
+    } else if (e.key === 'Escape') {
+      hideNotesModal(false);
+    }
+  });
+
   // Setup utilities
   setupSectionToggles();
   setupModalCloseHandlers();
@@ -2784,6 +2885,8 @@ function saveCurrentTabState(): void {
     cachedLines: cachedLines.toMap(),
     splitFiles: state.splitFiles,
     currentSplitIndex: state.currentSplitIndex,
+    minimapData: minimapData.length > 0 ? [...minimapData] : null,
+    isLoaded: true,
   };
 }
 
@@ -2833,6 +2936,8 @@ function createTab(filePath: string): TabState {
     isLoading: false,
     loadingText: '',
     loadingPercent: 0,
+    minimapData: null,
+    isLoaded: false,
   };
   return tab;
 }
@@ -2852,8 +2957,11 @@ async function switchToTab(tabId: string): Promise<void> {
   // Sync loading overlay for new tab (may already be loading)
   syncLoadingOverlay();
 
-  // Re-open the file in the backend (needed for getLines to work)
-  showProgress('Opening file...');
+  // Only show progress for files that haven't been loaded yet
+  const isAlreadyLoaded = tab.isLoaded;
+  if (!isAlreadyLoaded) {
+    showProgress('Opening file...');
+  }
 
   try {
     const result = await window.api.openFile(tab.filePath);
@@ -2882,7 +2990,7 @@ async function switchToTab(tabId: string): Promise<void> {
       // Wait for DOM layout
       await new Promise(resolve => requestAnimationFrame(resolve));
 
-      // Initialize visible range and restore scroll position
+      // Initialize visible range from saved scroll position
       if (logViewerElement) {
         const containerHeight = logViewerElement.clientHeight;
         const visibleLines = Math.ceil(containerHeight / getLineHeight());
@@ -2891,16 +2999,29 @@ async function switchToTab(tabId: string): Promise<void> {
         const startLine = scrollTopToLine(tab.scrollTop);
         state.visibleStartLine = Math.max(0, startLine - BUFFER_LINES);
         state.visibleEndLine = Math.min(startLine + visibleLines + BUFFER_LINES, state.totalLines - 1);
+      }
 
+      await loadVisibleLines();
+
+      // Restore scroll position AFTER content is rendered
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      if (logViewerElement) {
         logViewerElement.scrollTop = tab.scrollTop;
         logViewerElement.scrollLeft = tab.scrollLeft;
       }
 
-      await loadVisibleLines();
       updateSplitNavigation();
 
-      // Rebuild minimap
-      await buildMinimap();
+      // Use cached minimap if available, otherwise rebuild
+      if (tab.minimapData && tab.minimapData.length > 0) {
+        minimapData = tab.minimapData;
+        renderMinimap();
+      } else if (!isAlreadyLoaded) {
+        await buildMinimap();
+      }
+
+      // Mark as loaded
+      tab.isLoaded = true;
     }
   } finally {
     hideProgress();

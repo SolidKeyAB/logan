@@ -74,6 +74,10 @@ const api = {
   saveSelectedLines: (startLine: number, endLine: number): Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }> =>
     ipcRenderer.invoke('save-selected-lines', startLine, endLine),
 
+  // Save to notes file
+  saveToNotes: (startLine: number, endLine: number, note?: string): Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }> =>
+    ipcRenderer.invoke('save-to-notes', startLine, endLine, note),
+
   // Split file
   splitFile: (options: { mode: 'lines' | 'parts'; value: number }): Promise<{ success: boolean; outputDir?: string; files?: string[]; partCount?: number; error?: string }> =>
     ipcRenderer.invoke('split-file', options),
