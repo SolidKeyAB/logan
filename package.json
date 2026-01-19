@@ -1,6 +1,6 @@
 {
   "name": "logan",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Fast log file viewer and analyzer for large files with pattern detection, search, and bookmarks",
   "main": "dist/main/index.js",
   "scripts": {
