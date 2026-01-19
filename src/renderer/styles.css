@@ -204,6 +204,7 @@ body {
 .main-content {
   display: flex;
   flex: 1;
+  min-height: 0; /* Important for flex child to respect parent bounds */
   overflow: hidden;
 }
 
@@ -654,6 +655,7 @@ body {
 /* Log Viewer */
 .log-viewer {
   flex: 1;
+  min-height: 0; /* Important for flex child to respect parent bounds */
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -661,6 +663,7 @@ body {
 
 .editor-container {
   flex: 1;
+  min-height: 0; /* Important for flex child to respect parent bounds */
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -719,7 +722,7 @@ body {
 /* Virtual Log Viewer */
 .virtual-log-viewer {
   flex: 1;
-  height: 100%;
+  min-height: 0; /* Important for flex child to respect parent bounds */
   overflow: auto;
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
   font-size: 13px;
@@ -728,12 +731,17 @@ body {
   overflow-anchor: none; /* Prevent scroll anchoring issues */
   overscroll-behavior: contain; /* Prevent scroll chaining */
   scroll-behavior: auto; /* Use instant scrolling for programmatic scrolls */
+  /* Prevent text selection issues on scroll */
+  user-select: text;
 }
 
 .log-content {
   position: relative;
   min-width: 100%;
   /* Don't use contain: layout as it breaks horizontal scroll */
+  /* Add padding at bottom to ensure last lines are fully visible */
+  padding-bottom: 40px;
+  box-sizing: border-box;
 }
 
 .log-line {
@@ -747,6 +755,8 @@ body {
   contain: layout style paint;
   /* Prevent layout thrashing */
   box-sizing: border-box;
+  /* Prevent highlight flicker during scroll */
+  -webkit-tap-highlight-color: transparent;
 }
 
 .log-line:hover {
@@ -1148,6 +1158,7 @@ body {
 .log-viewer-wrapper {
   display: flex;
   flex: 1;
+  min-height: 0; /* Important for flex child to respect parent bounds */
   overflow: hidden;
   position: relative;
 }
