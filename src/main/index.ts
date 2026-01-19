@@ -331,6 +331,120 @@ ipcMain.handle(IPC.READ_FOLDER, async (_, folderPath: string) => {
   }
 });
 
+// === Column Analysis ===
+
+interface ColumnInfo {
+  index: number;
+  sample: string[];  // Sample values from this column
+  visible: boolean;
+}
+
+interface ColumnAnalysis {
+  delimiter: string;
+  delimiterName: string;
+  columns: ColumnInfo[];
+  sampleLines: string[];
+}
+
+// Detect delimiter by analyzing character frequencies
+function detectDelimiter(lines: string[]): { delimiter: string; name: string } {
+  const candidates = [
+    { char: '\t', name: 'Tab' },
+    { char: ',', name: 'Comma' },
+    { char: '|', name: 'Pipe' },
+    { char: ';', name: 'Semicolon' },
+  ];
+
+  // Count occurrences of each delimiter and check consistency
+  const scores: Map<string, number> = new Map();
+
+  for (const { char } of candidates) {
+    const counts = lines.map(line => (line.match(new RegExp(char === '|' ? '\\|' : char, 'g')) || []).length);
+    const nonZeroCounts = counts.filter(c => c > 0);
+
+    if (nonZeroCounts.length === 0) continue;
+
+    // Check if count is consistent across lines (good delimiter has consistent column count)
+    const avgCount = nonZeroCounts.reduce((a, b) => a + b, 0) / nonZeroCounts.length;
+    const consistency = nonZeroCounts.filter(c => Math.abs(c - avgCount) <= 1).length / nonZeroCounts.length;
+
+    // Score based on: presence, count, and consistency
+    const score = avgCount * consistency * (nonZeroCounts.length / lines.length);
+    scores.set(char, score);
+  }
+
+  // Find best delimiter
+  let bestDelimiter = { char: ' ', name: 'Space' }; // Default to space
+  let bestScore = 0;
+
+  for (const { char, name } of candidates) {
+    const score = scores.get(char) || 0;
+    if (score > bestScore && score > 1) { // Must have at least some presence
+      bestScore = score;
+      bestDelimiter = { char, name };
+    }
+  }
+
+  return { delimiter: bestDelimiter.char, name: bestDelimiter.name };
+}
+
+ipcMain.handle('analyze-columns', async () => {
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+
+  try {
+    // Get sample lines (first 100 non-empty lines)
+    const sampleSize = 100;
+    const lines = handler.getLines(1, sampleSize);
+    const nonEmptyLines = lines.filter(l => l.text.trim().length > 0).map(l => l.text);
+
+    if (nonEmptyLines.length === 0) {
+      return { success: false, error: 'No content to analyze' };
+    }
+
+    // Detect delimiter
+    const { delimiter, name: delimiterName } = detectDelimiter(nonEmptyLines);
+
+    // Split lines into columns
+    const splitLines = nonEmptyLines.map(line => {
+      if (delimiter === ' ') {
+        // For space delimiter, use whitespace splitting but preserve structure
+        return line.split(/\s+/);
+      }
+      return line.split(delimiter);
+    });
+
+    // Find max column count
+    const maxColumns = Math.max(...splitLines.map(cols => cols.length));
+
+    // Build column info with samples
+    const columns: ColumnInfo[] = [];
+    for (let i = 0; i < maxColumns; i++) {
+      const samples = splitLines
+        .map(cols => cols[i] || '')
+        .filter(s => s.trim().length > 0)
+        .slice(0, 5); // Keep 5 samples per column
+
+      columns.push({
+        index: i,
+        sample: samples,
+        visible: true, // All visible by default
+      });
+    }
+
+    const result: ColumnAnalysis = {
+      delimiter,
+      delimiterName,
+      columns,
+      sampleLines: nonEmptyLines.slice(0, 5), // First 5 lines as preview
+    };
+
+    return { success: true, analysis: result };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
 ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
   try {
     // Check if file is already cached

@@ -1526,3 +1526,50 @@ kbd {
 .tips-list li strong {
   color: var(--text-primary);
 }
+
+/* Column Visibility Modal */
+.columns-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.column-item {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 12px;
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+  gap: 4px;
+}
+
+.column-item .checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.column-item .column-index {
+  font-weight: 600;
+  color: var(--accent-color);
+  min-width: 50px;
+}
+
+.column-samples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-left: 24px;
+}
+
+.column-samples code {
+  background-color: var(--bg-secondary);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

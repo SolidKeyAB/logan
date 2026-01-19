@@ -95,6 +95,17 @@ interface FolderState {
   collapsed: boolean;
 }
 
+// Column visibility state
+interface ColumnConfig {
+  delimiter: string;
+  delimiterName: string;
+  columns: Array<{
+    index: number;
+    sample: string[];
+    visible: boolean;
+  }>;
+}
+
 // Tab State - stores per-file state for inactive tabs
 interface TabState {
   id: string;
@@ -146,6 +157,8 @@ interface AppState {
   activeTabId: string | null;
   // Folder tree
   folders: FolderState[];
+  // Column visibility
+  columnConfig: ColumnConfig | null;
 }
 
 const state: AppState = {
@@ -169,6 +182,7 @@ const state: AppState = {
   tabs: [],
   activeTabId: null,
   folders: [],
+  columnConfig: null,
 };
 
 // Constants
@@ -254,6 +268,17 @@ const elements = {
   splitPreview: document.getElementById('split-preview') as HTMLDivElement,
   btnDoSplit: document.getElementById('btn-do-split') as HTMLButtonElement,
   btnCancelSplit: document.getElementById('btn-cancel-split') as HTMLButtonElement,
+  // Columns
+  btnColumns: document.getElementById('btn-columns') as HTMLButtonElement,
+  columnsModal: document.getElementById('columns-modal') as HTMLDivElement,
+  columnsLoading: document.getElementById('columns-loading') as HTMLDivElement,
+  columnsContent: document.getElementById('columns-content') as HTMLDivElement,
+  columnsDelimiter: document.getElementById('columns-delimiter') as HTMLSpanElement,
+  columnsList: document.getElementById('columns-list') as HTMLDivElement,
+  btnColumnsAll: document.getElementById('btn-columns-all') as HTMLButtonElement,
+  btnColumnsNone: document.getElementById('btn-columns-none') as HTMLButtonElement,
+  btnColumnsApply: document.getElementById('btn-columns-apply') as HTMLButtonElement,
+  btnColumnsCancel: document.getElementById('btn-columns-cancel') as HTMLButtonElement,
   includePatterns: document.getElementById('include-patterns') as HTMLTextAreaElement,
   excludePatterns: document.getElementById('exclude-patterns') as HTMLTextAreaElement,
   collapseDuplicates: document.getElementById('collapse-duplicates') as HTMLInputElement,
@@ -818,7 +843,8 @@ function createLineElementPooled(line: LogLine): HTMLDivElement {
 
   // Create content using innerHTML for speed (single parse)
   const lineNumHtml = `<span class="line-number">${line.lineNumber + 1}</span>`;
-  const contentHtml = `<span class="line-content">${applyHighlights(line.text)}</span>`;
+  const displayText = applyColumnFilter(line.text);
+  const contentHtml = `<span class="line-content">${applyHighlights(displayText)}</span>`;
   div.innerHTML = lineNumHtml + contentHtml;
 
   return div;
@@ -856,8 +882,9 @@ function createLineElement(line: LogLine): HTMLDivElement {
   const contentSpan = document.createElement('span');
   contentSpan.className = 'line-content';
 
-  // Apply highlights
-  const highlightedText = applyHighlights(line.text);
+  // Apply column filter then highlights
+  const displayText = applyColumnFilter(line.text);
+  const highlightedText = applyHighlights(displayText);
   contentSpan.innerHTML = highlightedText;
 
   div.appendChild(lineNumSpan);
@@ -1764,6 +1791,8 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
 
       elements.btnAnalyze.disabled = false;
       elements.btnSplit.disabled = false;
+      elements.btnColumns.disabled = false;
+      state.columnConfig = null; // Reset column config for new file
       updateStatusBar();
       updateSplitNavigation();
 
@@ -1829,6 +1858,126 @@ async function analyzeFile(): Promise<void> {
     elements.analysisProgress.style.display = 'none';
     elements.btnAnalyze.disabled = false;
   }
+}
+
+// Column visibility
+async function showColumnsModal(): Promise<void> {
+  if (!state.filePath) return;
+
+  elements.columnsModal.classList.remove('hidden');
+  elements.columnsLoading.style.display = 'block';
+  elements.columnsContent.style.display = 'none';
+
+  try {
+    const result = await window.api.analyzeColumns();
+
+    if (result.success && result.analysis) {
+      const { delimiter, delimiterName, columns } = result.analysis;
+
+      // Restore previous visibility if we have a config
+      if (state.columnConfig && state.columnConfig.delimiter === delimiter) {
+        // Keep existing visibility settings
+        for (let i = 0; i < columns.length; i++) {
+          if (i < state.columnConfig.columns.length) {
+            columns[i].visible = state.columnConfig.columns[i].visible;
+          }
+        }
+      }
+
+      elements.columnsDelimiter.textContent = delimiterName;
+
+      // Render column list
+      elements.columnsList.innerHTML = columns.map((col: ColumnInfo, idx: number) => {
+        const samples = col.sample.slice(0, 3).map((s: string) => s.length > 30 ? s.substring(0, 27) + '...' : s);
+        return `
+          <div class="column-item">
+            <label class="checkbox-label">
+              <input type="checkbox" data-col-index="${idx}" ${col.visible ? 'checked' : ''}>
+              <span class="column-index">Col ${idx + 1}</span>
+            </label>
+            <div class="column-samples">${samples.map((s: string) => `<code>${escapeHtml(s)}</code>`).join(' ')}</div>
+          </div>
+        `;
+      }).join('');
+
+      // Store temporarily for apply
+      (elements.columnsModal as any)._tempConfig = { delimiter, delimiterName, columns };
+
+      elements.columnsLoading.style.display = 'none';
+      elements.columnsContent.style.display = 'block';
+    } else {
+      elements.columnsLoading.textContent = result.error || 'Failed to analyze columns';
+    }
+  } catch (error) {
+    elements.columnsLoading.textContent = `Error: ${error}`;
+  }
+}
+
+function hideColumnsModal(): void {
+  elements.columnsModal.classList.add('hidden');
+}
+
+function applyColumnsConfig(): void {
+  const tempConfig = (elements.columnsModal as any)._tempConfig;
+  if (!tempConfig) return;
+
+  // Read checkbox states
+  const checkboxes = elements.columnsList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+  checkboxes.forEach((cb) => {
+    const idx = parseInt(cb.dataset.colIndex || '0', 10);
+    if (idx < tempConfig.columns.length) {
+      tempConfig.columns[idx].visible = cb.checked;
+    }
+  });
+
+  state.columnConfig = {
+    delimiter: tempConfig.delimiter,
+    delimiterName: tempConfig.delimiterName,
+    columns: tempConfig.columns.map((c: any) => ({
+      index: c.index,
+      sample: c.sample,
+      visible: c.visible,
+    })),
+  };
+
+  hideColumnsModal();
+
+  // Re-render visible lines with new column filter
+  if (logContentElement) {
+    logContentElement.innerHTML = '';
+    lineElementPool.releaseAll();
+  }
+  loadVisibleLines();
+}
+
+function setAllColumnsVisibility(visible: boolean): void {
+  const checkboxes = elements.columnsList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+  checkboxes.forEach((cb) => {
+    cb.checked = visible;
+  });
+}
+
+// Apply column filter to a line of text
+function applyColumnFilter(text: string): string {
+  if (!state.columnConfig || state.columnConfig.columns.every(c => c.visible)) {
+    return text;
+  }
+
+  const { delimiter, columns } = state.columnConfig;
+  let parts: string[];
+
+  if (delimiter === ' ') {
+    parts = text.split(/\s+/);
+  } else {
+    parts = text.split(delimiter);
+  }
+
+  // Build filtered text with only visible columns
+  const visibleParts = parts.filter((_, idx) => {
+    return idx < columns.length ? columns[idx].visible : true;
+  });
+
+  return visibleParts.join(delimiter === ' ' ? ' ' : delimiter);
 }
 
 // Search
@@ -2957,6 +3106,13 @@ function init(): void {
   elements.btnSplit.addEventListener('click', showSplitModal);
   elements.btnDoSplit.addEventListener('click', doSplit);
   elements.btnCancelSplit.addEventListener('click', hideSplitModal);
+
+  // Columns
+  elements.btnColumns.addEventListener('click', showColumnsModal);
+  elements.btnColumnsApply.addEventListener('click', applyColumnsConfig);
+  elements.btnColumnsCancel.addEventListener('click', hideColumnsModal);
+  elements.btnColumnsAll.addEventListener('click', () => setAllColumnsVisibility(true));
+  elements.btnColumnsNone.addEventListener('click', () => setAllColumnsVisibility(false));
 
   // Split mode and value change handlers
   document.querySelectorAll('input[name="split-mode"]').forEach((radio) => {

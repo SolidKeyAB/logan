@@ -114,6 +114,10 @@ const api = {
     return () => ipcRenderer.removeListener(IPC.SEARCH_PROGRESS, handler);
   },
 
+  // Column Analysis
+  analyzeColumns: (): Promise<{ success: boolean; analysis?: { delimiter: string; delimiterName: string; columns: Array<{ index: number; sample: string[]; visible: boolean }>; sampleLines: string[] }; error?: string }> =>
+    ipcRenderer.invoke('analyze-columns'),
+
   // Analysis
   listAnalyzers: (): Promise<{ success: boolean; analyzers?: Array<{ name: string; description: string }> }> =>
     ipcRenderer.invoke('list-analyzers'),

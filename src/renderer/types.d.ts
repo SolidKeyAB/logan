@@ -110,6 +110,19 @@ interface FolderFile {
   size?: number;
 }
 
+interface ColumnInfo {
+  index: number;
+  sample: string[];
+  visible: boolean;
+}
+
+interface ColumnAnalysis {
+  delimiter: string;
+  delimiterName: string;
+  columns: ColumnInfo[];
+  sampleLines: string[];
+}
+
 interface Api {
   // File operations
   openFileDialog: () => Promise<string | null>;
@@ -157,6 +170,9 @@ interface Api {
   analyzeFile: (analyzerName?: string, options?: AnalyzerOptions) => Promise<{ success: boolean; result?: AnalysisResult; error?: string }>;
   cancelAnalysis: () => Promise<{ success: boolean }>;
   applyFilter: (config: FilterConfig) => Promise<{ success: boolean; stats?: { filteredLines: number }; error?: string }>;
+
+  // Column Analysis
+  analyzeColumns: () => Promise<{ success: boolean; analysis?: ColumnAnalysis; error?: string }>;
 
   // Events
   onIndexingProgress: (callback: (percent: number) => void) => () => void;

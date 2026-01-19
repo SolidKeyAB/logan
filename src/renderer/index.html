@@ -36,6 +36,7 @@
         <button id="btn-filter" class="toolbar-btn" title="Filter settings">Filter</button>
         <button id="btn-split" class="toolbar-btn" title="Split file into parts" disabled>Split</button>
         <button id="btn-analyze" class="toolbar-btn" title="Analyze file" disabled>Analyze</button>
+        <button id="btn-columns" class="toolbar-btn" title="Show/hide columns" disabled>Columns</button>
       </div>
       <div class="toolbar-right">
         <button id="btn-help" class="toolbar-btn small" title="Keyboard shortcuts & help">?</button>
@@ -397,6 +398,35 @@
         <div class="modal-footer">
           <span class="version-info">LOGAN v0.1.0</span>
           <button id="btn-close-help" class="primary-btn">Got it!</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Columns Modal -->
+    <div id="columns-modal" class="modal hidden">
+      <div class="modal-content" style="width: 600px; max-height: 80vh;">
+        <div class="modal-header">
+          <h3>Column Visibility</h3>
+          <button class="modal-close" data-modal="columns-modal">&times;</button>
+        </div>
+        <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
+          <div id="columns-loading" class="placeholder">Analyzing columns...</div>
+          <div id="columns-content" style="display: none;">
+            <div class="filter-group">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span>Detected delimiter: <strong id="columns-delimiter"></strong></span>
+                <div>
+                  <button id="btn-columns-all" class="secondary-btn small">All</button>
+                  <button id="btn-columns-none" class="secondary-btn small">None</button>
+                </div>
+              </div>
+            </div>
+            <div id="columns-list" class="columns-list"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-columns-cancel" class="secondary-btn">Cancel</button>
+          <button id="btn-columns-apply" class="primary-btn">Apply</button>
         </div>
       </div>
     </div>
