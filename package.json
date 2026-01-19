@@ -35,7 +35,8 @@
     "appId": "com.solidkey.logan",
     "productName": "LOGAN",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "assets"
     },
     "files": [
       "dist/**/*",
@@ -43,21 +44,21 @@
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
-      "icon": "assets/logo.png",
+      "icon": "icon.png",
       "target": [
         "dmg",
         "zip"
       ]
     },
     "win": {
-      "icon": "assets/logo.png",
+      "icon": "icon.png",
       "target": [
         "nsis",
         "portable"
       ]
     },
     "linux": {
-      "icon": "assets/logo.png",
+      "icon": "icon.png",
       "target": [
         "AppImage",
         "deb"
