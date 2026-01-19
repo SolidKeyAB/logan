@@ -771,10 +771,71 @@ ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: numb
 });
 
 // === Save to Notes ===
-// TODO: Simplify note file creation - append to single file instead of creating new file for each entry
-// TODO: Simplify naming convention for notes file
 
-ipcMain.handle('save-to-notes', async (_, startLine: number, endLine: number, note?: string) => {
+// Helper: Read notes file header to get source log path
+function getNotesFileSource(notesFilePath: string): string | null {
+  try {
+    const content = fs.readFileSync(notesFilePath, 'utf-8');
+    const lines = content.split('\n').slice(0, 10); // Read first 10 lines
+    for (const line of lines) {
+      if (line.startsWith('Source: ')) {
+        return line.substring(8).trim();
+      }
+    }
+  } catch {
+    // File doesn't exist or can't be read
+  }
+  return null;
+}
+
+// Find existing notes files for the current log file
+ipcMain.handle('find-notes-files', async () => {
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+
+  const fileInfo = handler.getFileInfo();
+  if (!fileInfo) return { success: false, error: 'No file info' };
+
+  const currentDir = path.dirname(fileInfo.path);
+  const logFilePath = fileInfo.path;
+
+  try {
+    const files = fs.readdirSync(currentDir);
+    const notesFiles: Array<{ name: string; path: string; created: string }> = [];
+
+    for (const file of files) {
+      if (file.endsWith('.notes.txt')) {
+        const fullPath = path.join(currentDir, file);
+        const source = getNotesFileSource(fullPath);
+
+        // Check if this notes file belongs to the current log file
+        if (source === logFilePath) {
+          // Get created date from header
+          const content = fs.readFileSync(fullPath, 'utf-8');
+          const createdMatch = content.match(/Created: (.+)/);
+          notesFiles.push({
+            name: file,
+            path: fullPath,
+            created: createdMatch ? createdMatch[1].trim() : 'Unknown',
+          });
+        }
+      }
+    }
+
+    return { success: true, files: notesFiles, logFilePath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// Save to notes - creates new file or appends to existing
+ipcMain.handle('save-to-notes', async (
+  _,
+  startLine: number,
+  endLine: number,
+  note?: string,
+  targetFilePath?: string // If provided, append to this file; otherwise create new
+) => {
   const handler = getFileHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
@@ -792,30 +853,72 @@ ipcMain.handle('save-to-notes', async (_, startLine: number, endLine: number, no
     if (!fileInfo) return { success: false, error: 'No file info' };
 
     const currentDir = path.dirname(fileInfo.path);
-    const originalFileName = path.basename(fileInfo.path, path.extname(fileInfo.path));
-    const notesFileName = `notes_from-${originalFileName}.log`;
-    const notesFilePath = path.join(currentDir, notesFileName);
-
-    // Build the note entry
     const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
     const separator = '='.repeat(80);
-    const noteText = note ? `Note: ${note}` : 'Note: (no description)';
-    const lineInfo = `Lines: ${startLine + 1}-${endLine + 1} | Saved: ${timestamp}`;
 
-    const entry = [
+    let notesFilePath: string;
+    let isNewFile = false;
+
+    if (targetFilePath && fs.existsSync(targetFilePath)) {
+      // Append to existing file
+      notesFilePath = targetFilePath;
+    } else {
+      // Create new file with unique name
+      const originalFileName = path.basename(fileInfo.path, path.extname(fileInfo.path));
+      const dateStr = new Date().toISOString().substring(0, 10).replace(/-/g, '');
+      let counter = 1;
+      let notesFileName = `${originalFileName}_${dateStr}.notes.txt`;
+      notesFilePath = path.join(currentDir, notesFileName);
+
+      // Find unique filename if exists
+      while (fs.existsSync(notesFilePath)) {
+        counter++;
+        notesFileName = `${originalFileName}_${dateStr}_${counter}.notes.txt`;
+        notesFilePath = path.join(currentDir, notesFileName);
+      }
+      isNewFile = true;
+    }
+
+    // Build content
+    let content = '';
+
+    if (isNewFile) {
+      // Add header for new file
+      content = [
+        separator,
+        'LOGAN Notes',
+        `Source: ${fileInfo.path}`,
+        `Created: ${timestamp}`,
+        separator,
+        '',
+      ].join('\n');
+    }
+
+    // Add the note entry
+    const noteDesc = note ? ` | ${note}` : '';
+    content += [
       '',
-      separator,
-      noteText,
-      lineInfo,
-      separator,
+      `--- [${timestamp}] Lines ${startLine + 1}-${endLine + 1}${noteDesc} ---`,
       ...lines.map(l => l.text),
-      ''
+      '',
     ].join('\n');
 
-    // Append to notes file (create if doesn't exist)
-    fs.appendFileSync(notesFilePath, entry, 'utf-8');
+    // Write or append
+    if (isNewFile) {
+      fs.writeFileSync(notesFilePath, content, 'utf-8');
+    } else {
+      fs.appendFileSync(notesFilePath, content, 'utf-8');
+    }
 
-    return { success: true, filePath: notesFilePath, lineCount: lines.length };
+    // Invalidate cache for this file so it gets re-indexed with new content
+    fileHandlerCache.delete(notesFilePath);
+
+    return {
+      success: true,
+      filePath: notesFilePath,
+      lineCount: lines.length,
+      isNewFile,
+    };
   } catch (error) {
     return { success: false, error: String(error) };
   }

@@ -161,6 +161,8 @@ interface AppState {
   folders: FolderState[];
   // Column visibility
   columnConfig: ColumnConfig | null;
+  // Notes file tracking
+  currentNotesFile: string | null;
 }
 
 const state: AppState = {
@@ -185,6 +187,7 @@ const state: AppState = {
   activeTabId: null,
   folders: [],
   columnConfig: null,
+  currentNotesFile: null,
 };
 
 // Constants
@@ -323,6 +326,7 @@ const elements = {
   btnCancelBookmark: document.getElementById('btn-cancel-bookmark') as HTMLButtonElement,
   // Notes modal
   notesModal: document.getElementById('notes-modal') as HTMLDivElement,
+  notesFileOptions: document.getElementById('notes-file-options') as HTMLDivElement,
   notesDescription: document.getElementById('notes-description') as HTMLInputElement,
   notesLineInfo: document.getElementById('notes-line-info') as HTMLParagraphElement,
   btnSaveNotes: document.getElementById('btn-save-notes') as HTMLButtonElement,
@@ -1400,10 +1404,37 @@ function handleContextMenu(event: MouseEvent): void {
     menu.appendChild(separator2);
   }
 
-  // Save to Notes - always available (single line or range)
-  const hasRange = state.selectionStart !== null && state.selectionEnd !== null;
-  const saveStartLine = hasRange ? state.selectionStart! : lineNumber;
-  const saveEndLine = hasRange ? state.selectionEnd! : lineNumber;
+  // Save to Notes - check for text selection across lines, Shift+click range, or single line
+  let saveStartLine = lineNumber;
+  let saveEndLine = lineNumber;
+
+  // First, check if there's a text selection spanning multiple lines
+  if (selection && selection.rangeCount > 0) {
+    const range = selection.getRangeAt(0);
+    const startLineEl = (range.startContainer.nodeType === Node.TEXT_NODE
+      ? range.startContainer.parentElement
+      : range.startContainer as Element)?.closest('.log-line') as HTMLDivElement | null;
+    const endLineEl = (range.endContainer.nodeType === Node.TEXT_NODE
+      ? range.endContainer.parentElement
+      : range.endContainer as Element)?.closest('.log-line') as HTMLDivElement | null;
+
+    if (startLineEl && endLineEl) {
+      const startLineNum = parseInt(startLineEl.dataset.lineNumber || '0', 10);
+      const endLineNum = parseInt(endLineEl.dataset.lineNumber || '0', 10);
+      if (startLineNum !== endLineNum || selectedText) {
+        // Text selection spans lines or there's selected text on a single line
+        saveStartLine = Math.min(startLineNum, endLineNum);
+        saveEndLine = Math.max(startLineNum, endLineNum);
+      }
+    }
+  }
+
+  // If no text selection range, check for Shift+click range selection
+  if (saveStartLine === saveEndLine && state.selectionStart !== null && state.selectionEnd !== null) {
+    saveStartLine = state.selectionStart;
+    saveEndLine = state.selectionEnd;
+  }
+
   const lineCount = saveEndLine - saveStartLine + 1;
 
   const saveToNotesItem = document.createElement('div');
@@ -1516,9 +1547,55 @@ async function saveSelectedLinesToFile(): Promise<void> {
 }
 
 // Notes modal state
-let pendingNotesResolve: ((note: string | null) => void) | null = null;
+interface NotesModalResult {
+  note: string;
+  targetFilePath: string | null; // null means create new file
+}
+let pendingNotesResolve: ((result: NotesModalResult | null) => void) | null = null;
+let selectedNotesFilePath: string | null = null;
 
-function showNotesModal(startLine: number, endLine: number): Promise<string | null> {
+async function showNotesModal(startLine: number, endLine: number): Promise<NotesModalResult | null> {
+  // Fetch existing notes files for the current log
+  const existingFiles = await window.api.findNotesFiles();
+  const filesList = existingFiles.success && existingFiles.files ? existingFiles.files : [];
+
+  // Check if current notes file still exists in the list
+  const currentFileExists = filesList.some(f => f.path === state.currentNotesFile);
+
+  // Determine which option should be selected
+  // If we have a valid current notes file, use it; otherwise default to "Create new"
+  const selectedPath = currentFileExists ? state.currentNotesFile : null;
+  selectedNotesFilePath = selectedPath;
+
+  // Populate file options
+  let optionsHtml = `
+    <label class="radio-option">
+      <input type="radio" name="notes-file" value="new" ${selectedPath === null ? 'checked' : ''}>
+      <span>Create new notes file</span>
+    </label>
+  `;
+
+  for (const file of filesList) {
+    const isSelected = selectedPath === file.path;
+    optionsHtml += `
+      <label class="radio-option">
+        <input type="radio" name="notes-file" value="${file.path}" ${isSelected ? 'checked' : ''}>
+        <span title="${file.path}">${file.name} <span class="hint">(${file.created})</span></span>
+      </label>
+    `;
+  }
+
+  elements.notesFileOptions.innerHTML = optionsHtml;
+
+  // Add change listener
+  const radioInputs = elements.notesFileOptions.querySelectorAll('input[type="radio"]');
+  radioInputs.forEach((input) => {
+    input.addEventListener('change', (e) => {
+      const target = e.target as HTMLInputElement;
+      selectedNotesFilePath = target.value === 'new' ? null : target.value;
+    });
+  });
+
   return new Promise((resolve) => {
     pendingNotesResolve = resolve;
     const lineCount = endLine - startLine + 1;
@@ -1532,34 +1609,60 @@ function showNotesModal(startLine: number, endLine: number): Promise<string | nu
 }
 
 function hideNotesModal(save: boolean): void {
-  const note = save ? elements.notesDescription.value : null;
   elements.notesModal.classList.add('hidden');
-  elements.notesDescription.value = '';
 
   if (pendingNotesResolve) {
-    pendingNotesResolve(note);
+    if (save) {
+      pendingNotesResolve({
+        note: elements.notesDescription.value,
+        targetFilePath: selectedNotesFilePath,
+      });
+    } else {
+      pendingNotesResolve(null);
+    }
     pendingNotesResolve = null;
   }
+
+  elements.notesDescription.value = '';
+  selectedNotesFilePath = null;
 }
 
 async function saveToNotesWithRange(startLine: number, endLine: number): Promise<void> {
-  const note = await showNotesModal(startLine, endLine);
-  if (note === null) return; // User cancelled
+  const modalResult = await showNotesModal(startLine, endLine);
+  if (modalResult === null) return; // User cancelled
 
-  const result = await window.api.saveToNotes(startLine, endLine, note || undefined);
+  const result = await window.api.saveToNotes(
+    startLine,
+    endLine,
+    modalResult.note || undefined,
+    modalResult.targetFilePath || undefined
+  );
 
   if (result.success) {
+    // Remember the selected notes file for this session
+    if (result.filePath) {
+      state.currentNotesFile = result.filePath;
+    }
+
     // Clear selection after saving
     state.selectionStart = null;
     state.selectionEnd = null;
     renderVisibleLines();
 
-    // Open notes file as inactive tab
+    // Handle notes file tab
     if (result.filePath) {
       const existingTab = findTabByFilePath(result.filePath);
       if (!existingTab) {
         // Open as new tab but don't switch to it
         await loadFileAsInactiveTab(result.filePath);
+      } else if (existingTab.id === state.activeTabId) {
+        // Notes tab is currently active - refresh it
+        await refreshActiveTab();
+      } else {
+        // Notes tab exists but is inactive - mark for reload when switched to
+        existingTab.isLoaded = false;
+        existingTab.totalLines = 0;
+        existingTab.cachedLines.clear();
       }
     }
   } else {
@@ -1742,6 +1845,7 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       state.filteredLines = null;
       state.searchResults = [];
       state.currentSearchIndex = -1;
+      state.currentNotesFile = null; // Reset notes file for new log file
       cachedLines.clear();
 
       // Load bookmarks from file open response (persisted per-file)
@@ -1839,6 +1943,32 @@ async function loadFileAsInactiveTab(filePath: string): Promise<void> {
   const newTab = createTab(filePath);
   state.tabs.push(newTab);
   renderTabBar();
+}
+
+// Refresh the currently active tab (reload file content)
+async function refreshActiveTab(): Promise<void> {
+  if (!state.filePath) return;
+
+  try {
+    const result = await window.api.openFile(state.filePath);
+
+    if (result.success && result.info) {
+      state.totalLines = result.info.totalLines;
+      state.fileStats = {
+        path: result.info.path,
+        size: result.info.size,
+        totalLines: result.info.totalLines,
+        indexedAt: Date.now(),
+      };
+
+      // Clear cache and re-render
+      cachedLines.clear();
+      renderVisibleLines();
+      updateStatusBar();
+    }
+  } catch (error) {
+    console.error('Failed to refresh tab:', error);
+  }
 }
 
 // Analysis

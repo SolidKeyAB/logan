@@ -454,12 +454,18 @@
 
     <!-- Save to Notes Modal -->
     <div id="notes-modal" class="modal hidden">
-      <div class="modal-content" style="width: 450px;">
+      <div class="modal-content" style="width: 500px;">
         <div class="modal-header">
           <h3>Save to Notes</h3>
           <button class="modal-close" data-modal="notes-modal">&times;</button>
         </div>
         <div class="modal-body">
+          <div class="filter-group" id="notes-file-group">
+            <label>Notes File</label>
+            <div id="notes-file-options" class="radio-group">
+              <!-- Will be populated dynamically -->
+            </div>
+          </div>
           <div class="filter-group">
             <label for="notes-description">Description (optional)</label>
             <input type="text" id="notes-description" class="modal-input" placeholder="e.g., Memory leak at startup, Connection timeout...">

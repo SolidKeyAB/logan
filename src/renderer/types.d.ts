@@ -165,7 +165,10 @@ interface Api {
 
   // Save selected lines
   saveSelectedLines: (startLine: number, endLine: number) => Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }>;
-  saveToNotes: (startLine: number, endLine: number, note?: string) => Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }>;
+
+  // Notes files
+  findNotesFiles: () => Promise<{ success: boolean; files?: Array<{ name: string; path: string; created: string }>; logFilePath?: string; error?: string }>;
+  saveToNotes: (startLine: number, endLine: number, note?: string, targetFilePath?: string) => Promise<{ success: boolean; filePath?: string; lineCount?: number; isNewFile?: boolean; error?: string }>;
 
   // Split file
   splitFile: (options: { mode: 'lines' | 'parts'; value: number }) => Promise<{ success: boolean; outputDir?: string; files?: string[]; partCount?: number; error?: string }>;

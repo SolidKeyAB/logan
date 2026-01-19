@@ -88,8 +88,11 @@ const api = {
     ipcRenderer.invoke('save-selected-lines', startLine, endLine),
 
   // Save to notes file
-  saveToNotes: (startLine: number, endLine: number, note?: string): Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }> =>
-    ipcRenderer.invoke('save-to-notes', startLine, endLine, note),
+  findNotesFiles: (): Promise<{ success: boolean; files?: Array<{ name: string; path: string; created: string }>; logFilePath?: string; error?: string }> =>
+    ipcRenderer.invoke('find-notes-files'),
+
+  saveToNotes: (startLine: number, endLine: number, note?: string, targetFilePath?: string): Promise<{ success: boolean; filePath?: string; lineCount?: number; isNewFile?: boolean; error?: string }> =>
+    ipcRenderer.invoke('save-to-notes', startLine, endLine, note, targetFilePath),
 
   // Split file
   splitFile: (options: { mode: 'lines' | 'parts'; value: number }): Promise<{ success: boolean; outputDir?: string; files?: string[]; partCount?: number; error?: string }> =>
