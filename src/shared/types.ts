@@ -50,6 +50,14 @@ export interface ChunkRequest {
   lineCount: number;
 }
 
+// Folder entry for tree view
+export interface FolderEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  size?: number;
+}
+
 // IPC Channels
 export const IPC = {
   OPEN_FILE_DIALOG: 'open-file-dialog',
@@ -59,4 +67,6 @@ export const IPC = {
   SEARCH_PROGRESS: 'search-progress',
   SEARCH_CANCEL: 'search-cancel',
   GOTO_LINE: 'goto-line',
+  OPEN_FOLDER_DIALOG: 'open-folder-dialog',
+  READ_FOLDER: 'read-folder',
 } as const;

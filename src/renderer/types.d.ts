@@ -103,12 +103,23 @@ interface HighlightConfig {
   isGlobal?: boolean; // true = applies to all files, false = file-specific
 }
 
+interface FolderFile {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  size?: number;
+}
+
 interface Api {
   // File operations
   openFileDialog: () => Promise<string | null>;
   openFile: (path: string) => Promise<{ success: boolean; info?: FileInfo; error?: string; splitFiles?: string[]; splitIndex?: number; bookmarks?: Bookmark[]; highlights?: HighlightConfig[] }>;
   getLines: (startLine: number, count: number) => Promise<{ success: boolean; lines?: LogLine[]; error?: string }>;
   getFileInfo: () => Promise<{ success: boolean; info?: FileInfo; error?: string }>;
+
+  // Folder operations
+  openFolderDialog: () => Promise<string | null>;
+  readFolder: (folderPath: string) => Promise<{ success: boolean; files?: FolderFile[]; folderPath?: string; error?: string }>;
 
   // System info
   checkSearchEngine: () => Promise<{ engine: 'ripgrep' | 'stream'; version: string | null }>;

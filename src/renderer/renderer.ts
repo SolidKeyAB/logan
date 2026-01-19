@@ -81,6 +81,20 @@ interface HighlightConfig {
   highlightAll: boolean; // true = all occurrences, false = first only per line
 }
 
+// Folder State - stores opened folders and their files
+interface LocalFolderFile {
+  name: string;
+  path: string;
+  size?: number;
+}
+
+interface FolderState {
+  path: string;
+  name: string;
+  files: LocalFolderFile[];
+  collapsed: boolean;
+}
+
 // Tab State - stores per-file state for inactive tabs
 interface TabState {
   id: string;
@@ -130,6 +144,8 @@ interface AppState {
   // Tab management
   tabs: TabState[];
   activeTabId: string | null;
+  // Folder tree
+  folders: FolderState[];
 }
 
 const state: AppState = {
@@ -152,6 +168,7 @@ const state: AppState = {
   currentSplitIndex: -1,
   tabs: [],
   activeTabId: null,
+  folders: [],
 };
 
 // Constants
@@ -205,6 +222,8 @@ const elements = {
   sidebar: document.getElementById('sidebar') as HTMLElement,
   editorContainer: document.getElementById('editor-container') as HTMLDivElement,
   welcomeMessage: document.getElementById('welcome-message') as HTMLDivElement,
+  foldersList: document.getElementById('folders-list') as HTMLDivElement,
+  btnAddFolder: document.getElementById('btn-add-folder') as HTMLButtonElement,
   fileStats: document.getElementById('file-stats') as HTMLDivElement,
   analysisResults: document.getElementById('analysis-results') as HTMLDivElement,
   analysisProgress: document.getElementById('analysis-progress') as HTMLDivElement,
@@ -1521,7 +1540,129 @@ async function openFile(): Promise<void> {
   await loadFile(filePath);
 }
 
+// === Folder Operations ===
+
+async function openFolder(): Promise<void> {
+  const folderPath = await window.api.openFolderDialog();
+  if (!folderPath) return;
+
+  // Check if folder already open
+  if (state.folders.some((f) => f.path === folderPath)) {
+    return;
+  }
+
+  const result = await window.api.readFolder(folderPath);
+  if (result.success && result.files) {
+    const folderName = folderPath.split('/').pop() || folderPath;
+    state.folders.push({
+      path: folderPath,
+      name: folderName,
+      files: result.files.map((f) => ({ name: f.name, path: f.path, size: f.size })),
+      collapsed: false,
+    });
+    renderFolderTree();
+  }
+}
+
+function removeFolder(folderPath: string): void {
+  state.folders = state.folders.filter((f) => f.path !== folderPath);
+  renderFolderTree();
+}
+
+function toggleFolder(folderPath: string): void {
+  const folder = state.folders.find((f) => f.path === folderPath);
+  if (folder) {
+    folder.collapsed = !folder.collapsed;
+    renderFolderTree();
+  }
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderFolderTree(): void {
+  if (state.folders.length === 0) {
+    elements.foldersList.innerHTML = '<p class="placeholder">No folders open</p>';
+    return;
+  }
+
+  elements.foldersList.innerHTML = state.folders
+    .map(
+      (folder) => `
+      <div class="folder-group ${folder.collapsed ? 'collapsed' : ''}" data-path="${folder.path}">
+        <div class="folder-header">
+          <span class="folder-toggle">&#9660;</span>
+          <span class="folder-name" title="${folder.path}">${folder.name}</span>
+          <button class="folder-close" title="Remove folder">&times;</button>
+        </div>
+        <div class="folder-files">
+          ${
+            folder.files.length === 0
+              ? '<div class="placeholder" style="padding: 4px 0; font-size: 11px;">No log files</div>'
+              : folder.files
+                  .map(
+                    (file) => `
+              <div class="folder-file ${file.path === state.filePath ? 'active' : ''}" data-path="${file.path}">
+                <span class="folder-file-name" title="${file.name}">${file.name}</span>
+                ${file.size ? `<span class="folder-file-size">${formatFileSize(file.size)}</span>` : ''}
+              </div>
+            `
+                  )
+                  .join('')
+          }
+        </div>
+      </div>
+    `
+    )
+    .join('');
+
+  // Add event listeners
+  elements.foldersList.querySelectorAll('.folder-header').forEach((header) => {
+    const folderPath = (header.closest('.folder-group') as HTMLElement)?.dataset.path;
+    if (!folderPath) return;
+
+    // Toggle collapse
+    header.querySelector('.folder-toggle')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleFolder(folderPath);
+    });
+    header.querySelector('.folder-name')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleFolder(folderPath);
+    });
+
+    // Remove folder
+    header.querySelector('.folder-close')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      removeFolder(folderPath);
+    });
+  });
+
+  // File click to open
+  elements.foldersList.querySelectorAll('.folder-file').forEach((fileEl) => {
+    fileEl.addEventListener('click', async () => {
+      const filePath = (fileEl as HTMLElement).dataset.path;
+      if (filePath) {
+        await loadFile(filePath);
+        renderFolderTree(); // Update active state
+      }
+    });
+  });
+}
+
 async function loadFile(filePath: string, createNewTab: boolean = true): Promise<void> {
+  // Check if file is already open in a tab BEFORE calling backend
+  const existingTab = findTabByFilePath(filePath);
+  if (existingTab && existingTab.id !== state.activeTabId) {
+    // Switch to existing tab instead of re-opening
+    await switchToTab(existingTab.id);
+    renderFolderTree(); // Update active state in folder tree
+    return;
+  }
+
   showProgress('Indexing file...');
 
   const unsubscribe = window.api.onIndexingProgress((progress) => {
@@ -1533,15 +1674,6 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
     const result = await window.api.openFile(filePath);
 
     if (result.success && result.info) {
-      // Check if file is already open in a tab
-      const existingTab = findTabByFilePath(filePath);
-      if (existingTab && existingTab.id !== state.activeTabId) {
-        // Switch to existing tab instead of opening new one
-        unsubscribe();
-        hideProgress();
-        await switchToTab(existingTab.id);
-        return;
-      }
 
       // Save current tab state before switching (if there's an active tab)
       if (state.activeTabId && createNewTab) {
@@ -1615,6 +1747,7 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       updateFileStatsUI();
       createLogViewer();
       renderTabBar();
+      renderFolderTree(); // Update active file highlight
 
       // Wait for DOM layout before loading lines
       await new Promise(resolve => requestAnimationFrame(resolve));
@@ -2791,6 +2924,9 @@ function init(): void {
   // File operations
   elements.btnOpenFile.addEventListener('click', openFile);
   elements.btnOpenWelcome.addEventListener('click', openFile);
+
+  // Folder operations
+  elements.btnAddFolder.addEventListener('click', openFolder);
 
   // Search
   elements.btnSearch.addEventListener('click', performSearch);

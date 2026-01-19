@@ -280,6 +280,57 @@ ipcMain.handle(IPC.OPEN_FILE_DIALOG, async () => {
   return result.canceled ? null : result.filePaths[0];
 });
 
+// === Folder Operations ===
+
+ipcMain.handle(IPC.OPEN_FOLDER_DIALOG, async () => {
+  const result = await dialog.showOpenDialog(mainWindow!, {
+    properties: ['openDirectory'],
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+
+// Log file extensions to show in folder tree
+const LOG_EXTENSIONS = new Set(['.log', '.txt', '.json', '.out', '.err', '.csv', '.xml', '.yaml', '.yml']);
+
+ipcMain.handle(IPC.READ_FOLDER, async (_, folderPath: string) => {
+  try {
+    const entries = await fs.promises.readdir(folderPath, { withFileTypes: true });
+    const files: Array<{ name: string; path: string; isDirectory: boolean; size?: number }> = [];
+
+    for (const entry of entries) {
+      // Skip hidden files
+      if (entry.name.startsWith('.')) continue;
+
+      const fullPath = path.join(folderPath, entry.name);
+
+      if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase();
+        // Only include log-like files
+        if (LOG_EXTENSIONS.has(ext) || ext === '') {
+          try {
+            const stat = await fs.promises.stat(fullPath);
+            files.push({
+              name: entry.name,
+              path: fullPath,
+              isDirectory: false,
+              size: stat.size,
+            });
+          } catch {
+            // Skip files we can't stat
+          }
+        }
+      }
+    }
+
+    // Sort by name
+    files.sort((a, b) => a.name.localeCompare(b.name));
+
+    return { success: true, files, folderPath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
 ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
   try {
     // Check if file is already cached

@@ -8,6 +8,8 @@ const IPC = {
   SEARCH: 'search',
   SEARCH_PROGRESS: 'search-progress',
   SEARCH_CANCEL: 'search-cancel',
+  OPEN_FOLDER_DIALOG: 'open-folder-dialog',
+  READ_FOLDER: 'read-folder',
 } as const;
 
 // API exposed to renderer
@@ -21,6 +23,13 @@ const api = {
 
   getLines: (startLine: number, count: number): Promise<{ success: boolean; lines?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.GET_LINES, startLine, count),
+
+  // Folder operations
+  openFolderDialog: (): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.OPEN_FOLDER_DIALOG),
+
+  readFolder: (folderPath: string): Promise<{ success: boolean; files?: Array<{ name: string; path: string; isDirectory: boolean; size?: number }>; folderPath?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.READ_FOLDER, folderPath),
 
   getFileInfo: (): Promise<{ success: boolean; info?: any; error?: string }> =>
     ipcRenderer.invoke('get-file-info'),

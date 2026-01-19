@@ -276,6 +276,117 @@ body {
   font-size: 12px;
 }
 
+/* Section header button (e.g., + for adding folders) */
+.section-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.section-btn:hover {
+  color: var(--accent-color);
+}
+
+/* Folder tree styles */
+.folder-group {
+  margin-bottom: 8px;
+}
+
+.folder-header {
+  display: flex;
+  align-items: center;
+  padding: 4px 0;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-primary);
+  gap: 4px;
+}
+
+.folder-header:hover {
+  color: var(--accent-color);
+}
+
+.folder-toggle {
+  font-size: 10px;
+  transition: transform 0.15s ease;
+  width: 12px;
+}
+
+.folder-group.collapsed .folder-toggle {
+  transform: rotate(-90deg);
+}
+
+.folder-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.folder-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 2px;
+  opacity: 0;
+}
+
+.folder-header:hover .folder-close {
+  opacity: 1;
+}
+
+.folder-close:hover {
+  color: var(--error-color);
+}
+
+.folder-group.collapsed .folder-files {
+  display: none;
+}
+
+.folder-files {
+  padding-left: 16px;
+}
+
+.folder-file {
+  display: flex;
+  align-items: center;
+  padding: 3px 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 3px;
+  gap: 6px;
+}
+
+.folder-file:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.folder-file.active {
+  background: var(--accent-color);
+  color: white;
+}
+
+.folder-file-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-file-size {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
 .stats-content {
   font-size: 12px;
 }
