@@ -184,6 +184,9 @@ interface Api {
   onIndexingProgress: (callback: (percent: number) => void) => () => void;
   onSearchProgress: (callback: (data: { percent: number; matchCount: number }) => void) => () => void;
   onAnalyzeProgress: (callback: (data: { phase: string; percent: number; message?: string }) => void) => () => void;
+
+  // Utilities
+  openExternalUrl: (url: string) => Promise<void>;
 }
 
 interface Window {

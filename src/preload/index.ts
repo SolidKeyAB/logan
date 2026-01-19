@@ -136,6 +136,10 @@ const api = {
     ipcRenderer.on('analyze-progress', handler);
     return () => ipcRenderer.removeListener('analyze-progress', handler);
   },
+
+  // Open external URL in default browser
+  openExternalUrl: (url: string): Promise<void> =>
+    ipcRenderer.invoke('open-external-url', url),
 };
 
 contextBridge.exposeInMainWorld('api', api);

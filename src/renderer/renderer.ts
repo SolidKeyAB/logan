@@ -221,6 +221,7 @@ let scrollEndTimer: ReturnType<typeof setTimeout> | null = null;
 
 // DOM Elements
 const elements = {
+  logo: document.getElementById('logo') as HTMLImageElement,
   btnOpenFile: document.getElementById('btn-open-file') as HTMLButtonElement,
   btnOpenWelcome: document.getElementById('btn-open-welcome') as HTMLButtonElement,
   btnSearch: document.getElementById('btn-search') as HTMLButtonElement,
@@ -3079,9 +3080,17 @@ async function checkSearchEngine(): Promise<void> {
 }
 
 // Initialize event listeners
+const GITHUB_URL = 'https://github.com/SolidKeyAB/logan';
+
 function init(): void {
   // Check search engine on startup
   checkSearchEngine();
+
+  // Logo click - open GitHub
+  elements.logo.addEventListener('click', () => {
+    window.api.openExternalUrl(GITHUB_URL);
+  });
+  elements.logo.style.cursor = 'pointer';
 
   // File operations
   elements.btnOpenFile.addEventListener('click', openFile);

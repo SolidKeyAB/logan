@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -718,6 +718,14 @@ ipcMain.handle('check-search-engine', async () => {
       }
     });
   });
+});
+
+// Open external URL in default browser
+ipcMain.handle('open-external-url', async (_, url: string) => {
+  // Only allow https URLs for security
+  if (url.startsWith('https://')) {
+    await shell.openExternal(url);
+  }
 });
 
 // === Save Selected Lines ===
