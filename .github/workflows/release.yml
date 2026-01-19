@@ -37,21 +37,15 @@ jobs:
 
       - name: Package for macOS
         if: matrix.platform == 'mac'
-        run: npx electron-builder --mac
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --mac --publish never
 
       - name: Package for Linux
         if: matrix.platform == 'linux'
-        run: npx electron-builder --linux
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --linux --publish never
 
       - name: Package for Windows
         if: matrix.platform == 'win'
-        run: npx electron-builder --win
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --publish never
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
