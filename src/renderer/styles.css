@@ -30,6 +30,8 @@
 html, body {
   height: 100%;
   overflow: hidden;
+  /* Prevent overscroll bounce and selection */
+  overscroll-behavior: none;
 }
 
 body {
@@ -38,6 +40,9 @@ body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
   line-height: 1.4;
+  /* Prevent accidental text selection during scroll */
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* Scrollbar */
@@ -64,6 +69,9 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* Prevent selection during overscroll */
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* Toolbar */

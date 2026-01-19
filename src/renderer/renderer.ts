@@ -502,7 +502,7 @@ function createLogViewer(): void {
   logViewerElement.addEventListener('click', handleLogClick);
   logViewerElement.addEventListener('contextmenu', handleContextMenu);
 
-  // Mouse wheel zoom (Ctrl + scroll)
+  // Mouse wheel zoom (Ctrl + scroll) and boundary scroll prevention
   logViewerElement.addEventListener('wheel', (e: WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
@@ -511,6 +511,16 @@ function createLogViewer(): void {
       } else {
         zoomOut();
       }
+      return;
+    }
+
+    // Prevent overscroll at boundaries to avoid selection issues
+    const atTop = logViewerElement!.scrollTop <= 0;
+    const atBottom = logViewerElement!.scrollTop >=
+      logViewerElement!.scrollHeight - logViewerElement!.clientHeight;
+
+    if ((atTop && e.deltaY < 0) || (atBottom && e.deltaY > 0)) {
+      e.preventDefault();
     }
   }, { passive: false });
   minimapElement.addEventListener('click', handleMinimapClick);
@@ -1095,11 +1105,14 @@ function updateMinimapViewport(): void {
   const currentLine = scrollTopToLine(scrollTop);
   const visibleLines = Math.ceil(clientHeight / getLineHeight());
 
-  const viewportTop = (currentLine / totalLines) * minimapHeight;
-  const viewportHeight = (visibleLines / totalLines) * minimapHeight;
+  const viewportHeight = Math.max(20, (visibleLines / totalLines) * minimapHeight);
+  let viewportTop = (currentLine / totalLines) * minimapHeight;
+
+  // Clamp viewport to stay within minimap bounds
+  viewportTop = Math.max(0, Math.min(viewportTop, minimapHeight - viewportHeight));
 
   minimapViewportElement.style.top = `${viewportTop}px`;
-  minimapViewportElement.style.height = `${Math.max(20, viewportHeight)}px`;
+  minimapViewportElement.style.height = `${viewportHeight}px`;
 }
 
 function handleMinimapClick(event: MouseEvent): void {
