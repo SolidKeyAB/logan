@@ -184,6 +184,15 @@ export class FileHandler {
   ): Promise<SearchMatch[]> {
     if (!this.filePath) return [];
 
+    // If column filtering is active, use stream search for accurate results
+    const hasColumnFilter = options.columnConfig &&
+      options.columnConfig.columns.some(c => !c.visible);
+
+    if (hasColumnFilter) {
+      // Stream search handles column filtering properly
+      return this.searchWithStream(options, onProgress, signal);
+    }
+
     // Try ripgrep first for much faster search
     const hasRipgrep = await checkRipgrep();
     if (hasRipgrep) {
@@ -312,6 +321,30 @@ export class FileHandler {
     });
   }
 
+  // Helper to filter line to visible columns
+  private filterLineToVisibleColumns(
+    line: string,
+    columnConfig: SearchOptions['columnConfig']
+  ): string {
+    if (!columnConfig) return line;
+
+    const { delimiter, columns } = columnConfig;
+    let parts: string[];
+
+    if (delimiter === ' ') {
+      parts = line.split(/\s+/);
+    } else {
+      parts = line.split(delimiter);
+    }
+
+    // Build filtered text with only visible columns
+    const visibleParts = parts.filter((_, idx) => {
+      return idx < columns.length ? columns[idx].visible : true;
+    });
+
+    return visibleParts.join(delimiter === ' ' ? ' ' : delimiter);
+  }
+
   private async searchWithStream(
     options: SearchOptions,
     onProgress?: (percent: number, matchCount: number) => void,
@@ -361,15 +394,19 @@ export class FileHandler {
       }
 
       const visibleLineNum = lineNumber - this.headerLineCount;
+
+      // Filter to visible columns if column config is provided
+      const searchText = this.filterLineToVisibleColumns(line, options.columnConfig);
+
       let match;
       regex.lastIndex = 0;
 
-      while ((match = regex.exec(line)) !== null) {
+      while ((match = regex.exec(searchText)) !== null) {
         matches.push({
           lineNumber: visibleLineNum,
           column: match.index,
           length: match[0].length,
-          lineText: line,
+          lineText: searchText, // Return filtered text for display
         });
 
         if (matches.length >= 50000) {

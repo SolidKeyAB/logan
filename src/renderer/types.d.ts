@@ -28,11 +28,17 @@ interface SearchResult {
   lineText: string;
 }
 
+interface SearchColumnConfig {
+  delimiter: string;
+  columns: Array<{ index: number; visible: boolean }>;
+}
+
 interface SearchOptions {
   pattern: string;
   isRegex: boolean;
   matchCase: boolean;
   wholeWord: boolean;
+  columnConfig?: SearchColumnConfig;
 }
 
 interface PatternGroup {

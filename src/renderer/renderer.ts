@@ -130,6 +130,8 @@ interface TabState {
   // Minimap cache
   minimapData: Array<{ level: string | undefined }> | null;
   isLoaded: boolean; // true if file was fully loaded (skip re-indexing progress)
+  // Column visibility
+  columnConfig: ColumnConfig | null;
 }
 
 // Application State - maintains current file state for backward compatibility
@@ -1993,12 +1995,23 @@ async function performSearch(): Promise<void> {
   });
 
   try {
-    const result = await window.api.search({
+    // Build search options with column config if available
+    const searchOptions: SearchOptions = {
       pattern,
       isRegex: elements.searchRegex.checked,
       matchCase: elements.searchCase.checked,
       wholeWord: false,
-    });
+    };
+
+    // Add column config if columns are filtered
+    if (state.columnConfig && state.columnConfig.columns.some(c => !c.visible)) {
+      searchOptions.columnConfig = {
+        delimiter: state.columnConfig.delimiter,
+        columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible })),
+      };
+    }
+
+    const result = await window.api.search(searchOptions);
 
     if (result.success && result.matches) {
       state.searchResults = result.matches;
@@ -3225,6 +3238,7 @@ function saveCurrentTabState(): void {
     currentSplitIndex: state.currentSplitIndex,
     minimapData: minimapData.length > 0 ? [...minimapData] : null,
     isLoaded: true,
+    columnConfig: state.columnConfig,
   };
 }
 
@@ -3242,6 +3256,7 @@ function restoreTabState(tab: TabState): void {
   state.currentSplitIndex = tab.currentSplitIndex;
   state.isFiltered = false;
   state.filteredLines = null;
+  state.columnConfig = tab.columnConfig;
 
   // Restore cached lines
   cachedLines.clear();
@@ -3276,6 +3291,7 @@ function createTab(filePath: string): TabState {
     loadingPercent: 0,
     minimapData: null,
     isLoaded: false,
+    columnConfig: null,
   };
   return tab;
 }

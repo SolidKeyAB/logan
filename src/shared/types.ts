@@ -19,11 +19,17 @@ export interface SearchMatch {
   lineText: string;
 }
 
+export interface SearchColumnConfig {
+  delimiter: string;
+  columns: Array<{ index: number; visible: boolean }>;
+}
+
 export interface SearchOptions {
   pattern: string;
   isRegex: boolean;
   matchCase: boolean;
   wholeWord: boolean;
+  columnConfig?: SearchColumnConfig;
 }
 
 export interface Bookmark {

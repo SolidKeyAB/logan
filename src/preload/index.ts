@@ -39,7 +39,7 @@ const api = {
     ipcRenderer.invoke('check-search-engine'),
 
   // Search
-  search: (options: { pattern: string; isRegex: boolean; matchCase: boolean; wholeWord: boolean }): Promise<{ success: boolean; matches?: any[]; error?: string }> =>
+  search: (options: { pattern: string; isRegex: boolean; matchCase: boolean; wholeWord: boolean; columnConfig?: { delimiter: string; columns: Array<{ index: number; visible: boolean }> } }): Promise<{ success: boolean; matches?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.SEARCH, options),
 
   cancelSearch: (): Promise<{ success: boolean }> =>
