@@ -49,8 +49,31 @@ If ripgrep is not installed, LOGAN falls back to a stream-based search which is 
 
 ## Installation
 
+### Download Pre-built Packages
+
+Download the latest release from [GitHub Releases](https://github.com/SolidKeyAB/logan/releases).
+
+**macOS:**
+- Download `LOGAN-x.x.x-arm64.dmg` (Apple Silicon) or `LOGAN-x.x.x-x64.dmg` (Intel)
+- Open the DMG and drag LOGAN to Applications
+- On first launch, right-click and select "Open" to bypass Gatekeeper
+
+**Linux:**
+- **AppImage:** Download `LOGAN-x.x.x.AppImage`, make executable (`chmod +x`), and run
+- **Debian/Ubuntu:** Download `logan_x.x.x_amd64.deb` and install with `sudo dpkg -i logan_x.x.x_amd64.deb`
+
+**Windows:**
+- **Installer:** Download and run `LOGAN.Setup.x.x.x.exe`
+- **Portable:** Download `LOGAN.x.x.x.exe` and run directly (no installation needed)
+
+### Build from Source
+
 ```bash
+git clone https://github.com/SolidKeyAB/logan.git
+cd logan
 npm install
+npm run build
+npm start
 ```
 
 ## Development
