@@ -53,6 +53,16 @@ export class FileHandler {
     const stat = fs.statSync(filePath);
     const fileSize = stat.size;
 
+    // Detect line ending type (CRLF vs LF)
+    let lineEndingSize = 1; // Default to LF (\n)
+    const sampleBuffer = Buffer.alloc(Math.min(4096, fileSize));
+    const sampleFd = fs.openSync(filePath, 'r');
+    fs.readSync(sampleFd, sampleBuffer, 0, sampleBuffer.length, 0);
+    fs.closeSync(sampleFd);
+    if (sampleBuffer.includes('\r\n')) {
+      lineEndingSize = 2; // CRLF (\r\n)
+    }
+
     // Index all line offsets
     this.lineOffsets = [];
     let offset = 0;
@@ -77,7 +87,7 @@ export class FileHandler {
       }
 
       this.lineOffsets.push({ offset, length });
-      offset += length + 1; // +1 for newline
+      offset += length + lineEndingSize; // Account for line ending (LF or CRLF)
       lineNumber++;
 
       if (lineNumber % 100000 === 0 && onProgress) {
