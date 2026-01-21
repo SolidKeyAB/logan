@@ -456,6 +456,17 @@ body {
   border-radius: 10px;
   font-size: 11px;
   font-weight: 500;
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.1s;
+}
+
+.level-badge:hover {
+  transform: scale(1.05);
+}
+
+.level-badge.active-filter {
+  box-shadow: 0 0 0 2px var(--accent-color);
+  transform: scale(1.1);
 }
 
 .level-badge.error {

@@ -134,6 +134,9 @@ const api = {
   applyFilter: (config: any): Promise<{ success: boolean; stats?: { filteredLines: number }; error?: string }> =>
     ipcRenderer.invoke('apply-filter', config),
 
+  clearFilter: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('clear-filter'),
+
   onAnalyzeProgress: (callback: (data: { phase: string; percent: number; message?: string }) => void): (() => void) => {
     const handler = (_: any, data: { phase: string; percent: number; message?: string }) => callback(data);
     ipcRenderer.on('analyze-progress', handler);

@@ -86,6 +86,7 @@ interface FilterConfig {
   levels: string[];
   collapseDuplicates: boolean;
   timeRange?: { start: string; end: string };
+  contextLines?: number;
 }
 
 interface Bookmark {
@@ -179,6 +180,7 @@ interface Api {
   analyzeFile: (analyzerName?: string, options?: AnalyzerOptions) => Promise<{ success: boolean; result?: AnalysisResult; error?: string }>;
   cancelAnalysis: () => Promise<{ success: boolean }>;
   applyFilter: (config: FilterConfig) => Promise<{ success: boolean; stats?: { filteredLines: number }; error?: string }>;
+  clearFilter: () => Promise<{ success: boolean }>;
 
   // Column Analysis
   analyzeColumns: () => Promise<{ success: boolean; analysis?: ColumnAnalysis; error?: string }>;

@@ -11,6 +11,14 @@ let mainWindow: BrowserWindow | null = null;
 let searchSignal: { cancelled: boolean } = { cancelled: false };
 let currentFilePath: string | null = null;
 
+// Filter state - maps file path to array of visible line indices
+const filterState = new Map<string, number[] | null>();
+
+function getFilteredLines(): number[] | null {
+  if (!currentFilePath) return null;
+  return filterState.get(currentFilePath) || null;
+}
+
 // Cache FileHandlers by path to avoid re-indexing when switching tabs
 const fileHandlerCache = new Map<string, FileHandler>();
 const MAX_CACHED_FILES = 10; // Limit cache size to prevent memory issues
@@ -570,6 +578,24 @@ function escapeRegex(str: string): string {
 ipcMain.handle(IPC.GET_LINES, async (_, startLine: number, count: number) => {
   const handler = getFileHandler();
   if (!handler) return { success: false, error: 'No file open' };
+
+  const filteredIndices = getFilteredLines();
+
+  if (filteredIndices) {
+    // Filter is active - startLine/count refer to positions in filtered list
+    const endIdx = Math.min(startLine + count, filteredIndices.length);
+    const lineNumbers = filteredIndices.slice(startLine, endIdx);
+
+    // Fetch actual lines by their real line numbers
+    const lines = [];
+    for (const lineNum of lineNumbers) {
+      const [line] = handler.getLines(lineNum, 1);
+      if (line) lines.push(line);
+    }
+    return { success: true, lines };
+  }
+
+  // No filter - normal operation
   const lines = handler.getLines(startLine, count);
   return { success: true, lines };
 });
@@ -973,6 +999,103 @@ ipcMain.handle('analyze-file', async (_, analyzerName?: string, options?: Analyz
 // Cancel analysis
 ipcMain.handle('cancel-analysis', async () => {
   analyzeSignal.cancelled = true;
+  return { success: true };
+});
+
+// === Filter ===
+
+interface FilterConfig {
+  levels: string[];
+  includePatterns: string[];
+  excludePatterns: string[];
+  collapseDuplicates: boolean;
+  contextLines?: number;
+}
+
+ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
+  const handler = getFileHandler();
+  if (!handler || !currentFilePath) {
+    return { success: false, error: 'No file open' };
+  }
+
+  try {
+    const totalLines = handler.getTotalLines();
+    const matchingLines: Set<number> = new Set();
+    const contextLines = config.contextLines || 0;
+
+    // Process in batches for performance
+    const batchSize = 10000;
+    for (let start = 0; start < totalLines; start += batchSize) {
+      const count = Math.min(batchSize, totalLines - start);
+      const lines = handler.getLines(start, count);
+
+      for (const line of lines) {
+        let matches = true;
+
+        // Level filter
+        if (config.levels.length > 0) {
+          const lineLevel = line.level || 'other';
+          matches = config.levels.includes(lineLevel);
+        }
+
+        // Include patterns (OR logic)
+        if (matches && config.includePatterns.length > 0) {
+          matches = config.includePatterns.some(pattern => {
+            try {
+              return new RegExp(pattern, 'i').test(line.text);
+            } catch {
+              return line.text.toLowerCase().includes(pattern.toLowerCase());
+            }
+          });
+        }
+
+        // Exclude patterns (AND logic - all must not match)
+        if (matches && config.excludePatterns.length > 0) {
+          matches = !config.excludePatterns.some(pattern => {
+            try {
+              return new RegExp(pattern, 'i').test(line.text);
+            } catch {
+              return line.text.toLowerCase().includes(pattern.toLowerCase());
+            }
+          });
+        }
+
+        if (matches) {
+          matchingLines.add(line.lineNumber);
+        }
+      }
+    }
+
+    // Add context lines
+    if (contextLines > 0) {
+      const matchArray = Array.from(matchingLines);
+      for (const lineNum of matchArray) {
+        for (let i = 1; i <= contextLines; i++) {
+          if (lineNum - i >= 0) matchingLines.add(lineNum - i);
+          if (lineNum + i < totalLines) matchingLines.add(lineNum + i);
+        }
+      }
+    }
+
+    // Sort and store
+    const sortedLines = Array.from(matchingLines).sort((a, b) => a - b);
+    filterState.set(currentFilePath, sortedLines);
+
+    return {
+      success: true,
+      stats: {
+        filteredLines: sortedLines.length,
+      },
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('clear-filter', async () => {
+  if (currentFilePath) {
+    filterState.delete(currentFilePath);
+  }
   return { success: true };
 });
 

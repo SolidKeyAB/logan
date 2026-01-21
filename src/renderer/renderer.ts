@@ -59,6 +59,7 @@ interface FilterConfig {
   levels: string[];
   collapseDuplicates: boolean;
   timeRange?: { start: string; end: string };
+  contextLines?: number;
 }
 
 interface Bookmark {
@@ -143,6 +144,7 @@ interface AppState {
   totalLines: number;
   filteredLines: number | null;
   isFiltered: boolean;
+  activeLevelFilter: string | null;
   searchResults: SearchResult[];
   currentSearchIndex: number;
   bookmarks: Bookmark[];
@@ -172,6 +174,7 @@ const state: AppState = {
   totalLines: 0,
   filteredLines: null,
   isFiltered: false,
+  activeLevelFilter: null,
   searchResults: [],
   currentSearchIndex: -1,
   bookmarks: [],
@@ -699,8 +702,12 @@ async function loadVisibleLines(): Promise<void> {
       const count = gap.end - gap.start + 1;
       const result = await window.api.getLines(gap.start, count);
       if (result.success && result.lines) {
-        for (const line of result.lines) {
-          cachedLines.set(line.lineNumber, line);
+        // When filtering, cache by filtered position (gap.start + offset)
+        // When not filtering, cache by original line number
+        for (let idx = 0; idx < result.lines.length; idx++) {
+          const line = result.lines[idx];
+          const cacheKey = state.isFiltered ? gap.start + idx : line.lineNumber;
+          cachedLines.set(cacheKey, line);
         }
       }
     });
@@ -2241,6 +2248,13 @@ async function applyFilter(): Promise<void> {
       state.filteredLines = result.stats.filteredLines;
       cachedLines.clear();
 
+      // Reset scroll to top of filtered view
+      state.visibleStartLine = 0;
+      state.visibleEndLine = Math.min(100, state.filteredLines - 1);
+      if (logViewerElement) {
+        logViewerElement.scrollTop = 0;
+      }
+
       hideFilterModal();
       await loadVisibleLines();
       updateStatusBar();
@@ -2255,11 +2269,65 @@ async function applyFilter(): Promise<void> {
 async function clearFilter(): Promise<void> {
   state.isFiltered = false;
   state.filteredLines = null;
+  state.activeLevelFilter = null;
   cachedLines.clear();
+
+  // Clear backend filter state
+  await window.api.clearFilter();
 
   hideFilterModal();
   await loadVisibleLines();
   updateStatusBar();
+  updateLevelBadgeStyles();
+}
+
+async function applyQuickLevelFilter(level: string): Promise<void> {
+  if (!state.analysisResult) return;
+
+  const config: FilterConfig = {
+    levels: [level],
+    includePatterns: [],
+    excludePatterns: [],
+    collapseDuplicates: false,
+    contextLines: 3,
+  };
+
+  showProgress(`Filtering ${level}...`);
+
+  try {
+    const result = await window.api.applyFilter(config);
+
+    if (result.success && result.stats) {
+      state.isFiltered = true;
+      state.filteredLines = result.stats.filteredLines;
+      state.activeLevelFilter = level;
+      cachedLines.clear();
+
+      // Reset scroll to top of filtered view
+      state.visibleStartLine = 0;
+      state.visibleEndLine = Math.min(100, state.filteredLines - 1);
+      if (logViewerElement) {
+        logViewerElement.scrollTop = 0;
+      }
+
+      await loadVisibleLines();
+      updateStatusBar();
+      updateLevelBadgeStyles();
+    }
+  } finally {
+    hideProgress();
+  }
+}
+
+function updateLevelBadgeStyles(): void {
+  elements.analysisResults.querySelectorAll('.level-badge[data-level]').forEach((badge) => {
+    const level = (badge as HTMLElement).dataset.level;
+    if (state.activeLevelFilter && state.activeLevelFilter === level) {
+      badge.classList.add('active-filter');
+    } else {
+      badge.classList.remove('active-filter');
+    }
+  });
 }
 
 // Split File
@@ -2649,10 +2717,12 @@ function updateAnalysisUI(): void {
 
   const result = state.analysisResult;
 
-  // Level counts
+  // Level counts - clickable to filter
   let levelHtml = '<div class="level-counts">';
   for (const [level, count] of Object.entries(result.levelCounts)) {
-    levelHtml += `<span class="level-badge ${level}">${level}: ${count.toLocaleString()}</span>`;
+    if (count > 0) {
+      levelHtml += `<span class="level-badge ${level}" data-level="${level}" title="Click to filter by ${level}">${level}: ${count.toLocaleString()}</span>`;
+    }
   }
   levelHtml += '</div>';
 
@@ -2671,6 +2741,25 @@ function updateAnalysisUI(): void {
         : ''
     }
   `;
+
+  // Add click handlers for level filtering
+  elements.analysisResults.querySelectorAll('.level-badge[data-level]').forEach((badge) => {
+    badge.addEventListener('click', async () => {
+      const level = (badge as HTMLElement).dataset.level;
+      if (!level) return;
+
+      // If clicking the same level that's already filtered, clear the filter
+      if (state.isFiltered && state.activeLevelFilter === level) {
+        await clearFilter();
+        state.activeLevelFilter = null;
+        updateLevelBadgeStyles();
+        return;
+      }
+
+      // Apply filter for this level only
+      await applyQuickLevelFilter(level);
+    });
+  });
 
   // Patterns
   if (result.patterns.length === 0) {
