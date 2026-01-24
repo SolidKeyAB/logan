@@ -159,6 +159,17 @@
             <button id="btn-add-highlight" class="add-btn">+ Add Highlight Rule</button>
           </div>
         </div>
+
+        <!-- Terminal Section -->
+        <div class="sidebar-section" id="section-terminal">
+          <div class="section-header" data-section="terminal">
+            <span class="section-title">Terminal</span>
+            <button id="btn-terminal-toggle" class="section-btn" title="Toggle Terminal (Ctrl+`)">⌨</button>
+          </div>
+          <div id="terminal-panel" class="terminal-section-content hidden">
+            <div id="terminal-container" class="terminal-container"></div>
+          </div>
+        </div>
       </aside>
 
       <!-- Log Viewer -->
@@ -186,17 +197,6 @@
           </div>
         </div>
       </main>
-
-      <!-- Terminal Panel -->
-      <div id="terminal-panel" class="terminal-panel hidden">
-        <div class="terminal-header">
-          <span class="terminal-title">Terminal</span>
-          <div class="terminal-controls">
-            <button id="btn-terminal-close" class="terminal-btn" title="Close (Ctrl+`)">×</button>
-          </div>
-        </div>
-        <div id="terminal-container" class="terminal-container"></div>
-      </div>
     </div>
 
     <!-- Status Bar -->
@@ -214,8 +214,6 @@
         </div>
       </div>
       <div class="status-right">
-        <button id="btn-terminal-toggle" class="status-btn" title="Toggle Terminal (Ctrl+`)">⌨ Terminal</button>
-        <span class="status-separator">|</span>
         <span id="status-cursor">Ln 1, Col 1</span>
         <span class="status-separator">|</span>
         <span id="status-size">0 B</span>

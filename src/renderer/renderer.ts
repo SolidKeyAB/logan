@@ -353,7 +353,7 @@ const elements = {
   terminalPanel: document.getElementById('terminal-panel') as HTMLDivElement,
   terminalContainer: document.getElementById('terminal-container') as HTMLDivElement,
   btnTerminalToggle: document.getElementById('btn-terminal-toggle') as HTMLButtonElement,
-  btnTerminalClose: document.getElementById('btn-terminal-close') as HTMLButtonElement,
+  sectionTerminal: document.getElementById('section-terminal') as HTMLDivElement,
 };
 
 // Virtual Log Viewer
@@ -2006,8 +2006,9 @@ async function initTerminal(): Promise<void> {
 
   terminal = new Terminal({
     cursorBlink: true,
-    fontSize: 13,
+    fontSize: 12,
     fontFamily: "'SF Mono', 'Consolas', 'Monaco', monospace",
+    allowProposedApi: true,
     theme: {
       background: '#1e1e1e',
       foreground: '#cccccc',
@@ -2064,6 +2065,11 @@ async function initTerminal(): Promise<void> {
 
   state.terminalInitialized = true;
 
+  // Focus terminal after init
+  setTimeout(() => {
+    terminal?.focus();
+  }, 100);
+
   // Handle resize
   window.addEventListener('resize', () => {
     if (terminal && fitAddon && state.terminalVisible) {
@@ -2073,6 +2079,11 @@ async function initTerminal(): Promise<void> {
         window.api.terminalResize(dims.cols, dims.rows);
       }
     }
+  });
+
+  // Click to focus terminal
+  elements.terminalContainer.addEventListener('click', () => {
+    terminal?.focus();
   });
 }
 
@@ -3688,7 +3699,6 @@ function init(): void {
 
   // Terminal
   elements.btnTerminalToggle.addEventListener('click', toggleTerminal);
-  elements.btnTerminalClose.addEventListener('click', closeTerminal);
 
   // Search
   elements.btnSearch.addEventListener('click', performSearch);
