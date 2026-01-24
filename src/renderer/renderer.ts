@@ -266,6 +266,7 @@ const elements = {
   markdownPreview: document.getElementById('markdown-preview') as HTMLDivElement,
   foldersList: document.getElementById('folders-list') as HTMLDivElement,
   btnAddFolder: document.getElementById('btn-add-folder') as HTMLButtonElement,
+  btnRefreshFolders: document.getElementById('btn-refresh-folders') as HTMLButtonElement,
   folderSearchInput: document.getElementById('folder-search-input') as HTMLInputElement,
   btnFolderSearch: document.getElementById('btn-folder-search') as HTMLButtonElement,
   btnFolderSearchCancel: document.getElementById('btn-folder-search-cancel') as HTMLButtonElement,
@@ -1967,6 +1968,32 @@ function toggleFolder(folderPath: string): void {
   if (folder) {
     folder.collapsed = !folder.collapsed;
     renderFolderTree();
+  }
+}
+
+async function refreshFolders(): Promise<void> {
+  if (state.folders.length === 0) return;
+
+  // Show refreshing state
+  elements.btnRefreshFolders.disabled = true;
+  elements.btnRefreshFolders.textContent = '⟳';
+
+  try {
+    // Re-read each folder while preserving collapsed state
+    for (const folder of state.folders) {
+      const result = await window.api.readFolder(folder.path);
+      if (result.success && result.files) {
+        folder.files = result.files.map((f) => ({
+          name: f.name,
+          path: f.path,
+          size: f.size,
+        }));
+      }
+    }
+    renderFolderTree();
+  } finally {
+    elements.btnRefreshFolders.disabled = false;
+    elements.btnRefreshFolders.innerHTML = '&#8635;';
   }
 }
 
@@ -4056,6 +4083,7 @@ function init(): void {
 
   // Folder operations
   elements.btnAddFolder.addEventListener('click', openFolder);
+  elements.btnRefreshFolders.addEventListener('click', refreshFolders);
 
   // Folder search
   elements.btnFolderSearch.addEventListener('click', performFolderSearch);
