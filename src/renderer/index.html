@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="lib/xterm.css">
   <script src="lib/xterm.js"></script>
   <script src="lib/xterm-addon-fit.js"></script>
+  <script src="lib/marked.umd.js"></script>
 </head>
 <body>
   <div id="app">
@@ -180,6 +181,8 @@
       <!-- Log Viewer -->
       <main class="log-viewer">
         <div id="editor-container" class="editor-container">
+          <!-- Markdown Preview -->
+          <div id="markdown-preview" class="markdown-preview hidden"></div>
           <div id="welcome-message" class="welcome-message">
             <img src="assets/logo.png" alt="LOGAN" class="welcome-logo">
             <h2>LOGAN</h2>

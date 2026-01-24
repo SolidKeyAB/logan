@@ -221,6 +221,11 @@ let zoomLevel = 100; // Percentage (100 = default)
 // Word wrap setting
 let wordWrapEnabled = false;
 
+// Markdown preview
+let isMarkdownFile = false;
+let markdownPreviewMode = true; // Start in preview mode for md files
+declare const marked: { parse: (text: string) => string };
+
 // Get current line height based on zoom
 function getLineHeight(): number {
   return Math.round(BASE_LINE_HEIGHT * (zoomLevel / 100));
@@ -258,6 +263,7 @@ const elements = {
   sidebar: document.getElementById('sidebar') as HTMLElement,
   editorContainer: document.getElementById('editor-container') as HTMLDivElement,
   welcomeMessage: document.getElementById('welcome-message') as HTMLDivElement,
+  markdownPreview: document.getElementById('markdown-preview') as HTMLDivElement,
   foldersList: document.getElementById('folders-list') as HTMLDivElement,
   btnAddFolder: document.getElementById('btn-add-folder') as HTMLButtonElement,
   folderSearchInput: document.getElementById('folder-search-input') as HTMLInputElement,
@@ -2431,6 +2437,27 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       updateStatusBar();
       updateSplitNavigation();
 
+      // Check if this is a markdown file
+      isMarkdownFile = isMarkdownExtension(filePath);
+      if (isMarkdownFile) {
+        // Show markdown preview by default
+        markdownPreviewMode = true;
+        elements.btnWordWrap.textContent = 'Raw';
+        elements.btnWordWrap.title = 'Show raw markdown';
+        await renderMarkdownPreview();
+        showMarkdownPreview();
+      } else {
+        // Reset for non-markdown files
+        markdownPreviewMode = false;
+        elements.markdownPreview.classList.add('hidden');
+        elements.btnWordWrap.textContent = 'Wrap';
+        elements.btnWordWrap.title = 'Toggle word wrap (⌥Z)';
+        const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
+        if (wrapper) {
+          wrapper.style.display = '';
+        }
+      }
+
       // Build minimap with progress
       unsubscribe(); // Stop listening to indexing progress
       showProgress('Building minimap...');
@@ -3567,6 +3594,84 @@ function toggleWordWrap(): void {
   }
 }
 
+function isMarkdownExtension(filePath: string): boolean {
+  const ext = filePath.toLowerCase().split('.').pop();
+  return ext === 'md' || ext === 'markdown';
+}
+
+async function renderMarkdownPreview(): Promise<void> {
+  if (!state.filePath || !isMarkdownFile) return;
+
+  try {
+    // Fetch all content for markdown preview
+    const result = await window.api.getLines(0, state.totalLines);
+    if (result.success && result.lines) {
+      const content = result.lines.map(l => l.text).join('\n');
+      const html = marked.parse(content);
+      elements.markdownPreview.innerHTML = html;
+
+      // Make links open in external browser
+      elements.markdownPreview.querySelectorAll('a').forEach(link => {
+        link.addEventListener('click', (e) => {
+          e.preventDefault();
+          const href = link.getAttribute('href');
+          if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
+            window.api.openExternalUrl?.(href);
+          }
+        });
+      });
+    }
+  } catch (error) {
+    elements.markdownPreview.innerHTML = '<p>Error rendering markdown</p>';
+  }
+}
+
+function showMarkdownPreview(): void {
+  if (!isMarkdownFile) return;
+
+  markdownPreviewMode = true;
+  elements.markdownPreview.classList.remove('hidden');
+
+  // Hide log viewer wrapper if it exists
+  const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
+  if (wrapper) {
+    wrapper.style.display = 'none';
+  }
+
+  // Update button state
+  elements.btnWordWrap.textContent = 'Raw';
+  elements.btnWordWrap.title = 'Show raw markdown';
+}
+
+function showMarkdownRaw(): void {
+  markdownPreviewMode = false;
+  elements.markdownPreview.classList.add('hidden');
+
+  // Show log viewer wrapper
+  const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
+  if (wrapper) {
+    wrapper.style.display = '';
+  }
+
+  // Update button state
+  elements.btnWordWrap.textContent = 'Preview';
+  elements.btnWordWrap.title = 'Show markdown preview';
+}
+
+function toggleMarkdownPreview(): void {
+  if (!isMarkdownFile) {
+    toggleWordWrap();
+    return;
+  }
+
+  if (markdownPreviewMode) {
+    showMarkdownRaw();
+  } else {
+    showMarkdownPreview();
+    renderMarkdownPreview();
+  }
+}
+
 function applyZoom(): void {
   // Update status bar
   elements.statusZoom.textContent = `${zoomLevel}%`;
@@ -4045,7 +4150,7 @@ function init(): void {
   elements.btnColumnsNone.addEventListener('click', () => setAllColumnsVisibility(false));
 
   // Word wrap
-  elements.btnWordWrap.addEventListener('click', toggleWordWrap);
+  elements.btnWordWrap.addEventListener('click', toggleMarkdownPreview);
 
   // Split mode and value change handlers
   document.querySelectorAll('input[name="split-mode"]').forEach((radio) => {

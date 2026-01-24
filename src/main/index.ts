@@ -281,8 +281,9 @@ ipcMain.handle(IPC.OPEN_FILE_DIALOG, async () => {
   const result = await dialog.showOpenDialog(mainWindow!, {
     properties: ['openFile'],
     filters: [
+      { name: 'All Supported', extensions: ['log', 'txt', 'out', 'err', 'md', 'markdown', 'json', 'xml', 'yaml', 'yml', 'csv', 'ini', 'conf', 'cfg'] },
       { name: 'Log Files', extensions: ['log', 'txt', 'out', 'err'] },
-      { name: 'Text Files', extensions: ['md', 'markdown', 'rst', 'text'] },
+      { name: 'Markdown', extensions: ['md', 'markdown'] },
       { name: 'Data Files', extensions: ['json', 'xml', 'yaml', 'yml', 'csv', 'tsv', 'toml'] },
       { name: 'Config Files', extensions: ['ini', 'conf', 'cfg', 'config', 'properties', 'env'] },
       { name: 'All Files', extensions: ['*'] },
