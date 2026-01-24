@@ -255,6 +255,7 @@ const elements = {
   patternsList: document.getElementById('patterns-list') as HTMLDivElement,
   duplicatesList: document.getElementById('duplicates-list') as HTMLDivElement,
   bookmarksList: document.getElementById('bookmarks-list') as HTMLDivElement,
+  btnExportBookmarks: document.getElementById('btn-export-bookmarks') as HTMLButtonElement,
   highlightsList: document.getElementById('highlights-list') as HTMLDivElement,
   btnAddHighlight: document.getElementById('btn-add-highlight') as HTMLButtonElement,
   statusFile: document.getElementById('status-file') as HTMLSpanElement,
@@ -3449,6 +3450,21 @@ function init(): void {
       hideBookmarkModal(true);
     } else if (e.key === 'Escape') {
       hideBookmarkModal(false);
+    }
+  });
+
+  // Export bookmarks
+  elements.btnExportBookmarks.addEventListener('click', async () => {
+    if (state.bookmarks.length === 0) {
+      alert('No bookmarks to export');
+      return;
+    }
+    const result = await window.api.exportBookmarks();
+    if (result.success && result.filePath) {
+      // Open the exported file in a new tab
+      await loadFileAsInactiveTab(result.filePath);
+    } else if (result.error) {
+      alert(`Export failed: ${result.error}`);
     }
   });
 

@@ -296,6 +296,25 @@ body {
   line-height: 1;
 }
 
+/* Icon button in section headers */
+.icon-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  margin-left: auto;
+  margin-right: 4px;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.icon-btn:hover {
+  opacity: 1;
+  color: var(--accent-color);
+}
+
 .section-btn:hover {
   color: var(--accent-color);
 }

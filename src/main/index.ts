@@ -701,6 +701,72 @@ ipcMain.handle('bookmark-update', async (_, bookmark: Bookmark) => {
   return { success: false, error: 'Bookmark not found' };
 });
 
+// Export bookmarks to file
+ipcMain.handle('export-bookmarks', async () => {
+  if (!currentFilePath || bookmarks.size === 0) {
+    return { success: false, error: 'No bookmarks to export' };
+  }
+
+  try {
+    const handler = getFileHandler();
+    const fileInfo = handler?.getFileInfo();
+    if (!fileInfo) {
+      return { success: false, error: 'No file info available' };
+    }
+
+    // Generate export filename
+    const currentDir = path.dirname(fileInfo.path);
+    const baseName = path.basename(fileInfo.path, path.extname(fileInfo.path));
+    const timestamp = new Date().toISOString().substring(0, 10).replace(/-/g, '');
+    const exportPath = path.join(currentDir, `${baseName}_bookmarks_${timestamp}.md`);
+
+    // Build markdown content with clickable links
+    const lines: string[] = [
+      `# Bookmarks`,
+      ``,
+      `**Source:** \`${fileInfo.path}\``,
+      `**Exported:** ${new Date().toISOString().replace('T', ' ').substring(0, 19)}`,
+      `**Total Bookmarks:** ${bookmarks.size}`,
+      ``,
+      `---`,
+      ``,
+    ];
+
+    // Sort bookmarks by line number
+    const sortedBookmarks = Array.from(bookmarks.values())
+      .sort((a, b) => a.lineNumber - b.lineNumber);
+
+    for (const bookmark of sortedBookmarks) {
+      // Get the line text
+      const [lineData] = handler?.getLines(bookmark.lineNumber, 1) || [];
+      const lineText = lineData?.text || '';
+      const truncatedText = lineText.length > 100 ? lineText.substring(0, 100) + '...' : lineText;
+
+      lines.push(`## Line ${bookmark.lineNumber + 1}`);
+      lines.push(``);
+      if (bookmark.label) {
+        lines.push(`**Note:** ${bookmark.label}`);
+        lines.push(``);
+      }
+      // File link in format that some editors/tools can open (VSCode, etc)
+      lines.push(`**Link:** \`${fileInfo.path}:${bookmark.lineNumber + 1}\``);
+      lines.push(``);
+      lines.push(`\`\`\``);
+      lines.push(truncatedText);
+      lines.push(`\`\`\``);
+      lines.push(``);
+      lines.push(`---`);
+      lines.push(``);
+    }
+
+    fs.writeFileSync(exportPath, lines.join('\n'), 'utf-8');
+
+    return { success: true, filePath: exportPath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
 // === Highlights ===
 
 ipcMain.handle('highlight-add', async (_, highlight: Highlight) => {

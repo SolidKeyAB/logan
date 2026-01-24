@@ -61,6 +61,9 @@ const api = {
   clearBookmarks: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('bookmark-clear'),
 
+  exportBookmarks: (): Promise<{ success: boolean; filePath?: string; error?: string }> =>
+    ipcRenderer.invoke('export-bookmarks'),
+
   // Highlights
   addHighlight: (highlight: any): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('highlight-add', highlight),

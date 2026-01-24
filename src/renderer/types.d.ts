@@ -154,6 +154,7 @@ interface Api {
   updateBookmark: (bookmark: Bookmark) => Promise<{ success: boolean }>;
   listBookmarks: () => Promise<{ success: boolean; bookmarks?: Bookmark[] }>;
   clearBookmarks: () => Promise<{ success: boolean }>;
+  exportBookmarks: () => Promise<{ success: boolean; filePath?: string; error?: string }>;
 
   // Highlights
   addHighlight: (highlight: HighlightConfig) => Promise<{ success: boolean }>;
