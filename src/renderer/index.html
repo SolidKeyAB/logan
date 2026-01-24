@@ -6,6 +6,9 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src 'self';">
   <title>LOGAN - Log Analyzer</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="lib/xterm.css">
+  <script src="lib/xterm.js"></script>
+  <script src="lib/xterm-addon-fit.js"></script>
 </head>
 <body>
   <div id="app">
@@ -183,6 +186,17 @@
           </div>
         </div>
       </main>
+
+      <!-- Terminal Panel -->
+      <div id="terminal-panel" class="terminal-panel hidden">
+        <div class="terminal-header">
+          <span class="terminal-title">Terminal</span>
+          <div class="terminal-controls">
+            <button id="btn-terminal-close" class="terminal-btn" title="Close (Ctrl+`)">×</button>
+          </div>
+        </div>
+        <div id="terminal-container" class="terminal-container"></div>
+      </div>
     </div>
 
     <!-- Status Bar -->
@@ -200,6 +214,8 @@
         </div>
       </div>
       <div class="status-right">
+        <button id="btn-terminal-toggle" class="status-btn" title="Toggle Terminal (Ctrl+`)">⌨ Terminal</button>
+        <span class="status-separator">|</span>
         <span id="status-cursor">Ln 1, Col 1</span>
         <span class="status-separator">|</span>
         <span id="status-size">0 B</span>
@@ -382,6 +398,13 @@
             </div>
           </div>
           <div class="help-section">
+            <h4>Terminal</h4>
+            <div class="shortcut-list">
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>`</kbd><span>Toggle terminal panel</span></div>
+              <div class="shortcut-item"><kbd>Esc</kbd><span>Close terminal (when focused)</span></div>
+            </div>
+          </div>
+          <div class="help-section">
             <h4>Tips</h4>
             <ul class="tips-list">
               <li><strong>Shift+Click</strong> to select a range of lines</li>
@@ -403,7 +426,7 @@
           </div>
         </div>
         <div class="modal-footer">
-          <span class="version-info">LOGAN v0.1.3</span>
+          <span class="version-info">LOGAN v0.1.4</span>
           <button id="btn-close-help" class="primary-btn">Got it!</button>
         </div>
       </div>

@@ -206,6 +206,15 @@ interface Api {
 
   // Utilities
   openExternalUrl: (url: string) => Promise<void>;
+
+  // Terminal
+  terminalCreate: (options?: { cwd?: string; cols?: number; rows?: number }) => Promise<{ success: boolean; pid?: number; error?: string }>;
+  terminalWrite: (data: string) => Promise<{ success: boolean; error?: string }>;
+  terminalResize: (cols: number, rows: number) => Promise<{ success: boolean; error?: string }>;
+  terminalKill: () => Promise<{ success: boolean; error?: string }>;
+  terminalCd: (directory: string) => Promise<{ success: boolean; error?: string }>;
+  onTerminalData: (callback: (data: string) => void) => () => void;
+  onTerminalExit: (callback: (exitCode: number) => void) => () => void;
 }
 
 interface Window {

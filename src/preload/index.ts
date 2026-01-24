@@ -165,6 +165,34 @@ const api = {
   // Open external URL in default browser
   openExternalUrl: (url: string): Promise<void> =>
     ipcRenderer.invoke('open-external-url', url),
+
+  // Terminal
+  terminalCreate: (options?: { cwd?: string; cols?: number; rows?: number }): Promise<{ success: boolean; pid?: number; error?: string }> =>
+    ipcRenderer.invoke('terminal-create', options),
+
+  terminalWrite: (data: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('terminal-write', data),
+
+  terminalResize: (cols: number, rows: number): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('terminal-resize', cols, rows),
+
+  terminalKill: (): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('terminal-kill'),
+
+  terminalCd: (directory: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('terminal-cd', directory),
+
+  onTerminalData: (callback: (data: string) => void): (() => void) => {
+    const handler = (_: any, data: string) => callback(data);
+    ipcRenderer.on('terminal-data', handler);
+    return () => ipcRenderer.removeListener('terminal-data', handler);
+  },
+
+  onTerminalExit: (callback: (exitCode: number) => void): (() => void) => {
+    const handler = (_: any, exitCode: number) => callback(exitCode);
+    ipcRenderer.on('terminal-exit', handler);
+    return () => ipcRenderer.removeListener('terminal-exit', handler);
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

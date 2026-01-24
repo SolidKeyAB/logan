@@ -168,6 +168,9 @@ interface AppState {
   // Folder search
   folderSearchResults: FolderSearchMatch[];
   isFolderSearching: boolean;
+  // Terminal
+  terminalVisible: boolean;
+  terminalInitialized: boolean;
 }
 
 const state: AppState = {
@@ -196,6 +199,8 @@ const state: AppState = {
   currentNotesFile: null,
   folderSearchResults: [],
   isFolderSearching: false,
+  terminalVisible: false,
+  terminalInitialized: false,
 };
 
 // Constants
@@ -344,6 +349,11 @@ const elements = {
   notesLineInfo: document.getElementById('notes-line-info') as HTMLParagraphElement,
   btnSaveNotes: document.getElementById('btn-save-notes') as HTMLButtonElement,
   btnCancelNotes: document.getElementById('btn-cancel-notes') as HTMLButtonElement,
+  // Terminal
+  terminalPanel: document.getElementById('terminal-panel') as HTMLDivElement,
+  terminalContainer: document.getElementById('terminal-container') as HTMLDivElement,
+  btnTerminalToggle: document.getElementById('btn-terminal-toggle') as HTMLButtonElement,
+  btnTerminalClose: document.getElementById('btn-terminal-close') as HTMLButtonElement,
 };
 
 // Virtual Log Viewer
@@ -355,6 +365,14 @@ let minimapContentElement: HTMLDivElement | null = null;
 let minimapViewportElement: HTMLDivElement | null = null;
 let minimapData: Array<{ level: string | undefined }> = [];
 const MINIMAP_SAMPLE_RATE = 1000; // Sample every N lines for minimap
+
+// Terminal - xterm.js instance
+// @ts-ignore - Terminal loaded via script tag
+let terminal: any = null;
+// @ts-ignore - FitAddon loaded via script tag
+let fitAddon: any = null;
+let terminalDataUnsubscribe: (() => void) | null = null;
+let terminalExitUnsubscribe: (() => void) | null = null;
 
 // LRU Cache for lines - better memory management
 class LRUCache<K, V> {
@@ -1971,6 +1989,154 @@ function renderFolderSearchResults(pattern: string, cancelled?: boolean): void {
   });
 }
 
+// === Terminal ===
+
+async function initTerminal(): Promise<void> {
+  if (state.terminalInitialized) return;
+
+  // @ts-ignore - Terminal loaded via script tag
+  const Terminal = window.Terminal;
+  // @ts-ignore - FitAddon loaded via script tag
+  const FitAddon = window.FitAddon;
+
+  if (!Terminal || !FitAddon) {
+    console.error('xterm.js not loaded');
+    return;
+  }
+
+  terminal = new Terminal({
+    cursorBlink: true,
+    fontSize: 13,
+    fontFamily: "'SF Mono', 'Consolas', 'Monaco', monospace",
+    theme: {
+      background: '#1e1e1e',
+      foreground: '#cccccc',
+      cursor: '#cccccc',
+      cursorAccent: '#1e1e1e',
+      selectionBackground: '#264f78',
+      black: '#1e1e1e',
+      red: '#f14c4c',
+      green: '#23d18b',
+      yellow: '#f5f543',
+      blue: '#3b8eea',
+      magenta: '#d670d6',
+      cyan: '#29b8db',
+      white: '#cccccc',
+      brightBlack: '#666666',
+      brightRed: '#f14c4c',
+      brightGreen: '#23d18b',
+      brightYellow: '#f5f543',
+      brightBlue: '#3b8eea',
+      brightMagenta: '#d670d6',
+      brightCyan: '#29b8db',
+      brightWhite: '#ffffff',
+    },
+  });
+
+  fitAddon = new FitAddon.FitAddon();
+  terminal.loadAddon(fitAddon);
+
+  terminal.open(elements.terminalContainer);
+  fitAddon.fit();
+
+  // Handle terminal input
+  terminal.onData((data: string) => {
+    window.api.terminalWrite(data);
+  });
+
+  // Handle terminal output
+  terminalDataUnsubscribe = window.api.onTerminalData((data) => {
+    terminal.write(data);
+  });
+
+  // Handle terminal exit
+  terminalExitUnsubscribe = window.api.onTerminalExit((exitCode) => {
+    terminal.writeln(`\r\n[Process exited with code ${exitCode}]`);
+    terminal.writeln('Press any key to restart...');
+    const restartHandler = terminal.onKey(() => {
+      restartHandler.dispose();
+      startTerminalProcess();
+    });
+  });
+
+  // Start the terminal process
+  await startTerminalProcess();
+
+  state.terminalInitialized = true;
+
+  // Handle resize
+  window.addEventListener('resize', () => {
+    if (terminal && fitAddon && state.terminalVisible) {
+      fitAddon.fit();
+      const dims = fitAddon.proposeDimensions();
+      if (dims) {
+        window.api.terminalResize(dims.cols, dims.rows);
+      }
+    }
+  });
+}
+
+async function startTerminalProcess(): Promise<void> {
+  // Get current file directory or home
+  let cwd: string | undefined;
+  if (state.filePath) {
+    const lastSlash = state.filePath.lastIndexOf('/');
+    if (lastSlash > 0) {
+      cwd = state.filePath.substring(0, lastSlash);
+    }
+  }
+
+  const dims = fitAddon?.proposeDimensions();
+  const cols = dims?.cols || 80;
+  const rows = dims?.rows || 24;
+
+  await window.api.terminalCreate({ cwd, cols, rows });
+}
+
+async function toggleTerminal(): Promise<void> {
+  state.terminalVisible = !state.terminalVisible;
+
+  if (state.terminalVisible) {
+    elements.terminalPanel.classList.remove('hidden');
+    elements.btnTerminalToggle.classList.add('active');
+
+    if (!state.terminalInitialized) {
+      await initTerminal();
+    } else {
+      // Resize terminal to fit panel
+      setTimeout(() => {
+        if (fitAddon) {
+          fitAddon.fit();
+          const dims = fitAddon.proposeDimensions();
+          if (dims) {
+            window.api.terminalResize(dims.cols, dims.rows);
+          }
+        }
+        terminal?.focus();
+      }, 50);
+    }
+  } else {
+    elements.terminalPanel.classList.add('hidden');
+    elements.btnTerminalToggle.classList.remove('active');
+  }
+}
+
+function closeTerminal(): void {
+  state.terminalVisible = false;
+  elements.terminalPanel.classList.add('hidden');
+  elements.btnTerminalToggle.classList.remove('active');
+}
+
+async function terminalCdToFile(filePath: string): Promise<void> {
+  if (!state.terminalInitialized || !filePath) return;
+
+  const lastSlash = filePath.lastIndexOf('/');
+  if (lastSlash > 0) {
+    const dir = filePath.substring(0, lastSlash);
+    await window.api.terminalCd(dir);
+  }
+}
+
 async function loadFile(filePath: string, createNewTab: boolean = true): Promise<void> {
   // Check if file is already open in a tab BEFORE calling backend
   const existingTab = findTabByFilePath(filePath);
@@ -2067,6 +2233,9 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       createLogViewer();
       renderTabBar();
       renderFolderTree(); // Update active file highlight
+
+      // Auto-cd terminal to file's directory
+      terminalCdToFile(filePath);
 
       // Wait for DOM layout before loading lines
       await new Promise(resolve => requestAnimationFrame(resolve));
@@ -3319,11 +3488,21 @@ function setupKeyboardShortcuts(): void {
       }
     }
 
-    // Escape: Close modals
+    // Escape: Close modals or terminal
     if (e.key === 'Escape') {
-      hideFilterModal();
-      hideHighlightModal();
-      hideSplitModal();
+      if (state.terminalVisible && document.activeElement?.closest('.terminal-container')) {
+        closeTerminal();
+      } else {
+        hideFilterModal();
+        hideHighlightModal();
+        hideSplitModal();
+      }
+    }
+
+    // Ctrl/Cmd + `: Toggle terminal
+    if ((e.ctrlKey || e.metaKey) && e.key === '`') {
+      e.preventDefault();
+      toggleTerminal();
     }
 
     // Ctrl/Cmd + PageDown: Next split file
@@ -3506,6 +3685,10 @@ function init(): void {
       closeFolderSearchResults();
     }
   });
+
+  // Terminal
+  elements.btnTerminalToggle.addEventListener('click', toggleTerminal);
+  elements.btnTerminalClose.addEventListener('click', closeTerminal);
 
   // Search
   elements.btnSearch.addEventListener('click', performSearch);

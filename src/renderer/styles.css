@@ -1788,3 +1788,91 @@ kbd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Terminal Panel */
+.terminal-panel {
+  display: flex;
+  flex-direction: column;
+  height: 300px;
+  min-height: 100px;
+  max-height: 70vh;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-primary);
+}
+
+.terminal-panel.hidden {
+  display: none;
+}
+
+.terminal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 10px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.terminal-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.terminal-controls {
+  display: flex;
+  gap: 4px;
+}
+
+.terminal-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 3px;
+}
+
+.terminal-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.terminal-container {
+  flex: 1;
+  padding: 4px;
+  overflow: hidden;
+}
+
+.terminal-container .xterm {
+  height: 100%;
+}
+
+.terminal-container .xterm-viewport {
+  overflow-y: auto;
+}
+
+/* Status bar terminal button */
+.status-btn {
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 3px;
+}
+
+.status-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.status-btn.active {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: white;
+}

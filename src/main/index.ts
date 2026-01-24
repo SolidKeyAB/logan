@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { spawn } from 'child_process';
+import * as pty from 'node-pty';
 import { FileHandler } from './fileHandler';
 import { IPC, SearchOptions, Bookmark, Highlight } from '../shared/types';
 import { analyzerRegistry, AnalyzerOptions } from './analyzers';
@@ -1412,4 +1413,87 @@ ipcMain.handle('split-file', async (_, options: SplitOptions) => {
   } catch (error) {
     return { success: false, error: String(error) };
   }
+});
+
+// === Terminal ===
+
+let ptyProcess: pty.IPty | null = null;
+
+function getDefaultShell(): string {
+  if (process.platform === 'win32') {
+    return process.env.COMSPEC || 'cmd.exe';
+  }
+  return process.env.SHELL || '/bin/bash';
+}
+
+ipcMain.handle('terminal-create', async (_, options?: { cwd?: string; cols?: number; rows?: number }) => {
+  try {
+    // Kill existing terminal if any
+    if (ptyProcess) {
+      ptyProcess.kill();
+      ptyProcess = null;
+    }
+
+    const shell = getDefaultShell();
+    const cwd = options?.cwd || os.homedir();
+    const cols = options?.cols || 80;
+    const rows = options?.rows || 24;
+
+    ptyProcess = pty.spawn(shell, [], {
+      name: 'xterm-256color',
+      cols,
+      rows,
+      cwd,
+      env: process.env as { [key: string]: string },
+    });
+
+    // Forward terminal output to renderer
+    ptyProcess.onData((data: string) => {
+      mainWindow?.webContents.send('terminal-data', data);
+    });
+
+    ptyProcess.onExit(({ exitCode }) => {
+      mainWindow?.webContents.send('terminal-exit', exitCode);
+      ptyProcess = null;
+    });
+
+    return { success: true, pid: ptyProcess.pid };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('terminal-write', async (_, data: string) => {
+  if (ptyProcess) {
+    ptyProcess.write(data);
+    return { success: true };
+  }
+  return { success: false, error: 'No terminal process' };
+});
+
+ipcMain.handle('terminal-resize', async (_, cols: number, rows: number) => {
+  if (ptyProcess) {
+    ptyProcess.resize(cols, rows);
+    return { success: true };
+  }
+  return { success: false, error: 'No terminal process' };
+});
+
+ipcMain.handle('terminal-kill', async () => {
+  if (ptyProcess) {
+    ptyProcess.kill();
+    ptyProcess = null;
+    return { success: true };
+  }
+  return { success: false, error: 'No terminal process' };
+});
+
+ipcMain.handle('terminal-cd', async (_, directory: string) => {
+  if (ptyProcess && fs.existsSync(directory)) {
+    // Send cd command to terminal
+    const cdCmd = process.platform === 'win32' ? `cd /d "${directory}"\r` : `cd "${directory}"\r`;
+    ptyProcess.write(cdCmd);
+    return { success: true };
+  }
+  return { success: false, error: 'No terminal process or invalid directory' };
 });
