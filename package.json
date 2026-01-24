@@ -4,6 +4,7 @@
   "description": "Fast log file viewer and analyzer for large files with pattern detection, search, and bookmarks",
   "main": "dist/main/index.js",
   "scripts": {
+    "postinstall": "npx @electron/rebuild",
     "build": "tsc && npm run copy-assets",
     "copy-assets": "cp src/renderer/index.html src/renderer/styles.css dist/renderer/ && cp -r src/renderer/assets dist/renderer/ && mkdir -p dist/renderer/lib && cp node_modules/xterm/css/xterm.css dist/renderer/lib/ && cp node_modules/xterm/lib/xterm.js dist/renderer/lib/ && cp node_modules/xterm-addon-fit/lib/xterm-addon-fit.js dist/renderer/lib/",
     "start": "npm run build && electron .",
@@ -25,6 +26,7 @@
     "url": "https://github.com/SolidKeyAB/logan.git"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.7.2",
     "@types/node": "^20.10.0",
     "electron": "^28.0.0",
     "electron-builder": "^24.9.1",
