@@ -53,46 +53,128 @@ export class FileHandler {
     const stat = fs.statSync(filePath);
     const fileSize = stat.size;
 
-    // Detect line ending type (CRLF vs LF)
-    let lineEndingSize = 1; // Default to LF (\n)
-    const sampleBuffer = Buffer.alloc(Math.min(4096, fileSize));
-    const sampleFd = fs.openSync(filePath, 'r');
-    fs.readSync(sampleFd, sampleBuffer, 0, sampleBuffer.length, 0);
-    fs.closeSync(sampleFd);
-    if (sampleBuffer.includes('\r\n')) {
-      lineEndingSize = 2; // CRLF (\r\n)
-    }
-
-    // Index all line offsets
+    // Index all line offsets - handle any line ending format (LF, CRLF, CR, mixed)
     this.lineOffsets = [];
-    let offset = 0;
     let lineNumber = 0;
     let firstLine = true;
 
-    const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
-    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    // Read file in chunks to find line boundaries and compute exact offsets
+    const fd = fs.openSync(filePath, 'r');
+    const chunkSize = 1024 * 1024; // 1MB chunks
+    const buffer = Buffer.alloc(chunkSize);
+    let fileOffset = 0;
+    let lineStart = 0;
+    let leftover = Buffer.alloc(0);
 
-    for await (const line of rl) {
-      const length = Buffer.byteLength(line, 'utf-8');
+    try {
+      while (fileOffset < fileSize) {
+        const bytesRead = fs.readSync(fd, buffer, 0, chunkSize, fileOffset);
+        if (bytesRead === 0) break;
 
-      // Check first line for split header
-      if (firstLine) {
-        firstLine = false;
-        const splitInfo = this.parseSplitHeader(line);
-        if (splitInfo) {
-          this.splitMetadata = splitInfo;
-          this.headerLineCount = 1;
-          // Still store the offset but we'll skip it when returning lines
+        // Combine leftover from previous chunk with current chunk
+        const chunk = Buffer.concat([leftover, buffer.slice(0, bytesRead)]);
+        let chunkPos = 0;
+        const effectiveOffset = fileOffset - leftover.length;
+
+        while (chunkPos < chunk.length) {
+          const byte = chunk[chunkPos];
+
+          if (byte === 0x0A) { // LF
+            // End of line (LF or end of CRLF)
+            const lineEnd = effectiveOffset + chunkPos;
+            const lineLength = lineEnd - lineStart;
+
+            // Check for CRLF - exclude CR from line content
+            let actualLength = lineLength;
+            if (lineLength > 0 && chunkPos > 0 && chunk[chunkPos - 1] === 0x0D) {
+              actualLength = lineLength - 1;
+            } else if (lineLength > 0 && this.lineOffsets.length > 0) {
+              // CR might be at end of previous chunk - check the stored length
+              // This is handled by reading the actual bytes when needed
+            }
+
+            this.lineOffsets.push({ offset: lineStart, length: actualLength });
+
+            // Check first line for split header
+            if (firstLine) {
+              firstLine = false;
+              const lineBuffer = Buffer.alloc(Math.min(actualLength, 500));
+              fs.readSync(fd, lineBuffer, 0, lineBuffer.length, lineStart);
+              const lineText = lineBuffer.toString('utf-8');
+              const splitInfo = this.parseSplitHeader(lineText);
+              if (splitInfo) {
+                this.splitMetadata = splitInfo;
+                this.headerLineCount = 1;
+              }
+            }
+
+            lineNumber++;
+            lineStart = lineEnd + 1; // Move past LF
+
+            if (lineNumber % 100000 === 0 && onProgress) {
+              onProgress(Math.min(99, Math.round((lineStart / fileSize) * 100)));
+            }
+          } else if (byte === 0x0D) { // CR
+            // Could be CR-only (old Mac) or start of CRLF
+            // Look ahead to see if next byte is LF
+            if (chunkPos + 1 < chunk.length) {
+              if (chunk[chunkPos + 1] !== 0x0A) {
+                // CR-only line ending (old Mac format)
+                const lineEnd = effectiveOffset + chunkPos;
+                const lineLength = lineEnd - lineStart;
+                this.lineOffsets.push({ offset: lineStart, length: lineLength });
+
+                if (firstLine) {
+                  firstLine = false;
+                  const lineBuffer = Buffer.alloc(Math.min(lineLength, 500));
+                  fs.readSync(fd, lineBuffer, 0, lineBuffer.length, lineStart);
+                  const lineText = lineBuffer.toString('utf-8');
+                  const splitInfo = this.parseSplitHeader(lineText);
+                  if (splitInfo) {
+                    this.splitMetadata = splitInfo;
+                    this.headerLineCount = 1;
+                  }
+                }
+
+                lineNumber++;
+                lineStart = lineEnd + 1; // Move past CR
+              }
+              // If next is LF, we'll handle it in the LF case
+            }
+            // If CR is at end of chunk, we'll handle it in the next iteration
+          }
+          chunkPos++;
         }
+
+        // Keep any partial line for next chunk
+        if (lineStart < effectiveOffset + chunk.length) {
+          leftover = chunk.slice(lineStart - effectiveOffset);
+        } else {
+          leftover = Buffer.alloc(0);
+        }
+
+        fileOffset += bytesRead;
       }
 
-      this.lineOffsets.push({ offset, length });
-      offset += length + lineEndingSize; // Account for line ending (LF or CRLF)
-      lineNumber++;
+      // Handle last line if file doesn't end with newline
+      if (lineStart < fileSize) {
+        const lastLineLength = fileSize - lineStart;
+        this.lineOffsets.push({ offset: lineStart, length: lastLineLength });
 
-      if (lineNumber % 100000 === 0 && onProgress) {
-        onProgress(Math.min(99, Math.round((offset / fileSize) * 100)));
+        if (firstLine) {
+          const lineBuffer = Buffer.alloc(Math.min(lastLineLength, 500));
+          fs.readSync(fd, lineBuffer, 0, lineBuffer.length, lineStart);
+          const lineText = lineBuffer.toString('utf-8');
+          const splitInfo = this.parseSplitHeader(lineText);
+          if (splitInfo) {
+            this.splitMetadata = splitInfo;
+            this.headerLineCount = 1;
+          }
+        }
+        lineNumber++;
       }
+    } finally {
+      fs.closeSync(fd);
     }
 
     // Adjust total lines to exclude hidden header
