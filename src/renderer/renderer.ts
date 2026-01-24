@@ -899,7 +899,9 @@ function createLineElementPooled(line: LogLine): HTMLDivElement {
   // Create content using innerHTML for speed (single parse)
   const lineNumHtml = `<span class="line-number">${line.lineNumber + 1}</span>`;
   const displayText = applyColumnFilter(line.text);
-  const contentHtml = `<span class="line-content">${applyHighlights(displayText)}</span>`;
+  // Apply search highlights and manual highlights together
+  const searchResult = applySearchHighlightsRaw(displayText, line.lineNumber);
+  const contentHtml = `<span class="line-content">${applyHighlightsWithSearch(displayText, searchResult.searchRanges)}</span>`;
   div.innerHTML = lineNumHtml + contentHtml;
 
   return div;
@@ -937,11 +939,13 @@ function createLineElement(line: LogLine): HTMLDivElement {
   const contentSpan = document.createElement('span');
   contentSpan.className = 'line-content';
 
-  // Apply column filter, then highlights, then search matches
+  // Apply column filter, then search highlights, then manual highlights
   const displayText = applyColumnFilter(line.text);
-  let highlightedText = applyHighlights(displayText);
-  highlightedText = applySearchHighlights(highlightedText, line.lineNumber);
-  contentSpan.innerHTML = highlightedText;
+  // Apply search highlights first (on raw text), returns { html, hasSearchMatch }
+  const searchResult = applySearchHighlightsRaw(displayText, line.lineNumber);
+  // Then apply manual highlights (escapes HTML and adds highlight spans)
+  const finalHtml = applyHighlightsWithSearch(displayText, searchResult.searchRanges);
+  contentSpan.innerHTML = finalHtml;
 
   div.appendChild(lineNumSpan);
   div.appendChild(contentSpan);
@@ -1035,11 +1039,17 @@ function applyHighlights(text: string): string {
   return result;
 }
 
-function applySearchHighlights(html: string, lineNumber: number): string {
+interface SearchRange {
+  start: number;
+  end: number;
+  isCurrent: boolean;
+}
+
+function applySearchHighlightsRaw(text: string, lineNumber: number): { searchRanges: SearchRange[] } {
   // Find search matches for this line
   const lineMatches = state.searchResults.filter(m => m.lineNumber === lineNumber);
   if (lineMatches.length === 0 || !elements.searchInput.value) {
-    return html;
+    return { searchRanges: [] };
   }
 
   // Get the search pattern
@@ -1047,33 +1057,158 @@ function applySearchHighlights(html: string, lineNumber: number): string {
   const isRegex = elements.searchRegex.checked;
   const matchCase = elements.searchCase.checked;
 
+  const searchRanges: SearchRange[] = [];
+
   try {
     let searchRegex: RegExp;
     if (isRegex) {
-      searchRegex = new RegExp(`(${pattern})`, matchCase ? 'g' : 'gi');
+      searchRegex = new RegExp(pattern, matchCase ? 'g' : 'gi');
     } else {
       // Escape special regex chars for literal search
       const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      searchRegex = new RegExp(`(${escaped})`, matchCase ? 'g' : 'gi');
+      searchRegex = new RegExp(escaped, matchCase ? 'g' : 'gi');
     }
 
-    // Only apply to text content, not HTML tags
-    // Split by HTML tags, apply highlighting to text parts only
-    const parts = html.split(/(<[^>]+>)/);
-    const highlighted = parts.map(part => {
-      if (part.startsWith('<')) {
-        return part; // Keep HTML tags unchanged
-      }
-      // Check if current search result is on this line
-      const isCurrent = state.currentSearchIndex >= 0 &&
-        state.searchResults[state.currentSearchIndex]?.lineNumber === lineNumber;
-      const matchClass = isCurrent ? 'search-match current' : 'search-match';
-      return part.replace(searchRegex, `<span class="${matchClass}">$1</span>`);
-    });
-    return highlighted.join('');
+    // Check if current search result is on this line
+    const isCurrent = state.currentSearchIndex >= 0 &&
+      state.searchResults[state.currentSearchIndex]?.lineNumber === lineNumber;
+
+    let match;
+    while ((match = searchRegex.exec(text)) !== null) {
+      searchRanges.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        isCurrent,
+      });
+    }
   } catch {
-    return html;
+    // Invalid regex, return empty
   }
+
+  return { searchRanges };
+}
+
+function applyHighlightsWithSearch(text: string, searchRanges: SearchRange[]): string {
+  interface HighlightRange {
+    start: number;
+    end: number;
+    type: 'search' | 'highlight';
+    className: string;
+  }
+
+  const ranges: HighlightRange[] = [];
+
+  // Add search ranges
+  for (const sr of searchRanges) {
+    const className = sr.isCurrent ? 'search-match current' : 'search-match';
+    ranges.push({ start: sr.start, end: sr.end, type: 'search', className });
+  }
+
+  // Add manual highlight ranges
+  for (const config of state.highlights) {
+    try {
+      let flags = config.highlightAll ? 'g' : '';
+      if (!config.matchCase) flags += 'i';
+
+      let pattern = config.pattern;
+      if (!config.isRegex) {
+        pattern = escapeRegex(pattern);
+      }
+
+      if (config.includeWhitespace) {
+        pattern = `(\\s*)${pattern}(\\s*)`;
+      }
+
+      if (config.wholeWord && !config.includeWhitespace) {
+        pattern = `\\b${pattern}\\b`;
+      }
+
+      const regex = new RegExp(pattern, flags || undefined);
+      let match;
+
+      if (config.highlightAll) {
+        while ((match = regex.exec(text)) !== null) {
+          ranges.push({
+            start: match.index,
+            end: match.index + match[0].length,
+            type: 'highlight',
+            className: `highlight highlight-${config.backgroundColor}`,
+          });
+        }
+      } else {
+        match = regex.exec(text);
+        if (match) {
+          ranges.push({
+            start: match.index,
+            end: match.index + match[0].length,
+            type: 'highlight',
+            className: `highlight highlight-${config.backgroundColor}`,
+          });
+        }
+      }
+    } catch {
+      // Invalid regex, skip
+    }
+  }
+
+  // If no ranges, just escape and return
+  if (ranges.length === 0) {
+    return escapeHtml(text);
+  }
+
+  // Sort by start position, search matches have priority (rendered on top)
+  ranges.sort((a, b) => {
+    if (a.start !== b.start) return a.start - b.start;
+    // Search matches render after highlights (so they appear on top)
+    return a.type === 'search' ? 1 : -1;
+  });
+
+  // Build result by iterating through text and applying ranges
+  // We'll use a simpler non-overlapping approach: search matches take precedence
+  let result = '';
+  let pos = 0;
+
+  // Remove overlapping highlight ranges where search matches exist
+  const finalRanges: HighlightRange[] = [];
+  for (const range of ranges) {
+    if (range.type === 'search') {
+      finalRanges.push(range);
+    } else {
+      // Check if this highlight overlaps with any search range
+      const overlapsSearch = searchRanges.some(
+        sr => !(range.end <= sr.start || range.start >= sr.end)
+      );
+      if (!overlapsSearch) {
+        finalRanges.push(range);
+      }
+    }
+  }
+
+  // Re-sort and remove overlapping ranges (first one wins)
+  finalRanges.sort((a, b) => a.start - b.start);
+  const nonOverlapping: HighlightRange[] = [];
+  for (const range of finalRanges) {
+    if (nonOverlapping.length === 0 || range.start >= nonOverlapping[nonOverlapping.length - 1].end) {
+      nonOverlapping.push(range);
+    }
+  }
+
+  for (const range of nonOverlapping) {
+    // Add text before this range
+    if (range.start > pos) {
+      result += escapeHtml(text.slice(pos, range.start));
+    }
+    // Add the highlighted range
+    result += `<span class="${range.className}">${escapeHtml(text.slice(range.start, range.end))}</span>`;
+    pos = range.end;
+  }
+
+  // Add remaining text
+  if (pos < text.length) {
+    result += escapeHtml(text.slice(pos));
+  }
+
+  return result;
 }
 
 function escapeHtml(text: string): string {
@@ -2148,6 +2283,10 @@ async function terminalCdToFile(filePath: string): Promise<void> {
   if (lastSlash > 0) {
     const dir = filePath.substring(0, lastSlash);
     await window.api.terminalCd(dir);
+    // Clear terminal and show fresh prompt
+    if (terminal) {
+      terminal.clear();
+    }
   }
 }
 
@@ -2517,6 +2656,7 @@ async function performSearch(): Promise<void> {
       state.currentSearchIndex = result.matches.length > 0 ? 0 : -1;
       updateSearchUI();
       renderMinimapMarkers(); // Update minimap with search markers
+      renderVisibleLines(); // Re-render to show search highlights
 
       if (state.currentSearchIndex >= 0) {
         goToSearchResult(state.currentSearchIndex);
@@ -2543,6 +2683,7 @@ function goToSearchResult(index: number): void {
   const result = state.searchResults[index];
   goToLine(result.lineNumber);
   updateSearchUI();
+  renderVisibleLines(); // Update current match highlight
 }
 
 function goToLine(lineNumber: number): void {
@@ -4045,6 +4186,9 @@ async function switchToTab(tabId: string): Promise<void> {
 
       // Mark as loaded
       tab.isLoaded = true;
+
+      // Change terminal directory to new file's folder
+      terminalCdToFile(tab.filePath);
     }
   } finally {
     hideProgress();
