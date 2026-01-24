@@ -218,6 +218,9 @@ const ZOOM_MAX = 200;
 const ZOOM_STEP = 10;
 let zoomLevel = 100; // Percentage (100 = default)
 
+// Word wrap setting
+let wordWrapEnabled = false;
+
 // Get current line height based on zoom
 function getLineHeight(): number {
   return Math.round(BASE_LINE_HEIGHT * (zoomLevel / 100));
@@ -294,6 +297,7 @@ const elements = {
   btnCancelSplit: document.getElementById('btn-cancel-split') as HTMLButtonElement,
   // Columns
   btnColumns: document.getElementById('btn-columns') as HTMLButtonElement,
+  btnWordWrap: document.getElementById('btn-word-wrap') as HTMLButtonElement,
   columnsModal: document.getElementById('columns-modal') as HTMLDivElement,
   columnsLoading: document.getElementById('columns-loading') as HTMLDivElement,
   columnsContent: document.getElementById('columns-content') as HTMLDivElement,
@@ -845,7 +849,12 @@ function renderVisibleLines(): void {
 
       // Use transform for GPU-accelerated positioning (smoother scrolling)
       // Note: no right:0 to allow horizontal scroll expansion
-      lineElement.style.cssText = `position:absolute;top:0;left:0;transform:translateY(${top}px);will-change:transform;white-space:pre;`;
+      if (wordWrapEnabled) {
+        // Word wrap mode: use relative positioning for natural flow
+        lineElement.style.cssText = `position:relative;white-space:pre-wrap;word-break:break-all;`;
+      } else {
+        lineElement.style.cssText = `position:absolute;top:0;left:0;transform:translateY(${top}px);will-change:transform;white-space:pre;`;
+      }
 
       fragment.appendChild(lineElement);
 
@@ -863,8 +872,14 @@ function renderVisibleLines(): void {
   logContentElement.appendChild(fragment);
 
   // Set content size for scrolling
-  logContentElement.style.height = `${virtualHeight}px`;
-  logContentElement.style.minWidth = `${Math.max(maxContentWidth, logViewerElement.clientWidth)}px`;
+  if (wordWrapEnabled) {
+    // Word wrap mode: let content flow naturally
+    logContentElement.style.height = 'auto';
+    logContentElement.style.minWidth = '';
+  } else {
+    logContentElement.style.height = `${virtualHeight}px`;
+    logContentElement.style.minWidth = `${Math.max(maxContentWidth, logViewerElement.clientWidth)}px`;
+  }
 
   // Restore horizontal scroll position
   if (scrollLeft > 0) {
@@ -1464,8 +1479,14 @@ async function buildMinimap(onProgress?: (percent: number) => void): Promise<voi
 function renderMinimap(): void {
   if (!minimapContentElement || !minimapElement) return;
 
+  const totalLines = getTotalLines();
+  if (totalLines === 0 || minimapData.length === 0) return;
+
   const minimapHeight = minimapElement.clientHeight;
-  const lineHeight = Math.max(1, minimapHeight / minimapData.length);
+  // Calculate how many actual lines each sample represents
+  const linesPerSample = totalLines / minimapData.length;
+  // Each minimap line should take proportional height
+  const lineHeight = minimapHeight / minimapData.length;
 
   minimapContentElement.innerHTML = '';
 
@@ -1473,8 +1494,8 @@ function renderMinimap(): void {
     const data = minimapData[i];
     const line = document.createElement('div');
     line.className = `minimap-line level-${data.level || 'default'}`;
+    // Use exact height without margin to ensure proper alignment with markers
     line.style.height = `${Math.max(1, lineHeight)}px`;
-    line.style.marginBottom = lineHeight < 2 ? '0' : '1px';
     minimapContentElement.appendChild(line);
   }
 
@@ -3525,6 +3546,27 @@ function resetZoom(): void {
   applyZoom();
 }
 
+function toggleWordWrap(): void {
+  wordWrapEnabled = !wordWrapEnabled;
+
+  // Update button state
+  if (wordWrapEnabled) {
+    elements.btnWordWrap.classList.add('active');
+  } else {
+    elements.btnWordWrap.classList.remove('active');
+  }
+
+  if (logViewerElement) {
+    if (wordWrapEnabled) {
+      logViewerElement.classList.add('word-wrap');
+    } else {
+      logViewerElement.classList.remove('word-wrap');
+    }
+    // Re-render to apply word wrap
+    renderVisibleLines();
+  }
+}
+
 function applyZoom(): void {
   // Update status bar
   elements.statusZoom.textContent = `${zoomLevel}%`;
@@ -3768,6 +3810,86 @@ function setupKeyboardShortcuts(): void {
       resetZoom();
     }
 
+    // Arrow key navigation (only when not in input fields)
+    const isInputFocused = document.activeElement instanceof HTMLInputElement ||
+      document.activeElement instanceof HTMLTextAreaElement ||
+      document.activeElement?.closest('.terminal-container');
+
+    if (!isInputFocused && logViewerElement) {
+      const totalLines = getTotalLines();
+      const visibleLines = Math.floor(logViewerElement.clientHeight / getLineHeight());
+
+      // Arrow Down: Move down one line
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const newLine = Math.min((state.selectedLine ?? 0) + 1, totalLines - 1);
+        state.selectedLine = newLine;
+        goToLine(newLine);
+        renderVisibleLines();
+      }
+
+      // Arrow Up: Move up one line
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const newLine = Math.max((state.selectedLine ?? 0) - 1, 0);
+        state.selectedLine = newLine;
+        goToLine(newLine);
+        renderVisibleLines();
+      }
+
+      // Arrow Right: Scroll right
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        logViewerElement.scrollLeft += 50;
+      }
+
+      // Arrow Left: Scroll left
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        logViewerElement.scrollLeft = Math.max(0, logViewerElement.scrollLeft - 50);
+      }
+
+      // Page Down: Move down by visible lines
+      if (e.key === 'PageDown' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        const newLine = Math.min((state.selectedLine ?? 0) + visibleLines, totalLines - 1);
+        state.selectedLine = newLine;
+        goToLine(newLine);
+        renderVisibleLines();
+      }
+
+      // Page Up: Move up by visible lines
+      if (e.key === 'PageUp' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        const newLine = Math.max((state.selectedLine ?? 0) - visibleLines, 0);
+        state.selectedLine = newLine;
+        goToLine(newLine);
+        renderVisibleLines();
+      }
+
+      // Home: Go to first line
+      if (e.key === 'Home' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        state.selectedLine = 0;
+        goToLine(0);
+        renderVisibleLines();
+      }
+
+      // End: Go to last line
+      if (e.key === 'End' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        state.selectedLine = totalLines - 1;
+        goToLine(totalLines - 1);
+        renderVisibleLines();
+      }
+    }
+
+    // Alt/Option + Z: Toggle word wrap (use code for Mac compatibility)
+    if (e.altKey && e.code === 'KeyZ') {
+      e.preventDefault();
+      toggleWordWrap();
+    }
+
     // Help: F1 or ?
     if (e.key === 'F1' || (e.key === '?' && !e.ctrlKey && !e.metaKey)) {
       e.preventDefault();
@@ -3921,6 +4043,9 @@ function init(): void {
   elements.btnColumnsCancel.addEventListener('click', hideColumnsModal);
   elements.btnColumnsAll.addEventListener('click', () => setAllColumnsVisibility(true));
   elements.btnColumnsNone.addEventListener('click', () => setAllColumnsVisibility(false));
+
+  // Word wrap
+  elements.btnWordWrap.addEventListener('click', toggleWordWrap);
 
   // Split mode and value change handlers
   document.querySelectorAll('input[name="split-mode"]').forEach((radio) => {
