@@ -281,7 +281,10 @@ ipcMain.handle(IPC.OPEN_FILE_DIALOG, async () => {
   const result = await dialog.showOpenDialog(mainWindow!, {
     properties: ['openFile'],
     filters: [
-      { name: 'Log Files', extensions: ['log', 'txt', 'json', 'out', 'err'] },
+      { name: 'Log Files', extensions: ['log', 'txt', 'out', 'err'] },
+      { name: 'Text Files', extensions: ['md', 'markdown', 'rst', 'text'] },
+      { name: 'Data Files', extensions: ['json', 'xml', 'yaml', 'yml', 'csv', 'tsv', 'toml'] },
+      { name: 'Config Files', extensions: ['ini', 'conf', 'cfg', 'config', 'properties', 'env'] },
       { name: 'All Files', extensions: ['*'] },
     ],
   });
@@ -297,8 +300,21 @@ ipcMain.handle(IPC.OPEN_FOLDER_DIALOG, async () => {
   return result.canceled ? null : result.filePaths[0];
 });
 
-// Log file extensions to show in folder tree
-const LOG_EXTENSIONS = new Set(['.log', '.txt', '.json', '.out', '.err', '.csv', '.xml', '.yaml', '.yml']);
+// Text file extensions to show in folder tree - expanded to support many formats
+const TEXT_EXTENSIONS = new Set([
+  // Log files
+  '.log', '.out', '.err',
+  // Text files
+  '.txt', '.text', '.md', '.markdown', '.rst',
+  // Config files
+  '.json', '.xml', '.yaml', '.yml', '.toml', '.ini', '.conf', '.cfg', '.config',
+  // Data files
+  '.csv', '.tsv', '.ndjson', '.jsonl',
+  // Code/script files (often contain logs or can be viewed as text)
+  '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd',
+  // Other common text formats
+  '.properties', '.env', '.gitignore', '.dockerignore',
+]);
 
 ipcMain.handle(IPC.READ_FOLDER, async (_, folderPath: string) => {
   try {
@@ -313,8 +329,8 @@ ipcMain.handle(IPC.READ_FOLDER, async (_, folderPath: string) => {
 
       if (entry.isFile()) {
         const ext = path.extname(entry.name).toLowerCase();
-        // Only include log-like files
-        if (LOG_EXTENSIONS.has(ext) || ext === '') {
+        // Include text-based files or files without extension
+        if (TEXT_EXTENSIONS.has(ext) || ext === '') {
           try {
             const stat = await fs.promises.stat(fullPath);
             files.push({
