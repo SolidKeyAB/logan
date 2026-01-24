@@ -234,6 +234,24 @@ body {
   overflow: hidden;
 }
 
+.sidebar-resize-handle {
+  width: 6px;
+  background: var(--bg-secondary);
+  cursor: ew-resize;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-color);
+  transition: background 0.15s;
+}
+
+.sidebar-resize-handle:hover,
+.sidebar-resize-handle.dragging {
+  background: var(--accent-color);
+}
+
+.sidebar.collapsed + .sidebar-resize-handle {
+  display: none;
+}
+
 .sidebar-section {
   border-bottom: 1px solid var(--border-color);
 }
@@ -1792,19 +1810,37 @@ kbd {
 /* Terminal Section in Sidebar */
 .terminal-section-content {
   height: 250px;
-  min-height: 150px;
+  min-height: 100px;
+  max-height: 80vh;
   background: var(--bg-primary);
   border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
 }
 
 .terminal-section-content.hidden {
   display: none;
 }
 
+.terminal-resize-handle {
+  height: 6px;
+  background: var(--bg-secondary);
+  cursor: ns-resize;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-color);
+  transition: background 0.15s;
+}
+
+.terminal-resize-handle:hover,
+.terminal-resize-handle.dragging {
+  background: var(--accent-color);
+}
+
 .terminal-container {
-  height: 100%;
+  flex: 1;
   padding: 4px;
   overflow: hidden;
+  min-height: 0;
 }
 
 .terminal-container .xterm {

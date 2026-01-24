@@ -352,8 +352,11 @@ const elements = {
   // Terminal
   terminalPanel: document.getElementById('terminal-panel') as HTMLDivElement,
   terminalContainer: document.getElementById('terminal-container') as HTMLDivElement,
+  terminalResizeHandle: document.getElementById('terminal-resize-handle') as HTMLDivElement,
   btnTerminalToggle: document.getElementById('btn-terminal-toggle') as HTMLButtonElement,
   sectionTerminal: document.getElementById('section-terminal') as HTMLDivElement,
+  // Sidebar resize
+  sidebarResizeHandle: document.getElementById('sidebar-resize-handle') as HTMLDivElement,
 };
 
 // Virtual Log Viewer
@@ -3699,6 +3702,47 @@ function init(): void {
 
   // Terminal
   elements.btnTerminalToggle.addEventListener('click', toggleTerminal);
+
+  // Sidebar resize (horizontal)
+  let isResizingSidebar = false;
+  let sidebarStartX = 0;
+  let sidebarStartWidth = 0;
+
+  elements.sidebarResizeHandle.addEventListener('mousedown', (e) => {
+    isResizingSidebar = true;
+    sidebarStartX = e.clientX;
+    sidebarStartWidth = elements.sidebar.offsetWidth;
+    elements.sidebarResizeHandle.classList.add('dragging');
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isResizingSidebar) return;
+
+    const deltaX = e.clientX - sidebarStartX;
+    const newWidth = Math.max(200, Math.min(window.innerWidth * 0.5, sidebarStartWidth + deltaX));
+    elements.sidebar.style.width = `${newWidth}px`;
+
+    // Resize terminal to fit new width if visible
+    if (fitAddon && state.terminalVisible) {
+      fitAddon.fit();
+      const dims = fitAddon.proposeDimensions();
+      if (dims) {
+        window.api.terminalResize(dims.cols, dims.rows);
+      }
+    }
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (isResizingSidebar) {
+      isResizingSidebar = false;
+      elements.sidebarResizeHandle.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    }
+  });
 
   // Search
   elements.btnSearch.addEventListener('click', performSearch);
