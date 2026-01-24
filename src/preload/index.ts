@@ -10,6 +10,9 @@ const IPC = {
   SEARCH_CANCEL: 'search-cancel',
   OPEN_FOLDER_DIALOG: 'open-folder-dialog',
   READ_FOLDER: 'read-folder',
+  FOLDER_SEARCH: 'folder-search',
+  FOLDER_SEARCH_PROGRESS: 'folder-search-progress',
+  FOLDER_SEARCH_CANCEL: 'folder-search-cancel',
 } as const;
 
 // API exposed to renderer
@@ -30,6 +33,19 @@ const api = {
 
   readFolder: (folderPath: string): Promise<{ success: boolean; files?: Array<{ name: string; path: string; isDirectory: boolean; size?: number }>; folderPath?: string; error?: string }> =>
     ipcRenderer.invoke(IPC.READ_FOLDER, folderPath),
+
+  // Folder search
+  folderSearch: (folderPaths: string[], pattern: string, options: { isRegex: boolean; matchCase: boolean }): Promise<{ success: boolean; matches?: Array<{ filePath: string; fileName: string; lineNumber: number; column: number; lineText: string }>; cancelled?: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.FOLDER_SEARCH, folderPaths, pattern, options),
+
+  cancelFolderSearch: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.FOLDER_SEARCH_CANCEL),
+
+  onFolderSearchProgress: (callback: (data: { matchCount: number }) => void): (() => void) => {
+    const handler = (_: any, data: { matchCount: number }) => callback(data);
+    ipcRenderer.on(IPC.FOLDER_SEARCH_PROGRESS, handler);
+    return () => ipcRenderer.removeListener(IPC.FOLDER_SEARCH_PROGRESS, handler);
+  },
 
   getFileInfo: (): Promise<{ success: boolean; info?: any; error?: string }> =>
     ipcRenderer.invoke('get-file-info'),

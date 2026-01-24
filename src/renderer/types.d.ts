@@ -117,6 +117,14 @@ interface FolderFile {
   size?: number;
 }
 
+interface FolderSearchMatch {
+  filePath: string;
+  fileName: string;
+  lineNumber: number;
+  column: number;
+  lineText: string;
+}
+
 interface ColumnInfo {
   index: number;
   sample: string[];
@@ -140,6 +148,11 @@ interface Api {
   // Folder operations
   openFolderDialog: () => Promise<string | null>;
   readFolder: (folderPath: string) => Promise<{ success: boolean; files?: FolderFile[]; folderPath?: string; error?: string }>;
+
+  // Folder search
+  folderSearch: (folderPaths: string[], pattern: string, options: { isRegex: boolean; matchCase: boolean }) => Promise<{ success: boolean; matches?: FolderSearchMatch[]; cancelled?: boolean; error?: string }>;
+  cancelFolderSearch: () => Promise<{ success: boolean }>;
+  onFolderSearchProgress: (callback: (data: { matchCount: number }) => void) => () => void;
 
   // System info
   checkSearchEngine: () => Promise<{ engine: 'ripgrep' | 'stream'; version: string | null }>;

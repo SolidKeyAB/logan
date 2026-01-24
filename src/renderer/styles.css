@@ -415,6 +415,139 @@ body {
   color: var(--text-muted);
 }
 
+/* Folder Search */
+.folder-search-container {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0;
+  margin-bottom: 4px;
+}
+
+.folder-search-input {
+  flex: 1;
+  padding: 4px 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-size: 11px;
+  min-width: 0;
+}
+
+.folder-search-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.folder-search-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.folder-search-btn {
+  padding: 4px 6px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.folder-search-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.folder-search-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.folder-search-results {
+  max-height: 300px;
+  overflow-y: auto;
+  font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+  font-size: 11px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  margin-bottom: 8px;
+}
+
+.folder-search-results.hidden {
+  display: none;
+}
+
+.folder-search-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.folder-search-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.folder-search-close:hover {
+  color: var(--text-primary);
+}
+
+.folder-search-item {
+  display: block;
+  padding: 4px 8px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-color);
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.folder-search-item:last-child {
+  border-bottom: none;
+}
+
+.folder-search-item:hover {
+  background: var(--bg-hover);
+}
+
+.folder-search-file {
+  color: var(--info-color);
+}
+
+.folder-search-line {
+  color: var(--warning-color);
+}
+
+.folder-search-text {
+  color: var(--text-secondary);
+}
+
+.folder-search-match {
+  background: rgba(255, 255, 0, 0.3);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.folder-search-searching {
+  padding: 8px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
 .stats-content {
   font-size: 12px;
 }

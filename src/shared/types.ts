@@ -65,6 +65,15 @@ export interface FolderEntry {
   size?: number;
 }
 
+// Folder search result
+export interface FolderSearchMatch {
+  filePath: string;
+  fileName: string;
+  lineNumber: number;
+  column: number;
+  lineText: string;
+}
+
 // IPC Channels
 export const IPC = {
   OPEN_FILE_DIALOG: 'open-file-dialog',
@@ -76,4 +85,7 @@ export const IPC = {
   GOTO_LINE: 'goto-line',
   OPEN_FOLDER_DIALOG: 'open-folder-dialog',
   READ_FOLDER: 'read-folder',
+  FOLDER_SEARCH: 'folder-search',
+  FOLDER_SEARCH_PROGRESS: 'folder-search-progress',
+  FOLDER_SEARCH_CANCEL: 'folder-search-cancel',
 } as const;

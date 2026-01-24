@@ -165,6 +165,9 @@ interface AppState {
   columnConfig: ColumnConfig | null;
   // Notes file tracking
   currentNotesFile: string | null;
+  // Folder search
+  folderSearchResults: FolderSearchMatch[];
+  isFolderSearching: boolean;
 }
 
 const state: AppState = {
@@ -191,6 +194,8 @@ const state: AppState = {
   folders: [],
   columnConfig: null,
   currentNotesFile: null,
+  folderSearchResults: [],
+  isFolderSearching: false,
 };
 
 // Constants
@@ -247,6 +252,10 @@ const elements = {
   welcomeMessage: document.getElementById('welcome-message') as HTMLDivElement,
   foldersList: document.getElementById('folders-list') as HTMLDivElement,
   btnAddFolder: document.getElementById('btn-add-folder') as HTMLButtonElement,
+  folderSearchInput: document.getElementById('folder-search-input') as HTMLInputElement,
+  btnFolderSearch: document.getElementById('btn-folder-search') as HTMLButtonElement,
+  btnFolderSearchCancel: document.getElementById('btn-folder-search-cancel') as HTMLButtonElement,
+  folderSearchResults: document.getElementById('folder-search-results') as HTMLDivElement,
   fileStats: document.getElementById('file-stats') as HTMLDivElement,
   analysisResults: document.getElementById('analysis-results') as HTMLDivElement,
   analysisProgress: document.getElementById('analysis-progress') as HTMLDivElement,
@@ -1757,12 +1766,17 @@ async function openFolder(): Promise<void> {
       collapsed: false,
     });
     renderFolderTree();
+    updateFolderSearchState();
   }
 }
 
 function removeFolder(folderPath: string): void {
   state.folders = state.folders.filter((f) => f.path !== folderPath);
   renderFolderTree();
+  updateFolderSearchState();
+  if (state.folders.length === 0) {
+    closeFolderSearchResults();
+  }
 }
 
 function toggleFolder(folderPath: string): void {
@@ -1844,6 +1858,114 @@ function renderFolderTree(): void {
       if (filePath) {
         await loadFile(filePath);
         renderFolderTree(); // Update active state
+      }
+    });
+  });
+}
+
+// === Folder Search ===
+
+function updateFolderSearchState(): void {
+  const hasFolders = state.folders.length > 0;
+  elements.folderSearchInput.disabled = !hasFolders;
+  elements.btnFolderSearch.disabled = !hasFolders;
+}
+
+async function performFolderSearch(): Promise<void> {
+  const pattern = elements.folderSearchInput.value.trim();
+  if (!pattern || state.folders.length === 0) return;
+
+  state.isFolderSearching = true;
+  state.folderSearchResults = [];
+
+  elements.btnFolderSearch.classList.add('hidden');
+  elements.btnFolderSearchCancel.classList.remove('hidden');
+  elements.folderSearchResults.classList.remove('hidden');
+  elements.folderSearchResults.innerHTML = '<div class="folder-search-searching">Searching...</div>';
+
+  const unsubscribe = window.api.onFolderSearchProgress((data) => {
+    if (state.isFolderSearching) {
+      elements.folderSearchResults.innerHTML = `<div class="folder-search-searching">Searching... ${data.matchCount} matches found</div>`;
+    }
+  });
+
+  try {
+    const folderPaths = state.folders.map(f => f.path);
+    const result = await window.api.folderSearch(folderPaths, pattern, { isRegex: false, matchCase: false });
+
+    if (result.success && result.matches) {
+      state.folderSearchResults = result.matches;
+      renderFolderSearchResults(pattern, result.cancelled);
+    } else {
+      elements.folderSearchResults.innerHTML = `<div class="folder-search-searching">${result.error || 'Search failed'}</div>`;
+    }
+  } catch (error) {
+    elements.folderSearchResults.innerHTML = `<div class="folder-search-searching">Error: ${error}</div>`;
+  } finally {
+    unsubscribe();
+    state.isFolderSearching = false;
+    elements.btnFolderSearch.classList.remove('hidden');
+    elements.btnFolderSearchCancel.classList.add('hidden');
+  }
+}
+
+function cancelFolderSearch(): void {
+  if (state.isFolderSearching) {
+    window.api.cancelFolderSearch();
+  }
+}
+
+function closeFolderSearchResults(): void {
+  state.folderSearchResults = [];
+  elements.folderSearchResults.classList.add('hidden');
+  elements.folderSearchResults.innerHTML = '';
+}
+
+function highlightMatch(text: string, pattern: string): string {
+  const escaped = escapeHtml(text);
+  const patternEscaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(${patternEscaped})`, 'gi');
+  return escaped.replace(regex, '<span class="folder-search-match">$1</span>');
+}
+
+function renderFolderSearchResults(pattern: string, cancelled?: boolean): void {
+  const matches = state.folderSearchResults;
+
+  if (matches.length === 0) {
+    elements.folderSearchResults.innerHTML = '<div class="folder-search-searching">No matches found</div>';
+    return;
+  }
+
+  const header = `
+    <div class="folder-search-header">
+      <span>${matches.length}${cancelled ? '+' : ''} match${matches.length !== 1 ? 'es' : ''}</span>
+      <button class="folder-search-close" title="Close">&times;</button>
+    </div>
+  `;
+
+  const items = matches.map((match, index) => {
+    const relPath = match.filePath;
+    const lineText = match.lineText.length > 200 ? match.lineText.substring(0, 200) + '...' : match.lineText;
+
+    return `
+      <div class="folder-search-item" data-index="${index}">
+        <span class="folder-search-file">${escapeHtml(match.fileName)}</span>:<span class="folder-search-line">${match.lineNumber}</span>: <span class="folder-search-text">${highlightMatch(lineText, pattern)}</span>
+      </div>
+    `;
+  }).join('');
+
+  elements.folderSearchResults.innerHTML = header + items;
+
+  // Add event listeners
+  elements.folderSearchResults.querySelector('.folder-search-close')?.addEventListener('click', closeFolderSearchResults);
+
+  elements.folderSearchResults.querySelectorAll('.folder-search-item').forEach((item) => {
+    item.addEventListener('click', async () => {
+      const index = parseInt((item as HTMLElement).dataset.index || '0', 10);
+      const match = state.folderSearchResults[index];
+      if (match) {
+        await loadFile(match.filePath);
+        goToLine(match.lineNumber - 1); // Convert to 0-based
       }
     });
   });
@@ -3373,6 +3495,17 @@ function init(): void {
 
   // Folder operations
   elements.btnAddFolder.addEventListener('click', openFolder);
+
+  // Folder search
+  elements.btnFolderSearch.addEventListener('click', performFolderSearch);
+  elements.btnFolderSearchCancel.addEventListener('click', cancelFolderSearch);
+  elements.folderSearchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      performFolderSearch();
+    } else if (e.key === 'Escape') {
+      closeFolderSearchResults();
+    }
+  });
 
   // Search
   elements.btnSearch.addEventListener('click', performSearch);

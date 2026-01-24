@@ -355,6 +355,127 @@ ipcMain.handle(IPC.READ_FOLDER, async (_, folderPath: string) => {
   }
 });
 
+// === Folder Search ===
+let folderSearchSignal: { cancelled: boolean } = { cancelled: false };
+
+ipcMain.handle(IPC.FOLDER_SEARCH, async (_, folderPaths: string[], pattern: string, options: { isRegex: boolean; matchCase: boolean }) => {
+  folderSearchSignal = { cancelled: false };
+
+  if (!folderPaths.length || !pattern) {
+    return { success: false, error: 'No folders or pattern provided' };
+  }
+
+  const matches: Array<{ filePath: string; fileName: string; lineNumber: number; column: number; lineText: string }> = [];
+  const MAX_MATCHES = 1000;
+
+  try {
+    // Build ripgrep arguments
+    const args: string[] = [
+      '--line-number',
+      '--column',
+      '--no-heading',
+      '--with-filename',
+      '--max-count', '100', // Limit matches per file
+    ];
+
+    if (!options.matchCase) {
+      args.push('--ignore-case');
+    }
+
+    if (options.isRegex) {
+      args.push('--regexp', pattern);
+    } else {
+      args.push('--fixed-strings', pattern);
+    }
+
+    // Add file type filters for text files
+    for (const ext of TEXT_EXTENSIONS) {
+      args.push('--glob', `*${ext}`);
+    }
+    args.push('--glob', '!.*'); // Exclude hidden files
+
+    // Add folder paths
+    args.push(...folderPaths);
+
+    return new Promise((resolve) => {
+      const proc = spawn('rg', args);
+      let buffer = '';
+      let lastProgressUpdate = 0;
+
+      proc.stdout.on('data', (data: Buffer) => {
+        if (folderSearchSignal.cancelled) {
+          proc.kill();
+          return;
+        }
+
+        buffer += data.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line) continue;
+
+          // Parse ripgrep output: filename:line:column:text
+          const colonIndex1 = line.indexOf(':');
+          if (colonIndex1 === -1) continue;
+
+          const colonIndex2 = line.indexOf(':', colonIndex1 + 1);
+          if (colonIndex2 === -1) continue;
+
+          const colonIndex3 = line.indexOf(':', colonIndex2 + 1);
+          if (colonIndex3 === -1) continue;
+
+          const filePath = line.substring(0, colonIndex1);
+          const lineNum = parseInt(line.substring(colonIndex1 + 1, colonIndex2), 10);
+          const column = parseInt(line.substring(colonIndex2 + 1, colonIndex3), 10);
+          const lineText = line.substring(colonIndex3 + 1);
+
+          if (isNaN(lineNum) || isNaN(column)) continue;
+
+          matches.push({
+            filePath,
+            fileName: path.basename(filePath),
+            lineNumber: lineNum,
+            column: column - 1,
+            lineText: lineText.length > 500 ? lineText.substring(0, 500) + '...' : lineText,
+          });
+
+          if (matches.length >= MAX_MATCHES) {
+            proc.kill();
+            break;
+          }
+        }
+
+        // Send progress updates
+        const now = Date.now();
+        if (now - lastProgressUpdate > 100) {
+          lastProgressUpdate = now;
+          mainWindow?.webContents.send(IPC.FOLDER_SEARCH_PROGRESS, { matchCount: matches.length });
+        }
+      });
+
+      proc.on('error', () => {
+        resolve({ success: false, error: 'ripgrep not available. Install with: brew install ripgrep' });
+      });
+
+      proc.on('close', () => {
+        if (folderSearchSignal.cancelled) {
+          resolve({ success: true, matches, cancelled: true });
+        } else {
+          resolve({ success: true, matches });
+        }
+      });
+    });
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.FOLDER_SEARCH_CANCEL, async () => {
+  folderSearchSignal.cancelled = true;
+  return { success: true };
+});
+
 // === Column Analysis ===
 
 interface ColumnInfo {
