@@ -906,9 +906,10 @@ function createLineElement(line: LogLine): HTMLDivElement {
   const contentSpan = document.createElement('span');
   contentSpan.className = 'line-content';
 
-  // Apply column filter then highlights
+  // Apply column filter, then highlights, then search matches
   const displayText = applyColumnFilter(line.text);
-  const highlightedText = applyHighlights(displayText);
+  let highlightedText = applyHighlights(displayText);
+  highlightedText = applySearchHighlights(highlightedText, line.lineNumber);
   contentSpan.innerHTML = highlightedText;
 
   div.appendChild(lineNumSpan);
@@ -1001,6 +1002,47 @@ function applyHighlights(text: string): string {
 
   result += escapeHtml(text.slice(lastEnd));
   return result;
+}
+
+function applySearchHighlights(html: string, lineNumber: number): string {
+  // Find search matches for this line
+  const lineMatches = state.searchResults.filter(m => m.lineNumber === lineNumber);
+  if (lineMatches.length === 0 || !elements.searchInput.value) {
+    return html;
+  }
+
+  // Get the search pattern
+  const pattern = elements.searchInput.value;
+  const isRegex = elements.searchRegex.checked;
+  const matchCase = elements.searchCase.checked;
+
+  try {
+    let searchRegex: RegExp;
+    if (isRegex) {
+      searchRegex = new RegExp(`(${pattern})`, matchCase ? 'g' : 'gi');
+    } else {
+      // Escape special regex chars for literal search
+      const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      searchRegex = new RegExp(`(${escaped})`, matchCase ? 'g' : 'gi');
+    }
+
+    // Only apply to text content, not HTML tags
+    // Split by HTML tags, apply highlighting to text parts only
+    const parts = html.split(/(<[^>]+>)/);
+    const highlighted = parts.map(part => {
+      if (part.startsWith('<')) {
+        return part; // Keep HTML tags unchanged
+      }
+      // Check if current search result is on this line
+      const isCurrent = state.currentSearchIndex >= 0 &&
+        state.searchResults[state.currentSearchIndex]?.lineNumber === lineNumber;
+      const matchClass = isCurrent ? 'search-match current' : 'search-match';
+      return part.replace(searchRegex, `<span class="${matchClass}">$1</span>`);
+    });
+    return highlighted.join('');
+  } catch {
+    return html;
+  }
 }
 
 function escapeHtml(text: string): string {
