@@ -4022,8 +4022,8 @@ function setupKeyboardShortcuts(): void {
       toggleWordWrap();
     }
 
-    // Help: F1 or ?
-    if (e.key === 'F1' || (e.key === '?' && !e.ctrlKey && !e.metaKey)) {
+    // Help: F1
+    if (e.key === 'F1') {
       e.preventDefault();
       elements.helpModal.classList.toggle('hidden');
     }
