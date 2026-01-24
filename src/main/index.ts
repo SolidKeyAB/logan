@@ -616,6 +616,30 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
       },
       searchSignal
     );
+
+    // Check if filter is active for current file
+    const filteredIndices = getFilteredLines();
+
+    // If filter is active, only return matches within filtered lines
+    // and map line numbers to filtered indices
+    if (filteredIndices && filteredIndices.length > 0) {
+      const filteredSet = new Set(filteredIndices);
+      const lineToFilteredIndex = new Map<number, number>();
+      filteredIndices.forEach((lineNum, idx) => {
+        lineToFilteredIndex.set(lineNum, idx);
+      });
+
+      const filteredMatches = matches
+        .filter(m => filteredSet.has(m.lineNumber))
+        .map(m => ({
+          ...m,
+          originalLineNumber: m.lineNumber,
+          lineNumber: lineToFilteredIndex.get(m.lineNumber) ?? m.lineNumber,
+        }));
+
+      return { success: true, matches: filteredMatches };
+    }
+
     return { success: true, matches };
   } catch (error) {
     return { success: false, error: String(error) };

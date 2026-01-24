@@ -30,6 +30,7 @@ export interface SearchOptions {
   matchCase: boolean;
   wholeWord: boolean;
   columnConfig?: SearchColumnConfig;
+  filteredLineIndices?: number[]; // When filter is active, only search these lines
 }
 
 export interface Bookmark {
