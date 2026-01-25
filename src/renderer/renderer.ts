@@ -366,7 +366,6 @@ const elements = {
   analysisProgress: document.getElementById('analysis-progress') as HTMLDivElement,
   analysisProgressText: document.querySelector('.analysis-progress-text') as HTMLDivElement,
   analysisProgressFill: document.querySelector('.analysis-progress-fill') as HTMLDivElement,
-  patternsList: document.getElementById('patterns-list') as HTMLDivElement,
   duplicatesList: document.getElementById('duplicates-list') as HTMLDivElement,
   bookmarksList: document.getElementById('bookmarks-list') as HTMLDivElement,
   btnExportBookmarks: document.getElementById('btn-export-bookmarks') as HTMLButtonElement,
@@ -4051,8 +4050,6 @@ function updateAnalysisUI(): void {
   if (!state.analysisResult) {
     elements.analysisResults.innerHTML =
       '<p class="placeholder">Run analysis to see results</p>';
-    elements.patternsList.innerHTML =
-      '<p class="placeholder">No patterns detected</p>';
     elements.duplicatesList.innerHTML =
       '<p class="placeholder">No duplicates found</p>';
     return;
@@ -4263,38 +4260,6 @@ function updateAnalysisUI(): void {
       state.appliedFilterSuggestion = null;
       await clearFilter();
       updateAnalysisUI();
-    });
-  }
-
-  // Patterns
-  if (result.patterns.length === 0) {
-    elements.patternsList.innerHTML =
-      '<p class="placeholder">No patterns detected</p>';
-  } else {
-    elements.patternsList.innerHTML = result.patterns
-      .slice(0, 30)
-      .map(
-        (p) => `
-        <div class="pattern-item" data-lines="${p.sampleLines.join(',')}" title="Click to go to first occurrence">
-          <div class="pattern-header">
-            <span class="category ${p.category}">${p.category}</span>
-            <span class="count">${p.count.toLocaleString()}x</span>
-          </div>
-          <div class="pattern-keywords">${escapeHtml(p.template)}</div>
-          ${p.sampleText ? `<div class="pattern-sample">${escapeHtml(p.sampleText)}</div>` : ''}
-        </div>
-      `
-      )
-      .join('');
-
-    // Click to navigate
-    elements.patternsList.querySelectorAll('.pattern-item').forEach((item) => {
-      item.addEventListener('click', () => {
-        const lines = (item as HTMLElement).dataset.lines?.split(',');
-        if (lines && lines.length > 0) {
-          goToLine(parseInt(lines[0], 10));
-        }
-      });
     });
   }
 
