@@ -8,9 +8,8 @@ release/
 # OS files
 .DS_Store
 
-# Test data (may contain sensitive information)
-test/
-tests/
+# Test data (may contain sensitive log files)
+test/data/
 test-data/
 *.log
 *.txt.gz
