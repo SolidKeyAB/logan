@@ -677,7 +677,7 @@ function createLogViewer(): void {
   logViewerElement.addEventListener('click', handleLogClick);
   logViewerElement.addEventListener('contextmenu', handleContextMenu);
 
-  // Mouse wheel zoom (Ctrl + scroll) and boundary scroll prevention
+  // Mouse wheel zoom (Ctrl + scroll) and scroll speed normalization
   logViewerElement.addEventListener('wheel', (e: WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
@@ -689,14 +689,28 @@ function createLogViewer(): void {
       return;
     }
 
-    // Prevent overscroll at boundaries to avoid selection issues
-    const atTop = logViewerElement!.scrollTop <= 0;
-    const atBottom = logViewerElement!.scrollTop >=
-      logViewerElement!.scrollHeight - logViewerElement!.clientHeight;
+    // Normalize scroll speed for trackpad vs mouse
+    // deltaMode: 0 = pixels (trackpad), 1 = lines (mouse), 2 = pages
+    e.preventDefault();
 
-    if ((atTop && e.deltaY < 0) || (atBottom && e.deltaY > 0)) {
-      e.preventDefault();
+    let delta = e.deltaY;
+
+    if (e.deltaMode === 0) {
+      // Pixel-based scrolling (trackpad) - reduce speed significantly
+      // Trackpads send high-frequency small deltas, reduce by ~3x
+      delta = delta * 0.3;
+    } else if (e.deltaMode === 1) {
+      // Line-based scrolling (mouse wheel) - convert to pixels
+      delta = delta * getLineHeight();
+    } else if (e.deltaMode === 2) {
+      // Page-based scrolling - convert to pixels
+      delta = delta * logViewerElement!.clientHeight;
     }
+
+    // Apply the normalized scroll
+    const newScrollTop = logViewerElement!.scrollTop + delta;
+    const maxScroll = logViewerElement!.scrollHeight - logViewerElement!.clientHeight;
+    logViewerElement!.scrollTop = Math.max(0, Math.min(maxScroll, newScrollTop));
   }, { passive: false });
   minimapElement.addEventListener('click', handleMinimapClick);
   minimapElement.addEventListener('mousedown', handleMinimapDrag);
