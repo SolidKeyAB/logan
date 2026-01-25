@@ -18,6 +18,7 @@ export interface PatternGroup {
   template: string;     // Human-readable template with {placeholders}
   count: number;
   sampleLines: number[];
+  sampleText?: string;  // Actual example log line
   category: 'noise' | 'error' | 'warning' | 'info' | 'debug' | 'unknown';
 }
 
@@ -26,6 +27,71 @@ export interface DuplicateGroup {
   text: string;
   count: number;
   lineNumbers: number[];
+}
+
+export interface ColumnStatValue {
+  value: string;
+  count: number;
+  percentage: number;
+}
+
+export interface ColumnStats {
+  name: string;
+  type: string;
+  topValues: ColumnStatValue[];
+  uniqueCount: number;
+}
+
+// Noise candidate - high frequency message that could be filtered
+export interface NoiseCandidate {
+  pattern: string;
+  sampleText: string;
+  count: number;
+  percentage: number;
+  channel?: string;
+  suggestedFilter: string;
+}
+
+// Grouped error/warning messages
+export interface ErrorGroup {
+  pattern: string;
+  sampleText: string;
+  count: number;
+  level: 'error' | 'warning';
+  channel?: string;
+  firstLine: number;
+  lastLine: number;
+}
+
+// Rare/anomalous message
+export interface Anomaly {
+  text: string;
+  lineNumber: number;
+  level?: string;
+  channel?: string;
+  reason: string; // Why it's considered anomalous
+}
+
+// Filter suggestion
+export interface FilterSuggestion {
+  id: string;
+  title: string;
+  description: string;
+  type: 'exclude' | 'include' | 'level';
+  filter: {
+    excludePatterns?: string[];
+    includePatterns?: string[];
+    levels?: string[];
+    channel?: string;
+  };
+}
+
+// Analysis insights - the useful stuff
+export interface AnalysisInsights {
+  noiseCandidates: NoiseCandidate[];
+  errorGroups: ErrorGroup[];
+  anomalies: Anomaly[];
+  filterSuggestions: FilterSuggestion[];
 }
 
 export interface AnalysisResult {
@@ -41,6 +107,8 @@ export interface AnalysisResult {
   timeRange?: { start: string; end: string };
   analyzerName: string;
   analyzedAt: number;
+  columnStats?: ColumnStats[];
+  insights?: AnalysisInsights;
 }
 
 // Base interface - all analyzers must implement this

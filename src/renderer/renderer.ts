@@ -33,6 +33,7 @@ interface PatternGroup {
   template: string;
   count: number;
   sampleLines: number[];
+  sampleText?: string;
   category: 'noise' | 'error' | 'warning' | 'info' | 'debug' | 'unknown';
 }
 
@@ -43,12 +44,75 @@ interface DuplicateGroup {
   lineNumbers: number[];
 }
 
+interface ColumnStatValue {
+  value: string;
+  count: number;
+  percentage: number;
+}
+
+interface ColumnStats {
+  name: string;
+  type: string;
+  topValues: ColumnStatValue[];
+  uniqueCount: number;
+}
+
+// Insight types for actionable analysis
+interface NoiseCandidate {
+  pattern: string;
+  sampleText: string;
+  count: number;
+  percentage: number;
+  channel?: string;
+  suggestedFilter: string;
+}
+
+interface ErrorGroup {
+  pattern: string;
+  sampleText: string;
+  count: number;
+  level: 'error' | 'warning';
+  channel?: string;
+  firstLine: number;
+  lastLine: number;
+}
+
+interface Anomaly {
+  text: string;
+  lineNumber: number;
+  level?: string;
+  channel?: string;
+  reason: string;
+}
+
+interface FilterSuggestion {
+  id: string;
+  title: string;
+  description: string;
+  type: 'exclude' | 'include' | 'level';
+  filter: {
+    excludePatterns?: string[];
+    includePatterns?: string[];
+    levels?: string[];
+    channel?: string;
+  };
+}
+
+interface AnalysisInsights {
+  noiseCandidates: NoiseCandidate[];
+  errorGroups: ErrorGroup[];
+  anomalies: Anomaly[];
+  filterSuggestions: FilterSuggestion[];
+}
+
 interface AnalysisResult {
   stats: FileStats;
   patterns: PatternGroup[];
   levelCounts: Record<string, number>;
   duplicateGroups: DuplicateGroup[];
   timeRange?: { start: string; end: string };
+  columnStats?: ColumnStats[];
+  insights?: AnalysisInsights;
 }
 
 interface FilterConfig {
@@ -59,6 +123,30 @@ interface FilterConfig {
   levels: string[];
   collapseDuplicates: boolean;
   timeRange?: { start: string; end: string };
+  contextLines?: number;
+  // Advanced filter support
+  advancedFilter?: AdvancedFilterConfig;
+}
+
+// Advanced Filter Types
+type FilterRuleType = 'contains' | 'not_contains' | 'level' | 'not_level' | 'regex' | 'not_regex';
+
+interface FilterRule {
+  id: string;
+  type: FilterRuleType;
+  value: string;
+  caseSensitive?: boolean;
+}
+
+interface FilterGroup {
+  id: string;
+  operator: 'AND' | 'OR';
+  rules: FilterRule[];
+}
+
+interface AdvancedFilterConfig {
+  enabled: boolean;
+  groups: FilterGroup[];
   contextLines?: number;
 }
 
@@ -145,6 +233,7 @@ interface AppState {
   filteredLines: number | null;
   isFiltered: boolean;
   activeLevelFilter: string | null;
+  appliedFilterSuggestion: { id: string; title: string } | null;
   searchResults: SearchResult[];
   currentSearchIndex: number;
   bookmarks: Bookmark[];
@@ -181,6 +270,7 @@ const state: AppState = {
   filteredLines: null,
   isFiltered: false,
   activeLevelFilter: null,
+  appliedFilterSuggestion: null,
   searchResults: [],
   currentSearchIndex: -1,
   bookmarks: [],
@@ -368,6 +458,34 @@ const elements = {
   sectionTerminal: document.getElementById('section-terminal') as HTMLDivElement,
   // Sidebar resize
   sidebarResizeHandle: document.getElementById('sidebar-resize-handle') as HTMLDivElement,
+  // Advanced Filter
+  btnAdvancedFilter: document.getElementById('btn-advanced-filter') as HTMLButtonElement,
+  advancedFilterModal: document.getElementById('advanced-filter-modal') as HTMLDivElement,
+  filterGroupsContainer: document.getElementById('filter-groups-container') as HTMLDivElement,
+  btnAddFilterGroup: document.getElementById('btn-add-filter-group') as HTMLButtonElement,
+  advancedContextLinesEnabled: document.getElementById('advanced-context-lines-enabled') as HTMLInputElement,
+  advancedContextLines: document.getElementById('advanced-context-lines') as HTMLInputElement,
+  btnApplyAdvancedFilter: document.getElementById('btn-apply-advanced-filter') as HTMLButtonElement,
+  btnClearAdvancedFilter: document.getElementById('btn-clear-advanced-filter') as HTMLButtonElement,
+  btnCancelAdvancedFilter: document.getElementById('btn-cancel-advanced-filter') as HTMLButtonElement,
+  // Time Gaps
+  timeGapThreshold: document.getElementById('time-gap-threshold') as HTMLInputElement,
+  btnDetectGaps: document.getElementById('btn-detect-gaps') as HTMLButtonElement,
+  btnCancelGaps: document.getElementById('btn-cancel-gaps') as HTMLButtonElement,
+  btnClearGaps: document.getElementById('btn-clear-gaps') as HTMLButtonElement,
+  timeGapProgress: document.getElementById('time-gap-progress') as HTMLDivElement,
+  timeGapProgressFill: document.getElementById('time-gap-progress-fill') as HTMLDivElement,
+  timeGapProgressText: document.getElementById('time-gap-progress-text') as HTMLSpanElement,
+  timeGapsList: document.getElementById('time-gaps-list') as HTMLDivElement,
+  timeGapStartLine: document.getElementById('time-gap-start-line') as HTMLInputElement,
+  timeGapEndLine: document.getElementById('time-gap-end-line') as HTMLInputElement,
+  timeGapStartPattern: document.getElementById('time-gap-start-pattern') as HTMLInputElement,
+  timeGapEndPattern: document.getElementById('time-gap-end-pattern') as HTMLInputElement,
+  // Time gap navigation
+  timeGapNav: document.getElementById('time-gap-nav') as HTMLDivElement,
+  btnPrevGap: document.getElementById('btn-prev-gap') as HTMLButtonElement,
+  btnNextGap: document.getElementById('btn-next-gap') as HTMLButtonElement,
+  gapNavPosition: document.getElementById('gap-nav-position') as HTMLSpanElement,
 };
 
 // Virtual Log Viewer
@@ -387,6 +505,14 @@ let terminal: any = null;
 let fitAddon: any = null;
 let terminalDataUnsubscribe: (() => void) | null = null;
 let terminalExitUnsubscribe: (() => void) | null = null;
+
+// Advanced Filter State
+let advancedFilterGroups: FilterGroup[] = [];
+
+// Generate unique ID for filter groups/rules
+function generateFilterId(): string {
+  return `f_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
 
 // LRU Cache for lines - better memory management
 class LRUCache<K, V> {
@@ -2393,6 +2519,10 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       state.currentNotesFile = null; // Reset notes file for new log file
       cachedLines.clear();
 
+      // Clear highlight navigation cache for new file
+      highlightMatches.clear();
+      highlightCurrentIndex.clear();
+
       // Load bookmarks from file open response (persisted per-file)
       if (result.bookmarks && Array.isArray(result.bookmarks)) {
         state.bookmarks = result.bookmarks;
@@ -2780,22 +2910,28 @@ function hideFilterModal(): void {
   elements.filterModal.classList.add('hidden');
 }
 
-async function applyFilter(): Promise<void> {
-  const levelCheckboxes = document.querySelectorAll<HTMLInputElement>(
-    'input[name="level"]:checked'
-  );
-  const levels = Array.from(levelCheckboxes).map((cb) => cb.value);
+async function applyFilter(providedConfig?: FilterConfig): Promise<void> {
+  let config: FilterConfig;
 
-  const config: FilterConfig = {
-    levels,
-    includePatterns: elements.includePatterns.value
-      .split('\n')
-      .filter((p) => p.trim()),
-    excludePatterns: elements.excludePatterns.value
-      .split('\n')
-      .filter((p) => p.trim()),
-    collapseDuplicates: elements.collapseDuplicates.checked,
-  };
+  if (providedConfig) {
+    config = providedConfig;
+  } else {
+    const levelCheckboxes = document.querySelectorAll<HTMLInputElement>(
+      'input[name="level"]:checked'
+    );
+    const levels = Array.from(levelCheckboxes).map((cb) => cb.value);
+
+    config = {
+      levels,
+      includePatterns: elements.includePatterns.value
+        .split('\n')
+        .filter((p) => p.trim()),
+      excludePatterns: elements.excludePatterns.value
+        .split('\n')
+        .filter((p) => p.trim()),
+      collapseDuplicates: elements.collapseDuplicates.checked,
+    };
+  }
 
   if (!state.analysisResult) {
     alert('Please run analysis first before applying filters.');
@@ -2834,6 +2970,7 @@ async function clearFilter(): Promise<void> {
   state.isFiltered = false;
   state.filteredLines = null;
   state.activeLevelFilter = null;
+  state.appliedFilterSuggestion = null;
   cachedLines.clear();
 
   // Clear backend filter state
@@ -2892,6 +3029,547 @@ function updateLevelBadgeStyles(): void {
       badge.classList.remove('active-filter');
     }
   });
+}
+
+// === Advanced Filter ===
+
+function showAdvancedFilterModal(): void {
+  // Initialize with one empty group if no groups exist
+  if (advancedFilterGroups.length === 0) {
+    addFilterGroup();
+  }
+  renderAdvancedFilterUI();
+  elements.filterModal.classList.add('hidden');
+  elements.advancedFilterModal.classList.remove('hidden');
+}
+
+function hideAdvancedFilterModal(): void {
+  elements.advancedFilterModal.classList.add('hidden');
+}
+
+function addFilterGroup(): void {
+  const newGroup: FilterGroup = {
+    id: generateFilterId(),
+    operator: 'OR',
+    rules: [{
+      id: generateFilterId(),
+      type: 'contains',
+      value: '',
+      caseSensitive: false,
+    }],
+  };
+  advancedFilterGroups.push(newGroup);
+  renderAdvancedFilterUI();
+}
+
+function removeFilterGroup(groupId: string): void {
+  advancedFilterGroups = advancedFilterGroups.filter(g => g.id !== groupId);
+  renderAdvancedFilterUI();
+}
+
+function addFilterRule(groupId: string): void {
+  const group = advancedFilterGroups.find(g => g.id === groupId);
+  if (group) {
+    group.rules.push({
+      id: generateFilterId(),
+      type: 'contains',
+      value: '',
+      caseSensitive: false,
+    });
+    renderAdvancedFilterUI();
+  }
+}
+
+function removeFilterRule(groupId: string, ruleId: string): void {
+  const group = advancedFilterGroups.find(g => g.id === groupId);
+  if (group) {
+    group.rules = group.rules.filter(r => r.id !== ruleId);
+    // Remove group if no rules left
+    if (group.rules.length === 0) {
+      removeFilterGroup(groupId);
+    } else {
+      renderAdvancedFilterUI();
+    }
+  }
+}
+
+function updateFilterGroupOperator(groupId: string, operator: 'AND' | 'OR'): void {
+  const group = advancedFilterGroups.find(g => g.id === groupId);
+  if (group) {
+    group.operator = operator;
+  }
+}
+
+function updateFilterRule(groupId: string, ruleId: string, updates: Partial<FilterRule>): void {
+  const group = advancedFilterGroups.find(g => g.id === groupId);
+  if (group) {
+    const rule = group.rules.find(r => r.id === ruleId);
+    if (rule) {
+      Object.assign(rule, updates);
+    }
+  }
+}
+
+function renderAdvancedFilterUI(): void {
+  const container = elements.filterGroupsContainer;
+  container.innerHTML = '';
+
+  advancedFilterGroups.forEach((group, groupIndex) => {
+    // Add AND connector between groups
+    if (groupIndex > 0) {
+      const connector = document.createElement('div');
+      connector.className = 'filter-group-connector';
+      connector.textContent = 'AND';
+      container.appendChild(connector);
+    }
+
+    const groupEl = document.createElement('div');
+    groupEl.className = 'filter-group-card';
+    groupEl.dataset.groupId = group.id;
+
+    groupEl.innerHTML = `
+      <div class="filter-group-header">
+        <span class="filter-group-title">Group ${groupIndex + 1}</span>
+        <div class="filter-group-controls">
+          <select class="filter-group-operator" data-group-id="${group.id}">
+            <option value="OR" ${group.operator === 'OR' ? 'selected' : ''}>OR (any match)</option>
+            <option value="AND" ${group.operator === 'AND' ? 'selected' : ''}>AND (all match)</option>
+          </select>
+          <button class="filter-group-remove" data-group-id="${group.id}" title="Remove group">&times;</button>
+        </div>
+      </div>
+      <div class="filter-rules-list">
+        ${group.rules.map(rule => renderFilterRuleHTML(group.id, rule)).join('')}
+      </div>
+      <button class="filter-add-rule-btn" data-group-id="${group.id}">+ Add Rule</button>
+    `;
+
+    container.appendChild(groupEl);
+  });
+
+  // Attach event listeners
+  attachAdvancedFilterEventListeners();
+}
+
+function renderFilterRuleHTML(groupId: string, rule: FilterRule): string {
+  const isLevelType = rule.type === 'level' || rule.type === 'not_level';
+  const showCaseSensitive = !isLevelType;
+
+  const levelOptions = ['error', 'warning', 'info', 'debug', 'trace']
+    .map(l => `<option value="${l}" ${rule.value === l ? 'selected' : ''}>${l}</option>`)
+    .join('');
+
+  const valueInput = isLevelType
+    ? `<select class="filter-rule-value level-select" data-group-id="${groupId}" data-rule-id="${rule.id}" data-field="value">
+        ${levelOptions}
+      </select>`
+    : `<input type="text" class="filter-rule-value" data-group-id="${groupId}" data-rule-id="${rule.id}" data-field="value"
+        value="${escapeHtml(rule.value)}" placeholder="Enter pattern...">`;
+
+  return `
+    <div class="filter-rule-row" data-rule-id="${rule.id}">
+      <select class="filter-rule-type" data-group-id="${groupId}" data-rule-id="${rule.id}">
+        <option value="contains" ${rule.type === 'contains' ? 'selected' : ''}>contains</option>
+        <option value="not_contains" ${rule.type === 'not_contains' ? 'selected' : ''}>not contains</option>
+        <option value="level" ${rule.type === 'level' ? 'selected' : ''}>level is</option>
+        <option value="not_level" ${rule.type === 'not_level' ? 'selected' : ''}>level is not</option>
+        <option value="regex" ${rule.type === 'regex' ? 'selected' : ''}>matches regex</option>
+        <option value="not_regex" ${rule.type === 'not_regex' ? 'selected' : ''}>not matches regex</option>
+      </select>
+      ${valueInput}
+      ${showCaseSensitive ? `
+        <div class="filter-rule-options">
+          <button class="filter-rule-case ${rule.caseSensitive ? 'active' : ''}"
+            data-group-id="${groupId}" data-rule-id="${rule.id}" title="Case sensitive">Aa</button>
+        </div>
+      ` : ''}
+      <button class="filter-rule-remove" data-group-id="${groupId}" data-rule-id="${rule.id}" title="Remove rule">&times;</button>
+    </div>
+  `;
+}
+
+function attachAdvancedFilterEventListeners(): void {
+  // Group operator change
+  elements.filterGroupsContainer.querySelectorAll('.filter-group-operator').forEach(el => {
+    el.addEventListener('change', (e) => {
+      const target = e.target as HTMLSelectElement;
+      const groupId = target.dataset.groupId!;
+      updateFilterGroupOperator(groupId, target.value as 'AND' | 'OR');
+    });
+  });
+
+  // Remove group
+  elements.filterGroupsContainer.querySelectorAll('.filter-group-remove').forEach(el => {
+    el.addEventListener('click', (e) => {
+      const target = e.target as HTMLButtonElement;
+      const groupId = target.dataset.groupId!;
+      removeFilterGroup(groupId);
+    });
+  });
+
+  // Add rule
+  elements.filterGroupsContainer.querySelectorAll('.filter-add-rule-btn').forEach(el => {
+    el.addEventListener('click', (e) => {
+      const target = e.target as HTMLButtonElement;
+      const groupId = target.dataset.groupId!;
+      addFilterRule(groupId);
+    });
+  });
+
+  // Rule type change
+  elements.filterGroupsContainer.querySelectorAll('.filter-rule-type').forEach(el => {
+    el.addEventListener('change', (e) => {
+      const target = e.target as HTMLSelectElement;
+      const groupId = target.dataset.groupId!;
+      const ruleId = target.dataset.ruleId!;
+      const newType = target.value as FilterRuleType;
+
+      // Reset value when switching to/from level type
+      const isNowLevel = newType === 'level' || newType === 'not_level';
+      const group = advancedFilterGroups.find(g => g.id === groupId);
+      const rule = group?.rules.find(r => r.id === ruleId);
+      const wasLevel = rule?.type === 'level' || rule?.type === 'not_level';
+
+      if (isNowLevel !== wasLevel) {
+        updateFilterRule(groupId, ruleId, {
+          type: newType,
+          value: isNowLevel ? 'error' : '',
+        });
+        renderAdvancedFilterUI();
+      } else {
+        updateFilterRule(groupId, ruleId, { type: newType });
+      }
+    });
+  });
+
+  // Rule value change
+  elements.filterGroupsContainer.querySelectorAll('.filter-rule-value').forEach(el => {
+    el.addEventListener('input', (e) => {
+      const target = e.target as HTMLInputElement | HTMLSelectElement;
+      const groupId = target.dataset.groupId!;
+      const ruleId = target.dataset.ruleId!;
+      updateFilterRule(groupId, ruleId, { value: target.value });
+    });
+    el.addEventListener('change', (e) => {
+      const target = e.target as HTMLInputElement | HTMLSelectElement;
+      const groupId = target.dataset.groupId!;
+      const ruleId = target.dataset.ruleId!;
+      updateFilterRule(groupId, ruleId, { value: target.value });
+    });
+  });
+
+  // Case sensitive toggle
+  elements.filterGroupsContainer.querySelectorAll('.filter-rule-case').forEach(el => {
+    el.addEventListener('click', (e) => {
+      const target = e.target as HTMLButtonElement;
+      const groupId = target.dataset.groupId!;
+      const ruleId = target.dataset.ruleId!;
+      const group = advancedFilterGroups.find(g => g.id === groupId);
+      const rule = group?.rules.find(r => r.id === ruleId);
+      if (rule) {
+        updateFilterRule(groupId, ruleId, { caseSensitive: !rule.caseSensitive });
+        target.classList.toggle('active');
+      }
+    });
+  });
+
+  // Remove rule
+  elements.filterGroupsContainer.querySelectorAll('.filter-rule-remove').forEach(el => {
+    el.addEventListener('click', (e) => {
+      const target = e.target as HTMLButtonElement;
+      const groupId = target.dataset.groupId!;
+      const ruleId = target.dataset.ruleId!;
+      removeFilterRule(groupId, ruleId);
+    });
+  });
+}
+
+async function applyAdvancedFilter(): Promise<void> {
+  // Validate that we have at least one group with rules
+  const validGroups = advancedFilterGroups.filter(g =>
+    g.rules.some(r => r.value.trim() !== '' || r.type === 'level' || r.type === 'not_level')
+  );
+
+  if (validGroups.length === 0) {
+    alert('Please add at least one filter rule with a value.');
+    return;
+  }
+
+  const contextEnabled = elements.advancedContextLinesEnabled.checked;
+  const contextLines = contextEnabled ? parseInt(elements.advancedContextLines.value) || 0 : 0;
+
+  const advancedConfig: AdvancedFilterConfig = {
+    enabled: true,
+    groups: validGroups,
+    contextLines,
+  };
+
+  const config: FilterConfig = {
+    levels: [],
+    includePatterns: [],
+    excludePatterns: [],
+    collapseDuplicates: false,
+    advancedFilter: advancedConfig,
+  };
+
+  showProgress('Applying advanced filter...');
+
+  try {
+    const result = await window.api.applyFilter(config);
+
+    if (result.success && result.stats) {
+      state.isFiltered = true;
+      state.filteredLines = result.stats.filteredLines;
+      state.activeLevelFilter = null;
+      cachedLines.clear();
+
+      // Reset scroll to top of filtered view
+      state.visibleStartLine = 0;
+      state.visibleEndLine = Math.min(100, state.filteredLines - 1);
+      if (logViewerElement) {
+        logViewerElement.scrollTop = 0;
+      }
+
+      hideAdvancedFilterModal();
+      await loadVisibleLines();
+      updateStatusBar();
+      updateLevelBadgeStyles();
+    } else {
+      alert(`Failed to apply filter: ${result.error}`);
+    }
+  } finally {
+    hideProgress();
+  }
+}
+
+function clearAdvancedFilter(): void {
+  advancedFilterGroups = [];
+  addFilterGroup();
+  renderAdvancedFilterUI();
+}
+
+// === Time Gap Detection ===
+
+interface TimeGap {
+  lineNumber: number;
+  prevLineNumber: number;
+  gapSeconds: number;
+  prevTimestamp: string;
+  currTimestamp: string;
+  linePreview: string;
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+  }
+  const hours = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+}
+
+interface TimeGapOptions {
+  thresholdSeconds: number;
+  startLine?: number;
+  endLine?: number;
+  startPattern?: string;
+  endPattern?: string;
+}
+
+let timeGapProgressUnsubscribe: (() => void) | null = null;
+
+// Time gap navigation state
+let currentTimeGaps: TimeGap[] = [];
+let currentGapIndex = -1;
+
+// Highlight navigation state (per highlight ID)
+const highlightMatches: Map<string, number[]> = new Map(); // highlightId -> line numbers
+const highlightCurrentIndex: Map<string, number> = new Map(); // highlightId -> current index
+
+async function detectTimeGaps(): Promise<void> {
+  if (!state.filePath) {
+    alert('Please open a log file first.');
+    return;
+  }
+
+  const options: TimeGapOptions = {
+    thresholdSeconds: parseInt(elements.timeGapThreshold.value) || 30,
+  };
+
+  // Get optional line range
+  const startLine = parseInt(elements.timeGapStartLine.value);
+  const endLine = parseInt(elements.timeGapEndLine.value);
+  if (startLine > 0) options.startLine = startLine;
+  if (endLine > 0) options.endLine = endLine;
+
+  // Get optional pattern range
+  const startPattern = elements.timeGapStartPattern.value.trim();
+  const endPattern = elements.timeGapEndPattern.value.trim();
+  if (startPattern) options.startPattern = startPattern;
+  if (endPattern) options.endPattern = endPattern;
+
+  // Show progress UI
+  elements.timeGapsList.innerHTML = '<p class="placeholder">Detecting time gaps...</p>';
+  elements.btnDetectGaps.classList.add('hidden');
+  elements.btnCancelGaps.classList.remove('hidden');
+  elements.timeGapProgress.classList.remove('hidden');
+  elements.timeGapProgressFill.style.width = '0%';
+  elements.timeGapProgressText.textContent = '0%';
+
+  // Subscribe to progress updates
+  timeGapProgressUnsubscribe = window.api.onTimeGapProgress((data) => {
+    elements.timeGapProgressFill.style.width = `${data.percent}%`;
+    elements.timeGapProgressText.textContent = `${data.percent}%`;
+  });
+
+  try {
+    const result = await window.api.detectTimeGaps(options);
+
+    if (result.success && result.gaps) {
+      renderTimeGaps(result.gaps, options);
+    } else if (result.error === 'Cancelled') {
+      elements.timeGapsList.innerHTML = '<p class="placeholder">Detection cancelled</p>';
+    } else {
+      elements.timeGapsList.innerHTML = `<p class="placeholder">${result.error || 'Failed to detect time gaps'}</p>`;
+    }
+  } catch (error) {
+    elements.timeGapsList.innerHTML = `<p class="placeholder">Error: ${error}</p>`;
+  } finally {
+    // Cleanup
+    if (timeGapProgressUnsubscribe) {
+      timeGapProgressUnsubscribe();
+      timeGapProgressUnsubscribe = null;
+    }
+    elements.btnDetectGaps.classList.remove('hidden');
+    elements.btnCancelGaps.classList.add('hidden');
+    elements.timeGapProgress.classList.add('hidden');
+  }
+}
+
+async function cancelTimeGaps(): Promise<void> {
+  await window.api.cancelTimeGaps();
+}
+
+function clearTimeGaps(): void {
+  elements.timeGapsList.innerHTML = '<p class="placeholder">Click Detect to find time gaps</p>';
+  // Clear range inputs
+  elements.timeGapStartLine.value = '';
+  elements.timeGapEndLine.value = '';
+  elements.timeGapStartPattern.value = '';
+  elements.timeGapEndPattern.value = '';
+  // Hide progress bar
+  const progressContainer = document.querySelector('.time-gap-progress') as HTMLElement;
+  if (progressContainer) {
+    progressContainer.style.display = 'none';
+  }
+  // Reset navigation state
+  currentTimeGaps = [];
+  currentGapIndex = -1;
+  elements.timeGapNav.classList.add('hidden');
+}
+
+function renderTimeGaps(gaps: TimeGap[], options?: TimeGapOptions): void {
+  // Store gaps for navigation
+  currentTimeGaps = gaps;
+  currentGapIndex = -1;
+
+  if (gaps.length === 0) {
+    let msg = 'No time gaps found exceeding threshold';
+    if (options?.startPattern || options?.endPattern || options?.startLine || options?.endLine) {
+      msg += ' in specified range';
+    }
+    elements.timeGapsList.innerHTML = `<p class="placeholder">${msg}</p>`;
+    elements.timeGapNav.classList.add('hidden');
+    return;
+  }
+
+  // Show navigation
+  elements.timeGapNav.classList.remove('hidden');
+  updateGapNavPosition();
+
+  // Build range info text
+  let rangeInfo = '';
+  if (options) {
+    const parts = [];
+    if (options.startLine || options.endLine) {
+      const start = options.startLine || 1;
+      const end = options.endLine || 'end';
+      parts.push(`lines ${start}-${end}`);
+    }
+    if (options.startPattern || options.endPattern) {
+      const start = options.startPattern || '(start)';
+      const end = options.endPattern || '(end)';
+      parts.push(`"${start}" to "${end}"`);
+    }
+    if (parts.length > 0) {
+      rangeInfo = `<div class="gap-range-info">Range: ${parts.join(', ')}</div>`;
+    }
+  }
+
+  const html = gaps.map((gap, index) => `
+    <div class="time-gap-item" data-line="${gap.lineNumber}" data-index="${index}">
+      <div class="gap-header">
+        <span class="gap-duration">${formatDuration(gap.gapSeconds)}</span>
+        <span class="gap-line">Line ${gap.lineNumber}</span>
+      </div>
+      <div class="gap-times">${gap.prevTimestamp} → ${gap.currTimestamp}</div>
+      <div class="gap-preview" title="${escapeHtml(gap.linePreview)}">${escapeHtml(gap.linePreview)}</div>
+    </div>
+  `).join('');
+
+  elements.timeGapsList.innerHTML = `<div class="gap-count">${gaps.length} gap${gaps.length > 1 ? 's' : ''} found</div>${rangeInfo}${html}`;
+
+  // Add click handlers to navigate to the line
+  elements.timeGapsList.querySelectorAll('.time-gap-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const index = parseInt((item as HTMLElement).dataset.index || '0');
+      const lineNumber = parseInt((item as HTMLElement).dataset.line || '0');
+      if (lineNumber > 0) {
+        currentGapIndex = index;
+        updateGapNavPosition();
+        highlightCurrentGapItem();
+        goToLine(lineNumber);
+      }
+    });
+  });
+}
+
+function updateGapNavPosition(): void {
+  const total = currentTimeGaps.length;
+  const current = currentGapIndex >= 0 ? currentGapIndex + 1 : 0;
+  elements.gapNavPosition.textContent = `${current}/${total}`;
+}
+
+function highlightCurrentGapItem(): void {
+  // Remove highlight from all items
+  elements.timeGapsList.querySelectorAll('.time-gap-item').forEach(item => {
+    item.classList.remove('active');
+  });
+  // Highlight current
+  if (currentGapIndex >= 0) {
+    const currentItem = elements.timeGapsList.querySelector(`.time-gap-item[data-index="${currentGapIndex}"]`);
+    if (currentItem) {
+      currentItem.classList.add('active');
+      currentItem.scrollIntoView({ block: 'nearest' });
+    }
+  }
+}
+
+function navigateGap(direction: 'prev' | 'next'): void {
+  if (currentTimeGaps.length === 0) return;
+
+  if (direction === 'next') {
+    currentGapIndex = (currentGapIndex + 1) % currentTimeGaps.length;
+  } else {
+    currentGapIndex = currentGapIndex <= 0 ? currentTimeGaps.length - 1 : currentGapIndex - 1;
+  }
+
+  updateGapNavPosition();
+  highlightCurrentGapItem();
+  goToLine(currentTimeGaps[currentGapIndex].lineNumber);
 }
 
 // Split File
@@ -3205,19 +3883,30 @@ function updateHighlightsUI(): void {
 
   elements.highlightsList.innerHTML = state.highlights
     .map(
-      (h) => `
+      (h) => {
+        const currentIdx = highlightCurrentIndex.get(h.id) ?? -1;
+        const matches = highlightMatches.get(h.id);
+        const total = matches?.length ?? 0;
+        const posText = total > 0 ? `${currentIdx + 1}/${total}` : '0/0';
+        return `
       <div class="highlight-item" data-id="${h.id}" title="${h.isGlobal ? 'Global - applies to all files' : 'Local - applies to this file only'}">
         <div class="highlight-preview">
           <span class="highlight-color" style="background-color: ${h.backgroundColor}"></span>
-          <span>${escapeHtml(h.pattern)}</span>
+          <span class="highlight-pattern">${escapeHtml(h.pattern)}</span>
           <span class="highlight-scope ${h.isGlobal ? 'global' : 'local'}">${h.isGlobal ? 'G' : 'L'}</span>
+        </div>
+        <div class="highlight-nav">
+          <button class="highlight-nav-btn highlight-prev" data-id="${h.id}" title="Previous match">◀</button>
+          <span class="highlight-nav-pos" data-id="${h.id}">${posText}</span>
+          <button class="highlight-nav-btn highlight-next" data-id="${h.id}" title="Next match">▶</button>
         </div>
         <div class="highlight-actions">
           <button class="highlight-toggle-global" data-id="${h.id}" title="${h.isGlobal ? 'Make local (this file only)' : 'Make global (all files)'}">${h.isGlobal ? '🌐' : '📄'}</button>
           <button class="highlight-delete" data-id="${h.id}" title="Delete">&times;</button>
         </div>
       </div>
-    `
+    `;
+      }
     )
     .join('');
 
@@ -3229,6 +3918,9 @@ function updateHighlightsUI(): void {
       const result = await window.api.removeHighlight(id);
       if (result.success) {
         state.highlights = state.highlights.filter((h) => h.id !== id);
+        // Clear navigation cache for this highlight
+        highlightMatches.delete(id);
+        highlightCurrentIndex.delete(id);
         updateHighlightsUI();
         renderVisibleLines();
       }
@@ -3243,6 +3935,79 @@ function updateHighlightsUI(): void {
       await toggleHighlightGlobal(id);
     });
   });
+
+  // Add click handlers for highlight navigation
+  elements.highlightsList.querySelectorAll('.highlight-prev').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = (e.target as HTMLElement).dataset.id!;
+      await navigateHighlight(id, 'prev');
+    });
+  });
+
+  elements.highlightsList.querySelectorAll('.highlight-next').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = (e.target as HTMLElement).dataset.id!;
+      await navigateHighlight(id, 'next');
+    });
+  });
+}
+
+async function navigateHighlight(highlightId: string, direction: 'prev' | 'next'): Promise<void> {
+  const highlight = state.highlights.find(h => h.id === highlightId);
+  if (!highlight || !state.filePath) return;
+
+  // Check if we have cached matches
+  let matches = highlightMatches.get(highlightId);
+
+  if (!matches) {
+    // Search for matches on-demand
+    const result = await window.api.search({
+      pattern: highlight.pattern,
+      isRegex: highlight.isRegex,
+      matchCase: highlight.matchCase,
+      wholeWord: highlight.wholeWord,
+    });
+
+    if (!result.success || !result.matches || result.matches.length === 0) {
+      // No matches found
+      highlightMatches.set(highlightId, []);
+      highlightCurrentIndex.set(highlightId, -1);
+      updateHighlightNavPosition(highlightId);
+      return;
+    }
+
+    // Store unique line numbers (sorted)
+    const lineNumbers = [...new Set(result.matches.map(m => m.lineNumber))].sort((a, b) => a - b);
+    highlightMatches.set(highlightId, lineNumbers);
+    matches = lineNumbers;
+  }
+
+  if (matches.length === 0) return;
+
+  let currentIdx = highlightCurrentIndex.get(highlightId) ?? -1;
+
+  if (direction === 'next') {
+    currentIdx = (currentIdx + 1) % matches.length;
+  } else {
+    currentIdx = currentIdx <= 0 ? matches.length - 1 : currentIdx - 1;
+  }
+
+  highlightCurrentIndex.set(highlightId, currentIdx);
+  updateHighlightNavPosition(highlightId);
+  goToLine(matches[currentIdx]);
+}
+
+function updateHighlightNavPosition(highlightId: string): void {
+  const posEl = elements.highlightsList.querySelector(`.highlight-nav-pos[data-id="${highlightId}"]`);
+  if (!posEl) return;
+
+  const matches = highlightMatches.get(highlightId);
+  const currentIdx = highlightCurrentIndex.get(highlightId) ?? -1;
+  const total = matches?.length ?? 0;
+  const posText = total > 0 ? `${currentIdx + 1}/${total}` : '0/0';
+  posEl.textContent = posText;
 }
 
 // UI Updates
@@ -3290,8 +4055,116 @@ function updateAnalysisUI(): void {
   }
   levelHtml += '</div>';
 
+  // Build column stats HTML
+  let columnStatsHtml = '';
+  if (result.columnStats && result.columnStats.length > 0) {
+    columnStatsHtml = result.columnStats.map(col => `
+      <div class="column-stat">
+        <div class="column-stat-header">
+          <span class="column-stat-name">${col.name}</span>
+          <span class="column-stat-count">${col.uniqueCount} unique</span>
+        </div>
+        <div class="column-stat-values">
+          ${col.topValues.slice(0, 5).map(v => `
+            <div class="column-value-row" title="${escapeHtml(v.value)}">
+              <span class="column-value-name">${escapeHtml(v.value.length > 30 ? v.value.substring(0, 30) + '...' : v.value)}</span>
+              <span class="column-value-bar" style="width: ${Math.max(v.percentage, 2)}%"></span>
+              <span class="column-value-count">${v.count.toLocaleString()} (${v.percentage}%)</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // Build insights HTML
+  let insightsHtml = '';
+  if (result.insights) {
+    const ins = result.insights;
+
+    // Filter Suggestions - most actionable, show first
+    if (ins.filterSuggestions.length > 0 || state.appliedFilterSuggestion) {
+      insightsHtml += `
+        <div class="insight-section filter-suggestions">
+          <div class="insight-header">💡 Suggested Filters</div>
+          ${state.appliedFilterSuggestion ? `
+            <div class="active-filter-indicator">
+              <span class="active-filter-label">Active: ${escapeHtml(state.appliedFilterSuggestion.title)}</span>
+              <button class="clear-filter-btn" id="clearSuggestedFilter">Clear</button>
+            </div>
+          ` : ''}
+          ${ins.filterSuggestions.map(s => `
+            <div class="filter-suggestion-item${state.appliedFilterSuggestion?.id === s.id ? ' applied' : ''}" data-filter-id="${s.id}" title="${escapeHtml(s.description)}">
+              <span class="filter-suggestion-title">${escapeHtml(s.title)}</span>
+              <button class="apply-filter-btn" data-filter-id="${s.id}"${state.appliedFilterSuggestion?.id === s.id ? ' disabled' : ''}>
+                ${state.appliedFilterSuggestion?.id === s.id ? 'Applied' : 'Apply'}
+              </button>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    // Noise Detection
+    if (ins.noiseCandidates.length > 0) {
+      insightsHtml += `
+        <div class="insight-section noise-section">
+          <div class="insight-header">🔇 Noise (${ins.noiseCandidates.length})</div>
+          ${ins.noiseCandidates.slice(0, 5).map(n => `
+            <div class="noise-item" title="${escapeHtml(n.sampleText)}">
+              <div class="noise-info">
+                <span class="noise-count">${n.count.toLocaleString()}× (${n.percentage}%)</span>
+                ${n.channel ? `<span class="noise-channel">${escapeHtml(n.channel)}</span>` : ''}
+              </div>
+              <div class="noise-pattern">${escapeHtml(n.pattern.length > 50 ? n.pattern.substring(0, 50) + '...' : n.pattern)}</div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    // Error Groups
+    if (ins.errorGroups.length > 0) {
+      insightsHtml += `
+        <div class="insight-section error-section">
+          <div class="insight-header">⚠️ Errors/Warnings (${ins.errorGroups.length})</div>
+          ${ins.errorGroups.slice(0, 10).map(e => `
+            <div class="error-group-item" data-line="${e.firstLine}" title="${escapeHtml(e.sampleText)}">
+              <div class="error-group-header">
+                <span class="level-badge ${e.level}">${e.level}</span>
+                <span class="error-count">${e.count}×</span>
+              </div>
+              <div class="error-pattern">${escapeHtml(e.pattern.length > 60 ? e.pattern.substring(0, 60) + '...' : e.pattern)}</div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    // Anomalies
+    if (ins.anomalies.length > 0) {
+      insightsHtml += `
+        <div class="insight-section anomaly-section">
+          <div class="insight-header">🔍 Anomalies (${ins.anomalies.length})</div>
+          ${ins.anomalies.slice(0, 5).map(a => `
+            <div class="anomaly-item" data-line="${a.lineNumber}" title="${escapeHtml(a.reason)}">
+              <div class="anomaly-header">
+                <span class="anomaly-line">Line ${a.lineNumber}</span>
+                ${a.level ? `<span class="level-badge ${a.level}">${a.level}</span>` : ''}
+              </div>
+              <div class="anomaly-text">${escapeHtml(a.text.length > 80 ? a.text.substring(0, 80) + '...' : a.text)}</div>
+              <div class="anomaly-reason">${escapeHtml(a.reason)}</div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+  }
+
   elements.analysisResults.innerHTML = `
     ${levelHtml}
+    ${columnStatsHtml}
+    ${insightsHtml}
     ${
       result.timeRange
         ? `
@@ -3325,21 +4198,76 @@ function updateAnalysisUI(): void {
     });
   });
 
+  // Click handlers for error groups - navigate to first occurrence
+  elements.analysisResults.querySelectorAll('.error-group-item').forEach((item) => {
+    item.addEventListener('click', () => {
+      const line = parseInt((item as HTMLElement).dataset.line || '0', 10);
+      if (line > 0) goToLine(line);
+    });
+  });
+
+  // Click handlers for anomalies - navigate to line
+  elements.analysisResults.querySelectorAll('.anomaly-item').forEach((item) => {
+    item.addEventListener('click', () => {
+      const line = parseInt((item as HTMLElement).dataset.line || '0', 10);
+      if (line > 0) goToLine(line);
+    });
+  });
+
+  // Click handlers for filter suggestions
+  elements.analysisResults.querySelectorAll('.apply-filter-btn').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const filterId = (btn as HTMLElement).dataset.filterId;
+      if (!filterId || !result.insights) return;
+
+      const suggestion = result.insights.filterSuggestions.find(s => s.id === filterId);
+      if (!suggestion) return;
+
+      // Track which filter suggestion was applied
+      state.appliedFilterSuggestion = { id: suggestion.id, title: suggestion.title };
+
+      // Apply the suggested filter
+      const filterConfig: FilterConfig = {
+        excludePatterns: suggestion.filter.excludePatterns || [],
+        includePatterns: suggestion.filter.includePatterns || [],
+        levels: suggestion.filter.levels || [],
+        collapseDuplicates: false
+      };
+
+      await applyFilter(filterConfig);
+
+      // Refresh the UI to show applied state
+      updateAnalysisUI();
+    });
+  });
+
+  // Click handler for clear suggested filter button
+  const clearSuggestedFilterBtn = document.getElementById('clearSuggestedFilter');
+  if (clearSuggestedFilterBtn) {
+    clearSuggestedFilterBtn.addEventListener('click', async () => {
+      state.appliedFilterSuggestion = null;
+      await clearFilter();
+      updateAnalysisUI();
+    });
+  }
+
   // Patterns
   if (result.patterns.length === 0) {
     elements.patternsList.innerHTML =
       '<p class="placeholder">No patterns detected</p>';
   } else {
     elements.patternsList.innerHTML = result.patterns
-      .slice(0, 20)
+      .slice(0, 30)
       .map(
         (p) => `
-        <div class="pattern-item" data-lines="${p.sampleLines.join(',')}">
-          <span class="category ${p.category}">${p.category}</span>
-          <span class="count">${p.count.toLocaleString()} occurrences</span>
-          <div class="template">${escapeHtml(p.template.substring(0, 100))}${
-          p.template.length > 100 ? '...' : ''
-        }</div>
+        <div class="pattern-item" data-lines="${p.sampleLines.join(',')}" title="Click to go to first occurrence">
+          <div class="pattern-header">
+            <span class="category ${p.category}">${p.category}</span>
+            <span class="count">${p.count.toLocaleString()}x</span>
+          </div>
+          <div class="pattern-keywords">${escapeHtml(p.template)}</div>
+          ${p.sampleText ? `<div class="pattern-sample">${escapeHtml(p.sampleText)}</div>` : ''}
         </div>
       `
       )
@@ -4159,8 +5087,25 @@ function init(): void {
 
   // Filter
   elements.btnFilter.addEventListener('click', showFilterModal);
-  elements.btnApplyFilter.addEventListener('click', applyFilter);
+  elements.btnApplyFilter.addEventListener('click', () => applyFilter());
   elements.btnClearFilter.addEventListener('click', clearFilter);
+
+  // Advanced Filter
+  elements.btnAdvancedFilter.addEventListener('click', showAdvancedFilterModal);
+  elements.btnAddFilterGroup.addEventListener('click', addFilterGroup);
+  elements.btnApplyAdvancedFilter.addEventListener('click', applyAdvancedFilter);
+  elements.btnClearAdvancedFilter.addEventListener('click', clearAdvancedFilter);
+  elements.btnCancelAdvancedFilter.addEventListener('click', hideAdvancedFilterModal);
+  elements.advancedContextLinesEnabled.addEventListener('change', () => {
+    elements.advancedContextLines.disabled = !elements.advancedContextLinesEnabled.checked;
+  });
+
+  // Time Gap Detection
+  elements.btnDetectGaps.addEventListener('click', detectTimeGaps);
+  elements.btnCancelGaps.addEventListener('click', cancelTimeGaps);
+  elements.btnClearGaps.addEventListener('click', clearTimeGaps);
+  elements.btnPrevGap.addEventListener('click', () => navigateGap('prev'));
+  elements.btnNextGap.addEventListener('click', () => navigateGap('next'));
 
   // Analysis
   elements.btnAnalyze.addEventListener('click', analyzeFile);

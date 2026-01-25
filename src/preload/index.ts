@@ -156,6 +156,19 @@ const api = {
   clearFilter: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('clear-filter'),
 
+  // Time Gap Detection
+  detectTimeGaps: (options: { thresholdSeconds: number; startLine?: number; endLine?: number; startPattern?: string; endPattern?: string }): Promise<{ success: boolean; gaps?: Array<{ lineNumber: number; prevLineNumber: number; gapSeconds: number; prevTimestamp: string; currTimestamp: string; linePreview: string }>; totalLines?: number; error?: string }> =>
+    ipcRenderer.invoke('detect-time-gaps', options),
+
+  cancelTimeGaps: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('cancel-time-gaps'),
+
+  onTimeGapProgress: (callback: (data: { percent: number }) => void): (() => void) => {
+    const handler = (_: any, data: { percent: number }) => callback(data);
+    ipcRenderer.on('time-gap-progress', handler);
+    return () => ipcRenderer.removeListener('time-gap-progress', handler);
+  },
+
   onAnalyzeProgress: (callback: (data: { phase: string; percent: number; message?: string }) => void): (() => void) => {
     const handler = (_: any, data: { phase: string; percent: number; message?: string }) => callback(data);
     ipcRenderer.on('analyze-progress', handler);

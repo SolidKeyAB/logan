@@ -50,6 +50,7 @@ interface LogCluster {
   template: string[];        // The log template (tokens with <*> for variables)
   count: number;             // Number of logs matching this pattern
   sampleLines: number[];     // Sample line numbers
+  sampleText?: string;       // First sample log line for display
   level?: string;            // Detected log level
 }
 
@@ -220,7 +221,7 @@ export class DrainAnalyzer implements LogAnalyzer {
         if (this.clusterCount < MAX_CLUSTERS) {
           const tokens = tokenize(trimmed);
           if (tokens.length > 0 && tokens.length < 100) {
-            this.addLogMessage(tokens, lineNumber, level);
+            this.addLogMessage(tokens, lineNumber, level, trimmed);
           }
         }
 
@@ -253,13 +254,22 @@ export class DrainAnalyzer implements LogAnalyzer {
     // Build pattern groups
     const patterns: PatternGroup[] = allClusters
       .filter(c => c.count > 1)
-      .map(cluster => ({
-        pattern: cluster.template.join(' '),
-        template: cluster.template.join(' '),
-        count: cluster.count,
-        sampleLines: cluster.sampleLines.slice(0, 5),
-        category: categorizePattern(cluster.template, cluster.level)
-      }))
+      .map(cluster => {
+        // Create human-readable template: extract key fixed tokens
+        const keyTokens = cluster.template.filter(t => t !== PARAM_TOKEN && t.length > 2);
+        const readableTemplate = keyTokens.length > 0
+          ? keyTokens.slice(0, 8).join(' ')  // Show up to 8 key tokens
+          : cluster.template.slice(0, 5).join(' ');
+
+        return {
+          pattern: cluster.template.join(' '),
+          template: readableTemplate,
+          count: cluster.count,
+          sampleLines: cluster.sampleLines.slice(0, 5),
+          sampleText: cluster.sampleText,
+          category: categorizePattern(cluster.template, cluster.level)
+        };
+      })
       .sort((a, b) => b.count - a.count)
       .slice(0, maxPatterns);
 
@@ -303,7 +313,7 @@ export class DrainAnalyzer implements LogAnalyzer {
     };
   }
 
-  private addLogMessage(tokens: string[], lineNumber: number, level?: string): void {
+  private addLogMessage(tokens: string[], lineNumber: number, level?: string, originalLine?: string): void {
     const len = tokens.length;
 
     // Get or create length bucket
@@ -357,10 +367,14 @@ export class DrainAnalyzer implements LogAnalyzer {
       }
     } else {
       // Create new cluster
+      const sampleText = originalLine
+        ? (originalLine.length > 150 ? originalLine.substring(0, 150) + '...' : originalLine)
+        : undefined;
       const newCluster: LogCluster = {
         template: tokens.map(t => isVariable(t) ? PARAM_TOKEN : t),
         count: 1,
         sampleLines: [lineNumber],
+        sampleText,
         level
       };
       node.clusters.push(newCluster);

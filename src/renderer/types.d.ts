@@ -193,8 +193,13 @@ interface Api {
   listAnalyzers: () => Promise<{ success: boolean; analyzers?: Array<{ name: string; description: string }> }>;
   analyzeFile: (analyzerName?: string, options?: AnalyzerOptions) => Promise<{ success: boolean; result?: AnalysisResult; error?: string }>;
   cancelAnalysis: () => Promise<{ success: boolean }>;
-  applyFilter: (config: FilterConfig) => Promise<{ success: boolean; stats?: { filteredLines: number }; error?: string }>;
+  applyFilter: (config: any) => Promise<{ success: boolean; stats?: { filteredLines: number }; error?: string }>;
   clearFilter: () => Promise<{ success: boolean }>;
+
+  // Time Gap Detection
+  detectTimeGaps: (options: { thresholdSeconds: number; startLine?: number; endLine?: number; startPattern?: string; endPattern?: string }) => Promise<{ success: boolean; gaps?: Array<{ lineNumber: number; prevLineNumber: number; gapSeconds: number; prevTimestamp: string; currTimestamp: string; linePreview: string }>; totalLines?: number; error?: string }>;
+  cancelTimeGaps: () => Promise<{ success: boolean }>;
+  onTimeGapProgress: (callback: (data: { percent: number }) => void) => () => void;
 
   // Column Analysis
   analyzeColumns: () => Promise<{ success: boolean; analysis?: ColumnAnalysis; error?: string }>;

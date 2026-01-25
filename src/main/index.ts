@@ -1232,12 +1232,85 @@ ipcMain.handle('cancel-analysis', async () => {
 
 // === Filter ===
 
+// Advanced Filter Types
+type FilterRuleType = 'contains' | 'not_contains' | 'level' | 'not_level' | 'regex' | 'not_regex';
+
+interface FilterRule {
+  id: string;
+  type: FilterRuleType;
+  value: string;
+  caseSensitive?: boolean;
+}
+
+interface FilterGroup {
+  id: string;
+  operator: 'AND' | 'OR';
+  rules: FilterRule[];
+}
+
+interface AdvancedFilterConfig {
+  enabled: boolean;
+  groups: FilterGroup[];
+  contextLines?: number;
+}
+
 interface FilterConfig {
   levels: string[];
   includePatterns: string[];
   excludePatterns: string[];
   collapseDuplicates: boolean;
   contextLines?: number;
+  advancedFilter?: AdvancedFilterConfig;
+}
+
+// Compile advanced filter for performance - pre-compile regex and prepare matchers
+type CompiledMatcher = (text: string, level: string) => boolean;
+
+function compileAdvancedFilter(config: AdvancedFilterConfig): CompiledMatcher {
+  const compiledGroups = config.groups.map(group => {
+    const compiledRules = group.rules.map(rule => {
+      // Pre-compile regex if needed
+      if (rule.type === 'regex' || rule.type === 'not_regex') {
+        try {
+          const regex = new RegExp(rule.value, rule.caseSensitive ? '' : 'i');
+          return rule.type === 'regex'
+            ? (text: string, _level: string) => regex.test(text)
+            : (text: string, _level: string) => !regex.test(text);
+        } catch {
+          // Invalid regex - return matcher that always fails/passes
+          return rule.type === 'regex'
+            ? (_text: string, _level: string) => false
+            : (_text: string, _level: string) => true;
+        }
+      }
+
+      // Pre-lowercase for contains
+      const pattern = rule.caseSensitive ? rule.value : rule.value.toLowerCase();
+
+      switch (rule.type) {
+        case 'contains':
+          return (text: string, _level: string) =>
+            (rule.caseSensitive ? text : text.toLowerCase()).includes(pattern);
+        case 'not_contains':
+          return (text: string, _level: string) =>
+            !(rule.caseSensitive ? text : text.toLowerCase()).includes(pattern);
+        case 'level':
+          return (_text: string, level: string) => level === rule.value;
+        case 'not_level':
+          return (_text: string, level: string) => level !== rule.value;
+        default:
+          return (_text: string, _level: string) => true;
+      }
+    });
+
+    // Return group evaluator
+    return group.operator === 'AND'
+      ? (text: string, level: string) => compiledRules.every(fn => fn(text, level))
+      : (text: string, level: string) => compiledRules.some(fn => fn(text, level));
+  });
+
+  // Groups are AND'd together
+  return (text: string, level: string) => compiledGroups.every(fn => fn(text, level));
 }
 
 ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
@@ -1249,7 +1322,17 @@ ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
   try {
     const totalLines = handler.getTotalLines();
     const matchingLines: Set<number> = new Set();
-    const contextLines = config.contextLines || 0;
+
+    // Check if advanced filter is enabled
+    const useAdvancedFilter = config.advancedFilter?.enabled && config.advancedFilter.groups.length > 0;
+    const contextLines = useAdvancedFilter
+      ? (config.advancedFilter?.contextLines || 0)
+      : (config.contextLines || 0);
+
+    // Compile advanced filter if enabled
+    const advancedMatcher = useAdvancedFilter
+      ? compileAdvancedFilter(config.advancedFilter!)
+      : null;
 
     // Process in batches for performance
     const batchSize = 10000;
@@ -1259,33 +1342,40 @@ ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
 
       for (const line of lines) {
         let matches = true;
+        const lineLevel = line.level || 'other';
 
-        // Level filter
-        if (config.levels.length > 0) {
-          const lineLevel = line.level || 'other';
-          matches = config.levels.includes(lineLevel);
-        }
+        if (useAdvancedFilter && advancedMatcher) {
+          // Use advanced filter
+          matches = advancedMatcher(line.text, lineLevel);
+        } else {
+          // Use basic filter
 
-        // Include patterns (OR logic)
-        if (matches && config.includePatterns.length > 0) {
-          matches = config.includePatterns.some(pattern => {
-            try {
-              return new RegExp(pattern, 'i').test(line.text);
-            } catch {
-              return line.text.toLowerCase().includes(pattern.toLowerCase());
-            }
-          });
-        }
+          // Level filter
+          if (config.levels.length > 0) {
+            matches = config.levels.includes(lineLevel);
+          }
 
-        // Exclude patterns (AND logic - all must not match)
-        if (matches && config.excludePatterns.length > 0) {
-          matches = !config.excludePatterns.some(pattern => {
-            try {
-              return new RegExp(pattern, 'i').test(line.text);
-            } catch {
-              return line.text.toLowerCase().includes(pattern.toLowerCase());
-            }
-          });
+          // Include patterns (OR logic)
+          if (matches && config.includePatterns.length > 0) {
+            matches = config.includePatterns.some(pattern => {
+              try {
+                return new RegExp(pattern, 'i').test(line.text);
+              } catch {
+                return line.text.toLowerCase().includes(pattern.toLowerCase());
+              }
+            });
+          }
+
+          // Exclude patterns (AND logic - all must not match)
+          if (matches && config.excludePatterns.length > 0) {
+            matches = !config.excludePatterns.some(pattern => {
+              try {
+                return new RegExp(pattern, 'i').test(line.text);
+              } catch {
+                return line.text.toLowerCase().includes(pattern.toLowerCase());
+              }
+            });
+          }
         }
 
         if (matches) {
@@ -1324,6 +1414,261 @@ ipcMain.handle('clear-filter', async () => {
   if (currentFilePath) {
     filterState.delete(currentFilePath);
   }
+  return { success: true };
+});
+
+// === Time Gap Detection ===
+
+interface TimeGap {
+  lineNumber: number;
+  prevLineNumber: number;
+  gapSeconds: number;
+  prevTimestamp: string;
+  currTimestamp: string;
+  linePreview: string;
+}
+
+// Timestamp patterns for parsing
+const TIME_GAP_PATTERNS = [
+  // ISO format: 2024-01-25T10:00:01 or 2024-01-25 10:00:01
+  /(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/,
+  // European format: DD.MM.YYYY HH:mm:ss (e.g., 02.01.2026 18:16:01.061)
+  /(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/,
+  // Syslog format: Jan 25 10:00:01 (assumes current year)
+  /([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})/,
+];
+
+const MONTH_MAP: Record<string, number> = {
+  'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5,
+  'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11
+};
+
+function parseTimestamp(text: string): Date | null {
+  const sample = text.length > 100 ? text.substring(0, 100) : text;
+
+  // Try ISO format first
+  const isoMatch = sample.match(TIME_GAP_PATTERNS[0]);
+  if (isoMatch) {
+    const [, year, month, day, hour, min, sec] = isoMatch;
+    return new Date(
+      parseInt(year), parseInt(month) - 1, parseInt(day),
+      parseInt(hour), parseInt(min), parseInt(sec)
+    );
+  }
+
+  // Try European format: DD.MM.YYYY HH:mm:ss
+  const euroMatch = sample.match(TIME_GAP_PATTERNS[1]);
+  if (euroMatch) {
+    const [, day, month, year, hour, min, sec] = euroMatch;
+    return new Date(
+      parseInt(year), parseInt(month) - 1, parseInt(day),
+      parseInt(hour), parseInt(min), parseInt(sec)
+    );
+  }
+
+  // Try syslog format
+  const syslogMatch = sample.match(TIME_GAP_PATTERNS[2]);
+  if (syslogMatch) {
+    const [, monthStr, day, hour, min, sec] = syslogMatch;
+    const month = MONTH_MAP[monthStr];
+    if (month !== undefined) {
+      const now = new Date();
+      return new Date(
+        now.getFullYear(), month, parseInt(day),
+        parseInt(hour), parseInt(min), parseInt(sec)
+      );
+    }
+  }
+
+  return null;
+}
+
+function extractTimestampString(text: string): string | null {
+  const sample = text.length > 100 ? text.substring(0, 100) : text;
+  for (const pattern of TIME_GAP_PATTERNS) {
+    const match = sample.match(pattern);
+    if (match) return match[0];
+  }
+  return null;
+}
+
+interface TimeGapOptions {
+  thresholdSeconds: number;
+  startLine?: number;
+  endLine?: number;
+  startPattern?: string;
+  endPattern?: string;
+}
+
+// Cancellation signal for time gap detection
+let timeGapSignal = { cancelled: false };
+
+// Helper to yield to event loop - use setTimeout for better yielding
+const yieldToEventLoop = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+
+// Optimized timestamp parser - pre-compiled regex
+const ISO_TIMESTAMP_REGEX = /(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/;
+const EURO_TIMESTAMP_REGEX = /(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/;
+const SYSLOG_TIMESTAMP_REGEX = /([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})/;
+
+function parseTimestampFast(text: string): { date: Date; str: string } | null {
+  // Check first 60 chars for performance (enough for most timestamp formats)
+  const sample = text.length > 60 ? text.substring(0, 60) : text;
+
+  // Try ISO format first (most common)
+  const isoMatch = sample.match(ISO_TIMESTAMP_REGEX);
+  if (isoMatch) {
+    const [match, year, month, day, hour, min, sec] = isoMatch;
+    return {
+      date: new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hour), parseInt(min), parseInt(sec)),
+      str: match,
+    };
+  }
+
+  // Try European format: DD.MM.YYYY HH:mm:ss
+  const euroMatch = sample.match(EURO_TIMESTAMP_REGEX);
+  if (euroMatch) {
+    const [match, day, month, year, hour, min, sec] = euroMatch;
+    return {
+      date: new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hour), parseInt(min), parseInt(sec)),
+      str: match,
+    };
+  }
+
+  // Try syslog format
+  const syslogMatch = sample.match(SYSLOG_TIMESTAMP_REGEX);
+  if (syslogMatch) {
+    const [match, monthStr, day, hour, min, sec] = syslogMatch;
+    const month = MONTH_MAP[monthStr];
+    if (month !== undefined) {
+      return {
+        date: new Date(new Date().getFullYear(), month, parseInt(day), parseInt(hour), parseInt(min), parseInt(sec)),
+        str: match,
+      };
+    }
+  }
+
+  return null;
+}
+
+ipcMain.handle('detect-time-gaps', async (_, options: TimeGapOptions) => {
+  const handler = getFileHandler();
+  if (!handler || !currentFilePath) {
+    return { success: false, error: 'No file open' };
+  }
+
+  // Reset cancellation signal
+  timeGapSignal = { cancelled: false };
+
+  try {
+    const totalLines = handler.getTotalLines();
+    const gaps: TimeGap[] = [];
+    const MAX_GAPS = 500; // Lower limit for faster response
+
+    const thresholdSeconds = options.thresholdSeconds || 30;
+
+    // Determine the line range to scan
+    let scanStartLine = 0;
+    let scanEndLine = totalLines - 1;
+    let inRange = !options.startPattern;
+    let foundStartPattern = false;
+    let foundEndPattern = false;
+
+    if (options.startLine && options.startLine > 0) {
+      scanStartLine = options.startLine - 1;
+      inRange = !options.startPattern;
+    }
+    if (options.endLine && options.endLine > 0) {
+      scanEndLine = Math.min(options.endLine - 1, totalLines - 1);
+    }
+
+    let prevTimestamp: Date | null = null;
+    let prevTimestampStr: string | null = null;
+    let prevLineNumber = 0;
+
+    // Adaptive batch size based on file size
+    const linesToScan = scanEndLine - scanStartLine + 1;
+    const batchSize = linesToScan > 100000 ? 2000 : 5000;
+    let processedLines = 0;
+    let lastProgressUpdate = Date.now();
+
+    for (let start = scanStartLine; start <= scanEndLine && gaps.length < MAX_GAPS; start += batchSize) {
+      // Check for cancellation
+      if (timeGapSignal.cancelled) {
+        return { success: false, error: 'Cancelled' };
+      }
+
+      const count = Math.min(batchSize, scanEndLine - start + 1);
+      const lines = handler.getLines(start, count);
+
+      for (const line of lines) {
+        if (options.startPattern && !foundStartPattern) {
+          if (line.text.includes(options.startPattern)) {
+            foundStartPattern = true;
+            inRange = true;
+          }
+        }
+
+        if (options.endPattern && inRange && !foundEndPattern) {
+          if (line.text.includes(options.endPattern)) {
+            foundEndPattern = true;
+          }
+        }
+
+        if (!inRange) continue;
+
+        const parsed = parseTimestampFast(line.text);
+
+        if (parsed && prevTimestamp) {
+          const diffSeconds = (parsed.date.getTime() - prevTimestamp.getTime()) / 1000;
+
+          if (Math.abs(diffSeconds) >= thresholdSeconds) {
+            gaps.push({
+              lineNumber: line.lineNumber,
+              prevLineNumber: prevLineNumber,
+              gapSeconds: Math.abs(diffSeconds),
+              prevTimestamp: prevTimestampStr || '',
+              currTimestamp: parsed.str,
+              linePreview: line.text.length > 80 ? line.text.substring(0, 80) + '...' : line.text,
+            });
+
+            if (gaps.length >= MAX_GAPS) break;
+          }
+        }
+
+        if (parsed) {
+          prevTimestamp = parsed.date;
+          prevTimestampStr = parsed.str;
+          prevLineNumber = line.lineNumber;
+        }
+
+        if (foundEndPattern) break;
+      }
+
+      if (foundEndPattern || gaps.length >= MAX_GAPS) break;
+
+      processedLines += count;
+
+      // Yield and send progress every 50ms to keep UI responsive
+      const now = Date.now();
+      if (now - lastProgressUpdate > 50) {
+        await yieldToEventLoop();
+        const progress = Math.round((processedLines / linesToScan) * 100);
+        mainWindow?.webContents.send('time-gap-progress', { percent: progress });
+        lastProgressUpdate = now;
+      }
+    }
+
+    gaps.sort((a, b) => b.gapSeconds - a.gapSeconds);
+
+    return { success: true, gaps, totalLines };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('cancel-time-gaps', async () => {
+  timeGapSignal.cancelled = true;
   return { success: true };
 });
 

@@ -135,6 +135,55 @@
           </div>
         </div>
 
+        <!-- Time Gaps Section -->
+        <div class="sidebar-section" id="section-time-gaps">
+          <div class="section-header" data-section="time-gaps">
+            <span class="section-title">Time Gaps</span>
+            <span class="section-toggle">&#9660;</span>
+          </div>
+          <div class="section-content">
+            <div class="time-gap-controls">
+              <label class="time-gap-label">
+                Threshold:
+                <input type="number" id="time-gap-threshold" class="time-gap-input" value="30" min="1"> sec
+              </label>
+              <button id="btn-detect-gaps" class="secondary-btn small">Detect</button>
+              <button id="btn-cancel-gaps" class="secondary-btn small danger hidden">Cancel</button>
+              <button id="btn-clear-gaps" class="secondary-btn small">Clear</button>
+            </div>
+            <div id="time-gap-nav" class="nav-controls hidden">
+              <button id="btn-prev-gap" class="nav-btn" title="Previous gap">◀</button>
+              <span id="gap-nav-position" class="nav-position">0/0</span>
+              <button id="btn-next-gap" class="nav-btn" title="Next gap">▶</button>
+            </div>
+            <div id="time-gap-progress" class="time-gap-progress hidden">
+              <div class="progress-bar-mini">
+                <div id="time-gap-progress-fill" class="progress-fill-mini"></div>
+              </div>
+              <span id="time-gap-progress-text" class="progress-text-mini">0%</span>
+            </div>
+            <div class="time-gap-range">
+              <div class="range-row">
+                <label class="range-label">Lines:</label>
+                <input type="number" id="time-gap-start-line" class="range-input" placeholder="Start" min="1">
+                <span class="range-separator">-</span>
+                <input type="number" id="time-gap-end-line" class="range-input" placeholder="End" min="1">
+              </div>
+              <div class="range-row">
+                <label class="range-label">Between:</label>
+                <input type="text" id="time-gap-start-pattern" class="range-pattern-input" placeholder="Start pattern (e.g. 10:00:00)">
+              </div>
+              <div class="range-row">
+                <label class="range-label">and:</label>
+                <input type="text" id="time-gap-end-pattern" class="range-pattern-input" placeholder="End pattern (e.g. 11:00:00)">
+              </div>
+            </div>
+            <div id="time-gaps-list" class="time-gaps-content">
+              <p class="placeholder">Click Detect to find time gaps</p>
+            </div>
+          </div>
+        </div>
+
         <!-- Bookmarks Section -->
         <div class="sidebar-section" id="section-bookmarks">
           <div class="section-header" data-section="bookmarks">
@@ -269,7 +318,40 @@
         </div>
         <div class="modal-footer">
           <button id="btn-clear-filter" class="secondary-btn">Clear Filter</button>
+          <button id="btn-advanced-filter" class="secondary-btn">Advanced</button>
           <button id="btn-apply-filter" class="primary-btn">Apply Filter</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Advanced Filter Modal -->
+    <div id="advanced-filter-modal" class="modal hidden">
+      <div class="modal-content advanced-filter-modal-content">
+        <div class="modal-header">
+          <h3>Advanced Filter</h3>
+          <button class="modal-close" data-modal="advanced-filter-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="advanced-filter-description">
+            Create complex filter expressions. Groups are combined with AND. Rules within a group use the group's operator (AND/OR).
+          </div>
+          <div id="filter-groups-container" class="filter-groups-container">
+            <!-- Filter groups will be rendered here dynamically -->
+          </div>
+          <button id="btn-add-filter-group" class="add-btn">+ Add Group</button>
+
+          <div class="filter-group" style="margin-top: 16px;">
+            <label class="checkbox-label">
+              <input type="checkbox" id="advanced-context-lines-enabled">
+              Include context lines:
+              <input type="number" id="advanced-context-lines" class="context-lines-input" value="3" min="0" max="50" disabled>
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-clear-advanced-filter" class="secondary-btn">Clear</button>
+          <button id="btn-cancel-advanced-filter" class="secondary-btn">Cancel</button>
+          <button id="btn-apply-advanced-filter" class="primary-btn">Apply Filter</button>
         </div>
       </div>
     </div>
