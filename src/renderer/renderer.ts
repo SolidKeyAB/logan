@@ -355,6 +355,77 @@ function applySettings(): void {
 // Word wrap setting
 let wordWrapEnabled = false;
 
+// JSON formatting setting
+let jsonFormattingEnabled = false;
+
+// Check if text contains JSON
+function containsJson(text: string): boolean {
+  // Quick check for JSON-like content
+  return text.includes('{') && text.includes('}');
+}
+
+// Format JSON with syntax highlighting
+function formatJsonContent(text: string): string {
+  // Try to find JSON objects or arrays in the line
+  const jsonPattern = /(\{[\s\S]*\}|\[[\s\S]*\])/g;
+  let result = '';
+  let lastIndex = 0;
+  let match;
+
+  while ((match = jsonPattern.exec(text)) !== null) {
+    // Add text before the JSON
+    result += escapeHtml(text.slice(lastIndex, match.index));
+
+    try {
+      // Try to parse and format the JSON
+      const jsonStr = match[1];
+      const parsed = JSON.parse(jsonStr);
+      const formatted = syntaxHighlightJson(JSON.stringify(parsed, null, 2));
+      result += `<span class="json-block">${formatted}</span>`;
+    } catch {
+      // Not valid JSON, just escape it
+      result += escapeHtml(match[1]);
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Add remaining text
+  result += escapeHtml(text.slice(lastIndex));
+  return result;
+}
+
+// Apply syntax highlighting to JSON string
+function syntaxHighlightJson(json: string): string {
+  // Escape HTML first
+  json = json
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // Apply syntax highlighting
+  return json.replace(
+    /("(\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+    (match) => {
+      let cls = 'json-number';
+      if (/^"/.test(match)) {
+        if (/:$/.test(match)) {
+          cls = 'json-key';
+          // Remove the colon from the match for cleaner display
+          return `<span class="${cls}">${match.slice(0, -1)}</span>:`;
+        } else {
+          cls = 'json-string';
+        }
+      } else if (/true|false/.test(match)) {
+        cls = 'json-boolean';
+      } else if (/null/.test(match)) {
+        cls = 'json-null';
+      }
+      return `<span class="${cls}">${match}</span>`;
+    }
+  );
+}
+
 // Markdown preview
 let isMarkdownFile = false;
 let markdownPreviewMode = true; // Start in preview mode for md files
@@ -438,6 +509,7 @@ const elements = {
   // Columns
   btnColumns: document.getElementById('btn-columns') as HTMLButtonElement,
   btnWordWrap: document.getElementById('btn-word-wrap') as HTMLButtonElement,
+  btnJsonFormat: document.getElementById('btn-json-format') as HTMLButtonElement,
   columnsModal: document.getElementById('columns-modal') as HTMLDivElement,
   columnsLoading: document.getElementById('columns-loading') as HTMLDivElement,
   columnsContent: document.getElementById('columns-content') as HTMLDivElement,
@@ -1115,9 +1187,15 @@ function createLineElementPooled(line: LogLine): HTMLDivElement {
   // Create content using innerHTML for speed (single parse)
   const lineNumHtml = `<span class="line-number">${line.lineNumber + 1}</span>`;
   const displayText = applyColumnFilter(line.text);
-  // Apply search highlights and manual highlights together
-  const searchResult = applySearchHighlightsRaw(displayText, line.lineNumber);
-  const contentHtml = `<span class="line-content">${applyHighlightsWithSearch(displayText, searchResult.searchRanges)}</span>`;
+
+  let formattedContent: string;
+  if (jsonFormattingEnabled && containsJson(displayText)) {
+    formattedContent = formatJsonContent(displayText);
+  } else {
+    const searchResult = applySearchHighlightsRaw(displayText, line.lineNumber);
+    formattedContent = applyHighlightsWithSearch(displayText, searchResult.searchRanges);
+  }
+  const contentHtml = `<span class="line-content">${formattedContent}</span>`;
   div.innerHTML = lineNumHtml + contentHtml;
 
   return div;
@@ -1157,10 +1235,16 @@ function createLineElement(line: LogLine): HTMLDivElement {
 
   // Apply column filter, then search highlights, then manual highlights
   const displayText = applyColumnFilter(line.text);
-  // Apply search highlights first (on raw text), returns { html, hasSearchMatch }
-  const searchResult = applySearchHighlightsRaw(displayText, line.lineNumber);
-  // Then apply manual highlights (escapes HTML and adds highlight spans)
-  const finalHtml = applyHighlightsWithSearch(displayText, searchResult.searchRanges);
+
+  let finalHtml: string;
+  if (jsonFormattingEnabled && containsJson(displayText)) {
+    // JSON formatting takes precedence - apply JSON syntax highlighting
+    finalHtml = formatJsonContent(displayText);
+  } else {
+    // Normal highlighting pipeline
+    const searchResult = applySearchHighlightsRaw(displayText, line.lineNumber);
+    finalHtml = applyHighlightsWithSearch(displayText, searchResult.searchRanges);
+  }
   contentSpan.innerHTML = finalHtml;
 
   div.appendChild(lineNumSpan);
@@ -5168,6 +5252,15 @@ function init(): void {
 
   // Word wrap
   elements.btnWordWrap.addEventListener('click', toggleMarkdownPreview);
+
+  // JSON formatting toggle
+  elements.btnJsonFormat.addEventListener('click', () => {
+    jsonFormattingEnabled = !jsonFormattingEnabled;
+    elements.btnJsonFormat.classList.toggle('active', jsonFormattingEnabled);
+    // Re-render visible lines with new formatting
+    cachedLines.clear();
+    loadVisibleLines();
+  });
 
   // Split mode and value change handlers
   document.querySelectorAll('input[name="split-mode"]').forEach((radio) => {

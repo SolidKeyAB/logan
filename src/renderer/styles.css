@@ -1401,6 +1401,41 @@ body {
   border-color: rgba(255, 165, 0, 0.8);
 }
 
+/* JSON Syntax Highlighting */
+.json-block {
+  display: inline;
+  white-space: pre-wrap;
+}
+
+.json-key {
+  color: #9cdcfe;
+  font-weight: 500;
+}
+
+.json-string {
+  color: #ce9178;
+}
+
+.json-number {
+  color: #b5cea8;
+}
+
+.json-boolean {
+  color: #569cd6;
+  font-weight: 500;
+}
+
+.json-null {
+  color: #569cd6;
+  font-style: italic;
+}
+
+/* JSON toggle button active state */
+#btn-json-format.active {
+  background-color: var(--accent-color);
+  color: white;
+}
+
 /* Status Bar */
 .status-bar {
   display: flex;
