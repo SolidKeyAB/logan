@@ -1647,6 +1647,56 @@ body {
   margin-top: 4px;
 }
 
+/* Settings styles */
+.settings-group {
+  margin-bottom: 16px;
+}
+
+.settings-group label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.slider-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  outline: none;
+}
+
+.settings-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: var(--accent-color);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.settings-slider::-webkit-slider-thumb:hover {
+  background: var(--accent-hover);
+}
+
+.slider-value {
+  min-width: 40px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
 .split-preview {
   padding: 10px;
   background-color: var(--bg-tertiary);

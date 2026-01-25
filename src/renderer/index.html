@@ -44,6 +44,7 @@
         <button id="btn-word-wrap" class="toolbar-btn" title="Toggle word wrap (⌥Z)">Wrap</button>
       </div>
       <div class="toolbar-right">
+        <button id="btn-settings" class="toolbar-btn small" title="Settings">&#9881;</button>
         <button id="btn-help" class="toolbar-btn small" title="Keyboard shortcuts & help (F1)">&#9432;</button>
         <button id="btn-toggle-sidebar" class="toolbar-btn small" title="Toggle sidebar">&#9776;</button>
       </div>
@@ -588,6 +589,50 @@
         <div class="modal-footer">
           <button id="btn-cancel-notes" class="secondary-btn">Cancel</button>
           <button id="btn-save-notes" class="primary-btn">Save to Notes</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal hidden">
+      <div class="modal-content" style="width: 400px;">
+        <div class="modal-header">
+          <h3>Settings</h3>
+          <button class="modal-close" data-modal="settings-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="settings-group">
+            <label for="scroll-speed">Scroll Speed</label>
+            <div class="slider-container">
+              <input type="range" id="scroll-speed" min="10" max="100" value="30" class="settings-slider">
+              <span id="scroll-speed-value" class="slider-value">30%</span>
+            </div>
+            <p class="hint">Adjusts trackpad scroll sensitivity (default: 30%)</p>
+          </div>
+          <div class="settings-group">
+            <label for="default-font-size">Default Font Size</label>
+            <div class="slider-container">
+              <input type="range" id="default-font-size" min="10" max="20" value="13" class="settings-slider">
+              <span id="default-font-size-value" class="slider-value">13px</span>
+            </div>
+          </div>
+          <div class="settings-group">
+            <label for="default-gap-threshold">Default Time Gap Threshold</label>
+            <div class="slider-container">
+              <input type="range" id="default-gap-threshold" min="1" max="60" value="5" class="settings-slider">
+              <span id="default-gap-threshold-value" class="slider-value">5s</span>
+            </div>
+          </div>
+          <div class="settings-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="auto-analyze"> Auto-analyze when opening files
+            </label>
+            <p class="hint">Automatically run analysis when a file is opened</p>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-reset-settings" class="secondary-btn">Reset to Defaults</button>
+          <button id="btn-close-settings" class="primary-btn">Close</button>
         </div>
       </div>
     </div>

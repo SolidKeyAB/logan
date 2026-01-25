@@ -308,6 +308,50 @@ const ZOOM_MAX = 200;
 const ZOOM_STEP = 10;
 let zoomLevel = 100; // Percentage (100 = default)
 
+// User settings (persisted to localStorage)
+interface UserSettings {
+  scrollSpeed: number;        // 10-100, percentage
+  defaultFontSize: number;    // 10-20, pixels
+  defaultGapThreshold: number; // 1-60, seconds
+  autoAnalyze: boolean;
+}
+
+const DEFAULT_SETTINGS: UserSettings = {
+  scrollSpeed: 30,
+  defaultFontSize: 13,
+  defaultGapThreshold: 5,
+  autoAnalyze: false
+};
+
+let userSettings: UserSettings = { ...DEFAULT_SETTINGS };
+
+function loadSettings(): void {
+  try {
+    const saved = localStorage.getItem('logan-settings');
+    if (saved) {
+      userSettings = { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+    }
+  } catch {
+    userSettings = { ...DEFAULT_SETTINGS };
+  }
+}
+
+function saveSettings(): void {
+  localStorage.setItem('logan-settings', JSON.stringify(userSettings));
+}
+
+function applySettings(): void {
+  // Apply default font size to zoom level
+  const fontSizeRatio = userSettings.defaultFontSize / BASE_FONT_SIZE;
+  zoomLevel = Math.round(fontSizeRatio * 100);
+
+  // Update gap threshold input if it exists
+  const gapInput = document.getElementById('gap-threshold') as HTMLInputElement;
+  if (gapInput) {
+    gapInput.value = userSettings.defaultGapThreshold.toString();
+  }
+}
+
 // Word wrap setting
 let wordWrapEnabled = false;
 
@@ -435,6 +479,18 @@ const elements = {
   btnHelp: document.getElementById('btn-help') as HTMLButtonElement,
   helpModal: document.getElementById('help-modal') as HTMLDivElement,
   btnCloseHelp: document.getElementById('btn-close-help') as HTMLButtonElement,
+  // Settings
+  btnSettings: document.getElementById('btn-settings') as HTMLButtonElement,
+  settingsModal: document.getElementById('settings-modal') as HTMLDivElement,
+  scrollSpeedSlider: document.getElementById('scroll-speed') as HTMLInputElement,
+  scrollSpeedValue: document.getElementById('scroll-speed-value') as HTMLSpanElement,
+  defaultFontSizeSlider: document.getElementById('default-font-size') as HTMLInputElement,
+  defaultFontSizeValue: document.getElementById('default-font-size-value') as HTMLSpanElement,
+  defaultGapThresholdSlider: document.getElementById('default-gap-threshold') as HTMLInputElement,
+  defaultGapThresholdValue: document.getElementById('default-gap-threshold-value') as HTMLSpanElement,
+  autoAnalyzeCheckbox: document.getElementById('auto-analyze') as HTMLInputElement,
+  btnResetSettings: document.getElementById('btn-reset-settings') as HTMLButtonElement,
+  btnCloseSettings: document.getElementById('btn-close-settings') as HTMLButtonElement,
   // Bookmark modal
   bookmarkModal: document.getElementById('bookmark-modal') as HTMLDivElement,
   bookmarkModalTitle: document.getElementById('bookmark-modal-title') as HTMLHeadingElement,
@@ -695,9 +751,8 @@ function createLogViewer(): void {
     let delta = e.deltaY;
 
     if (e.deltaMode === 0) {
-      // Pixel-based scrolling (trackpad) - reduce speed significantly
-      // Trackpads send high-frequency small deltas, reduce by ~3x
-      delta = delta * 0.3;
+      // Pixel-based scrolling (trackpad) - use user's scroll speed setting
+      delta = delta * (userSettings.scrollSpeed / 100);
     } else if (e.deltaMode === 1) {
       // Line-based scrolling (mouse wheel) - convert to pixels
       delta = delta * getLineHeight();
@@ -2635,6 +2690,12 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
         updateProgress(percent);
         updateProgressText(`Building minimap... ${percent}%`);
       });
+
+      // Auto-analyze if enabled in settings
+      if (userSettings.autoAnalyze && !isMarkdownFile) {
+        hideProgress();
+        await analyzeFile();
+      }
     } else {
       alert(`Failed to open file: ${result.error}`);
     }
@@ -4975,6 +5036,10 @@ async function checkSearchEngine(): Promise<void> {
 const GITHUB_URL = 'https://github.com/SolidKeyAB/logan';
 
 function init(): void {
+  // Load user settings from localStorage
+  loadSettings();
+  applySettings();
+
   // Check search engine on startup
   checkSearchEngine();
 
@@ -5132,6 +5197,67 @@ function init(): void {
   });
   elements.btnCloseHelp.addEventListener('click', () => {
     elements.helpModal.classList.add('hidden');
+  });
+
+  // Settings modal
+  elements.btnSettings.addEventListener('click', () => {
+    // Load current settings into UI
+    elements.scrollSpeedSlider.value = userSettings.scrollSpeed.toString();
+    elements.scrollSpeedValue.textContent = `${userSettings.scrollSpeed}%`;
+    elements.defaultFontSizeSlider.value = userSettings.defaultFontSize.toString();
+    elements.defaultFontSizeValue.textContent = `${userSettings.defaultFontSize}px`;
+    elements.defaultGapThresholdSlider.value = userSettings.defaultGapThreshold.toString();
+    elements.defaultGapThresholdValue.textContent = `${userSettings.defaultGapThreshold}s`;
+    elements.autoAnalyzeCheckbox.checked = userSettings.autoAnalyze;
+    elements.settingsModal.classList.remove('hidden');
+  });
+
+  elements.scrollSpeedSlider.addEventListener('input', () => {
+    const value = parseInt(elements.scrollSpeedSlider.value, 10);
+    elements.scrollSpeedValue.textContent = `${value}%`;
+    userSettings.scrollSpeed = value;
+    saveSettings();
+  });
+
+  elements.defaultFontSizeSlider.addEventListener('input', () => {
+    const value = parseInt(elements.defaultFontSizeSlider.value, 10);
+    elements.defaultFontSizeValue.textContent = `${value}px`;
+    userSettings.defaultFontSize = value;
+    saveSettings();
+  });
+
+  elements.defaultGapThresholdSlider.addEventListener('input', () => {
+    const value = parseInt(elements.defaultGapThresholdSlider.value, 10);
+    elements.defaultGapThresholdValue.textContent = `${value}s`;
+    userSettings.defaultGapThreshold = value;
+    saveSettings();
+    // Update the gap threshold input if visible
+    const gapInput = document.getElementById('gap-threshold') as HTMLInputElement;
+    if (gapInput) {
+      gapInput.value = value.toString();
+    }
+  });
+
+  elements.autoAnalyzeCheckbox.addEventListener('change', () => {
+    userSettings.autoAnalyze = elements.autoAnalyzeCheckbox.checked;
+    saveSettings();
+  });
+
+  elements.btnResetSettings.addEventListener('click', () => {
+    userSettings = { ...DEFAULT_SETTINGS };
+    saveSettings();
+    // Update UI
+    elements.scrollSpeedSlider.value = userSettings.scrollSpeed.toString();
+    elements.scrollSpeedValue.textContent = `${userSettings.scrollSpeed}%`;
+    elements.defaultFontSizeSlider.value = userSettings.defaultFontSize.toString();
+    elements.defaultFontSizeValue.textContent = `${userSettings.defaultFontSize}px`;
+    elements.defaultGapThresholdSlider.value = userSettings.defaultGapThreshold.toString();
+    elements.defaultGapThresholdValue.textContent = `${userSettings.defaultGapThreshold}s`;
+    elements.autoAnalyzeCheckbox.checked = userSettings.autoAnalyze;
+  });
+
+  elements.btnCloseSettings.addEventListener('click', () => {
+    elements.settingsModal.classList.add('hidden');
   });
 
   // Bookmark modal
