@@ -1760,6 +1760,49 @@ ipcMain.handle('split-file', async (_, options: SplitOptions) => {
   }
 });
 
+// === Format JSON File ===
+
+ipcMain.handle('format-json-file', async (_, filePath: string) => {
+  try {
+    // Get file size first
+    const stats = fs.statSync(filePath);
+    console.log(`[JSON Format] File size: ${stats.size} bytes`);
+
+    // Read the original file
+    const content = fs.readFileSync(filePath, 'utf-8');
+    console.log(`[JSON Format] Content length: ${content.length} characters`);
+
+    // Try to parse as JSON
+    const parsed = JSON.parse(content);
+    console.log(`[JSON Format] Parsed successfully, type: ${Array.isArray(parsed) ? 'array' : typeof parsed}`);
+    if (Array.isArray(parsed)) {
+      console.log(`[JSON Format] Array length: ${parsed.length}`);
+    }
+
+    // Pretty-print with 2-space indentation
+    const formatted = JSON.stringify(parsed, null, 2);
+    console.log(`[JSON Format] Formatted length: ${formatted.length} characters`);
+
+    // Generate output path
+    const dir = path.dirname(filePath);
+    const baseName = path.basename(filePath, path.extname(filePath));
+    const ext = path.extname(filePath);
+    const formattedPath = path.join(dir, `${baseName}.formatted${ext}`);
+
+    // Write formatted file
+    fs.writeFileSync(formattedPath, formatted, 'utf-8');
+
+    // Verify written file
+    const writtenStats = fs.statSync(formattedPath);
+    console.log(`[JSON Format] Written file size: ${writtenStats.size} bytes`);
+
+    return { success: true, formattedPath };
+  } catch (error) {
+    console.error(`[JSON Format] Error:`, error);
+    return { success: false, error: String(error) };
+  }
+});
+
 // === Terminal ===
 
 let ptyProcess: pty.IPty | null = null;

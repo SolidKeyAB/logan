@@ -1402,9 +1402,8 @@ body {
 }
 
 /* JSON Syntax Highlighting */
-.json-block {
-  display: inline;
-  white-space: pre-wrap;
+.json-inline {
+  /* Inline JSON highlighting */
 }
 
 .json-key {
@@ -1428,6 +1427,26 @@ body {
 .json-null {
   color: #569cd6;
   font-style: italic;
+}
+
+/* JSON mode - natural flowing layout with pre-wrap */
+.virtual-log-viewer.json-mode .log-line {
+  position: relative !important;
+  transform: none !important;
+  height: auto !important;
+  min-height: var(--line-height, 20px);
+  align-items: flex-start;
+  contain: none;
+  will-change: auto;
+}
+
+.virtual-log-viewer.json-mode .line-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.virtual-log-viewer.json-mode .log-content {
+  height: auto !important;
 }
 
 /* JSON toggle button active state */

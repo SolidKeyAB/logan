@@ -179,6 +179,10 @@ const api = {
   openExternalUrl: (url: string): Promise<void> =>
     ipcRenderer.invoke('open-external-url', url),
 
+  // JSON formatting
+  formatJsonFile: (filePath: string): Promise<{ success: boolean; formattedPath?: string; error?: string }> =>
+    ipcRenderer.invoke('format-json-file', filePath),
+
   // Terminal
   terminalCreate: (options?: { cwd?: string; cols?: number; rows?: number }): Promise<{ success: boolean; pid?: number; error?: string }> =>
     ipcRenderer.invoke('terminal-create', options),

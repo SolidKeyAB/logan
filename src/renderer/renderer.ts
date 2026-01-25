@@ -357,73 +357,128 @@ let wordWrapEnabled = false;
 
 // JSON formatting setting
 let jsonFormattingEnabled = false;
+let jsonOriginalFile: string | null = null; // Track original file when viewing formatted JSON
 
 // Check if text contains JSON
 function containsJson(text: string): boolean {
   // Quick check for JSON-like content
-  return text.includes('{') && text.includes('}');
+  const trimmed = text.trim();
+  const firstChar = trimmed[0];
+  return firstChar === '{' || firstChar === '[';
 }
 
 // Format JSON with syntax highlighting
-function formatJsonContent(text: string): string {
-  // Try to find JSON objects or arrays in the line
-  const jsonPattern = /(\{[\s\S]*\}|\[[\s\S]*\])/g;
-  let result = '';
-  let lastIndex = 0;
-  let match;
+// If skipSyntaxHighlight is true, just pretty-print without colors (for use with user highlights)
+function formatJsonContent(text: string, skipSyntaxHighlight: boolean = false): string {
+  // Simple approach: try to parse the entire line as JSON
+  const trimmed = text.trim();
 
-  while ((match = jsonPattern.exec(text)) !== null) {
-    // Add text before the JSON
-    result += escapeHtml(text.slice(lastIndex, match.index));
-
-    try {
-      // Try to parse and format the JSON
-      const jsonStr = match[1];
-      const parsed = JSON.parse(jsonStr);
-      const formatted = syntaxHighlightJson(JSON.stringify(parsed, null, 2));
-      result += `<span class="json-block">${formatted}</span>`;
-    } catch {
-      // Not valid JSON, just escape it
-      result += escapeHtml(match[1]);
+  try {
+    const parsed = JSON.parse(trimmed);
+    const prettyJson = JSON.stringify(parsed, null, 2);
+    if (skipSyntaxHighlight) {
+      // Return raw pretty-printed JSON - no escaping needed, will be escaped by caller
+      return prettyJson;
+    } else {
+      // Apply syntax highlighting - this escapes HTML internally
+      return syntaxHighlightJson(prettyJson);
     }
-
-    lastIndex = match.index + match[0].length;
+  } catch {
+    // Not valid JSON, return escaped original
+    if (skipSyntaxHighlight) {
+      return text;
+    } else {
+      return escapeHtml(text);
+    }
   }
-
-  // Add remaining text
-  result += escapeHtml(text.slice(lastIndex));
-  return result;
 }
 
-// Apply syntax highlighting to JSON string
-function syntaxHighlightJson(json: string): string {
-  // Escape HTML first
-  json = json
+// Escape HTML without sanitization (for pre-validated content like JSON)
+function escapeHtmlSimple(text: string): string {
+  return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
 
-  // Apply syntax highlighting
-  return json.replace(
-    /("(\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
-    (match) => {
-      let cls = 'json-number';
-      if (/^"/.test(match)) {
-        if (/:$/.test(match)) {
-          cls = 'json-key';
-          // Remove the colon from the match for cleaner display
-          return `<span class="${cls}">${match.slice(0, -1)}</span>:`;
+// Simple JSON syntax highlighter using character scanning (no regex backtracking)
+function syntaxHighlightJson(json: string): string {
+  let result = '';
+  let i = 0;
+
+  while (i < json.length) {
+    const char = json[i];
+
+    // String (key or value)
+    if (char === '"') {
+      const start = i;
+      i++; // skip opening quote
+      while (i < json.length && json[i] !== '"') {
+        if (json[i] === '\\' && i + 1 < json.length) {
+          i += 2; // skip escaped char
         } else {
-          cls = 'json-string';
+          i++;
         }
-      } else if (/true|false/.test(match)) {
-        cls = 'json-boolean';
-      } else if (/null/.test(match)) {
-        cls = 'json-null';
       }
-      return `<span class="${cls}">${match}</span>`;
+      i++; // skip closing quote
+      const str = json.slice(start, i);
+      const escaped = str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+      // Check if it's a key (followed by colon)
+      let j = i;
+      while (j < json.length && (json[j] === ' ' || json[j] === '\t')) j++;
+      if (json[j] === ':') {
+        result += `<span class="json-key">${escaped}</span>`;
+      } else {
+        result += `<span class="json-string">${escaped}</span>`;
+      }
+      continue;
     }
-  );
+
+    // Number
+    if (char === '-' || (char >= '0' && char <= '9')) {
+      const start = i;
+      if (char === '-') i++;
+      while (i < json.length && json[i] >= '0' && json[i] <= '9') i++;
+      if (i < json.length && json[i] === '.') {
+        i++;
+        while (i < json.length && json[i] >= '0' && json[i] <= '9') i++;
+      }
+      if (i < json.length && (json[i] === 'e' || json[i] === 'E')) {
+        i++;
+        if (i < json.length && (json[i] === '+' || json[i] === '-')) i++;
+        while (i < json.length && json[i] >= '0' && json[i] <= '9') i++;
+      }
+      result += `<span class="json-number">${json.slice(start, i)}</span>`;
+      continue;
+    }
+
+    // true/false/null keywords
+    if (json.slice(i, i + 4) === 'true') {
+      result += '<span class="json-boolean">true</span>';
+      i += 4;
+      continue;
+    }
+    if (json.slice(i, i + 5) === 'false') {
+      result += '<span class="json-boolean">false</span>';
+      i += 5;
+      continue;
+    }
+    if (json.slice(i, i + 4) === 'null') {
+      result += '<span class="json-null">null</span>';
+      i += 4;
+      continue;
+    }
+
+    // Structural characters and whitespace - escape and pass through
+    const escaped = char === '<' ? '&lt;' : char === '>' ? '&gt;' : char === '&' ? '&amp;' : char;
+    result += escaped;
+    i++;
+  }
+
+  return result;
 }
 
 // Markdown preview
@@ -894,6 +949,12 @@ function lineToScrollTop(lineNumber: number): number {
 function handleScroll(): void {
   if (!logViewerElement || !logContentElement) return;
 
+  // In JSON mode, content flows naturally - just update minimap
+  if (jsonFormattingEnabled) {
+    updateMinimapViewport();
+    return;
+  }
+
   // Render immediately with cached data for responsive feel
   // Only defer the data loading part
   const scrollTop = logViewerElement.scrollTop;
@@ -937,6 +998,12 @@ function handleScroll(): void {
 
 function performScrollUpdate(): void {
   if (!logViewerElement || !logContentElement) return;
+
+  // In JSON mode, content flows naturally - skip virtual scroll calculations
+  if (jsonFormattingEnabled) {
+    updateMinimapViewport();
+    return;
+  }
 
   const scrollTop = logViewerElement.scrollTop;
   const containerHeight = logViewerElement.clientHeight;
@@ -1122,9 +1189,9 @@ function renderVisibleLines(): void {
 
       // Use transform for GPU-accelerated positioning (smoother scrolling)
       // Note: no right:0 to allow horizontal scroll expansion
-      if (wordWrapEnabled) {
-        // Word wrap mode: use relative positioning for natural flow
-        lineElement.style.cssText = `position:relative;white-space:pre-wrap;word-break:break-all;`;
+      if (wordWrapEnabled || jsonFormattingEnabled) {
+        // Word wrap or JSON mode: use relative positioning for natural flow
+        lineElement.style.cssText = `position:relative;white-space:pre-wrap;word-break:break-word;`;
       } else {
         lineElement.style.cssText = `position:absolute;top:0;left:0;transform:translateY(${top}px);will-change:transform;white-space:pre;`;
       }
@@ -1145,8 +1212,8 @@ function renderVisibleLines(): void {
   logContentElement.appendChild(fragment);
 
   // Set content size for scrolling
-  if (wordWrapEnabled) {
-    // Word wrap mode: let content flow naturally
+  if (wordWrapEnabled || jsonFormattingEnabled) {
+    // Word wrap or JSON mode: let content flow naturally
     logContentElement.style.height = 'auto';
     logContentElement.style.minWidth = '';
   } else {
@@ -1154,9 +1221,13 @@ function renderVisibleLines(): void {
     logContentElement.style.minWidth = `${Math.max(maxContentWidth, logViewerElement.clientWidth)}px`;
   }
 
-  // Restore horizontal scroll position
+  // Restore scroll positions
   if (scrollLeft > 0) {
     logViewerElement.scrollLeft = scrollLeft;
+  }
+  // In JSON mode, preserve vertical scroll position after re-render
+  if (jsonFormattingEnabled && scrollTop > 0) {
+    logViewerElement.scrollTop = scrollTop;
   }
 }
 
@@ -1188,9 +1259,21 @@ function createLineElementPooled(line: LogLine): HTMLDivElement {
   const lineNumHtml = `<span class="line-number">${line.lineNumber + 1}</span>`;
   const displayText = applyColumnFilter(line.text);
 
+  // Check if there are active highlights or search
+  const hasActiveHighlights = state.highlights.length > 0 || state.searchResults.length > 0;
+
   let formattedContent: string;
   if (jsonFormattingEnabled && containsJson(displayText)) {
-    formattedContent = formatJsonContent(displayText);
+    if (hasActiveHighlights) {
+      // Pretty-print JSON first, then apply highlights to the formatted text
+      const prettyText = formatJsonContent(displayText, true);
+      const searchResult = applySearchHighlightsRaw(prettyText, line.lineNumber);
+      // Use simple escaping for JSON - no truncation since JSON.parse validated the content
+      formattedContent = applyHighlightsWithSearchJson(prettyText, searchResult.searchRanges);
+    } else {
+      // Full JSON formatting with syntax highlighting (already escaped internally)
+      formattedContent = formatJsonContent(displayText);
+    }
   } else {
     const searchResult = applySearchHighlightsRaw(displayText, line.lineNumber);
     formattedContent = applyHighlightsWithSearch(displayText, searchResult.searchRanges);
@@ -1236,12 +1319,22 @@ function createLineElement(line: LogLine): HTMLDivElement {
   // Apply column filter, then search highlights, then manual highlights
   const displayText = applyColumnFilter(line.text);
 
+  // Check if there are active highlights or search
+  const hasActiveHighlights = state.highlights.length > 0 || state.searchResults.length > 0;
+
   let finalHtml: string;
   if (jsonFormattingEnabled && containsJson(displayText)) {
-    // JSON formatting takes precedence - apply JSON syntax highlighting
-    finalHtml = formatJsonContent(displayText);
+    if (hasActiveHighlights) {
+      // Pretty-print JSON first, then apply highlights to the formatted text
+      const prettyText = formatJsonContent(displayText, true);
+      const searchResult = applySearchHighlightsRaw(prettyText, line.lineNumber);
+      // Use simple escaping for JSON - no truncation
+      finalHtml = applyHighlightsWithSearchJson(prettyText, searchResult.searchRanges);
+    } else {
+      // Full JSON formatting with syntax highlighting
+      finalHtml = formatJsonContent(displayText);
+    }
   } else {
-    // Normal highlighting pipeline
     const searchResult = applySearchHighlightsRaw(displayText, line.lineNumber);
     finalHtml = applyHighlightsWithSearch(displayText, searchResult.searchRanges);
   }
@@ -1394,6 +1487,7 @@ function applyHighlightsWithSearch(text: string, searchRanges: SearchRange[]): s
     end: number;
     type: 'search' | 'highlight';
     className: string;
+    style?: string;
   }
 
   const ranges: HighlightRange[] = [];
@@ -1426,13 +1520,19 @@ function applyHighlightsWithSearch(text: string, searchRanges: SearchRange[]): s
       const regex = new RegExp(pattern, flags || undefined);
       let match;
 
+      // Build inline style for this highlight
+      const style = `background-color: ${config.backgroundColor}; ${
+        config.textColor ? `color: ${config.textColor}` : ''
+      }`;
+
       if (config.highlightAll) {
         while ((match = regex.exec(text)) !== null) {
           ranges.push({
             start: match.index,
             end: match.index + match[0].length,
             type: 'highlight',
-            className: `highlight highlight-${config.backgroundColor}`,
+            className: 'highlight',
+            style,
           });
         }
       } else {
@@ -1442,7 +1542,8 @@ function applyHighlightsWithSearch(text: string, searchRanges: SearchRange[]): s
             start: match.index,
             end: match.index + match[0].length,
             type: 'highlight',
-            className: `highlight highlight-${config.backgroundColor}`,
+            className: 'highlight',
+            style,
           });
         }
       }
@@ -1498,14 +1599,141 @@ function applyHighlightsWithSearch(text: string, searchRanges: SearchRange[]): s
     if (range.start > pos) {
       result += escapeHtml(text.slice(pos, range.start));
     }
-    // Add the highlighted range
-    result += `<span class="${range.className}">${escapeHtml(text.slice(range.start, range.end))}</span>`;
+    // Add the highlighted range with style if available
+    const styleAttr = range.style ? ` style="${range.style}"` : '';
+    const highlightedText = escapeHtml(text.slice(range.start, range.end)).replace(/ /g, '&nbsp;');
+    result += `<span class="${range.className}"${styleAttr}>${highlightedText}</span>`;
     pos = range.end;
   }
 
   // Add remaining text
   if (pos < text.length) {
     result += escapeHtml(text.slice(pos));
+  }
+
+  return result;
+}
+
+// Version for JSON content - uses simple escaping without truncation
+// JSON content is already validated by JSON.parse, so no sanitization needed
+function applyHighlightsWithSearchJson(text: string, searchRanges: SearchRange[]): string {
+  interface HighlightRange {
+    start: number;
+    end: number;
+    type: 'search' | 'highlight';
+    className: string;
+    style?: string;
+  }
+
+  const ranges: HighlightRange[] = [];
+
+  // Add search ranges
+  for (const sr of searchRanges) {
+    const className = sr.isCurrent ? 'search-match current' : 'search-match';
+    ranges.push({ start: sr.start, end: sr.end, type: 'search', className });
+  }
+
+  // Add manual highlight ranges
+  for (const config of state.highlights) {
+    try {
+      let flags = config.highlightAll ? 'g' : '';
+      if (!config.matchCase) flags += 'i';
+
+      let pattern = config.pattern;
+      if (!config.isRegex) {
+        pattern = escapeRegex(pattern);
+      }
+
+      if (config.includeWhitespace) {
+        pattern = `(\\s*)${pattern}(\\s*)`;
+      }
+
+      if (config.wholeWord && !config.includeWhitespace) {
+        pattern = `\\b${pattern}\\b`;
+      }
+
+      const regex = new RegExp(pattern, flags || undefined);
+      let match;
+
+      const style = `background-color: ${config.backgroundColor}; ${
+        config.textColor ? `color: ${config.textColor}` : ''
+      }`;
+
+      if (config.highlightAll) {
+        while ((match = regex.exec(text)) !== null) {
+          ranges.push({
+            start: match.index,
+            end: match.index + match[0].length,
+            type: 'highlight',
+            className: 'highlight',
+            style,
+          });
+        }
+      } else {
+        match = regex.exec(text);
+        if (match) {
+          ranges.push({
+            start: match.index,
+            end: match.index + match[0].length,
+            type: 'highlight',
+            className: 'highlight',
+            style,
+          });
+        }
+      }
+    } catch {
+      // Invalid regex, skip
+    }
+  }
+
+  // If no ranges, just escape and return (no sanitization for JSON)
+  if (ranges.length === 0) {
+    return escapeHtmlSimple(text);
+  }
+
+  // Sort and remove overlapping ranges
+  ranges.sort((a, b) => {
+    if (a.start !== b.start) return a.start - b.start;
+    return a.type === 'search' ? 1 : -1;
+  });
+
+  const finalRanges: HighlightRange[] = [];
+  for (const range of ranges) {
+    if (range.type === 'search') {
+      finalRanges.push(range);
+    } else {
+      const overlapsSearch = searchRanges.some(
+        sr => !(range.end <= sr.start || range.start >= sr.end)
+      );
+      if (!overlapsSearch) {
+        finalRanges.push(range);
+      }
+    }
+  }
+
+  finalRanges.sort((a, b) => a.start - b.start);
+  const nonOverlapping: HighlightRange[] = [];
+  for (const range of finalRanges) {
+    if (nonOverlapping.length === 0 || range.start >= nonOverlapping[nonOverlapping.length - 1].end) {
+      nonOverlapping.push(range);
+    }
+  }
+
+  let result = '';
+  let pos = 0;
+
+  for (const range of nonOverlapping) {
+    if (range.start > pos) {
+      result += escapeHtmlSimple(text.slice(pos, range.start));
+    }
+    const styleAttr = range.style ? ` style="${range.style}"` : '';
+    const highlightedText = escapeHtmlSimple(text.slice(range.start, range.end)).replace(/ /g, '&nbsp;');
+    result += `<span class="${range.className}"${styleAttr}>${highlightedText}</span>`;
+    pos = range.end;
+  }
+
+  if (pos < text.length) {
+    result += escapeHtmlSimple(text.slice(pos));
   }
 
   return result;
@@ -1532,8 +1760,9 @@ function isNormalChar(code: number): boolean {
 // Sanitize text by detecting and replacing binary/corrupted sections
 function sanitizeText(text: string): string {
   // Safety limit for very long lines (corrupted files can have huge "lines")
-  const MAX_LINE_LENGTH = 5000;
-  const MAX_DISPLAY_LENGTH = 2000;
+  // Significantly increased for JSON mode - pretty-printed JSON can be very long
+  const MAX_LINE_LENGTH = 500000;
+  const MAX_DISPLAY_LENGTH = 500000;
 
   if (text.length === 0) return text;
 
@@ -5254,12 +5483,44 @@ function init(): void {
   elements.btnWordWrap.addEventListener('click', toggleMarkdownPreview);
 
   // JSON formatting toggle
-  elements.btnJsonFormat.addEventListener('click', () => {
-    jsonFormattingEnabled = !jsonFormattingEnabled;
-    elements.btnJsonFormat.classList.toggle('active', jsonFormattingEnabled);
-    // Re-render visible lines with new formatting
-    cachedLines.clear();
-    loadVisibleLines();
+  elements.btnJsonFormat.addEventListener('click', async () => {
+    if (!state.filePath) return;
+
+    if (!jsonFormattingEnabled) {
+      // Enable JSON mode - format and open formatted file
+      elements.btnJsonFormat.classList.add('active');
+
+      // Store original file path
+      const originalPath = state.filePath;
+
+      try {
+        // Format the file (creates .formatted.json)
+        const result = await (window.api as any).formatJsonFile(originalPath);
+        if (result.success && result.formattedPath) {
+          // Store that we're in JSON mode and track the original file
+          jsonFormattingEnabled = true;
+          jsonOriginalFile = originalPath;
+
+          // Open the formatted file
+          await loadFile(result.formattedPath);
+        } else {
+          elements.btnJsonFormat.classList.remove('active');
+          console.error('Failed to format JSON:', result.error);
+        }
+      } catch (error) {
+        elements.btnJsonFormat.classList.remove('active');
+        console.error('Error formatting JSON:', error);
+      }
+    } else {
+      // Disable JSON mode - go back to original file
+      jsonFormattingEnabled = false;
+      elements.btnJsonFormat.classList.remove('active');
+
+      if (jsonOriginalFile) {
+        await loadFile(jsonOriginalFile);
+        jsonOriginalFile = null;
+      }
+    }
   });
 
   // Split mode and value change handlers
