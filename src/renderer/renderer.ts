@@ -597,6 +597,7 @@ const elements = {
   searchInput: document.getElementById('search-input') as HTMLInputElement,
   searchRegex: document.getElementById('search-regex') as HTMLInputElement,
   searchCase: document.getElementById('search-case') as HTMLInputElement,
+  searchWholeWord: document.getElementById('search-whole-word') as HTMLInputElement,
   searchResultCount: document.getElementById('search-result-count') as HTMLSpanElement,
   searchEngineBadge: document.getElementById('search-engine-badge') as HTMLSpanElement,
   searchEngineInfo: document.getElementById('search-engine-info') as HTMLParagraphElement,
@@ -3441,7 +3442,7 @@ async function performSearch(): Promise<void> {
       pattern,
       isRegex: elements.searchRegex.checked,
       matchCase: elements.searchCase.checked,
-      wholeWord: false,
+      wholeWord: elements.searchWholeWord.checked,
     };
 
     // Add column config if columns are filtered
