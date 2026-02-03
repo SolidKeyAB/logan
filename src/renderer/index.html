@@ -13,11 +13,20 @@
 </head>
 <body>
   <div id="app">
+    <!-- Title Bar (drag region) -->
+    <div class="titlebar">
+      <img src="assets/logo.png" alt="LOGAN" class="titlebar-logo" id="logo" title="Open LOGAN on GitHub">
+      <span class="titlebar-text">LOGAN</span>
+      <div class="titlebar-spacer"></div>
+      <div id="window-controls" class="window-controls hidden">
+        <button id="btn-win-minimize" class="window-control-btn" title="Minimize">&#x2014;</button>
+        <button id="btn-win-maximize" class="window-control-btn" title="Maximize">&#9633;</button>
+        <button id="btn-win-close" class="window-control-btn close" title="Close">&#10005;</button>
+      </div>
+    </div>
     <!-- Toolbar -->
     <div class="toolbar">
       <div class="toolbar-left">
-        <img src="assets/logo.png" alt="LOGAN" class="toolbar-logo" id="logo" title="Open LOGAN on GitHub">
-        <div class="separator"></div>
         <button id="btn-open-file" class="toolbar-btn" title="Open file">
           <span class="icon">&#128194;</span> Open File
         </button>
@@ -45,6 +54,7 @@
         <button id="btn-json-format" class="toolbar-btn" title="Format & highlight JSON in logs">JSON</button>
       </div>
       <div class="toolbar-right">
+        <button id="btn-terminal-toggle" class="toolbar-btn small" title="Toggle Terminal (Ctrl+`)">&#9000;</button>
         <button id="btn-settings" class="toolbar-btn small" title="Settings">&#9881;</button>
         <button id="btn-help" class="toolbar-btn small" title="Keyboard shortcuts & help (F1)">&#9432;</button>
         <button id="btn-toggle-sidebar" class="toolbar-btn small" title="Toggle sidebar">&#9776;</button>
@@ -194,6 +204,13 @@
             <span class="section-toggle">&#9660;</span>
           </div>
           <div class="section-content">
+            <div id="highlight-groups-bar" class="highlight-groups-bar">
+              <div id="highlight-groups-chips" class="highlight-groups-chips"></div>
+              <div class="highlight-groups-actions">
+                <button id="btn-save-highlight-group" class="highlight-group-btn" title="Save current highlights as a group">Save</button>
+                <button id="btn-delete-highlight-group" class="highlight-group-btn danger" title="Delete active group" style="display:none">Del</button>
+              </div>
+            </div>
             <div id="highlights-list" class="highlights-content">
               <p class="placeholder">No highlight rules</p>
             </div>
@@ -201,21 +218,18 @@
           </div>
         </div>
 
-        <!-- Terminal Section -->
-        <div class="sidebar-section" id="section-terminal">
-          <div class="section-header" data-section="terminal">
-            <span class="section-title">Terminal</span>
-            <button id="btn-terminal-toggle" class="section-btn" title="Toggle Terminal (Ctrl+`)">⌨</button>
-          </div>
-          <div id="terminal-panel" class="terminal-section-content hidden">
-            <div id="terminal-resize-handle" class="terminal-resize-handle"></div>
-            <div id="terminal-container" class="terminal-container"></div>
-          </div>
-        </div>
       </aside>
 
       <!-- Sidebar Resize Handle -->
       <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
+
+      <!-- Terminal Overlay (Quake-style drop-down) -->
+      <div id="terminal-overlay" class="terminal-overlay hidden">
+        <div id="terminal-panel" class="terminal-drop-panel">
+          <div id="terminal-container" class="terminal-container"></div>
+          <div id="terminal-resize-handle" class="terminal-resize-handle-bottom"></div>
+        </div>
+      </div>
 
       <!-- Log Viewer -->
       <main class="log-viewer">
@@ -289,20 +303,28 @@
               <label class="checkbox-label"><input type="checkbox" name="level" value="info" checked> Info</label>
               <label class="checkbox-label"><input type="checkbox" name="level" value="debug"> Debug</label>
               <label class="checkbox-label"><input type="checkbox" name="level" value="trace"> Trace</label>
+              <label class="checkbox-label"><input type="checkbox" name="level" value="other" checked> Other</label>
             </div>
           </div>
           <div class="filter-group">
             <label for="include-patterns">Include Patterns (one per line)</label>
             <textarea id="include-patterns" class="filter-textarea" placeholder="e.g., error\nfailed"></textarea>
+            <div class="context-lines-row">
+              <label for="basic-context-lines">Context lines around matches:</label>
+              <input type="number" id="basic-context-lines" class="context-lines-input" value="0" min="0" max="50">
+            </div>
           </div>
           <div class="filter-group">
             <label for="exclude-patterns">Exclude Patterns (one per line)</label>
             <textarea id="exclude-patterns" class="filter-textarea" placeholder="e.g., heartbeat\nhealth"></textarea>
           </div>
           <div class="filter-group">
-            <label class="checkbox-label">
-              <input type="checkbox" id="collapse-duplicates"> Collapse duplicate lines
-            </label>
+            <div class="checkbox-group">
+              <label class="checkbox-label"><input type="checkbox" id="filter-match-case"> Match Case</label>
+              <label class="checkbox-label"><input type="checkbox" id="filter-exact-match"> Exact Match</label>
+
+
+            </div>
           </div>
         </div>
         <div class="modal-footer">
@@ -603,6 +625,13 @@
         </div>
         <div class="modal-body">
           <div class="settings-group">
+            <label for="theme-select">Theme</label>
+            <select id="theme-select" class="settings-select">
+              <option value="dark">Dark</option>
+              <option value="paper">Paper (Eye Comfort)</option>
+            </select>
+          </div>
+          <div class="settings-group">
             <label for="scroll-speed">Scroll Speed</label>
             <div class="slider-container">
               <input type="range" id="scroll-speed" min="10" max="100" value="30" class="settings-slider">
@@ -629,6 +658,13 @@
               <input type="checkbox" id="auto-analyze"> Auto-analyze when opening files
             </label>
             <p class="hint">Automatically run analysis when a file is opened</p>
+          </div>
+          <div class="settings-group">
+            <label>Sidebar Sections</label>
+            <div class="settings-checkboxes" id="sidebar-section-toggles">
+              <!-- Populated dynamically from renderer.ts -->
+            </div>
+            <p class="hint">Toggle visibility of sidebar sections</p>
           </div>
         </div>
         <div class="modal-footer">

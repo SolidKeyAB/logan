@@ -121,7 +121,8 @@ interface FilterConfig {
   excludePatterns: string[];
   includePatterns: string[];
   levels: string[];
-  collapseDuplicates: boolean;
+  matchCase?: boolean;
+  exactMatch?: boolean;
   timeRange?: { start: string; end: string };
   contextLines?: number;
   // Advanced filter support
@@ -243,6 +244,7 @@ interface AppState {
   selectedLine: number | null;
   selectionStart: number | null;
   selectionEnd: number | null;
+  savedRanges: Array<{ startLine: number; endLine: number }>;
   splitFiles: string[];
   currentSplitIndex: number;
   // Tab management
@@ -280,6 +282,7 @@ const state: AppState = {
   selectedLine: null,
   selectionStart: null,
   selectionEnd: null,
+  savedRanges: [],
   splitFiles: [],
   currentSplitIndex: -1,
   tabs: [],
@@ -314,13 +317,31 @@ interface UserSettings {
   defaultFontSize: number;    // 10-20, pixels
   defaultGapThreshold: number; // 1-60, seconds
   autoAnalyze: boolean;
+  theme: 'dark' | 'paper';
+  sidebarSections: Record<string, boolean>; // section-id → visible
 }
+
+const SIDEBAR_SECTIONS: { id: string; label: string; colorVar: string }[] = [
+  { id: 'folders', label: 'Folders', colorVar: '--section-color-folders' },
+  { id: 'stats', label: 'File Stats', colorVar: '--section-color-stats' },
+  { id: 'analysis', label: 'Analysis', colorVar: '--section-color-analysis' },
+  { id: 'duplicates', label: 'Duplicates', colorVar: '--section-color-duplicates' },
+  { id: 'time-gaps', label: 'Time Gaps', colorVar: '--section-color-timegaps' },
+  { id: 'bookmarks', label: 'Bookmarks', colorVar: '--section-color-bookmarks' },
+  { id: 'highlights', label: 'Highlights', colorVar: '--section-color-highlights' },
+];
+
+const DEFAULT_SIDEBAR_SECTIONS: Record<string, boolean> = Object.fromEntries(
+  SIDEBAR_SECTIONS.map(s => [s.id, true])
+);
 
 const DEFAULT_SETTINGS: UserSettings = {
   scrollSpeed: 30,
   defaultFontSize: 13,
   defaultGapThreshold: 5,
-  autoAnalyze: false
+  autoAnalyze: false,
+  theme: 'dark',
+  sidebarSections: { ...DEFAULT_SIDEBAR_SECTIONS },
 };
 
 let userSettings: UserSettings = { ...DEFAULT_SETTINGS };
@@ -329,7 +350,10 @@ function loadSettings(): void {
   try {
     const saved = localStorage.getItem('logan-settings');
     if (saved) {
-      userSettings = { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+      const parsed = JSON.parse(saved);
+      userSettings = { ...DEFAULT_SETTINGS, ...parsed };
+      // Deep-merge sidebarSections so new sections get defaults
+      userSettings.sidebarSections = { ...DEFAULT_SIDEBAR_SECTIONS, ...(parsed.sidebarSections || {}) };
     }
   } catch {
     userSettings = { ...DEFAULT_SETTINGS };
@@ -349,6 +373,62 @@ function applySettings(): void {
   const gapInput = document.getElementById('gap-threshold') as HTMLInputElement;
   if (gapInput) {
     gapInput.value = userSettings.defaultGapThreshold.toString();
+  }
+
+  // Apply theme
+  applyTheme(userSettings.theme);
+
+  // Apply sidebar section visibility
+  applySidebarSectionVisibility();
+}
+
+function applySidebarSectionVisibility(): void {
+  for (const section of SIDEBAR_SECTIONS) {
+    const el = document.getElementById(`section-${section.id}`);
+    if (el) {
+      const visible = userSettings.sidebarSections[section.id] !== false;
+      el.classList.toggle('section-hidden', !visible);
+    }
+  }
+}
+
+function populateSidebarSectionToggles(): void {
+  const container = document.getElementById('sidebar-section-toggles');
+  if (!container) return;
+  container.innerHTML = '';
+  for (const section of SIDEBAR_SECTIONS) {
+    const label = document.createElement('label');
+    label.className = 'checkbox-label';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = userSettings.sidebarSections[section.id] !== false;
+    checkbox.dataset.sectionId = section.id;
+
+    const dot = document.createElement('span');
+    dot.className = 'section-color-dot';
+    const color = getComputedStyle(document.documentElement).getPropertyValue(section.colorVar).trim();
+    dot.style.backgroundColor = color;
+
+    const text = document.createTextNode(section.label);
+
+    checkbox.addEventListener('change', () => {
+      userSettings.sidebarSections[section.id] = checkbox.checked;
+      saveSettings();
+      applySidebarSectionVisibility();
+    });
+
+    label.appendChild(checkbox);
+    label.appendChild(dot);
+    label.appendChild(text);
+    container.appendChild(label);
+  }
+}
+
+function applyTheme(theme: string): void {
+  document.documentElement.classList.remove('theme-paper');
+  if (theme === 'paper') {
+    document.documentElement.classList.add('theme-paper');
   }
 }
 
@@ -541,6 +621,9 @@ const elements = {
   btnExportBookmarks: document.getElementById('btn-export-bookmarks') as HTMLButtonElement,
   highlightsList: document.getElementById('highlights-list') as HTMLDivElement,
   btnAddHighlight: document.getElementById('btn-add-highlight') as HTMLButtonElement,
+  highlightGroupsChips: document.getElementById('highlight-groups-chips') as HTMLDivElement,
+  btnSaveHighlightGroup: document.getElementById('btn-save-highlight-group') as HTMLButtonElement,
+  btnDeleteHighlightGroup: document.getElementById('btn-delete-highlight-group') as HTMLButtonElement,
   statusFile: document.getElementById('status-file') as HTMLSpanElement,
   statusLines: document.getElementById('status-lines') as HTMLSpanElement,
   statusFiltered: document.getElementById('status-filtered') as HTMLSpanElement,
@@ -576,7 +659,8 @@ const elements = {
   btnColumnsCancel: document.getElementById('btn-columns-cancel') as HTMLButtonElement,
   includePatterns: document.getElementById('include-patterns') as HTMLTextAreaElement,
   excludePatterns: document.getElementById('exclude-patterns') as HTMLTextAreaElement,
-  collapseDuplicates: document.getElementById('collapse-duplicates') as HTMLInputElement,
+  filterMatchCase: document.getElementById('filter-match-case') as HTMLInputElement,
+  filterExactMatch: document.getElementById('filter-exact-match') as HTMLInputElement,
   highlightPattern: document.getElementById('highlight-pattern') as HTMLInputElement,
   highlightRegex: document.getElementById('highlight-regex') as HTMLInputElement,
   highlightCase: document.getElementById('highlight-case') as HTMLInputElement,
@@ -616,6 +700,7 @@ const elements = {
   defaultGapThresholdSlider: document.getElementById('default-gap-threshold') as HTMLInputElement,
   defaultGapThresholdValue: document.getElementById('default-gap-threshold-value') as HTMLSpanElement,
   autoAnalyzeCheckbox: document.getElementById('auto-analyze') as HTMLInputElement,
+  themeSelect: document.getElementById('theme-select') as HTMLSelectElement,
   btnResetSettings: document.getElementById('btn-reset-settings') as HTMLButtonElement,
   btnCloseSettings: document.getElementById('btn-close-settings') as HTMLButtonElement,
   // Bookmark modal
@@ -632,12 +717,12 @@ const elements = {
   notesLineInfo: document.getElementById('notes-line-info') as HTMLParagraphElement,
   btnSaveNotes: document.getElementById('btn-save-notes') as HTMLButtonElement,
   btnCancelNotes: document.getElementById('btn-cancel-notes') as HTMLButtonElement,
-  // Terminal
+  // Terminal overlay
+  terminalOverlay: document.getElementById('terminal-overlay') as HTMLDivElement,
   terminalPanel: document.getElementById('terminal-panel') as HTMLDivElement,
   terminalContainer: document.getElementById('terminal-container') as HTMLDivElement,
   terminalResizeHandle: document.getElementById('terminal-resize-handle') as HTMLDivElement,
   btnTerminalToggle: document.getElementById('btn-terminal-toggle') as HTMLButtonElement,
-  sectionTerminal: document.getElementById('section-terminal') as HTMLDivElement,
   // Sidebar resize
   sidebarResizeHandle: document.getElementById('sidebar-resize-handle') as HTMLDivElement,
   // Advanced Filter
@@ -645,6 +730,7 @@ const elements = {
   advancedFilterModal: document.getElementById('advanced-filter-modal') as HTMLDivElement,
   filterGroupsContainer: document.getElementById('filter-groups-container') as HTMLDivElement,
   btnAddFilterGroup: document.getElementById('btn-add-filter-group') as HTMLButtonElement,
+  basicContextLines: document.getElementById('basic-context-lines') as HTMLInputElement,
   advancedContextLinesEnabled: document.getElementById('advanced-context-lines-enabled') as HTMLInputElement,
   advancedContextLines: document.getElementById('advanced-context-lines') as HTMLInputElement,
   btnApplyAdvancedFilter: document.getElementById('btn-apply-advanced-filter') as HTMLButtonElement,
@@ -679,6 +765,19 @@ let minimapContentElement: HTMLDivElement | null = null;
 let minimapViewportElement: HTMLDivElement | null = null;
 let minimapData: Array<{ level: string | undefined }> = [];
 const MINIMAP_SAMPLE_RATE = 1000; // Sample every N lines for minimap
+
+// Range selection (context menu)
+let rangeSelectStartLine: number | null = null;
+
+// Highlight groups
+interface HighlightGroupData {
+  id: string;
+  name: string;
+  highlights: HighlightConfig[];
+  createdAt: number;
+}
+let highlightGroups: HighlightGroupData[] = [];
+let activeHighlightGroupId: string | null = null;
 
 // Terminal - xterm.js instance
 // @ts-ignore - Terminal loaded via script tag
@@ -2022,18 +2121,34 @@ function renderMinimapMarkers(): void {
   if (!minimapElement) return;
 
   // Remove existing markers
-  minimapElement.querySelectorAll('.minimap-bookmark, .minimap-search-marker').forEach(el => el.remove());
+  minimapElement.querySelectorAll('.minimap-bookmark, .minimap-search-marker, .minimap-notes-marker').forEach(el => el.remove());
 
   const totalLines = getTotalLines();
   if (totalLines === 0) return;
 
   const minimapHeight = minimapElement.clientHeight;
 
-  // Add bookmark markers
+  // Add saved notes range markers (drawn first, behind other markers)
+  for (const range of state.savedRanges) {
+    const marker = document.createElement('div');
+    marker.className = 'minimap-notes-marker';
+    const top = (range.startLine / totalLines) * minimapHeight;
+    const height = Math.max(3, ((range.endLine - range.startLine + 1) / totalLines) * minimapHeight);
+    marker.style.top = `${top}px`;
+    marker.style.height = `${height}px`;
+    marker.title = `Saved: Lines ${range.startLine + 1}-${range.endLine + 1}`;
+    minimapElement.appendChild(marker);
+  }
+
+  // Add bookmark markers with colors and tooltips
   for (const bookmark of state.bookmarks) {
     const marker = document.createElement('div');
     marker.className = 'minimap-bookmark';
     marker.style.top = `${(bookmark.lineNumber / totalLines) * minimapHeight}px`;
+    if (bookmark.color) {
+      marker.style.backgroundColor = bookmark.color;
+    }
+    marker.title = bookmark.label || `Bookmark: Line ${bookmark.lineNumber + 1}`;
     minimapElement.appendChild(marker);
   }
 
@@ -2105,7 +2220,7 @@ function handleContextMenu(event: MouseEvent): void {
 
   // Get selected text
   const selection = window.getSelection();
-  const selectedText = selection?.toString().trim() || '';
+  const selectedText = selection?.toString() || '';
 
   // Remove existing context menu
   const existing = document.querySelector('.context-menu');
@@ -2116,20 +2231,12 @@ function handleContextMenu(event: MouseEvent): void {
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
 
-  // If text is selected, show highlight options first
+  // If text is selected, show highlight option
   if (selectedText) {
-    const highlightThis = document.createElement('div');
-    highlightThis.className = 'context-menu-item';
-    highlightThis.textContent = `Highlight "${selectedText.substring(0, 20)}${selectedText.length > 20 ? '...' : ''}"`;
-    highlightThis.addEventListener('click', () => {
-      createHighlightFromSelection(selectedText, false);
-      menu.remove();
-    });
-    menu.appendChild(highlightThis);
-
+    const displayText = selectedText.trim();
     const highlightAll = document.createElement('div');
     highlightAll.className = 'context-menu-item';
-    highlightAll.textContent = 'Highlight All Occurrences';
+    highlightAll.textContent = `Highlight "${displayText.substring(0, 20)}${displayText.length > 20 ? '...' : ''}"`;
     highlightAll.addEventListener('click', () => {
       createHighlightFromSelection(selectedText, true);
       menu.remove();
@@ -2202,6 +2309,42 @@ function handleContextMenu(event: MouseEvent): void {
   separatorSave.className = 'context-menu-separator';
   menu.appendChild(separatorSave);
 
+  // Range selection items
+  const rangeFromItem = document.createElement('div');
+  rangeFromItem.className = 'context-menu-item';
+  rangeFromItem.textContent = rangeSelectStartLine !== null ? 'Range from here (reset)' : 'Range from here';
+  rangeFromItem.addEventListener('click', () => {
+    rangeSelectStartLine = lineNumber;
+    state.selectionStart = lineNumber;
+    state.selectionEnd = lineNumber;
+    renderVisibleLines();
+    elements.statusCursor.textContent = `Range: from Ln ${lineNumber + 1} — right-click end line...`;
+    menu.remove();
+  });
+  menu.appendChild(rangeFromItem);
+
+  if (rangeSelectStartLine !== null && rangeSelectStartLine !== lineNumber) {
+    const rangeToItem = document.createElement('div');
+    rangeToItem.className = 'context-menu-item';
+    rangeToItem.textContent = 'Range to here';
+    rangeToItem.addEventListener('click', () => {
+      const start = Math.min(rangeSelectStartLine!, lineNumber);
+      const end = Math.max(rangeSelectStartLine!, lineNumber);
+      state.selectionStart = start;
+      state.selectionEnd = end;
+      renderVisibleLines();
+      rangeSelectStartLine = null;
+      menu.remove();
+      saveToNotesWithRange(start, end);
+      elements.statusCursor.textContent = `Range: Ln ${start + 1}–${end + 1} (${end - start + 1} lines)`;
+    });
+    menu.appendChild(rangeToItem);
+  }
+
+  const separatorRange = document.createElement('div');
+  separatorRange.className = 'context-menu-separator';
+  menu.appendChild(separatorRange);
+
   const hasBookmark = state.bookmarks.some((b) => b.lineNumber === lineNumber);
 
   if (hasBookmark) {
@@ -2234,7 +2377,7 @@ function handleContextMenu(event: MouseEvent): void {
   copyLine.addEventListener('click', () => {
     const line = cachedLines.get(lineNumber);
     if (line) {
-      navigator.clipboard.writeText(line.text);
+      navigator.clipboard.writeText(applyColumnFilter(line.text));
     }
     menu.remove();
   });
@@ -2253,6 +2396,20 @@ function handleContextMenu(event: MouseEvent): void {
 }
 
 async function createHighlightFromSelection(text: string, highlightAll: boolean): Promise<void> {
+  // Check for duplicate pattern — if it exists, remove it instead (toggle)
+  const existing = state.highlights.find(h => h.pattern === text && !h.isRegex);
+  if (existing) {
+    const result = await window.api.removeHighlight(existing.id);
+    if (result.success) {
+      state.highlights = state.highlights.filter(h => h.id !== existing.id);
+      activeHighlightGroupId = null;
+      updateHighlightGroupsUI();
+      updateHighlightsUI();
+      renderVisibleLines();
+    }
+    return;
+  }
+
   // Get next auto-assigned color
   const colorResult = await window.api.getNextHighlightColor();
   const backgroundColor = colorResult.success && colorResult.color ? colorResult.color : '#ffff00';
@@ -2272,6 +2429,8 @@ async function createHighlightFromSelection(text: string, highlightAll: boolean)
   const result = await window.api.addHighlight(highlight);
   if (result.success) {
     state.highlights.push(highlight);
+    activeHighlightGroupId = null;
+    updateHighlightGroupsUI();
     updateHighlightsUI();
     renderVisibleLines();
   }
@@ -2283,7 +2442,10 @@ async function saveSelectedLinesToFile(): Promise<void> {
     return;
   }
 
-  const result = await window.api.saveSelectedLines(state.selectionStart, state.selectionEnd);
+  const colConfig = state.columnConfig && state.columnConfig.columns.some(c => !c.visible)
+    ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible })) }
+    : undefined;
+  const result = await window.api.saveSelectedLines(state.selectionStart, state.selectionEnd, colConfig);
 
   if (result.success) {
     alert(`Saved ${result.lineCount} lines to:\n${result.filePath}`);
@@ -2381,11 +2543,15 @@ async function saveToNotesWithRange(startLine: number, endLine: number): Promise
   const modalResult = await showNotesModal(startLine, endLine);
   if (modalResult === null) return; // User cancelled
 
+  const colConfig = state.columnConfig && state.columnConfig.columns.some(c => !c.visible)
+    ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible })) }
+    : undefined;
   const result = await window.api.saveToNotes(
     startLine,
     endLine,
     modalResult.note || undefined,
-    modalResult.targetFilePath || undefined
+    modalResult.targetFilePath || undefined,
+    colConfig
   );
 
   if (result.success) {
@@ -2393,6 +2559,10 @@ async function saveToNotesWithRange(startLine: number, endLine: number): Promise
     if (result.filePath) {
       state.currentNotesFile = result.filePath;
     }
+
+    // Track saved range for minimap
+    state.savedRanges.push({ startLine, endLine });
+    renderMinimapMarkers();
 
     // Clear selection after saving
     state.selectionStart = null;
@@ -2708,8 +2878,9 @@ async function initTerminal(): Promise<void> {
     fontSize: 12,
     fontFamily: "'SF Mono', 'Consolas', 'Monaco', monospace",
     allowProposedApi: true,
+    allowTransparency: true,
     theme: {
-      background: '#1e1e1e',
+      background: 'rgba(30, 30, 30, 0)',
       foreground: '#cccccc',
       cursor: '#cccccc',
       cursorAccent: '#1e1e1e',
@@ -2737,7 +2908,8 @@ async function initTerminal(): Promise<void> {
   terminal.loadAddon(fitAddon);
 
   terminal.open(elements.terminalContainer);
-  fitAddon.fit();
+  // Delay fit until after slide animation completes
+  setTimeout(() => fitTerminalToPanel(), 300);
 
   // Handle terminal input
   terminal.onData((data: string) => {
@@ -2769,16 +2941,8 @@ async function initTerminal(): Promise<void> {
     terminal?.focus();
   }, 100);
 
-  // Handle resize
-  window.addEventListener('resize', () => {
-    if (terminal && fitAddon && state.terminalVisible) {
-      fitAddon.fit();
-      const dims = fitAddon.proposeDimensions();
-      if (dims) {
-        window.api.terminalResize(dims.cols, dims.rows);
-      }
-    }
-  });
+  // Handle window resize
+  window.addEventListener('resize', () => fitTerminalToPanel());
 
   // Click to focus terminal
   elements.terminalContainer.addEventListener('click', () => {
@@ -2803,38 +2967,67 @@ async function startTerminalProcess(): Promise<void> {
   await window.api.terminalCreate({ cwd, cols, rows });
 }
 
+function showTerminalOverlay(): void {
+  const overlay = elements.terminalOverlay;
+  overlay.classList.remove('hidden');
+  // Force reflow so the transition triggers
+  void overlay.offsetHeight;
+  overlay.classList.add('visible');
+  elements.btnTerminalToggle.classList.add('active');
+}
+
+function hideTerminalOverlay(): void {
+  const overlay = elements.terminalOverlay;
+  overlay.classList.remove('visible');
+  elements.btnTerminalToggle.classList.remove('active');
+  const onEnd = () => {
+    overlay.removeEventListener('transitionend', onEnd);
+    if (!overlay.classList.contains('visible')) {
+      overlay.classList.add('hidden');
+    }
+  };
+  overlay.addEventListener('transitionend', onEnd);
+  // Fallback if transitionend doesn't fire
+  setTimeout(() => {
+    if (!overlay.classList.contains('visible')) {
+      overlay.classList.add('hidden');
+    }
+  }, 350);
+}
+
+function fitTerminalToPanel(): void {
+  if (fitAddon && state.terminalVisible) {
+    fitAddon.fit();
+    const dims = fitAddon.proposeDimensions();
+    if (dims) {
+      window.api.terminalResize(dims.cols, dims.rows);
+    }
+  }
+}
+
 async function toggleTerminal(): Promise<void> {
   state.terminalVisible = !state.terminalVisible;
 
   if (state.terminalVisible) {
-    elements.terminalPanel.classList.remove('hidden');
-    elements.btnTerminalToggle.classList.add('active');
+    showTerminalOverlay();
 
     if (!state.terminalInitialized) {
       await initTerminal();
     } else {
-      // Resize terminal to fit panel
       setTimeout(() => {
-        if (fitAddon) {
-          fitAddon.fit();
-          const dims = fitAddon.proposeDimensions();
-          if (dims) {
-            window.api.terminalResize(dims.cols, dims.rows);
-          }
-        }
+        fitTerminalToPanel();
         terminal?.focus();
-      }, 50);
+      }, 280); // After slide animation
     }
   } else {
-    elements.terminalPanel.classList.add('hidden');
-    elements.btnTerminalToggle.classList.remove('active');
+    hideTerminalOverlay();
   }
 }
 
 function closeTerminal(): void {
+  if (!state.terminalVisible) return;
   state.terminalVisible = false;
-  elements.terminalPanel.classList.add('hidden');
-  elements.btnTerminalToggle.classList.remove('active');
+  hideTerminalOverlay();
 }
 
 async function terminalCdToFile(filePath: string): Promise<void> {
@@ -3316,7 +3509,9 @@ async function applyFilter(providedConfig?: FilterConfig): Promise<void> {
       excludePatterns: elements.excludePatterns.value
         .split('\n')
         .filter((p) => p.trim()),
-      collapseDuplicates: elements.collapseDuplicates.checked,
+      matchCase: elements.filterMatchCase?.checked || false,
+      exactMatch: elements.filterExactMatch?.checked || false,
+      contextLines: elements.basicContextLines ? parseInt(elements.basicContextLines.value) || 0 : 0,
     };
   }
 
@@ -3376,7 +3571,6 @@ async function applyQuickLevelFilter(level: string): Promise<void> {
     levels: [level],
     includePatterns: [],
     excludePatterns: [],
-    collapseDuplicates: false,
     contextLines: 3,
   };
 
@@ -3695,7 +3889,6 @@ async function applyAdvancedFilter(): Promise<void> {
     levels: [],
     includePatterns: [],
     excludePatterns: [],
-    collapseDuplicates: false,
     advancedFilter: advancedConfig,
   };
 
@@ -4086,6 +4279,9 @@ function hideBookmarkModal(save: boolean): void {
 
 // Bookmarks
 async function addBookmarkAtLine(lineNumber: number, comment?: string): Promise<void> {
+  // Prevent duplicate bookmark on the same line
+  if (state.bookmarks.some(b => b.lineNumber === lineNumber)) return;
+
   // Show modal for comment if not provided
   let label: string | undefined;
   if (comment !== undefined) {
@@ -4096,10 +4292,12 @@ async function addBookmarkAtLine(lineNumber: number, comment?: string): Promise<
     label = result || undefined;
   }
 
+  const cachedLine = cachedLines.get(lineNumber);
   const bookmark: Bookmark = {
     id: `bookmark-${Date.now()}`,
     lineNumber,
     label,
+    lineText: cachedLine?.text,
     createdAt: Date.now(),
   };
 
@@ -4150,9 +4348,10 @@ function updateBookmarksUI(): void {
     .sort((a, b) => a.lineNumber - b.lineNumber)
     .map(
       (b) => `
-      <div class="bookmark-item" data-id="${b.id}" data-line="${b.lineNumber}" title="${b.label ? escapeHtml(b.label) : 'Click to go to line, double-click to edit comment'}">
+      <div class="bookmark-item" data-id="${b.id}" data-line="${b.lineNumber}" title="${b.lineText ? escapeHtml(b.lineText) : (b.label ? escapeHtml(b.label) : 'Click to go to line, double-click to edit comment')}">
         <div class="bookmark-info">
           <span class="bookmark-line">Line ${b.lineNumber + 1}</span>
+          ${b.lineText ? `<span class="bookmark-text">${escapeHtml(b.lineText.substring(0, 120))}</span>` : ''}
           ${b.label ? `<span class="bookmark-label">${escapeHtml(b.label)}</span>` : '<span class="bookmark-label placeholder-text">No comment</span>'}
         </div>
         <div class="bookmark-actions">
@@ -4243,6 +4442,8 @@ async function saveHighlight(): Promise<void> {
   const result = await window.api.addHighlight(highlight);
   if (result.success) {
     state.highlights.push(highlight);
+    activeHighlightGroupId = null;
+    updateHighlightGroupsUI();
     updateHighlightsUI();
     renderVisibleLines();
     hideHighlightModal();
@@ -4308,6 +4509,8 @@ function updateHighlightsUI(): void {
         // Clear navigation cache for this highlight
         highlightMatches.delete(id);
         highlightCurrentIndex.delete(id);
+        activeHighlightGroupId = null;
+        updateHighlightGroupsUI();
         updateHighlightsUI();
         renderVisibleLines();
       }
@@ -4617,7 +4820,6 @@ function updateAnalysisUI(): void {
         excludePatterns: suggestion.filter.excludePatterns || [],
         includePatterns: suggestion.filter.includePatterns || [],
         levels: suggestion.filter.levels || [],
-        collapseDuplicates: false
       };
 
       await applyFilter(filterConfig);
@@ -5098,9 +5300,12 @@ function setupKeyboardShortcuts(): void {
       }
     }
 
-    // Escape: Close modals or terminal
+    // Escape: Cancel range selection, close modals, or close terminal
     if (e.key === 'Escape') {
-      if (state.terminalVisible && document.activeElement?.closest('.terminal-container')) {
+      if (rangeSelectStartLine !== null) {
+        rangeSelectStartLine = null;
+        elements.statusCursor.textContent = 'Range cancelled';
+      } else if (state.terminalVisible) {
         closeTerminal();
       } else {
         hideFilterModal();
@@ -5142,21 +5347,21 @@ function setupKeyboardShortcuts(): void {
       }
     }
 
-    // Ctrl/Cmd + H: Highlight all occurrences of selected text
+    // Ctrl/Cmd + H: Toggle highlight for selected text (all occurrences)
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'h') {
       e.preventDefault();
       const selection = window.getSelection();
-      const selectedText = selection?.toString().trim();
+      const selectedText = selection?.toString();
       if (selectedText) {
         createHighlightFromSelection(selectedText, true);
       }
     }
 
-    // Ctrl/Cmd + Shift + H: Highlight single occurrence of selected text
+    // Ctrl/Cmd + Shift + H: Toggle highlight for selected text (first per line)
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'H') {
       e.preventDefault();
       const selection = window.getSelection();
-      const selectedText = selection?.toString().trim();
+      const selectedText = selection?.toString();
       if (selectedText) {
         createHighlightFromSelection(selectedText, false);
       }
@@ -5348,7 +5553,33 @@ async function checkSearchEngine(): Promise<void> {
 // Initialize event listeners
 const GITHUB_URL = 'https://github.com/SolidKeyAB/logan';
 
+function setupWindowControls(): void {
+  window.api.getPlatform().then(platform => {
+    document.body.classList.add(`platform-${platform}`);
+
+    // Show window controls on non-macOS platforms
+    if (platform !== 'darwin') {
+      const windowControls = document.getElementById('window-controls');
+      if (windowControls) {
+        windowControls.classList.remove('hidden');
+      }
+    }
+  });
+
+  // Wire window control buttons
+  const btnMinimize = document.getElementById('btn-win-minimize');
+  const btnMaximize = document.getElementById('btn-win-maximize');
+  const btnClose = document.getElementById('btn-win-close');
+
+  btnMinimize?.addEventListener('click', () => window.api.windowMinimize());
+  btnMaximize?.addEventListener('click', () => window.api.windowMaximize());
+  btnClose?.addEventListener('click', () => window.api.windowClose());
+}
+
 function init(): void {
+  // Detect platform and setup window controls
+  setupWindowControls();
+
   // Load user settings from localStorage
   loadSettings();
   applySettings();
@@ -5384,6 +5615,46 @@ function init(): void {
   // Terminal
   elements.btnTerminalToggle.addEventListener('click', toggleTerminal);
 
+  // Terminal overlay: click outside panel to close
+  elements.terminalOverlay.addEventListener('click', (e) => {
+    if (e.target === elements.terminalOverlay) {
+      closeTerminal();
+    }
+  });
+
+  // Terminal panel: drag resize from bottom handle
+  let isResizingTerminal = false;
+  let terminalStartY = 0;
+  let terminalStartHeight = 0;
+
+  elements.terminalResizeHandle.addEventListener('mousedown', (e) => {
+    isResizingTerminal = true;
+    terminalStartY = e.clientY;
+    terminalStartHeight = elements.terminalPanel.offsetHeight;
+    elements.terminalResizeHandle.classList.add('dragging');
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isResizingTerminal) return;
+    const deltaY = e.clientY - terminalStartY;
+    const newHeight = Math.max(150, Math.min(window.innerHeight * 0.8, terminalStartHeight + deltaY));
+    elements.terminalPanel.style.height = `${newHeight}px`;
+    fitTerminalToPanel();
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (isResizingTerminal) {
+      isResizingTerminal = false;
+      elements.terminalResizeHandle.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      fitTerminalToPanel();
+    }
+  });
+
   // Sidebar resize (horizontal)
   let isResizingSidebar = false;
   let sidebarStartX = 0;
@@ -5405,15 +5676,6 @@ function init(): void {
     const deltaX = e.clientX - sidebarStartX;
     const newWidth = Math.max(200, Math.min(window.innerWidth * 0.5, sidebarStartWidth + deltaX));
     elements.sidebar.style.width = `${newWidth}px`;
-
-    // Resize terminal to fit new width if visible
-    if (fitAddon && state.terminalVisible) {
-      fitAddon.fit();
-      const dims = fitAddon.proposeDimensions();
-      if (dims) {
-        window.api.terminalResize(dims.cols, dims.rows);
-      }
-    }
   });
 
   document.addEventListener('mouseup', () => {
@@ -5537,6 +5799,10 @@ function init(): void {
   elements.btnSaveHighlight.addEventListener('click', saveHighlight);
   elements.btnCancelHighlight.addEventListener('click', hideHighlightModal);
 
+  // Highlight groups
+  elements.btnSaveHighlightGroup.addEventListener('click', saveCurrentAsHighlightGroup);
+  elements.btnDeleteHighlightGroup.addEventListener('click', deleteActiveHighlightGroup);
+
   // Tab bar
   elements.btnNewTab.addEventListener('click', openFile);
 
@@ -5563,6 +5829,8 @@ function init(): void {
     elements.defaultGapThresholdSlider.value = userSettings.defaultGapThreshold.toString();
     elements.defaultGapThresholdValue.textContent = `${userSettings.defaultGapThreshold}s`;
     elements.autoAnalyzeCheckbox.checked = userSettings.autoAnalyze;
+    elements.themeSelect.value = userSettings.theme;
+    populateSidebarSectionToggles();
     elements.settingsModal.classList.remove('hidden');
   });
 
@@ -5597,8 +5865,14 @@ function init(): void {
     saveSettings();
   });
 
+  elements.themeSelect.addEventListener('change', () => {
+    userSettings.theme = elements.themeSelect.value as 'dark' | 'paper';
+    saveSettings();
+    applyTheme(userSettings.theme);
+  });
+
   elements.btnResetSettings.addEventListener('click', () => {
-    userSettings = { ...DEFAULT_SETTINGS };
+    userSettings = { ...DEFAULT_SETTINGS, sidebarSections: { ...DEFAULT_SIDEBAR_SECTIONS } };
     saveSettings();
     // Update UI
     elements.scrollSpeedSlider.value = userSettings.scrollSpeed.toString();
@@ -5608,6 +5882,10 @@ function init(): void {
     elements.defaultGapThresholdSlider.value = userSettings.defaultGapThreshold.toString();
     elements.defaultGapThresholdValue.textContent = `${userSettings.defaultGapThreshold}s`;
     elements.autoAnalyzeCheckbox.checked = userSettings.autoAnalyze;
+    elements.themeSelect.value = userSettings.theme;
+    applyTheme(userSettings.theme);
+    populateSidebarSectionToggles();
+    applySidebarSectionVisibility();
   });
 
   elements.btnCloseSettings.addEventListener('click', () => {
@@ -5661,6 +5939,7 @@ function init(): void {
   // Load initial data
   loadBookmarks();
   loadHighlights();
+  loadHighlightGroups();
 }
 
 async function loadBookmarks(): Promise<void> {
@@ -5676,6 +5955,161 @@ async function loadHighlights(): Promise<void> {
   if (result.success && result.highlights) {
     state.highlights = result.highlights;
     updateHighlightsUI();
+  }
+}
+
+// === Highlight Groups ===
+
+async function loadHighlightGroups(): Promise<void> {
+  const result = await window.api.listHighlightGroups();
+  if (result.success && result.groups) {
+    highlightGroups = result.groups;
+    updateHighlightGroupsUI();
+  }
+}
+
+function updateHighlightGroupsUI(): void {
+  const chipsContainer = elements.highlightGroupsChips;
+  const deleteBtn = elements.btnDeleteHighlightGroup;
+
+  if (highlightGroups.length === 0) {
+    chipsContainer.innerHTML = '<span style="font-size:11px;color:var(--text-muted)">No saved groups</span>';
+    deleteBtn.style.display = 'none';
+    return;
+  }
+
+  chipsContainer.innerHTML = highlightGroups
+    .map(g => `<span class="highlight-group-chip${g.id === activeHighlightGroupId ? ' active' : ''}" data-id="${g.id}" title="${escapeHtml(g.name)} (${g.highlights.length} rules)">${escapeHtml(g.name)}</span>`)
+    .join('');
+
+  // Show/hide delete button based on active group
+  deleteBtn.style.display = activeHighlightGroupId ? '' : 'none';
+
+  // Add click handlers to chips
+  chipsContainer.querySelectorAll('.highlight-group-chip').forEach(chip => {
+    chip.addEventListener('click', (e) => {
+      const id = (e.target as HTMLElement).dataset.id!;
+      applyHighlightGroup(id);
+    });
+  });
+}
+
+async function applyHighlightGroup(groupId: string): Promise<void> {
+  const group = highlightGroups.find(g => g.id === groupId);
+  if (!group) return;
+
+  // Clear current highlights
+  await window.api.clearAllHighlights();
+
+  // Apply group's highlights
+  for (const h of group.highlights) {
+    await window.api.addHighlight(h);
+  }
+
+  // Reload highlights from backend
+  const result = await window.api.listHighlights();
+  if (result.success && result.highlights) {
+    state.highlights = result.highlights;
+  }
+
+  activeHighlightGroupId = groupId;
+  updateHighlightGroupsUI();
+  updateHighlightsUI();
+  renderVisibleLines();
+}
+
+function showTextInputModal(title: string, label: string, placeholder: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal';
+    overlay.style.cssText = 'display:flex;align-items:center;justify-content:center;';
+
+    overlay.innerHTML = `
+      <div class="modal-content" style="width:400px;">
+        <div class="modal-header">
+          <h3>${escapeHtml(title)}</h3>
+        </div>
+        <div class="modal-body">
+          <div class="filter-group">
+            <label>${escapeHtml(label)}</label>
+            <input type="text" class="modal-input" placeholder="${escapeHtml(placeholder)}" autofocus>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="secondary-btn" data-action="cancel">Cancel</button>
+          <button class="primary-btn" data-action="save">Save</button>
+        </div>
+      </div>
+    `;
+
+    const input = overlay.querySelector('input') as HTMLInputElement;
+    const btnSave = overlay.querySelector('[data-action="save"]') as HTMLButtonElement;
+    const btnCancel = overlay.querySelector('[data-action="cancel"]') as HTMLButtonElement;
+
+    const close = (value: string | null) => {
+      overlay.remove();
+      resolve(value);
+    };
+
+    btnSave.addEventListener('click', () => {
+      const val = input.value.trim();
+      close(val || null);
+    });
+    btnCancel.addEventListener('click', () => close(null));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const val = input.value.trim();
+        close(val || null);
+      } else if (e.key === 'Escape') {
+        close(null);
+      }
+    });
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close(null);
+    });
+
+    document.body.appendChild(overlay);
+    input.focus();
+  });
+}
+
+async function saveCurrentAsHighlightGroup(): Promise<void> {
+  if (state.highlights.length === 0) {
+    alert('No highlight rules to save. Add highlights first.');
+    return;
+  }
+
+  const name = await showTextInputModal('Save Highlight Group', 'Group Name', 'e.g., Error patterns, Auth flow...');
+  if (!name) return;
+
+  const group: HighlightGroupData = {
+    id: `hg-${Date.now()}`,
+    name,
+    highlights: state.highlights.map(h => ({ ...h })),
+    createdAt: Date.now(),
+  };
+
+  const result = await window.api.saveHighlightGroup(group);
+  if (result.success) {
+    highlightGroups.push(group);
+    activeHighlightGroupId = group.id;
+    updateHighlightGroupsUI();
+  }
+}
+
+async function deleteActiveHighlightGroup(): Promise<void> {
+  if (!activeHighlightGroupId) return;
+
+  const group = highlightGroups.find(g => g.id === activeHighlightGroupId);
+  if (!group) return;
+
+  if (!confirm(`Delete highlight group "${group.name}"?`)) return;
+
+  const result = await window.api.deleteHighlightGroup(activeHighlightGroupId);
+  if (result.success) {
+    highlightGroups = highlightGroups.filter(g => g.id !== activeHighlightGroupId);
+    activeHighlightGroupId = null;
+    updateHighlightGroupsUI();
   }
 }
 
