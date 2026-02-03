@@ -6,7 +6,7 @@
   "scripts": {
     "postinstall": "npx @electron/rebuild",
     "build": "tsc && npm run copy-assets",
-    "copy-assets": "cp src/renderer/index.html src/renderer/styles.css dist/renderer/ && cp -r src/renderer/assets dist/renderer/ && mkdir -p dist/renderer/lib && cp node_modules/xterm/css/xterm.css dist/renderer/lib/ && cp node_modules/xterm/lib/xterm.js dist/renderer/lib/ && cp node_modules/xterm-addon-fit/lib/xterm-addon-fit.js dist/renderer/lib/ && cp node_modules/marked/lib/marked.umd.js dist/renderer/lib/",
+    "copy-assets": "node scripts/copy-assets.js",
     "start": "npm run build && electron .",
     "dev": "npm run build && electron .",
     "watch": "tsc -w",
