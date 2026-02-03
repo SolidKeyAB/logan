@@ -13,6 +13,11 @@ const IPC = {
   FOLDER_SEARCH: 'folder-search',
   FOLDER_SEARCH_PROGRESS: 'folder-search-progress',
   FOLDER_SEARCH_CANCEL: 'folder-search-cancel',
+  DATADOG_LOAD_CONFIG: 'datadog-load-config',
+  DATADOG_SAVE_CONFIG: 'datadog-save-config',
+  DATADOG_FETCH_LOGS: 'datadog-fetch-logs',
+  DATADOG_FETCH_PROGRESS: 'datadog-fetch-progress',
+  DATADOG_CANCEL_FETCH: 'datadog-cancel-fetch',
 } as const;
 
 // API exposed to renderer
@@ -190,6 +195,25 @@ const api = {
   // JSON formatting
   formatJsonFile: (filePath: string): Promise<{ success: boolean; formattedPath?: string; error?: string }> =>
     ipcRenderer.invoke('format-json-file', filePath),
+
+  // Datadog
+  datadogLoadConfig: (): Promise<{ success: boolean; config?: { site: string; hasApiKey: boolean; hasAppKey: boolean } | null }> =>
+    ipcRenderer.invoke(IPC.DATADOG_LOAD_CONFIG),
+
+  datadogSaveConfig: (config: { site: string; apiKey: string; appKey: string } | null): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.DATADOG_SAVE_CONFIG, config),
+
+  datadogFetchLogs: (params: { query: string; from: string; to: string; maxLogs: number }): Promise<{ success: boolean; filePath?: string; logCount?: number; error?: string }> =>
+    ipcRenderer.invoke(IPC.DATADOG_FETCH_LOGS, params),
+
+  datadogCancelFetch: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.DATADOG_CANCEL_FETCH),
+
+  onDatadogFetchProgress: (callback: (data: { message: string; count: number }) => void): (() => void) => {
+    const handler = (_: any, data: { message: string; count: number }) => callback(data);
+    ipcRenderer.on(IPC.DATADOG_FETCH_PROGRESS, handler);
+    return () => ipcRenderer.removeListener(IPC.DATADOG_FETCH_PROGRESS, handler);
+  },
 
   // Terminal
   terminalCreate: (options?: { cwd?: string; cols?: number; rows?: number }): Promise<{ success: boolean; pid?: number; error?: string }> =>

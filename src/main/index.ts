@@ -7,6 +7,7 @@ import * as pty from 'node-pty';
 import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
 import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup } from '../shared/types';
 import { analyzerRegistry, AnalyzerOptions } from './analyzers';
+import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
 
 let mainWindow: BrowserWindow | null = null;
 let searchSignal: { cancelled: boolean } = { cancelled: false };
@@ -1981,4 +1982,55 @@ ipcMain.handle('terminal-cd', async (_, directory: string) => {
     return { success: true };
   }
   return { success: false, error: 'No terminal process or invalid directory' };
+});
+
+// === Datadog Integration ===
+
+let datadogFetchSignal: { cancelled: boolean } = { cancelled: false };
+
+ipcMain.handle(IPC.DATADOG_LOAD_CONFIG, async () => {
+  const config = loadDatadogConfig();
+  if (config) {
+    // Return config but mask the keys for display
+    return { success: true, config: { site: config.site, hasApiKey: !!config.apiKey, hasAppKey: !!config.appKey } };
+  }
+  return { success: true, config: null };
+});
+
+ipcMain.handle(IPC.DATADOG_SAVE_CONFIG, async (_, config: DatadogConfig | null) => {
+  try {
+    if (config === null) {
+      clearDatadogConfig();
+    } else {
+      saveDatadogConfig(config);
+    }
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.DATADOG_FETCH_LOGS, async (_, params: DatadogFetchParams) => {
+  const config = loadDatadogConfig();
+  if (!config || !config.apiKey || !config.appKey) {
+    return { success: false, error: 'Datadog not configured. Add credentials in Settings.' };
+  }
+
+  datadogFetchSignal = { cancelled: false };
+
+  const result = await fetchDatadogLogs(
+    config,
+    params,
+    (message, count) => {
+      mainWindow?.webContents.send(IPC.DATADOG_FETCH_PROGRESS, { message, count });
+    },
+    datadogFetchSignal
+  );
+
+  return result;
+});
+
+ipcMain.handle(IPC.DATADOG_CANCEL_FETCH, async () => {
+  datadogFetchSignal.cancelled = true;
+  return { success: true };
 });

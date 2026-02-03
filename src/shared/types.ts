@@ -96,4 +96,9 @@ export const IPC = {
   FOLDER_SEARCH: 'folder-search',
   FOLDER_SEARCH_PROGRESS: 'folder-search-progress',
   FOLDER_SEARCH_CANCEL: 'folder-search-cancel',
+  DATADOG_LOAD_CONFIG: 'datadog-load-config',
+  DATADOG_SAVE_CONFIG: 'datadog-save-config',
+  DATADOG_FETCH_LOGS: 'datadog-fetch-logs',
+  DATADOG_FETCH_PROGRESS: 'datadog-fetch-progress',
+  DATADOG_CANCEL_FETCH: 'datadog-cancel-fetch',
 } as const;

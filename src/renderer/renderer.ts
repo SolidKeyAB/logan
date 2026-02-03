@@ -754,6 +754,24 @@ const elements = {
   btnPrevGap: document.getElementById('btn-prev-gap') as HTMLButtonElement,
   btnNextGap: document.getElementById('btn-next-gap') as HTMLButtonElement,
   gapNavPosition: document.getElementById('gap-nav-position') as HTMLSpanElement,
+  // Datadog
+  btnDatadog: document.getElementById('btn-datadog') as HTMLButtonElement,
+  datadogModal: document.getElementById('datadog-modal') as HTMLDivElement,
+  ddQuery: document.getElementById('dd-query') as HTMLInputElement,
+  ddTimePreset: document.getElementById('dd-time-preset') as HTMLSelectElement,
+  ddCustomRange: document.getElementById('dd-custom-range') as HTMLDivElement,
+  ddFrom: document.getElementById('dd-from') as HTMLInputElement,
+  ddTo: document.getElementById('dd-to') as HTMLInputElement,
+  ddMaxLogs: document.getElementById('dd-max-logs') as HTMLInputElement,
+  ddFetchStatus: document.getElementById('dd-fetch-status') as HTMLDivElement,
+  btnDdFetch: document.getElementById('btn-dd-fetch') as HTMLButtonElement,
+  btnDdCancel: document.getElementById('btn-dd-cancel') as HTMLButtonElement,
+  ddSiteSelect: document.getElementById('dd-site-select') as HTMLSelectElement,
+  ddApiKey: document.getElementById('dd-api-key') as HTMLInputElement,
+  ddAppKey: document.getElementById('dd-app-key') as HTMLInputElement,
+  btnDdSaveConfig: document.getElementById('btn-dd-save-config') as HTMLButtonElement,
+  btnDdClearConfig: document.getElementById('btn-dd-clear-config') as HTMLButtonElement,
+  ddConfigStatus: document.getElementById('dd-config-status') as HTMLSpanElement,
 };
 
 // Virtual Log Viewer
@@ -5576,6 +5594,30 @@ function setupWindowControls(): void {
   btnClose?.addEventListener('click', () => window.api.windowClose());
 }
 
+// Compute ISO timestamps from Datadog time range presets
+function getDatadogTimeRange(): { from: string; to: string } {
+  const preset = elements.ddTimePreset.value;
+  if (preset === 'custom') {
+    return {
+      from: new Date(elements.ddFrom.value).toISOString(),
+      to: new Date(elements.ddTo.value).toISOString(),
+    };
+  }
+  const now = new Date();
+  const to = now.toISOString();
+  const msMap: Record<string, number> = {
+    '15m': 15 * 60 * 1000,
+    '1h': 60 * 60 * 1000,
+    '4h': 4 * 60 * 60 * 1000,
+    '1d': 24 * 60 * 60 * 1000,
+    '3d': 3 * 24 * 60 * 60 * 1000,
+    '7d': 7 * 24 * 60 * 60 * 1000,
+  };
+  const offset = msMap[preset] || 60 * 60 * 1000;
+  const from = new Date(now.getTime() - offset).toISOString();
+  return { from, to };
+}
+
 function init(): void {
   // Detect platform and setup window controls
   setupWindowControls();
@@ -5783,6 +5825,115 @@ function init(): void {
         jsonOriginalFile = null;
       }
     }
+  });
+
+  // Datadog integration
+  elements.btnDatadog.addEventListener('click', () => {
+    elements.ddFetchStatus.textContent = '';
+    elements.btnDdFetch.disabled = false;
+    elements.datadogModal.classList.remove('hidden');
+  });
+
+  elements.ddTimePreset.addEventListener('change', () => {
+    const isCustom = elements.ddTimePreset.value === 'custom';
+    elements.ddCustomRange.style.display = isCustom ? '' : 'none';
+  });
+
+  let ddProgressCleanup: (() => void) | null = null;
+
+  elements.btnDdFetch.addEventListener('click', async () => {
+    const query = elements.ddQuery.value.trim() || '*';
+    const maxLogs = Math.min(Math.max(parseInt(elements.ddMaxLogs.value, 10) || 5000, 100), 50000);
+    const { from, to } = getDatadogTimeRange();
+
+    elements.btnDdFetch.disabled = true;
+    elements.ddFetchStatus.textContent = 'Starting fetch...';
+
+    // Subscribe to progress
+    ddProgressCleanup = window.api.onDatadogFetchProgress((data: { message: string; count: number }) => {
+      elements.ddFetchStatus.textContent = data.message;
+    });
+
+    try {
+      const result = await window.api.datadogFetchLogs({ query, from, to, maxLogs });
+
+      if (result.success && result.filePath) {
+        elements.ddFetchStatus.textContent = `Fetched ${result.logCount} logs.`;
+        elements.datadogModal.classList.add('hidden');
+        await loadFile(result.filePath);
+      } else {
+        elements.ddFetchStatus.textContent = result.error || 'Unknown error';
+      }
+    } catch (error: any) {
+      elements.ddFetchStatus.textContent = `Error: ${error.message || error}`;
+    } finally {
+      elements.btnDdFetch.disabled = false;
+      if (ddProgressCleanup) {
+        ddProgressCleanup();
+        ddProgressCleanup = null;
+      }
+    }
+  });
+
+  elements.btnDdCancel.addEventListener('click', async () => {
+    await window.api.datadogCancelFetch();
+    elements.datadogModal.classList.add('hidden');
+    if (ddProgressCleanup) {
+      ddProgressCleanup();
+      ddProgressCleanup = null;
+    }
+  });
+
+  // Datadog settings - load config when settings open
+  const origSettingsClick = elements.btnSettings.onclick;
+  elements.btnSettings.addEventListener('click', async () => {
+    const result = await window.api.datadogLoadConfig();
+    if (result.success && result.config) {
+      elements.ddSiteSelect.value = result.config.site || 'US1';
+      elements.ddApiKey.value = result.config.hasApiKey ? '••••••••' : '';
+      elements.ddAppKey.value = result.config.hasAppKey ? '••••••••' : '';
+      elements.ddConfigStatus.textContent = 'Configured';
+      elements.ddConfigStatus.style.color = 'var(--debug-color)';
+    } else {
+      elements.ddSiteSelect.value = 'US1';
+      elements.ddApiKey.value = '';
+      elements.ddAppKey.value = '';
+      elements.ddConfigStatus.textContent = 'Not configured';
+      elements.ddConfigStatus.style.color = 'var(--text-muted)';
+    }
+  });
+
+  elements.btnDdSaveConfig.addEventListener('click', async () => {
+    const apiKey = elements.ddApiKey.value.trim();
+    const appKey = elements.ddAppKey.value.trim();
+    const site = elements.ddSiteSelect.value;
+
+    // Don't save masked values
+    if (!apiKey || apiKey === '••••••••' || !appKey || appKey === '••••••••') {
+      elements.ddConfigStatus.textContent = 'Enter both keys to save';
+      elements.ddConfigStatus.style.color = 'var(--warning-color)';
+      return;
+    }
+
+    const result = await window.api.datadogSaveConfig({ site, apiKey, appKey });
+    if (result.success) {
+      elements.ddConfigStatus.textContent = 'Saved';
+      elements.ddConfigStatus.style.color = 'var(--debug-color)';
+      // Mask the keys after saving
+      elements.ddApiKey.value = '••••••••';
+      elements.ddAppKey.value = '••••••••';
+    } else {
+      elements.ddConfigStatus.textContent = `Error: ${result.error}`;
+      elements.ddConfigStatus.style.color = 'var(--error-color)';
+    }
+  });
+
+  elements.btnDdClearConfig.addEventListener('click', async () => {
+    await window.api.datadogSaveConfig(null);
+    elements.ddApiKey.value = '';
+    elements.ddAppKey.value = '';
+    elements.ddConfigStatus.textContent = 'Cleared';
+    elements.ddConfigStatus.style.color = 'var(--text-muted)';
   });
 
   // Split mode and value change handlers

@@ -52,6 +52,7 @@
         <button id="btn-columns" class="toolbar-btn" title="Show/hide columns" disabled>Columns</button>
         <button id="btn-word-wrap" class="toolbar-btn" title="Toggle word wrap (⌥Z)">Wrap</button>
         <button id="btn-json-format" class="toolbar-btn" title="Format & highlight JSON in logs">JSON</button>
+        <button id="btn-datadog" class="toolbar-btn" title="Connect to Datadog">DD</button>
       </div>
       <div class="toolbar-right">
         <button id="btn-terminal-toggle" class="toolbar-btn small" title="Toggle Terminal (Ctrl+`)">&#9000;</button>
@@ -666,10 +667,80 @@
             </div>
             <p class="hint">Toggle visibility of sidebar sections</p>
           </div>
+          <div class="settings-group" style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 12px;">
+            <label>Datadog Integration</label>
+            <div style="margin-top: 8px;">
+              <label class="hint" for="dd-site-select">Site</label>
+              <select id="dd-site-select" class="settings-select" style="margin-bottom: 8px;">
+                <option value="US1">US1 (datadoghq.com)</option>
+                <option value="US3">US3 (us3.datadoghq.com)</option>
+                <option value="US5">US5 (us5.datadoghq.com)</option>
+                <option value="EU1">EU1 (datadoghq.eu)</option>
+                <option value="AP1">AP1 (ap1.datadoghq.com)</option>
+              </select>
+            </div>
+            <div style="margin-top: 4px;">
+              <label class="hint" for="dd-api-key">API Key</label>
+              <input type="password" id="dd-api-key" class="modal-input" placeholder="Enter Datadog API key">
+            </div>
+            <div style="margin-top: 4px;">
+              <label class="hint" for="dd-app-key">Application Key</label>
+              <input type="password" id="dd-app-key" class="modal-input" placeholder="Enter Datadog Application key">
+            </div>
+            <div style="margin-top: 8px; display: flex; gap: 8px; align-items: center;">
+              <button id="btn-dd-save-config" class="secondary-btn small">Save</button>
+              <button id="btn-dd-clear-config" class="secondary-btn small">Clear</button>
+              <span id="dd-config-status" class="hint" style="margin-left: 4px;"></span>
+            </div>
+          </div>
         </div>
         <div class="modal-footer">
           <button id="btn-reset-settings" class="secondary-btn">Reset to Defaults</button>
           <button id="btn-close-settings" class="primary-btn">Close</button>
+        </div>
+      </div>
+    </div>
+    <!-- Datadog Query Modal -->
+    <div id="datadog-modal" class="modal hidden">
+      <div class="modal-content" style="width: 450px;">
+        <div class="modal-header">
+          <h3>Fetch Datadog Logs</h3>
+          <button class="modal-close" data-modal="datadog-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="filter-group">
+            <label for="dd-query">Query</label>
+            <input type="text" id="dd-query" class="modal-input" placeholder="*" value="*">
+            <p class="hint">Datadog log search query syntax</p>
+          </div>
+          <div class="filter-group">
+            <label for="dd-time-preset">Time Range</label>
+            <select id="dd-time-preset" class="settings-select">
+              <option value="15m">Last 15 minutes</option>
+              <option value="1h" selected>Last 1 hour</option>
+              <option value="4h">Last 4 hours</option>
+              <option value="1d">Last 1 day</option>
+              <option value="3d">Last 3 days</option>
+              <option value="7d">Last 7 days</option>
+              <option value="custom">Custom range</option>
+            </select>
+          </div>
+          <div id="dd-custom-range" class="filter-group" style="display: none;">
+            <label for="dd-from">From</label>
+            <input type="datetime-local" id="dd-from" class="modal-input">
+            <label for="dd-to" style="margin-top: 4px;">To</label>
+            <input type="datetime-local" id="dd-to" class="modal-input">
+          </div>
+          <div class="filter-group">
+            <label for="dd-max-logs">Max Logs</label>
+            <input type="number" id="dd-max-logs" class="modal-input" value="5000" min="100" max="50000">
+            <p class="hint">Maximum number of log entries to fetch (100-50,000)</p>
+          </div>
+          <div id="dd-fetch-status" class="hint" style="min-height: 20px; margin-top: 8px;"></div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-dd-cancel" class="secondary-btn">Cancel</button>
+          <button id="btn-dd-fetch" class="primary-btn">Fetch Logs</button>
         </div>
       </div>
     </div>

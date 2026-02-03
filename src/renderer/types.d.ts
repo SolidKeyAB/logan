@@ -228,6 +228,13 @@ interface Api {
   onTerminalData: (callback: (data: string) => void) => () => void;
   onTerminalExit: (callback: (exitCode: number) => void) => () => void;
 
+  // Datadog
+  datadogLoadConfig: () => Promise<{ success: boolean; config?: { site: string; hasApiKey: boolean; hasAppKey: boolean } | null }>;
+  datadogSaveConfig: (config: { site: string; apiKey: string; appKey: string } | null) => Promise<{ success: boolean; error?: string }>;
+  datadogFetchLogs: (params: { query: string; from: string; to: string; maxLogs: number }) => Promise<{ success: boolean; filePath?: string; logCount?: number; error?: string }>;
+  datadogCancelFetch: () => Promise<{ success: boolean }>;
+  onDatadogFetchProgress: (callback: (data: { message: string; count: number }) => void) => () => void;
+
   // Window controls
   windowMinimize: () => Promise<void>;
   windowMaximize: () => Promise<void>;
