@@ -84,7 +84,8 @@ interface FilterConfig {
   excludePatterns: string[];
   includePatterns: string[];
   levels: string[];
-  collapseDuplicates: boolean;
+  matchCase?: boolean;
+  exactMatch?: boolean;
   timeRange?: { start: string; end: string };
   contextLines?: number;
 }
@@ -94,6 +95,7 @@ interface Bookmark {
   lineNumber: number;
   label?: string;
   color?: string;
+  lineText?: string;
   createdAt: number;
 }
 
@@ -178,12 +180,17 @@ interface Api {
   clearAllHighlights: () => Promise<{ success: boolean }>;
   getNextHighlightColor: () => Promise<{ success: boolean; color?: string }>;
 
+  // Highlight groups
+  listHighlightGroups: () => Promise<{ success: boolean; groups?: Array<{ id: string; name: string; highlights: HighlightConfig[]; createdAt: number }> }>;
+  saveHighlightGroup: (group: { id: string; name: string; highlights: HighlightConfig[]; createdAt: number }) => Promise<{ success: boolean }>;
+  deleteHighlightGroup: (groupId: string) => Promise<{ success: boolean }>;
+
   // Save selected lines
-  saveSelectedLines: (startLine: number, endLine: number) => Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }>;
+  saveSelectedLines: (startLine: number, endLine: number, columnConfig?: { delimiter: string; columns: Array<{ index: number; visible: boolean }> }) => Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }>;
 
   // Notes files
   findNotesFiles: () => Promise<{ success: boolean; files?: Array<{ name: string; path: string; created: string }>; logFilePath?: string; error?: string }>;
-  saveToNotes: (startLine: number, endLine: number, note?: string, targetFilePath?: string) => Promise<{ success: boolean; filePath?: string; lineCount?: number; isNewFile?: boolean; error?: string }>;
+  saveToNotes: (startLine: number, endLine: number, note?: string, targetFilePath?: string, columnConfig?: { delimiter: string; columns: Array<{ index: number; visible: boolean }> }) => Promise<{ success: boolean; filePath?: string; lineCount?: number; isNewFile?: boolean; error?: string }>;
 
   // Split file
   splitFile: (options: { mode: 'lines' | 'parts'; value: number }) => Promise<{ success: boolean; outputDir?: string; files?: string[]; partCount?: number; error?: string }>;
@@ -220,6 +227,12 @@ interface Api {
   terminalCd: (directory: string) => Promise<{ success: boolean; error?: string }>;
   onTerminalData: (callback: (data: string) => void) => () => void;
   onTerminalExit: (callback: (exitCode: number) => void) => () => void;
+
+  // Window controls
+  windowMinimize: () => Promise<void>;
+  windowMaximize: () => Promise<void>;
+  windowClose: () => Promise<void>;
+  getPlatform: () => Promise<string>;
 }
 
 interface Window {

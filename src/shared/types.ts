@@ -38,6 +38,7 @@ export interface Bookmark {
   lineNumber: number;
   label: string;
   color: string;
+  lineText?: string;
 }
 
 export interface Highlight {
@@ -50,6 +51,13 @@ export interface Highlight {
   includeWhitespace: boolean;
   highlightAll: boolean; // true = all occurrences, false = first only per line
   isGlobal?: boolean; // true = applies to all files, false = file-specific
+}
+
+export interface HighlightGroup {
+  id: string;
+  name: string;
+  highlights: Highlight[];
+  createdAt: number;
 }
 
 export interface ChunkRequest {

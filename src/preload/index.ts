@@ -102,16 +102,24 @@ const api = {
   getNextHighlightColor: (): Promise<{ success: boolean; color?: string }> =>
     ipcRenderer.invoke('highlight-get-next-color'),
 
+  // Highlight groups
+  listHighlightGroups: (): Promise<{ success: boolean; groups?: Array<{ id: string; name: string; highlights: any[]; createdAt: number }> }> =>
+    ipcRenderer.invoke('highlight-group-list'),
+  saveHighlightGroup: (group: { id: string; name: string; highlights: any[]; createdAt: number }): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('highlight-group-save', group),
+  deleteHighlightGroup: (groupId: string): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('highlight-group-delete', groupId),
+
   // Save selected lines
-  saveSelectedLines: (startLine: number, endLine: number): Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }> =>
-    ipcRenderer.invoke('save-selected-lines', startLine, endLine),
+  saveSelectedLines: (startLine: number, endLine: number, columnConfig?: { delimiter: string; columns: Array<{ index: number; visible: boolean }> }): Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }> =>
+    ipcRenderer.invoke('save-selected-lines', startLine, endLine, columnConfig),
 
   // Save to notes file
   findNotesFiles: (): Promise<{ success: boolean; files?: Array<{ name: string; path: string; created: string }>; logFilePath?: string; error?: string }> =>
     ipcRenderer.invoke('find-notes-files'),
 
-  saveToNotes: (startLine: number, endLine: number, note?: string, targetFilePath?: string): Promise<{ success: boolean; filePath?: string; lineCount?: number; isNewFile?: boolean; error?: string }> =>
-    ipcRenderer.invoke('save-to-notes', startLine, endLine, note, targetFilePath),
+  saveToNotes: (startLine: number, endLine: number, note?: string, targetFilePath?: string, columnConfig?: { delimiter: string; columns: Array<{ index: number; visible: boolean }> }): Promise<{ success: boolean; filePath?: string; lineCount?: number; isNewFile?: boolean; error?: string }> =>
+    ipcRenderer.invoke('save-to-notes', startLine, endLine, note, targetFilePath, columnConfig),
 
   // Split file
   splitFile: (options: { mode: 'lines' | 'parts'; value: number }): Promise<{ success: boolean; outputDir?: string; files?: string[]; partCount?: number; error?: string }> =>
@@ -210,6 +218,12 @@ const api = {
     ipcRenderer.on('terminal-exit', handler);
     return () => ipcRenderer.removeListener('terminal-exit', handler);
   },
+
+  // Window controls
+  windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),
+  windowMaximize: (): Promise<void> => ipcRenderer.invoke('window-maximize'),
+  windowClose: (): Promise<void> => ipcRenderer.invoke('window-close'),
+  getPlatform: (): Promise<string> => ipcRenderer.invoke('get-platform'),
 };
 
 contextBridge.exposeInMainWorld('api', api);

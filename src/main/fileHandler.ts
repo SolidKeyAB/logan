@@ -3,6 +3,27 @@ import * as readline from 'readline';
 import { spawn } from 'child_process';
 import { FileInfo, LineData, SearchMatch, SearchOptions } from '../shared/types';
 
+// Shared column filter utility — filters a line to only visible columns
+export interface ColumnConfig {
+  delimiter: string;
+  columns: Array<{ index: number; visible: boolean }>;
+}
+
+export function filterLineToVisibleColumns(
+  line: string,
+  columnConfig: ColumnConfig | undefined
+): string {
+  if (!columnConfig) return line;
+  if (!columnConfig.columns.some(c => !c.visible)) return line;
+
+  const { delimiter, columns } = columnConfig;
+  const parts = delimiter === ' ' ? line.split(/\s+/) : line.split(delimiter);
+  const visibleParts = parts.filter((_, idx) =>
+    idx < columns.length ? columns[idx].visible : true
+  );
+  return visibleParts.join(delimiter === ' ' ? ' ' : delimiter);
+}
+
 // Check if ripgrep is available
 let ripgrepAvailable: boolean | null = null;
 async function checkRipgrep(): Promise<boolean> {
@@ -295,12 +316,20 @@ export class FileHandler {
     return this.searchWithStream(options, onProgress, signal);
   }
 
+  // NOTE: searchWithRipgrep does NOT support column filtering.
+  // It searches raw file text. When columns are hidden, the caller (search())
+  // must route to searchWithStream() instead, which applies column filtering.
   private async searchWithRipgrep(
     options: SearchOptions,
     onProgress?: (percent: number, matchCount: number) => void,
     signal?: { cancelled: boolean }
   ): Promise<SearchMatch[]> {
     if (!this.filePath) return [];
+
+    // Defensive: refuse to run if column filtering is active
+    if (options.columnConfig && options.columnConfig.columns.some(c => !c.visible)) {
+      return this.searchWithStream(options, onProgress, signal);
+    }
 
     const matches: SearchMatch[] = [];
     const MAX_MATCHES = 50000;
@@ -413,28 +442,12 @@ export class FileHandler {
     });
   }
 
-  // Helper to filter line to visible columns
+  // Helper to filter line to visible columns (delegates to shared utility)
   private filterLineToVisibleColumns(
     line: string,
     columnConfig: SearchOptions['columnConfig']
   ): string {
-    if (!columnConfig) return line;
-
-    const { delimiter, columns } = columnConfig;
-    let parts: string[];
-
-    if (delimiter === ' ') {
-      parts = line.split(/\s+/);
-    } else {
-      parts = line.split(delimiter);
-    }
-
-    // Build filtered text with only visible columns
-    const visibleParts = parts.filter((_, idx) => {
-      return idx < columns.length ? columns[idx].visible : true;
-    });
-
-    return visibleParts.join(delimiter === ' ' ? ' ' : delimiter);
+    return filterLineToVisibleColumns(line, columnConfig);
   }
 
   private async searchWithStream(

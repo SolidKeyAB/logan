@@ -4,8 +4,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { spawn } from 'child_process';
 import * as pty from 'node-pty';
-import { FileHandler } from './fileHandler';
-import { IPC, SearchOptions, Bookmark, Highlight } from '../shared/types';
+import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
+import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup } from '../shared/types';
 import { analyzerRegistry, AnalyzerOptions } from './analyzers';
 
 let mainWindow: BrowserWindow | null = null;
@@ -47,6 +47,7 @@ const highlights = new Map<string, Highlight>();
 // Config folder path (~/.logan/)
 const getConfigDir = () => path.join(os.homedir(), '.logan');
 const getHighlightsPath = () => path.join(getConfigDir(), 'highlights.json');
+const getHighlightGroupsPath = () => path.join(getConfigDir(), 'highlight-groups.json');
 const getBookmarksPath = () => path.join(getConfigDir(), 'bookmarks.json');
 
 // Ensure config directory exists
@@ -235,9 +236,17 @@ function saveBookmarksForCurrentFile(): void {
 }
 
 function createWindow() {
+  const isMac = process.platform === 'darwin';
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
+    show: false,
+    frame: false,
+    ...(isMac ? {
+      titleBarStyle: 'hidden',
+      trafficLightPosition: { x: 10, y: 6 },
+    } : {}),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -247,6 +256,10 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show();
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -273,6 +286,28 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+// === Window Controls ===
+
+ipcMain.handle('window-minimize', () => {
+  mainWindow?.minimize();
+});
+
+ipcMain.handle('window-maximize', () => {
+  if (mainWindow?.isMaximized()) {
+    mainWindow.unmaximize();
+  } else {
+    mainWindow?.maximize();
+  }
+});
+
+ipcMain.handle('window-close', () => {
+  mainWindow?.close();
+});
+
+ipcMain.handle('get-platform', () => {
+  return process.platform;
 });
 
 // === File Operations ===
@@ -859,10 +894,8 @@ ipcMain.handle('export-bookmarks', async () => {
       .sort((a, b) => a.lineNumber - b.lineNumber);
 
     for (const bookmark of sortedBookmarks) {
-      // Get the line text
-      const [lineData] = handler?.getLines(bookmark.lineNumber, 1) || [];
-      const lineText = lineData?.text || '';
-      const truncatedText = lineText.length > 100 ? lineText.substring(0, 100) + '...' : lineText;
+      // Use stored lineText if available, otherwise fetch from file
+      const lineText = bookmark.lineText || (handler?.getLines(bookmark.lineNumber, 1)?.[0]?.text) || '';
 
       lines.push(`## Line ${bookmark.lineNumber + 1}`);
       lines.push(``);
@@ -874,7 +907,7 @@ ipcMain.handle('export-bookmarks', async () => {
       lines.push(`**Link:** \`${fileInfo.path}:${bookmark.lineNumber + 1}\``);
       lines.push(``);
       lines.push(`\`\`\``);
-      lines.push(truncatedText);
+      lines.push(lineText);
       lines.push(`\`\`\``);
       lines.push(``);
       lines.push(`---`);
@@ -941,6 +974,45 @@ ipcMain.handle('highlight-get-next-color', async () => {
   return { success: true, color: getNextColor() };
 });
 
+// === Highlight Groups ===
+
+function loadHighlightGroups(): HighlightGroup[] {
+  try {
+    const filePath = getHighlightGroupsPath();
+    if (fs.existsSync(filePath)) {
+      return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    }
+  } catch { /* ignore */ }
+  return [];
+}
+
+function saveHighlightGroups(groups: HighlightGroup[]): void {
+  ensureConfigDir();
+  fs.writeFileSync(getHighlightGroupsPath(), JSON.stringify(groups, null, 2), 'utf-8');
+}
+
+ipcMain.handle('highlight-group-list', async () => {
+  return { success: true, groups: loadHighlightGroups() };
+});
+
+ipcMain.handle('highlight-group-save', async (_, group: HighlightGroup) => {
+  const groups = loadHighlightGroups();
+  const existingIdx = groups.findIndex(g => g.id === group.id);
+  if (existingIdx >= 0) {
+    groups[existingIdx] = group;
+  } else {
+    groups.push(group);
+  }
+  saveHighlightGroups(groups);
+  return { success: true };
+});
+
+ipcMain.handle('highlight-group-delete', async (_, groupId: string) => {
+  const groups = loadHighlightGroups().filter(g => g.id !== groupId);
+  saveHighlightGroups(groups);
+  return { success: true };
+});
+
 // === Utility ===
 
 ipcMain.handle('get-file-info', async () => {
@@ -984,7 +1056,7 @@ ipcMain.handle('open-external-url', async (_, url: string) => {
 
 // === Save Selected Lines ===
 
-ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: number) => {
+ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: number, columnConfig?: ColumnConfig) => {
   const handler = getFileHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
@@ -1014,8 +1086,8 @@ ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: numb
     const filename = `${timestamp}.log`;
     const filePath = path.join(selectedDir, filename);
 
-    // Write lines to file
-    const content = lines.map(l => l.text).join('\n');
+    // Write lines to file, respecting column visibility
+    const content = lines.map(l => filterLineToVisibleColumns(l.text, columnConfig)).join('\n');
     fs.writeFileSync(filePath, content, 'utf-8');
 
     return { success: true, filePath, lineCount: lines.length };
@@ -1088,7 +1160,8 @@ ipcMain.handle('save-to-notes', async (
   startLine: number,
   endLine: number,
   note?: string,
-  targetFilePath?: string // If provided, append to this file; otherwise create new
+  targetFilePath?: string, // If provided, append to this file; otherwise create new
+  columnConfig?: ColumnConfig
 ) => {
   const handler = getFileHandler();
   if (!handler) return { success: false, error: 'No file open' };
@@ -1153,7 +1226,7 @@ ipcMain.handle('save-to-notes', async (
     content += [
       '',
       `--- [${timestamp}] Lines ${startLine + 1}-${endLine + 1}${noteDesc} ---`,
-      ...lines.map(l => l.text),
+      ...lines.map(l => filterLineToVisibleColumns(l.text, columnConfig)),
       '',
     ].join('\n');
 
@@ -1258,7 +1331,8 @@ interface FilterConfig {
   levels: string[];
   includePatterns: string[];
   excludePatterns: string[];
-  collapseDuplicates: boolean;
+  matchCase?: boolean;
+  exactMatch?: boolean;
   contextLines?: number;
   advancedFilter?: AdvancedFilterConfig;
 }
@@ -1334,6 +1408,31 @@ ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
       ? compileAdvancedFilter(config.advancedFilter!)
       : null;
 
+    // For basic filter: separate include and exclude passes
+    // Include matches get context window, exclude removes exact lines only
+    const hasBasicExclude = !useAdvancedFilter && config.excludePatterns.length > 0;
+    const excludeLines: Set<number> = new Set();
+
+    // Pattern matching helper respecting matchCase and exactMatch options
+    const caseSensitive = config.matchCase || false;
+    const exactMatch = config.exactMatch || false;
+    const matchPattern = (text: string, pattern: string): boolean => {
+      if (exactMatch) {
+        // Literal substring match
+        return caseSensitive
+          ? text.includes(pattern)
+          : text.toLowerCase().includes(pattern.toLowerCase());
+      }
+      // Regex match with fallback to substring
+      try {
+        return new RegExp(pattern, caseSensitive ? '' : 'i').test(text);
+      } catch {
+        return caseSensitive
+          ? text.includes(pattern)
+          : text.toLowerCase().includes(pattern.toLowerCase());
+      }
+    };
+
     // Process in batches for performance
     const batchSize = 10000;
     for (let start = 0; start < totalLines; start += batchSize) {
@@ -1357,24 +1456,15 @@ ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
 
           // Include patterns (OR logic)
           if (matches && config.includePatterns.length > 0) {
-            matches = config.includePatterns.some(pattern => {
-              try {
-                return new RegExp(pattern, 'i').test(line.text);
-              } catch {
-                return line.text.toLowerCase().includes(pattern.toLowerCase());
-              }
-            });
+            matches = config.includePatterns.some(pattern => matchPattern(line.text, pattern));
           }
 
-          // Exclude patterns (AND logic - all must not match)
-          if (matches && config.excludePatterns.length > 0) {
-            matches = !config.excludePatterns.some(pattern => {
-              try {
-                return new RegExp(pattern, 'i').test(line.text);
-              } catch {
-                return line.text.toLowerCase().includes(pattern.toLowerCase());
-              }
-            });
+          // Track exclude matches separately (exact lines only)
+          if (hasBasicExclude) {
+            const excluded = config.excludePatterns.some(pattern => matchPattern(line.text, pattern));
+            if (excluded) {
+              excludeLines.add(line.lineNumber);
+            }
           }
         }
 
@@ -1384,7 +1474,7 @@ ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
       }
     }
 
-    // Add context lines
+    // Add context lines around include matches (before exclude removal)
     if (contextLines > 0) {
       const matchArray = Array.from(matchingLines);
       for (const lineNum of matchArray) {
@@ -1392,6 +1482,13 @@ ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
           if (lineNum - i >= 0) matchingLines.add(lineNum - i);
           if (lineNum + i < totalLines) matchingLines.add(lineNum + i);
         }
+      }
+    }
+
+    // Remove exact exclude lines after context expansion
+    if (hasBasicExclude) {
+      for (const lineNum of excludeLines) {
+        matchingLines.delete(lineNum);
       }
     }
 
