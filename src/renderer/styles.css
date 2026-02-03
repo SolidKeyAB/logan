@@ -262,6 +262,60 @@ body.platform-darwin .titlebar {
   gap: 6px;
 }
 
+.search-options-wrapper {
+  position: relative;
+}
+
+.search-options-popup {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  padding: 8px 10px;
+  z-index: 1001;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.search-option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.search-option-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.search-direction-btn {
+  font-size: 11px !important;
+  white-space: nowrap;
+}
+
+.search-start-line-input {
+  width: 70px;
+  padding: 3px 6px;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: right;
+}
+
+.search-start-line-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
 .toolbar-input {
   padding: 5px 8px;
   background-color: var(--bg-tertiary);

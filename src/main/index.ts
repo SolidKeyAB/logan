@@ -1388,11 +1388,16 @@ function compileAdvancedFilter(config: AdvancedFilterConfig): CompiledMatcher {
   return (text: string, level: string) => compiledGroups.every(fn => fn(text, level));
 }
 
+// Cancellation signal for filter
+let filterSignal = { cancelled: false };
+
 ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
   const handler = getFileHandler();
   if (!handler || !currentFilePath) {
     return { success: false, error: 'No file open' };
   }
+
+  filterSignal = { cancelled: false };
 
   try {
     const totalLines = handler.getTotalLines();
@@ -1417,26 +1422,43 @@ ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
     // Pattern matching helper respecting matchCase and exactMatch options
     const caseSensitive = config.matchCase || false;
     const exactMatch = config.exactMatch || false;
-    const matchPattern = (text: string, pattern: string): boolean => {
+
+    // Pre-compile regex patterns once for performance (avoid re-creating RegExp per line)
+    type CompiledPattern = { regex: RegExp } | { literal: string; lowerLiteral: string };
+    const compilePattern = (pattern: string): CompiledPattern => {
       if (exactMatch) {
-        // Literal substring match
-        return caseSensitive
-          ? text.includes(pattern)
-          : text.toLowerCase().includes(pattern.toLowerCase());
+        return { literal: pattern, lowerLiteral: pattern.toLowerCase() };
       }
-      // Regex match with fallback to substring
       try {
-        return new RegExp(pattern, caseSensitive ? '' : 'i').test(text);
+        return { regex: new RegExp(pattern, caseSensitive ? '' : 'i') };
       } catch {
-        return caseSensitive
-          ? text.includes(pattern)
-          : text.toLowerCase().includes(pattern.toLowerCase());
+        return { literal: pattern, lowerLiteral: pattern.toLowerCase() };
       }
+    };
+
+    const compiledIncludePatterns = config.includePatterns.map(compilePattern);
+    const compiledExcludePatterns = config.excludePatterns.map(compilePattern);
+
+    const matchCompiled = (text: string, compiled: CompiledPattern): boolean => {
+      if ('regex' in compiled) {
+        return compiled.regex.test(text);
+      }
+      return caseSensitive
+        ? text.includes(compiled.literal)
+        : text.toLowerCase().includes(compiled.lowerLiteral);
     };
 
     // Process in batches for performance
     const batchSize = 10000;
+    let processedLines = 0;
+    let lastProgressUpdate = Date.now();
+
     for (let start = 0; start < totalLines; start += batchSize) {
+      // Check for cancellation
+      if (filterSignal.cancelled) {
+        return { success: false, error: 'Cancelled' };
+      }
+
       const count = Math.min(batchSize, totalLines - start);
       const lines = handler.getLines(start, count);
 
@@ -1456,13 +1478,13 @@ ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
           }
 
           // Include patterns (OR logic)
-          if (matches && config.includePatterns.length > 0) {
-            matches = config.includePatterns.some(pattern => matchPattern(line.text, pattern));
+          if (matches && compiledIncludePatterns.length > 0) {
+            matches = compiledIncludePatterns.some(cp => matchCompiled(line.text, cp));
           }
 
           // Track exclude matches separately (exact lines only)
           if (hasBasicExclude) {
-            const excluded = config.excludePatterns.some(pattern => matchPattern(line.text, pattern));
+            const excluded = compiledExcludePatterns.some(cp => matchCompiled(line.text, cp));
             if (excluded) {
               excludeLines.add(line.lineNumber);
             }
@@ -1472,6 +1494,17 @@ ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
         if (matches) {
           matchingLines.add(line.lineNumber);
         }
+      }
+
+      processedLines += count;
+
+      // Yield to event loop and send progress every 50ms to keep UI responsive
+      const now = Date.now();
+      if (now - lastProgressUpdate > 50) {
+        await yieldToEventLoop();
+        const progress = Math.round((processedLines / totalLines) * 100);
+        mainWindow?.webContents.send('filter-progress', { percent: Math.min(progress, 99) });
+        lastProgressUpdate = Date.now();
       }
     }
 
@@ -1506,6 +1539,11 @@ ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
   } catch (error) {
     return { success: false, error: String(error) };
   }
+});
+
+ipcMain.handle('cancel-filter', async () => {
+  filterSignal.cancelled = true;
+  return { success: true };
 });
 
 ipcMain.handle('clear-filter', async () => {

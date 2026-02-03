@@ -43,6 +43,19 @@
             <input type="checkbox" id="search-whole-word"> Whole Word
           </label>
           <button id="btn-search" class="toolbar-btn" title="Search">Search</button>
+          <div class="search-options-wrapper">
+            <button id="btn-search-options" class="toolbar-btn small" title="Search options">&#9881;</button>
+            <div id="search-options-popup" class="search-options-popup hidden">
+              <div class="search-option-row">
+                <label class="search-option-label">Direction</label>
+                <button id="search-direction" class="toolbar-btn small search-direction-btn" title="Toggle search direction">&#8595; Top to Bottom</button>
+              </div>
+              <div class="search-option-row">
+                <label class="search-option-label" for="search-start-line">Start from line</label>
+                <input type="number" id="search-start-line" class="search-start-line-input" placeholder="1" min="1">
+              </div>
+            </div>
+          </div>
           <button id="btn-prev-result" class="toolbar-btn small" title="Previous result" disabled>&lt;</button>
           <span id="search-result-count" class="result-count"></span>
           <span id="search-engine-badge" class="search-engine-badge" title="Search engine"></span>

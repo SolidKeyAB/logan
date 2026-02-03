@@ -201,6 +201,8 @@ interface Api {
   analyzeFile: (analyzerName?: string, options?: AnalyzerOptions) => Promise<{ success: boolean; result?: AnalysisResult; error?: string }>;
   cancelAnalysis: () => Promise<{ success: boolean }>;
   applyFilter: (config: any) => Promise<{ success: boolean; stats?: { filteredLines: number }; error?: string }>;
+  cancelFilter: () => Promise<{ success: boolean }>;
+  onFilterProgress: (callback: (data: { percent: number }) => void) => () => void;
   clearFilter: () => Promise<{ success: boolean }>;
 
   // Time Gap Detection

@@ -166,6 +166,15 @@ const api = {
   applyFilter: (config: any): Promise<{ success: boolean; stats?: { filteredLines: number }; error?: string }> =>
     ipcRenderer.invoke('apply-filter', config),
 
+  cancelFilter: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('cancel-filter'),
+
+  onFilterProgress: (callback: (data: { percent: number }) => void): (() => void) => {
+    const handler = (_: any, data: { percent: number }) => callback(data);
+    ipcRenderer.on('filter-progress', handler);
+    return () => ipcRenderer.removeListener('filter-progress', handler);
+  },
+
   clearFilter: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('clear-filter'),
 

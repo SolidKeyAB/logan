@@ -210,6 +210,7 @@ interface TabState {
   searchResults: SearchResult[];
   currentSearchIndex: number;
   bookmarks: Bookmark[];
+  highlights: HighlightConfig[];
   cachedLines: Map<number, LogLine>;
   splitFiles: string[];
   currentSplitIndex: number;
@@ -222,6 +223,12 @@ interface TabState {
   isLoaded: boolean; // true if file was fully loaded (skip re-indexing progress)
   // Column visibility
   columnConfig: ColumnConfig | null;
+  // Analysis & filter state (preserved across tab switches)
+  analysisResult: AnalysisResult | null;
+  isFiltered: boolean;
+  filteredLines: number | null;
+  activeLevelFilter: string | null;
+  appliedFilterSuggestion: { id: string; title: string } | null;
 }
 
 // Application State - maintains current file state for backward compatibility
@@ -435,6 +442,9 @@ function applyTheme(theme: string): void {
 // Word wrap setting
 let wordWrapEnabled = false;
 
+// Search direction and start line
+let searchDirection: 'forward' | 'backward' = 'forward';
+
 // JSON formatting setting
 let jsonFormattingEnabled = false;
 let jsonOriginalFile: string | null = null; // Track original file when viewing formatted JSON
@@ -601,6 +611,10 @@ const elements = {
   searchResultCount: document.getElementById('search-result-count') as HTMLSpanElement,
   searchEngineBadge: document.getElementById('search-engine-badge') as HTMLSpanElement,
   searchEngineInfo: document.getElementById('search-engine-info') as HTMLParagraphElement,
+  btnSearchOptions: document.getElementById('btn-search-options') as HTMLButtonElement,
+  searchOptionsPopup: document.getElementById('search-options-popup') as HTMLDivElement,
+  searchDirection: document.getElementById('search-direction') as HTMLButtonElement,
+  searchStartLine: document.getElementById('search-start-line') as HTMLInputElement,
   sidebar: document.getElementById('sidebar') as HTMLElement,
   editorContainer: document.getElementById('editor-container') as HTMLDivElement,
   welcomeMessage: document.getElementById('welcome-message') as HTMLDivElement,
@@ -2221,6 +2235,8 @@ function handleLogClick(event: MouseEvent): void {
     // Only re-render if selection changed
     if (state.selectedLine !== lineNumber) {
       state.selectedLine = lineNumber;
+      // Auto-populate search start line with clicked line
+      elements.searchStartLine.value = String(lineNumber + 1);
       updateCursorStatus(lineNumber);
       renderVisibleLines();
     }
@@ -2401,6 +2417,21 @@ function handleContextMenu(event: MouseEvent): void {
     menu.remove();
   });
   menu.appendChild(copyLine);
+
+  const separatorSearch = document.createElement('div');
+  separatorSearch.className = 'context-menu-separator';
+  menu.appendChild(separatorSearch);
+
+  const searchFromHere = document.createElement('div');
+  searchFromHere.className = 'context-menu-item';
+  searchFromHere.textContent = `Search from Ln ${lineNumber + 1}`;
+  searchFromHere.addEventListener('click', () => {
+    elements.searchStartLine.value = String(lineNumber + 1);
+    elements.searchInput.focus();
+    elements.searchInput.select();
+    menu.remove();
+  });
+  menu.appendChild(searchFromHere);
 
   document.body.appendChild(menu);
 
@@ -3457,7 +3488,27 @@ async function performSearch(): Promise<void> {
 
     if (result.success && result.matches) {
       state.searchResults = result.matches;
-      state.currentSearchIndex = result.matches.length > 0 ? 0 : -1;
+
+      // Determine starting match index based on direction and start line
+      const startLineVal = parseInt(elements.searchStartLine.value, 10);
+      const startLine = startLineVal > 0 ? startLineVal - 1 : null; // Convert to 0-indexed
+
+      if (result.matches.length > 0 && startLine !== null) {
+        if (searchDirection === 'forward') {
+          const idx = result.matches.findIndex(m => m.lineNumber >= startLine);
+          state.currentSearchIndex = idx >= 0 ? idx : 0;
+        } else {
+          // Backward: find last match at or before startLine
+          let idx = -1;
+          for (let i = result.matches.length - 1; i >= 0; i--) {
+            if (result.matches[i].lineNumber <= startLine) { idx = i; break; }
+          }
+          state.currentSearchIndex = idx >= 0 ? idx : result.matches.length - 1;
+        }
+      } else {
+        state.currentSearchIndex = result.matches.length > 0 ? 0 : -1;
+      }
+
       updateSearchUI();
       renderMinimapMarkers(); // Update minimap with search markers
       renderVisibleLines(); // Re-render to show search highlights
@@ -3474,10 +3525,29 @@ async function performSearch(): Promise<void> {
 
 function updateSearchUI(): void {
   const count = state.searchResults.length;
-  elements.searchResultCount.textContent =
-    count > 0 ? `${state.currentSearchIndex + 1}/${count}` : 'No results';
+  const arrow = searchDirection === 'forward' ? '\u2193' : '\u2191';
+  const startLineVal = parseInt(elements.searchStartLine.value, 10);
+  let label = count > 0 ? `${state.currentSearchIndex + 1}/${count}` : 'No results';
+  if (count > 0 && startLineVal > 0) {
+    label += ` ${arrow}Ln ${startLineVal}`;
+  }
+  elements.searchResultCount.textContent = label;
   elements.btnPrevResult.disabled = count === 0;
   elements.btnNextResult.disabled = count === 0;
+}
+
+function navigateSearchNext(): void {
+  if (state.searchResults.length === 0) return;
+  const delta = searchDirection === 'forward' ? 1 : -1;
+  const idx = (state.currentSearchIndex + delta + state.searchResults.length) % state.searchResults.length;
+  goToSearchResult(idx);
+}
+
+function navigateSearchPrev(): void {
+  if (state.searchResults.length === 0) return;
+  const delta = searchDirection === 'forward' ? -1 : 1;
+  const idx = (state.currentSearchIndex + delta + state.searchResults.length) % state.searchResults.length;
+  goToSearchResult(idx);
 }
 
 function goToSearchResult(index: number): void {
@@ -3541,6 +3611,12 @@ async function applyFilter(providedConfig?: FilterConfig): Promise<void> {
 
   showProgress('Applying filter...');
 
+  // Listen for progress updates from the main process
+  const removeProgressListener = window.api.onFilterProgress(({ percent }) => {
+    updateProgress(percent);
+    updateProgressText(`Applying filter... ${percent}%`);
+  });
+
   try {
     const result = await window.api.applyFilter(config);
 
@@ -3559,10 +3635,11 @@ async function applyFilter(providedConfig?: FilterConfig): Promise<void> {
       hideFilterModal();
       await loadVisibleLines();
       updateStatusBar();
-    } else {
+    } else if (result.error !== 'Cancelled') {
       alert(`Failed to apply filter: ${result.error}`);
     }
   } finally {
+    removeProgressListener();
     hideProgress();
   }
 }
@@ -3595,6 +3672,11 @@ async function applyQuickLevelFilter(level: string): Promise<void> {
 
   showProgress(`Filtering ${level}...`);
 
+  const removeProgressListener = window.api.onFilterProgress(({ percent }) => {
+    updateProgress(percent);
+    updateProgressText(`Filtering ${level}... ${percent}%`);
+  });
+
   try {
     const result = await window.api.applyFilter(config);
 
@@ -3616,6 +3698,7 @@ async function applyQuickLevelFilter(level: string): Promise<void> {
       updateLevelBadgeStyles();
     }
   } finally {
+    removeProgressListener();
     hideProgress();
   }
 }
@@ -3913,6 +3996,11 @@ async function applyAdvancedFilter(): Promise<void> {
 
   showProgress('Applying advanced filter...');
 
+  const removeProgressListener = window.api.onFilterProgress(({ percent }) => {
+    updateProgress(percent);
+    updateProgressText(`Applying advanced filter... ${percent}%`);
+  });
+
   try {
     const result = await window.api.applyFilter(config);
 
@@ -3933,10 +4021,11 @@ async function applyAdvancedFilter(): Promise<void> {
       await loadVisibleLines();
       updateStatusBar();
       updateLevelBadgeStyles();
-    } else {
+    } else if (result.error !== 'Cancelled') {
       alert(`Failed to apply filter: ${result.error}`);
     }
   } finally {
+    removeProgressListener();
     hideProgress();
   }
 }
@@ -5296,27 +5385,19 @@ function setupKeyboardShortcuts(): void {
       performSearch();
     }
 
-    // F3 or Ctrl/Cmd + G: Next search result
+    // F3 or Ctrl/Cmd + G: Next search result (respects direction)
     if (e.key === 'F3' || ((e.ctrlKey || e.metaKey) && e.key === 'g')) {
       e.preventDefault();
-      if (state.searchResults.length > 0) {
-        const nextIndex = (state.currentSearchIndex + 1) % state.searchResults.length;
-        goToSearchResult(nextIndex);
-      }
+      navigateSearchNext();
     }
 
-    // Shift + F3 or Ctrl/Cmd + Shift + G: Previous search result
+    // Shift + F3 or Ctrl/Cmd + Shift + G: Previous search result (respects direction)
     if (
       (e.key === 'F3' && e.shiftKey) ||
       ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'G')
     ) {
       e.preventDefault();
-      if (state.searchResults.length > 0) {
-        const prevIndex =
-          (state.currentSearchIndex - 1 + state.searchResults.length) %
-          state.searchResults.length;
-        goToSearchResult(prevIndex);
-      }
+      navigateSearchPrev();
     }
 
     // Escape: Cancel range selection, close modals, or close terminal
@@ -5732,18 +5813,38 @@ function init(): void {
 
   // Search
   elements.btnSearch.addEventListener('click', performSearch);
-  elements.btnPrevResult.addEventListener('click', () => {
-    if (state.searchResults.length > 0) {
-      const prevIndex =
-        (state.currentSearchIndex - 1 + state.searchResults.length) %
-        state.searchResults.length;
-      goToSearchResult(prevIndex);
+  elements.btnPrevResult.addEventListener('click', () => navigateSearchPrev());
+  elements.btnNextResult.addEventListener('click', () => navigateSearchNext());
+
+  // Search options popup
+  elements.btnSearchOptions.addEventListener('click', (e) => {
+    e.stopPropagation();
+    elements.searchOptionsPopup.classList.toggle('hidden');
+  });
+
+  // Close search options popup on outside click
+  document.addEventListener('click', (e) => {
+    if (!elements.searchOptionsPopup.classList.contains('hidden') &&
+        !elements.searchOptionsPopup.contains(e.target as Node) &&
+        e.target !== elements.btnSearchOptions) {
+      elements.searchOptionsPopup.classList.add('hidden');
     }
   });
-  elements.btnNextResult.addEventListener('click', () => {
-    if (state.searchResults.length > 0) {
-      const nextIndex = (state.currentSearchIndex + 1) % state.searchResults.length;
-      goToSearchResult(nextIndex);
+
+  // Direction toggle
+  elements.searchDirection.addEventListener('click', () => {
+    searchDirection = searchDirection === 'forward' ? 'backward' : 'forward';
+    elements.searchDirection.innerHTML = searchDirection === 'forward'
+      ? '&#8595; Top to Bottom'
+      : '&#8593; Bottom to Top';
+    updateSearchUI();
+  });
+
+  // Start line input — Enter triggers search
+  elements.searchStartLine.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      elements.searchOptionsPopup.classList.add('hidden');
+      performSearch();
     }
   });
 
@@ -6291,12 +6392,18 @@ function saveCurrentTabState(): void {
     searchResults: state.searchResults,
     currentSearchIndex: state.currentSearchIndex,
     bookmarks: [...state.bookmarks],
+    highlights: [...state.highlights],
     cachedLines: cachedLines.toMap(),
     splitFiles: state.splitFiles,
     currentSplitIndex: state.currentSplitIndex,
     minimapData: minimapData.length > 0 ? [...minimapData] : null,
     isLoaded: true,
     columnConfig: state.columnConfig,
+    analysisResult: state.analysisResult,
+    isFiltered: state.isFiltered,
+    filteredLines: state.filteredLines,
+    activeLevelFilter: state.activeLevelFilter,
+    appliedFilterSuggestion: state.appliedFilterSuggestion,
   };
 }
 
@@ -6310,11 +6417,17 @@ function restoreTabState(tab: TabState): void {
   state.searchResults = tab.searchResults;
   state.currentSearchIndex = tab.currentSearchIndex;
   state.bookmarks = [...tab.bookmarks];
+  state.highlights = [...tab.highlights];
   state.splitFiles = tab.splitFiles;
   state.currentSplitIndex = tab.currentSplitIndex;
-  state.isFiltered = false;
-  state.filteredLines = null;
   state.columnConfig = tab.columnConfig;
+
+  // Restore analysis & filter state
+  state.analysisResult = tab.analysisResult;
+  state.isFiltered = tab.isFiltered;
+  state.filteredLines = tab.filteredLines;
+  state.activeLevelFilter = tab.activeLevelFilter;
+  state.appliedFilterSuggestion = tab.appliedFilterSuggestion;
 
   // Restore cached lines
   cachedLines.clear();
@@ -6341,6 +6454,7 @@ function createTab(filePath: string): TabState {
     searchResults: [],
     currentSearchIndex: -1,
     bookmarks: [],
+    highlights: [],
     cachedLines: new Map(),
     splitFiles: [],
     currentSplitIndex: -1,
@@ -6350,6 +6464,11 @@ function createTab(filePath: string): TabState {
     minimapData: null,
     isLoaded: false,
     columnConfig: null,
+    analysisResult: null,
+    isFiltered: false,
+    filteredLines: null,
+    activeLevelFilter: null,
+    appliedFilterSuggestion: null,
   };
   return tab;
 }
@@ -6431,6 +6550,10 @@ async function switchToTab(tabId: string): Promise<void> {
       } else if (!isAlreadyLoaded) {
         await buildMinimap();
       }
+
+      // Restore analysis & filter UI
+      updateAnalysisUI();
+      updateLevelBadgeStyles();
 
       // Mark as loaded
       tab.isLoaded = true;
