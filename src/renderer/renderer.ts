@@ -606,6 +606,7 @@ const elements = {
   btnToggleSidebar: document.getElementById('btn-toggle-sidebar') as HTMLButtonElement,
   searchInput: document.getElementById('search-input') as HTMLInputElement,
   searchRegex: document.getElementById('search-regex') as HTMLInputElement,
+  searchWildcard: document.getElementById('search-wildcard') as HTMLInputElement,
   searchCase: document.getElementById('search-case') as HTMLInputElement,
   searchWholeWord: document.getElementById('search-whole-word') as HTMLInputElement,
   searchResultCount: document.getElementById('search-result-count') as HTMLSpanElement,
@@ -1580,6 +1581,7 @@ function applySearchHighlightsRaw(text: string, lineNumber: number): { searchRan
   // Get the search pattern
   const pattern = elements.searchInput.value;
   const isRegex = elements.searchRegex.checked;
+  const isWildcard = elements.searchWildcard.checked;
   const matchCase = elements.searchCase.checked;
 
   const searchRanges: SearchRange[] = [];
@@ -1588,6 +1590,12 @@ function applySearchHighlightsRaw(text: string, lineNumber: number): { searchRan
     let searchRegex: RegExp;
     if (isRegex) {
       searchRegex = new RegExp(pattern, matchCase ? 'g' : 'gi');
+    } else if (isWildcard) {
+      // Wildcard mode: * = any chars, ? = any single char, rest literal
+      const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*/g, '.*')
+        .replace(/\?/g, '.');
+      searchRegex = new RegExp(escaped, matchCase ? 'g' : 'gi');
     } else {
       // Escape special regex chars for literal search
       const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -3472,6 +3480,7 @@ async function performSearch(): Promise<void> {
     const searchOptions: SearchOptions = {
       pattern,
       isRegex: elements.searchRegex.checked,
+      isWildcard: elements.searchWildcard.checked,
       matchCase: elements.searchCase.checked,
       wholeWord: elements.searchWholeWord.checked,
     };
@@ -4664,6 +4673,7 @@ async function navigateHighlight(highlightId: string, direction: 'prev' | 'next'
     const result = await window.api.search({
       pattern: highlight.pattern,
       isRegex: highlight.isRegex,
+      isWildcard: false,
       matchCase: highlight.matchCase,
       wholeWord: highlight.wholeWord,
     });
@@ -5815,6 +5825,18 @@ function init(): void {
   elements.btnSearch.addEventListener('click', performSearch);
   elements.btnPrevResult.addEventListener('click', () => navigateSearchPrev());
   elements.btnNextResult.addEventListener('click', () => navigateSearchNext());
+
+  // Regex and Wildcard are mutually exclusive
+  elements.searchRegex.addEventListener('change', () => {
+    if (elements.searchRegex.checked) {
+      elements.searchWildcard.checked = false;
+    }
+  });
+  elements.searchWildcard.addEventListener('change', () => {
+    if (elements.searchWildcard.checked) {
+      elements.searchRegex.checked = false;
+    }
+  });
 
   // Search options popup
   elements.btnSearchOptions.addEventListener('click', (e) => {

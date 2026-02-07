@@ -36,6 +36,7 @@ interface SearchColumnConfig {
 interface SearchOptions {
   pattern: string;
   isRegex: boolean;
+  isWildcard: boolean;
   matchCase: boolean;
   wholeWord: boolean;
   columnConfig?: SearchColumnConfig;

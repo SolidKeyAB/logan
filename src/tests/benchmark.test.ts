@@ -264,6 +264,7 @@ describe('Logan Benchmark', () => {
         const matches = await handler.search({
           pattern: 'Timeout waiting',
           isRegex: false,
+          isWildcard: false,
           matchCase: false,
           wholeWord: false,
         });
@@ -297,6 +298,7 @@ describe('Logan Benchmark', () => {
         const matches = await handler.search({
           pattern: 'user_\\d{1,3}\\s+authenticated',
           isRegex: true,
+          isWildcard: false,
           matchCase: false,
           wholeWord: false,
         });

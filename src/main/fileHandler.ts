@@ -3,6 +3,13 @@ import * as readline from 'readline';
 import { spawn } from 'child_process';
 import { FileInfo, LineData, SearchMatch, SearchOptions } from '../shared/types';
 
+// Convert wildcard pattern to regex string: * = .*, ? = ., rest escaped
+function wildcardToRegex(pattern: string): string {
+  return pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '.*')
+    .replace(/\?/g, '.');
+}
+
 // Shared column filter utility — filters a line to only visible columns
 export interface ColumnConfig {
   delimiter: string;
@@ -334,6 +341,25 @@ export class FileHandler {
     const matches: SearchMatch[] = [];
     const MAX_MATCHES = 50000;
 
+    // Determine the effective regex pattern and whether ripgrep should use regex mode
+    const useRegexMode = options.isRegex || options.isWildcard;
+    let rgPattern = options.pattern;
+    if (options.isWildcard) {
+      rgPattern = wildcardToRegex(options.pattern);
+    }
+
+    // Pre-compile regex for determining actual match length (ripgrep doesn't report it)
+    let searchRegex: RegExp | null = null;
+    if (useRegexMode) {
+      try {
+        const flags = options.matchCase ? '' : 'i';
+        searchRegex = new RegExp(rgPattern, flags);
+      } catch {
+        // Invalid regex - ripgrep will also fail, return empty
+        return [];
+      }
+    }
+
     // Build ripgrep arguments
     const args: string[] = [
       '--line-number',
@@ -350,7 +376,7 @@ export class FileHandler {
       args.push('--word-regexp');
     }
 
-    if (!options.isRegex) {
+    if (!useRegexMode) {
       args.push('--fixed-strings');
     }
 
@@ -358,7 +384,7 @@ export class FileHandler {
     args.push('--max-count', String(MAX_MATCHES));
 
     // Add pattern and file
-    args.push('--', options.pattern, this.filePath);
+    args.push('--', rgPattern, this.filePath);
 
     return new Promise((resolve) => {
       const proc = spawn('rg', args);
@@ -396,10 +422,20 @@ export class FileHandler {
           const adjustedLineNum = lineNum - 1 - this.headerLineCount;
           if (adjustedLineNum < 0) continue;
 
+          // For regex patterns, determine actual match length from the line text
+          let matchLength = options.pattern.length;
+          if (searchRegex) {
+            const textFromMatch = lineText.substring(column - 1);
+            const reMatch = searchRegex.exec(textFromMatch);
+            if (reMatch && reMatch.index === 0) {
+              matchLength = reMatch[0].length;
+            }
+          }
+
           matches.push({
             lineNumber: adjustedLineNum,
             column: column - 1, // ripgrep uses 1-based columns
-            length: options.pattern.length,
+            length: matchLength,
             lineText,
           });
 
@@ -464,6 +500,12 @@ export class FileHandler {
       const flags = options.matchCase ? 'g' : 'gi';
       if (options.isRegex) {
         regex = new RegExp(options.pattern, flags);
+      } else if (options.isWildcard) {
+        let converted = wildcardToRegex(options.pattern);
+        if (options.wholeWord) {
+          converted = `\\b${converted}\\b`;
+        }
+        regex = new RegExp(converted, flags);
       } else {
         let escaped = options.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         if (options.wholeWord) {
