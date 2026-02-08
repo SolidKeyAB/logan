@@ -162,6 +162,12 @@ interface DiffDisplayLine {
   hunkIndex: number; // which hunk this belongs to
 }
 
+interface ActivityEntry {
+  timestamp: string;
+  action: string;
+  details: Record<string, unknown>;
+}
+
 interface Api {
   // File operations
   openFileDialog: () => Promise<string | null>;
@@ -271,6 +277,11 @@ interface Api {
   computeDiff: (leftFilePath: string, rightFilePath: string) => Promise<{ success: boolean; result?: DiffResult; error?: string }>;
   cancelDiff: () => Promise<{ success: boolean }>;
   onDiffProgress: (callback: (data: { percent: number; phase: string }) => void) => () => void;
+
+  // Local file status & activity history
+  loadActivityHistory: () => Promise<{ success: boolean; history?: ActivityEntry[]; error?: string }>;
+  clearActivityHistory: () => Promise<{ success: boolean; error?: string }>;
+  getLocalFileStatus: () => Promise<{ exists: boolean; writable: boolean; localPath: string | null }>;
 
   // Window controls
   windowMinimize: () => Promise<void>;

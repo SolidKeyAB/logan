@@ -22,6 +22,9 @@ const IPC = {
   DIFF_COMPUTE: 'diff-compute',
   DIFF_CANCEL: 'diff-cancel',
   DIFF_PROGRESS: 'diff-compute-progress',
+  LOAD_ACTIVITY_HISTORY: 'load-activity-history',
+  CLEAR_ACTIVITY_HISTORY: 'clear-activity-history',
+  GET_LOCAL_FILE_STATUS: 'get-local-file-status',
 } as const;
 
 // API exposed to renderer
@@ -283,6 +286,16 @@ const api = {
     ipcRenderer.on(IPC.DIFF_PROGRESS, handler);
     return () => ipcRenderer.removeListener(IPC.DIFF_PROGRESS, handler);
   },
+
+  // Local file status & activity history
+  loadActivityHistory: (): Promise<{ success: boolean; history?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.LOAD_ACTIVITY_HISTORY),
+
+  clearActivityHistory: (): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.CLEAR_ACTIVITY_HISTORY),
+
+  getLocalFileStatus: (): Promise<{ exists: boolean; writable: boolean; localPath: string | null }> =>
+    ipcRenderer.invoke(IPC.GET_LOCAL_FILE_STATUS),
 
   // Window controls
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),

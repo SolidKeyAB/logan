@@ -117,6 +117,10 @@
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
             <span class="activity-badge" id="badge-highlights"></span>
           </button>
+          <button class="activity-bar-btn" data-panel="history" title="History (Ctrl+7)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 8 14"></polyline><path d="M2.05 12A10 10 0 0 1 4.63 5.36"></path></svg>
+            <span class="activity-badge" id="badge-history"></span>
+          </button>
         </div>
         <div class="activity-bar-bottom">
           <button class="activity-bar-btn" id="btn-activity-settings" title="Settings">
@@ -250,6 +254,25 @@
             </div>
             <button id="btn-add-highlight" class="add-btn">+ Add Highlight Rule</button>
           </div>
+
+          <!-- History Panel -->
+          <div class="panel-view" id="panel-history" data-panel="history">
+            <div class="section-header-inline">
+              <select id="history-filter" class="history-filter-select">
+                <option value="all">All Activity</option>
+                <option value="search">Searches</option>
+                <option value="filter">Filters</option>
+                <option value="bookmark">Bookmarks</option>
+                <option value="highlight">Highlights</option>
+                <option value="analysis">Analysis</option>
+                <option value="other">Other</option>
+              </select>
+              <button id="btn-clear-history" class="section-btn" title="Clear history">&#128465;</button>
+            </div>
+            <div id="history-list" class="history-content">
+              <p class="placeholder">No activity recorded</p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -328,6 +351,7 @@
         </div>
       </div>
       <div class="status-right">
+        <span id="status-local-storage" class="status-local-storage hidden" title="Local .logan/ storage status"></span>
         <span id="status-cursor">Ln 1, Col 1</span>
         <span class="status-separator">|</span>
         <span id="status-size">0 B</span>
@@ -560,7 +584,7 @@
           <div class="help-section">
             <h4>Panels</h4>
             <div class="shortcut-list">
-              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>1</kbd>...<kbd>6</kbd><span>Toggle panel (Folders/Stats/Analysis/Gaps/Bookmarks/Highlights)</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>1</kbd>...<kbd>7</kbd><span>Toggle panel (Folders/Stats/Analysis/Gaps/Bookmarks/Highlights/History)</span></div>
               <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>\</kbd><span>Toggle panel visibility</span></div>
               <div class="shortcut-item"><kbd>Esc</kbd><span>Close panel (when focused)</span></div>
             </div>

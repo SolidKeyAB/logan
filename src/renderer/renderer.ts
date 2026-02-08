@@ -801,6 +801,11 @@ const elements = {
   btnPrevGap: document.getElementById('btn-prev-gap') as HTMLButtonElement,
   btnNextGap: document.getElementById('btn-next-gap') as HTMLButtonElement,
   gapNavPosition: document.getElementById('gap-nav-position') as HTMLSpanElement,
+  // History panel
+  historyList: document.getElementById('history-list') as HTMLDivElement,
+  historyFilter: document.getElementById('history-filter') as HTMLSelectElement,
+  btnClearHistory: document.getElementById('btn-clear-history') as HTMLButtonElement,
+  statusLocalStorage: document.getElementById('status-local-storage') as HTMLSpanElement,
   // Datadog
   btnDatadog: document.getElementById('btn-datadog') as HTMLButtonElement,
   datadogModal: document.getElementById('datadog-modal') as HTMLDivElement,
@@ -4125,6 +4130,7 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       elements.btnColumns.disabled = false;
       state.columnConfig = null; // Reset column config for new file
       updateStatusBar();
+      updateLocalStorageStatus();
       updateSplitNavigation();
 
       // Check if this is a markdown file
@@ -6516,7 +6522,7 @@ function formatBytes(bytes: number): string {
 
 // Sidebar toggle
 // Panel system
-const PANEL_IDS = ['folders', 'stats', 'analysis', 'time-gaps', 'bookmarks', 'highlights'];
+const PANEL_IDS = ['folders', 'stats', 'analysis', 'time-gaps', 'bookmarks', 'highlights', 'history'];
 const PANEL_NAMES: Record<string, string> = {
   'folders': 'Folders',
   'stats': 'File Stats',
@@ -6524,6 +6530,7 @@ const PANEL_NAMES: Record<string, string> = {
   'time-gaps': 'Time Gaps',
   'bookmarks': 'Bookmarks',
   'highlights': 'Highlights',
+  'history': 'History',
 };
 
 let activePanel: string | null = null;
@@ -6562,6 +6569,11 @@ function openPanel(panelId: string): void {
 
   // Update pin button state
   elements.btnPinPanel.classList.toggle('pinned', pinnedPanels.has(panelId));
+
+  // Lazy-load history panel
+  if (panelId === 'history') {
+    loadAndRenderHistory();
+  }
 
   savePanelState();
 }
@@ -6639,6 +6651,213 @@ function updateActivityBadge(panelId: string, count: number): void {
   }
 }
 
+// === History Panel ===
+
+const ACTION_CATEGORIES: Record<string, string[]> = {
+  search: ['search'],
+  filter: ['filter_applied', 'filter_cleared'],
+  bookmark: ['bookmark_added', 'bookmark_removed', 'bookmark_cleared'],
+  highlight: ['highlight_added', 'highlight_removed', 'highlight_cleared'],
+  analysis: ['analysis_run', 'time_gap_analysis', 'diff_compared'],
+  other: ['file_opened', 'notes_saved', 'lines_saved'],
+};
+
+const ACTION_ICONS: Record<string, string> = {
+  file_opened: '&#128194;',
+  search: '&#128269;',
+  filter_applied: '&#9660;',
+  filter_cleared: '&#9651;',
+  bookmark_added: '&#128278;',
+  bookmark_removed: '&#128278;',
+  bookmark_cleared: '&#128278;',
+  highlight_added: '&#127912;',
+  highlight_removed: '&#127912;',
+  highlight_cleared: '&#127912;',
+  diff_compared: '&#8596;',
+  time_gap_analysis: '&#9200;',
+  analysis_run: '&#128202;',
+  notes_saved: '&#128221;',
+  lines_saved: '&#128190;',
+};
+
+const ACTION_LABELS: Record<string, string> = {
+  file_opened: 'Opened file',
+  search: 'Search',
+  filter_applied: 'Filter applied',
+  filter_cleared: 'Filter cleared',
+  bookmark_added: 'Bookmark added',
+  bookmark_removed: 'Bookmark removed',
+  bookmark_cleared: 'Bookmarks cleared',
+  highlight_added: 'Highlight added',
+  highlight_removed: 'Highlight removed',
+  highlight_cleared: 'Highlights cleared',
+  diff_compared: 'Diff compared',
+  time_gap_analysis: 'Time gap analysis',
+  analysis_run: 'Analysis run',
+  notes_saved: 'Notes saved',
+  lines_saved: 'Lines saved',
+};
+
+function getRelativeTime(isoStr: string): string {
+  const date = new Date(isoStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHour = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHour / 24);
+
+  if (diffSec < 60) return 'just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffHour < 24) return `${diffHour}h ago`;
+  if (diffDay === 1) return 'yesterday';
+  if (diffDay < 7) return `${diffDay}d ago`;
+  return date.toLocaleDateString();
+}
+
+function getDateGroup(isoStr: string): string {
+  const date = new Date(isoStr);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dateDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffDays = Math.floor((today.getTime() - dateDay.getTime()) / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays} days ago`;
+  return date.toLocaleDateString();
+}
+
+function formatActivityDetails(entry: ActivityEntry): string {
+  const d = entry.details;
+  switch (entry.action) {
+    case 'search':
+      return `"${d.pattern}" (${d.matchCount} matches)`;
+    case 'filter_applied':
+      return `${d.filteredLines} lines visible`;
+    case 'bookmark_added':
+      return `Line ${(d.lineNumber as number) + 1}${d.label ? ': ' + d.label : ''}`;
+    case 'bookmark_removed':
+      return `ID: ${d.bookmarkId}`;
+    case 'bookmark_cleared':
+      return `${d.count} removed`;
+    case 'highlight_added':
+      return `"${d.pattern}"${d.isGlobal ? ' (global)' : ''}`;
+    case 'highlight_cleared':
+      return `${d.count} removed`;
+    case 'diff_compared':
+      return `${(d.leftFile as string || '').split('/').pop()} vs ${(d.rightFile as string || '').split('/').pop()}`;
+    case 'time_gap_analysis':
+      return `${d.gapsFound} gaps (>${d.threshold}s)`;
+    case 'analysis_run':
+      return `${d.analyzerName}`;
+    case 'notes_saved':
+    case 'lines_saved':
+      return `Lines ${(d.startLine as number) + 1}-${(d.endLine as number) + 1}`;
+    default:
+      return '';
+  }
+}
+
+async function loadAndRenderHistory(): Promise<void> {
+  const result = await window.api.loadActivityHistory();
+  if (!result.success || !result.history) {
+    elements.historyList.innerHTML = '<p class="placeholder">No activity recorded</p>';
+    return;
+  }
+  renderActivityHistory(result.history as ActivityEntry[]);
+}
+
+function renderActivityHistory(entries: ActivityEntry[]): void {
+  const filterValue = elements.historyFilter.value;
+
+  // Filter entries by category
+  let filtered = entries;
+  if (filterValue !== 'all') {
+    const allowedActions = ACTION_CATEGORIES[filterValue] || [];
+    filtered = entries.filter(e => allowedActions.includes(e.action));
+  }
+
+  if (filtered.length === 0) {
+    elements.historyList.innerHTML = '<p class="placeholder">No matching activity</p>';
+    updateActivityBadge('history', 0);
+    return;
+  }
+
+  // Reverse chronological
+  const sorted = [...filtered].reverse();
+
+  // Group by date
+  const groups: Map<string, ActivityEntry[]> = new Map();
+  for (const entry of sorted) {
+    const group = getDateGroup(entry.timestamp);
+    if (!groups.has(group)) groups.set(group, []);
+    groups.get(group)!.push(entry);
+  }
+
+  let html = '';
+  for (const [dateLabel, groupEntries] of groups) {
+    html += `<div class="history-date-group">${escapeHtml(dateLabel)}</div>`;
+    for (const entry of groupEntries) {
+      const icon = ACTION_ICONS[entry.action] || '&#9679;';
+      const label = ACTION_LABELS[entry.action] || entry.action;
+      const details = formatActivityDetails(entry);
+      const time = getRelativeTime(entry.timestamp);
+      const isClickable = entry.action === 'search' || entry.action === 'bookmark_added';
+      const clickClass = isClickable ? ' clickable' : '';
+      const dataAttr = isClickable ? ` data-action="${escapeHtml(entry.action)}" data-details='${escapeHtml(JSON.stringify(entry.details))}'` : '';
+
+      html += `<div class="history-entry${clickClass}"${dataAttr}>`;
+      html += `<span class="history-icon">${icon}</span>`;
+      html += `<div class="history-entry-body">`;
+      html += `<span class="history-label">${escapeHtml(label)}</span>`;
+      if (details) html += `<span class="history-details">${escapeHtml(details)}</span>`;
+      html += `</div>`;
+      html += `<span class="history-time">${escapeHtml(time)}</span>`;
+      html += `</div>`;
+    }
+  }
+
+  elements.historyList.innerHTML = html;
+
+  // Add click handlers for clickable entries
+  elements.historyList.querySelectorAll('.history-entry.clickable').forEach(el => {
+    el.addEventListener('click', () => {
+      const action = (el as HTMLElement).dataset.action;
+      try {
+        const details = JSON.parse((el as HTMLElement).dataset.details || '{}');
+        if (action === 'search' && details.pattern) {
+          elements.searchInput.value = details.pattern;
+          if (details.isRegex) elements.searchRegex.checked = true;
+          elements.btnSearch.click();
+        } else if (action === 'bookmark_added' && typeof details.lineNumber === 'number') {
+          goToLine(details.lineNumber);
+        }
+      } catch { /* ignore parse errors */ }
+    });
+  });
+
+  updateActivityBadge('history', entries.length);
+}
+
+async function updateLocalStorageStatus(): Promise<void> {
+  try {
+    const status = await window.api.getLocalFileStatus();
+    if (status.writable) {
+      elements.statusLocalStorage.textContent = '.logan';
+      elements.statusLocalStorage.title = `Local storage: ${status.localPath}`;
+      elements.statusLocalStorage.classList.remove('hidden', 'readonly');
+    } else {
+      elements.statusLocalStorage.textContent = '.logan (r/o)';
+      elements.statusLocalStorage.title = 'Directory not writable - using global ~/.logan/ storage';
+      elements.statusLocalStorage.classList.remove('hidden');
+      elements.statusLocalStorage.classList.add('readonly');
+    }
+  } catch {
+    elements.statusLocalStorage.classList.add('hidden');
+  }
+}
+
 function setupActivityBar(): void {
   // Click handlers for activity bar icons
   document.querySelectorAll('.activity-bar-btn[data-panel]').forEach(btn => {
@@ -6659,6 +6878,19 @@ function setupActivityBar(): void {
     document.getElementById('settings-modal')?.classList.remove('hidden');
   });
 
+  // History panel controls
+  elements.historyFilter.addEventListener('change', () => {
+    if (activePanel === 'history') loadAndRenderHistory();
+  });
+
+  elements.btnClearHistory.addEventListener('click', async () => {
+    const result = await window.api.clearActivityHistory();
+    if (result.success) {
+      elements.historyList.innerHTML = '<p class="placeholder">No activity recorded</p>';
+      updateActivityBadge('history', 0);
+    }
+  });
+
   // Panel resize handle
   elements.panelResizeHandle.addEventListener('mousedown', (e) => {
     isResizingSidebar = true;
@@ -6670,12 +6902,12 @@ function setupActivityBar(): void {
     e.preventDefault();
   });
 
-  // Keyboard shortcuts: Ctrl+1..6 toggle panels, Ctrl+B toggle visibility, Escape close
+  // Keyboard shortcuts: Ctrl+1..7 toggle panels, Ctrl+B toggle visibility, Escape close
   document.addEventListener('keydown', (e) => {
-    // Ctrl+1..6 — toggle panels
+    // Ctrl+1..7 — toggle panels
     if (e.ctrlKey && !e.shiftKey && !e.altKey) {
       const num = parseInt(e.key, 10);
-      if (num >= 1 && num <= 6) {
+      if (num >= 1 && num <= 7) {
         e.preventDefault();
         togglePanel(PANEL_IDS[num - 1]);
         return;

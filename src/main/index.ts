@@ -5,7 +5,7 @@ import * as os from 'os';
 import { spawn } from 'child_process';
 import * as pty from 'node-pty';
 import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
-import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup } from '../shared/types';
+import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, ActivityEntry, LocalFileData } from '../shared/types';
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
@@ -59,6 +59,103 @@ function ensureConfigDir(): void {
   const configDir = getConfigDir();
   if (!fs.existsSync(configDir)) {
     fs.mkdirSync(configDir, { recursive: true });
+  }
+}
+
+// === Local .logan/ Persistence ===
+
+function getLocalLoganDir(filePath: string): string {
+  return path.join(path.dirname(filePath), '.logan');
+}
+
+function getLocalFilePath(filePath: string): string {
+  return path.join(getLocalLoganDir(filePath), `${path.basename(filePath)}.json`);
+}
+
+function canWriteLocal(filePath: string): boolean {
+  try {
+    const dir = path.dirname(filePath);
+    fs.accessSync(dir, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function ensureLocalLoganDir(filePath: string): boolean {
+  if (!canWriteLocal(filePath)) return false;
+  try {
+    const loganDir = getLocalLoganDir(filePath);
+    if (!fs.existsSync(loganDir)) {
+      fs.mkdirSync(loganDir, { recursive: true });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function createDefaultLocalFileData(filePath: string): LocalFileData {
+  return {
+    version: 1,
+    logFile: filePath,
+    lastOpened: new Date().toISOString(),
+    bookmarks: [],
+    highlights: [],
+    activityHistory: [],
+  };
+}
+
+function loadLocalFileData(filePath: string): LocalFileData {
+  try {
+    const localPath = getLocalFilePath(filePath);
+    if (fs.existsSync(localPath)) {
+      const data = fs.readFileSync(localPath, 'utf-8');
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    console.error('Failed to load local file data:', error);
+  }
+  return createDefaultLocalFileData(filePath);
+}
+
+function saveLocalFileData(filePath: string, data: LocalFileData): void {
+  try {
+    if (!ensureLocalLoganDir(filePath)) return;
+    const localPath = getLocalFilePath(filePath);
+    // Atomic write: write to temp then rename
+    const tmpPath = localPath + '.tmp';
+    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+    fs.renameSync(tmpPath, localPath);
+  } catch (error) {
+    console.error('Failed to save local file data:', error);
+  }
+}
+
+// Track whether current file uses local storage or fallback
+let currentFileUsesLocalStorage = false;
+
+// Activity history logging
+const ACTIVITY_HISTORY_CAP = 500;
+const ACTIVITY_HISTORY_TRIM_TO = 400;
+
+function logActivity(filePath: string, action: ActivityEntry['action'], details: Record<string, unknown>): void {
+  if (!canWriteLocal(filePath)) return;
+  try {
+    const data = loadLocalFileData(filePath);
+    const entry: ActivityEntry = {
+      timestamp: new Date().toISOString(),
+      action,
+      details,
+    };
+    data.activityHistory.push(entry);
+    // Cap at ACTIVITY_HISTORY_CAP, trim oldest to ACTIVITY_HISTORY_TRIM_TO
+    if (data.activityHistory.length > ACTIVITY_HISTORY_CAP) {
+      data.activityHistory = data.activityHistory.slice(-ACTIVITY_HISTORY_TRIM_TO);
+    }
+    saveLocalFileData(filePath, data);
+  } catch (error) {
+    console.error('Failed to log activity:', error);
   }
 }
 
@@ -144,16 +241,40 @@ function loadHighlightsForFile(filePath: string): void {
   highlights.clear();
   const store = loadHighlightsStore();
 
-  // Load global highlights first
+  // Load global highlights from ~/.logan/ (always)
   const globalHighlights = store[GLOBAL_HIGHLIGHTS_KEY] || [];
   for (const h of globalHighlights) {
     highlights.set(h.id, { ...h, isGlobal: true });
   }
 
-  // Load file-specific highlights
-  const fileHighlights = store[filePath] || [];
-  for (const h of fileHighlights) {
-    highlights.set(h.id, { ...h, isGlobal: false });
+  if (canWriteLocal(filePath)) {
+    // Load file-specific highlights from local .logan/
+    const localData = loadLocalFileData(filePath);
+
+    if (localData.highlights.length > 0) {
+      for (const h of localData.highlights) {
+        highlights.set(h.id, { ...h, isGlobal: false });
+      }
+    } else {
+      // Check global store for migration
+      const fileHighlights = store[filePath] || [];
+      if (fileHighlights.length > 0) {
+        // Migrate: copy to local, remove from global
+        for (const h of fileHighlights) {
+          highlights.set(h.id, { ...h, isGlobal: false });
+        }
+        localData.highlights = fileHighlights;
+        saveLocalFileData(filePath, localData);
+        delete store[filePath];
+        saveHighlightsStore(store);
+      }
+    }
+  } else {
+    // Fallback: load file-specific from global store
+    const fileHighlights = store[filePath] || [];
+    for (const h of fileHighlights) {
+      highlights.set(h.id, { ...h, isGlobal: false });
+    }
   }
 }
 
@@ -161,30 +282,75 @@ function loadHighlightsForFile(filePath: string): void {
 function saveHighlight(highlight: Highlight): void {
   if (!currentFilePath && !highlight.isGlobal) return;
 
-  const store = loadHighlightsStore();
-  const key = highlight.isGlobal ? GLOBAL_HIGHLIGHTS_KEY : currentFilePath!;
+  if (highlight.isGlobal) {
+    // Global highlights always go to ~/.logan/highlights.json
+    const store = loadHighlightsStore();
+    // Remove old version from all keys in global store
+    for (const k of Object.keys(store)) {
+      store[k] = store[k].filter(h => h.id !== highlight.id);
+    }
+    if (!store[GLOBAL_HIGHLIGHTS_KEY]) {
+      store[GLOBAL_HIGHLIGHTS_KEY] = [];
+    }
+    store[GLOBAL_HIGHLIGHTS_KEY].push(highlight);
+    saveHighlightsStore(store);
 
-  if (!store[key]) {
-    store[key] = [];
+    // Also remove from local if it was previously file-specific
+    if (currentFilePath && currentFileUsesLocalStorage) {
+      const localData = loadLocalFileData(currentFilePath);
+      localData.highlights = localData.highlights.filter(h => h.id !== highlight.id);
+      saveLocalFileData(currentFilePath, localData);
+    }
+  } else if (currentFilePath && currentFileUsesLocalStorage) {
+    // File-specific → local .logan/
+    const localData = loadLocalFileData(currentFilePath);
+    localData.highlights = localData.highlights.filter(h => h.id !== highlight.id);
+    localData.highlights.push(highlight);
+    saveLocalFileData(currentFilePath, localData);
+
+    // Remove from global store if it was previously global
+    const store = loadHighlightsStore();
+    let changed = false;
+    for (const k of Object.keys(store)) {
+      const before = store[k].length;
+      store[k] = store[k].filter(h => h.id !== highlight.id);
+      if (store[k].length !== before) changed = true;
+    }
+    if (changed) saveHighlightsStore(store);
+  } else {
+    // Fallback to global store (read-only directory)
+    const store = loadHighlightsStore();
+    for (const k of Object.keys(store)) {
+      store[k] = store[k].filter(h => h.id !== highlight.id);
+    }
+    const key = currentFilePath!;
+    if (!store[key]) store[key] = [];
+    store[key].push(highlight);
+    saveHighlightsStore(store);
   }
-
-  // Remove old version if exists (in case of update or global toggle change)
-  for (const k of Object.keys(store)) {
-    store[k] = store[k].filter(h => h.id !== highlight.id);
-  }
-
-  // Add to appropriate location
-  store[key].push(highlight);
-  saveHighlightsStore(store);
 }
 
 // Remove a highlight from storage
 function removeHighlightFromStore(highlightId: string): void {
+  // Remove from global store
   const store = loadHighlightsStore();
+  let globalChanged = false;
   for (const key of Object.keys(store)) {
+    const before = store[key].length;
     store[key] = store[key].filter(h => h.id !== highlightId);
+    if (store[key].length !== before) globalChanged = true;
   }
-  saveHighlightsStore(store);
+  if (globalChanged) saveHighlightsStore(store);
+
+  // Remove from local .logan/ if applicable
+  if (currentFilePath && currentFileUsesLocalStorage) {
+    const localData = loadLocalFileData(currentFilePath);
+    const before = localData.highlights.length;
+    localData.highlights = localData.highlights.filter(h => h.id !== highlightId);
+    if (localData.highlights.length !== before) {
+      saveLocalFileData(currentFilePath, localData);
+    }
+  }
 }
 
 // Load all bookmarks from config file
@@ -217,27 +383,66 @@ function saveBookmarksStore(store: BookmarksStore): void {
 // Load bookmarks for a specific file into memory
 function loadBookmarksForFile(filePath: string): void {
   bookmarks.clear();
-  const store = loadBookmarksStore();
-  const fileBookmarks = store[filePath] || [];
-  for (const b of fileBookmarks) {
-    bookmarks.set(b.id, b);
+
+  if (canWriteLocal(filePath)) {
+    currentFileUsesLocalStorage = true;
+    const localData = loadLocalFileData(filePath);
+
+    if (localData.bookmarks.length > 0) {
+      // Load from local .logan/
+      for (const b of localData.bookmarks) {
+        bookmarks.set(b.id, b);
+      }
+    } else {
+      // Check global store for migration
+      const store = loadBookmarksStore();
+      const globalBookmarks = store[filePath] || [];
+      if (globalBookmarks.length > 0) {
+        // Migrate: copy to local, remove from global
+        for (const b of globalBookmarks) {
+          bookmarks.set(b.id, b);
+        }
+        localData.bookmarks = globalBookmarks;
+        saveLocalFileData(filePath, localData);
+        delete store[filePath];
+        saveBookmarksStore(store);
+      }
+    }
+  } else {
+    // Fallback: read-only directory, use global store
+    currentFileUsesLocalStorage = false;
+    const store = loadBookmarksStore();
+    const fileBookmarks = store[filePath] || [];
+    for (const b of fileBookmarks) {
+      bookmarks.set(b.id, b);
+    }
   }
+
   currentFilePath = filePath;
 }
 
 // Save current bookmarks to the store for the current file
 function saveBookmarksForCurrentFile(): void {
   if (!currentFilePath) return;
-  const store = loadBookmarksStore();
+
   const currentBookmarks = Array.from(bookmarks.values())
     .sort((a, b) => a.lineNumber - b.lineNumber);
-  if (currentBookmarks.length > 0) {
-    store[currentFilePath] = currentBookmarks;
+
+  if (currentFileUsesLocalStorage) {
+    // Save to local .logan/
+    const localData = loadLocalFileData(currentFilePath);
+    localData.bookmarks = currentBookmarks;
+    saveLocalFileData(currentFilePath, localData);
   } else {
-    // Remove empty bookmark arrays to keep config clean
-    delete store[currentFilePath];
+    // Fallback to global store
+    const store = loadBookmarksStore();
+    if (currentBookmarks.length > 0) {
+      store[currentFilePath] = currentBookmarks;
+    } else {
+      delete store[currentFilePath];
+    }
+    saveBookmarksStore(store);
   }
-  saveBookmarksStore(store);
 }
 
 function createWindow() {
@@ -721,6 +926,14 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
     loadBookmarksForFile(filePath);
     loadHighlightsForFile(filePath);
 
+    // Update lastOpened in local sidecar
+    if (canWriteLocal(filePath)) {
+      const localData = loadLocalFileData(filePath);
+      localData.lastOpened = new Date().toISOString();
+      saveLocalFileData(filePath, localData);
+    }
+    logActivity(filePath, 'file_opened', { filePath });
+
     // Check for split metadata in file header (preferred)
     const splitMeta = fileHandler.getSplitMetadata();
     let splitInfo: { files: string[]; currentIndex: number } | undefined;
@@ -858,6 +1071,8 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
       },
       searchSignal
     );
+
+    if (currentFilePath) logActivity(currentFilePath, 'search', { pattern: options.pattern, isRegex: options.isRegex, matchCount: matches.length });
 
     // Check if filter is active for current file
     const filteredIndices = getFilteredLines();
@@ -1050,6 +1265,8 @@ ipcMain.handle(IPC.DIFF_COMPUTE, async (_, leftFilePath: string, rightFilePath: 
 
     mainWindow?.webContents.send(IPC.DIFF_PROGRESS, { percent: 100, phase: 'Done' });
 
+    if (currentFilePath) logActivity(currentFilePath, 'diff_compared', { leftFile: leftFilePath, rightFile: rightFilePath });
+
     return {
       success: true,
       result: {
@@ -1074,12 +1291,14 @@ ipcMain.handle(IPC.DIFF_CANCEL, async () => {
 ipcMain.handle('bookmark-add', async (_, bookmark: Bookmark) => {
   bookmarks.set(bookmark.id, bookmark);
   saveBookmarksForCurrentFile();
+  if (currentFilePath) logActivity(currentFilePath, 'bookmark_added', { lineNumber: bookmark.lineNumber, label: bookmark.label });
   return { success: true };
 });
 
 ipcMain.handle('bookmark-remove', async (_, id: string) => {
   bookmarks.delete(id);
   saveBookmarksForCurrentFile();
+  if (currentFilePath) logActivity(currentFilePath, 'bookmark_removed', { bookmarkId: id });
   return { success: true };
 });
 
@@ -1088,8 +1307,10 @@ ipcMain.handle('bookmark-list', async () => {
 });
 
 ipcMain.handle('bookmark-clear', async () => {
+  const count = bookmarks.size;
   bookmarks.clear();
   saveBookmarksForCurrentFile();
+  if (currentFilePath && count > 0) logActivity(currentFilePath, 'bookmark_cleared', { count });
   return { success: true };
 });
 
@@ -1236,12 +1457,14 @@ ipcMain.handle('bookmark-set-load', async (_, setId: string) => {
 ipcMain.handle('highlight-add', async (_, highlight: Highlight) => {
   highlights.set(highlight.id, highlight);
   saveHighlight(highlight);
+  if (currentFilePath) logActivity(currentFilePath, 'highlight_added', { pattern: highlight.pattern, isGlobal: !!highlight.isGlobal });
   return { success: true };
 });
 
 ipcMain.handle('highlight-remove', async (_, id: string) => {
   highlights.delete(id);
   removeHighlightFromStore(id);
+  if (currentFilePath) logActivity(currentFilePath, 'highlight_removed', { highlightId: id });
   return { success: true };
 });
 
@@ -1260,6 +1483,17 @@ ipcMain.handle('highlight-list', async () => {
 
 ipcMain.handle('highlight-clear', async () => {
   // Only clear file-specific highlights for current file, not global ones
+  if (currentFilePath && currentFileUsesLocalStorage) {
+    // Clear local .logan/ file-specific highlights
+    const localData = loadLocalFileData(currentFilePath);
+    const clearedCount = localData.highlights.length;
+    localData.highlights = [];
+    saveLocalFileData(currentFilePath, localData);
+    if (clearedCount > 0) {
+      logActivity(currentFilePath, 'highlight_cleared', { count: clearedCount });
+    }
+  }
+  // Also clear from global store for this file (migration leftovers)
   const store = loadHighlightsStore();
   if (currentFilePath && store[currentFilePath]) {
     delete store[currentFilePath];
@@ -1276,6 +1510,12 @@ ipcMain.handle('highlight-clear-all', async () => {
   // Clear all highlights including global
   highlights.clear();
   saveHighlightsStore({});
+  // Also clear local file-specific highlights
+  if (currentFilePath && currentFileUsesLocalStorage) {
+    const localData = loadLocalFileData(currentFilePath);
+    localData.highlights = [];
+    saveLocalFileData(currentFilePath, localData);
+  }
   return { success: true };
 });
 
@@ -1410,6 +1650,8 @@ ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: numb
     // Write lines to file, respecting column visibility
     const content = lines.map(l => filterLineToVisibleColumns(l.text, columnConfig)).join('\n');
     fs.writeFileSync(filePath, content, 'utf-8');
+
+    if (currentFilePath) logActivity(currentFilePath, 'lines_saved', { startLine, endLine });
 
     return { success: true, filePath, lineCount: lines.length };
   } catch (error) {
@@ -1586,6 +1828,8 @@ ipcMain.handle('save-to-notes', async (
     // Invalidate cache for this file so it gets re-indexed with new content
     fileHandlerCache.delete(notesFilePath);
 
+    if (currentFilePath) logActivity(currentFilePath, 'notes_saved', { startLine, endLine });
+
     return {
       success: true,
       filePath: notesFilePath,
@@ -1636,6 +1880,8 @@ ipcMain.handle('analyze-file', async (_, analyzerName?: string, options?: Analyz
       },
       analyzeSignal
     );
+
+    logActivity(currentFilePath, 'analysis_run', { analyzerName: analyzer.name });
 
     return { success: true, result };
   } catch (error) {
@@ -1875,6 +2121,8 @@ ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
     const sortedLines = Array.from(matchingLines).sort((a, b) => a - b);
     filterState.set(currentFilePath, sortedLines);
 
+    logActivity(currentFilePath, 'filter_applied', { levels: config.levels, filteredLines: sortedLines.length });
+
     return {
       success: true,
       stats: {
@@ -1894,6 +2142,7 @@ ipcMain.handle('cancel-filter', async () => {
 ipcMain.handle('clear-filter', async () => {
   if (currentFilePath) {
     filterState.delete(currentFilePath);
+    logActivity(currentFilePath, 'filter_cleared', {});
   }
   return { success: true };
 });
@@ -2141,6 +2390,8 @@ ipcMain.handle('detect-time-gaps', async (_, options: TimeGapOptions) => {
     }
 
     gaps.sort((a, b) => b.gapSeconds - a.gapSeconds);
+
+    if (currentFilePath) logActivity(currentFilePath, 'time_gap_analysis', { threshold: thresholdSeconds, gapsFound: gaps.length });
 
     return { success: true, gaps, totalLines };
   } catch (error) {
@@ -2415,5 +2666,29 @@ ipcMain.handle(IPC.DATADOG_FETCH_LOGS, async (_, params: DatadogFetchParams) => 
 
 ipcMain.handle(IPC.DATADOG_CANCEL_FETCH, async () => {
   datadogFetchSignal.cancelled = true;
+  return { success: true };
+});
+
+// === Local File Status & Activity History ===
+
+ipcMain.handle(IPC.GET_LOCAL_FILE_STATUS, async () => {
+  if (!currentFilePath) return { exists: false, writable: false, localPath: null };
+  const writable = canWriteLocal(currentFilePath);
+  const localPath = getLocalFilePath(currentFilePath);
+  const exists = writable && fs.existsSync(localPath);
+  return { exists, writable, localPath };
+});
+
+ipcMain.handle(IPC.LOAD_ACTIVITY_HISTORY, async () => {
+  if (!currentFilePath) return { success: false, error: 'No file open' };
+  const data = loadLocalFileData(currentFilePath);
+  return { success: true, history: data.activityHistory };
+});
+
+ipcMain.handle(IPC.CLEAR_ACTIVITY_HISTORY, async () => {
+  if (!currentFilePath) return { success: false, error: 'No file open' };
+  const data = loadLocalFileData(currentFilePath);
+  data.activityHistory = [];
+  saveLocalFileData(currentFilePath, data);
   return { success: true };
 });

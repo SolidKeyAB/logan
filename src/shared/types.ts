@@ -91,6 +91,38 @@ export interface FolderSearchMatch {
   lineText: string;
 }
 
+// Activity history entry for local .logan/ persistence
+export interface ActivityEntry {
+  timestamp: string; // ISO 8601
+  action:
+    | 'file_opened'
+    | 'search'
+    | 'filter_applied'
+    | 'filter_cleared'
+    | 'bookmark_added'
+    | 'bookmark_removed'
+    | 'bookmark_cleared'
+    | 'highlight_added'
+    | 'highlight_removed'
+    | 'highlight_cleared'
+    | 'diff_compared'
+    | 'time_gap_analysis'
+    | 'analysis_run'
+    | 'notes_saved'
+    | 'lines_saved';
+  details: Record<string, unknown>;
+}
+
+// Local .logan/<filename>.json sidecar data
+export interface LocalFileData {
+  version: 1;
+  logFile: string; // absolute path to source file
+  lastOpened: string; // ISO 8601
+  bookmarks: Bookmark[];
+  highlights: Highlight[]; // file-specific only (non-global)
+  activityHistory: ActivityEntry[]; // capped at 500
+}
+
 // IPC Channels
 export const IPC = {
   OPEN_FILE_DIALOG: 'open-file-dialog',
@@ -114,4 +146,7 @@ export const IPC = {
   DIFF_COMPUTE: 'diff-compute',
   DIFF_CANCEL: 'diff-cancel',
   DIFF_PROGRESS: 'diff-compute-progress',
+  LOAD_ACTIVITY_HISTORY: 'load-activity-history',
+  CLEAR_ACTIVITY_HISTORY: 'clear-activity-history',
+  GET_LOCAL_FILE_STATUS: 'get-local-file-status',
 } as const;
