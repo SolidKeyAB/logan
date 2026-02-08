@@ -62,6 +62,7 @@
           <button id="btn-prev-result" class="toolbar-btn small" title="Previous result" disabled>&lt;</button>
           <span id="search-result-count" class="result-count"></span>
           <span id="search-engine-badge" class="search-engine-badge" title="Search engine"></span>
+          <span id="hidden-matches-badge" class="hidden-matches-badge hidden" title="Click to see matches in filtered-out lines"></span>
           <button id="btn-next-result" class="toolbar-btn small" title="Next result" disabled>&gt;</button>
         </div>
         <div class="separator"></div>
@@ -89,16 +90,59 @@
 
     <!-- Main Content -->
     <div class="main-content">
-      <!-- Sidebar -->
-      <aside id="sidebar" class="sidebar">
-        <!-- Folders Section -->
-        <div class="sidebar-section" id="section-folders">
-          <div class="section-header" data-section="folders">
-            <span class="section-title">Folders</span>
-            <button id="btn-refresh-folders" class="section-btn" title="Refresh folders">&#8635;</button>
-            <button id="btn-add-folder" class="section-btn" title="Open folder">+</button>
+      <!-- Activity Bar -->
+      <div id="activity-bar" class="activity-bar">
+        <div class="activity-bar-top">
+          <button class="activity-bar-btn" data-panel="folders" title="Folders (Ctrl+1)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+            <span class="activity-badge" id="badge-folders"></span>
+          </button>
+          <button class="activity-bar-btn" data-panel="stats" title="File Stats (Ctrl+2)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="18" y="3" width="4" height="18"></rect><rect x="10" y="8" width="4" height="13"></rect><rect x="2" y="13" width="4" height="8"></rect></svg>
+            <span class="activity-badge" id="badge-stats"></span>
+          </button>
+          <button class="activity-bar-btn" data-panel="analysis" title="Analysis (Ctrl+3)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <span class="activity-badge" id="badge-analysis"></span>
+          </button>
+          <button class="activity-bar-btn" data-panel="time-gaps" title="Time Gaps (Ctrl+4)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            <span class="activity-badge" id="badge-time-gaps"></span>
+          </button>
+          <button class="activity-bar-btn" data-panel="bookmarks" title="Bookmarks (Ctrl+5)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
+            <span class="activity-badge" id="badge-bookmarks"></span>
+          </button>
+          <button class="activity-bar-btn" data-panel="highlights" title="Highlights (Ctrl+6)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+            <span class="activity-badge" id="badge-highlights"></span>
+          </button>
+        </div>
+        <div class="activity-bar-bottom">
+          <button class="activity-bar-btn" id="btn-activity-settings" title="Settings">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- Panel Container -->
+      <div id="panel-container" class="panel-container hidden">
+        <!-- Panel Header -->
+        <div class="panel-header">
+          <span id="panel-title" class="panel-title">Folders</span>
+          <div class="panel-header-actions">
+            <button id="btn-pin-panel" class="panel-header-btn" title="Pin this panel (always visible)">&#128204;</button>
+            <button id="btn-close-panel" class="panel-header-btn" title="Close panel">&times;</button>
           </div>
-          <div class="section-content">
+        </div>
+        <!-- Panel Body -->
+        <div class="panel-body">
+          <!-- Folders Panel -->
+          <div class="panel-view" id="panel-folders" data-panel="folders">
+            <div class="section-header-inline">
+              <button id="btn-refresh-folders" class="section-btn" title="Refresh folders">&#8635;</button>
+              <button id="btn-add-folder" class="section-btn" title="Open folder">+</button>
+            </div>
             <div class="folder-search-container">
               <input type="text" id="folder-search-input" class="folder-search-input" placeholder="Search in folders..." disabled>
               <button id="btn-folder-search" class="folder-search-btn" title="Search" disabled>&#128269;</button>
@@ -109,28 +153,16 @@
               <p class="placeholder">No folders open</p>
             </div>
           </div>
-        </div>
 
-        <!-- File Stats Section -->
-        <div class="sidebar-section" id="section-stats">
-          <div class="section-header" data-section="stats">
-            <span class="section-title">File Stats</span>
-            <span class="section-toggle">&#9660;</span>
-          </div>
-          <div class="section-content">
+          <!-- Stats Panel -->
+          <div class="panel-view" id="panel-stats" data-panel="stats">
             <div id="file-stats" class="stats-content">
               <p class="placeholder">No file loaded</p>
             </div>
           </div>
-        </div>
 
-        <!-- Analysis Results Section -->
-        <div class="sidebar-section" id="section-analysis">
-          <div class="section-header" data-section="analysis">
-            <span class="section-title">Analysis</span>
-            <span class="section-toggle">&#9660;</span>
-          </div>
-          <div class="section-content">
+          <!-- Analysis Panel (includes duplicates) -->
+          <div class="panel-view" id="panel-analysis" data-panel="analysis">
             <div id="analysis-progress" class="analysis-progress" style="display: none;">
               <div class="analysis-progress-text">Analyzing...</div>
               <div class="analysis-progress-bar"><div class="analysis-progress-fill"></div></div>
@@ -138,29 +170,16 @@
             <div id="analysis-results" class="analysis-content">
               <p class="placeholder">Run analysis to see results</p>
             </div>
-          </div>
-        </div>
-
-        <!-- Duplicates Section -->
-        <div class="sidebar-section" id="section-duplicates">
-          <div class="section-header" data-section="duplicates">
-            <span class="section-title">Duplicates</span>
-            <span class="section-toggle">&#9660;</span>
-          </div>
-          <div class="section-content">
-            <div id="duplicates-list" class="duplicates-content">
-              <p class="placeholder">No duplicates found</p>
+            <div class="panel-sub-section">
+              <div class="panel-sub-header">Duplicates</div>
+              <div id="duplicates-list" class="duplicates-content">
+                <p class="placeholder">No duplicates found</p>
+              </div>
             </div>
           </div>
-        </div>
 
-        <!-- Time Gaps Section -->
-        <div class="sidebar-section" id="section-time-gaps">
-          <div class="section-header" data-section="time-gaps">
-            <span class="section-title">Time Gaps</span>
-            <span class="section-toggle">&#9660;</span>
-          </div>
-          <div class="section-content">
+          <!-- Time Gaps Panel -->
+          <div class="panel-view" id="panel-time-gaps" data-panel="time-gaps">
             <div class="time-gap-controls">
               <label class="time-gap-label">
                 Threshold:
@@ -171,9 +190,9 @@
               <button id="btn-clear-gaps" class="secondary-btn small">Clear</button>
             </div>
             <div id="time-gap-nav" class="nav-controls hidden">
-              <button id="btn-prev-gap" class="nav-btn" title="Previous gap">◀</button>
+              <button id="btn-prev-gap" class="nav-btn" title="Previous gap">&#9664;</button>
               <span id="gap-nav-position" class="nav-position">0/0</span>
-              <button id="btn-next-gap" class="nav-btn" title="Next gap">▶</button>
+              <button id="btn-next-gap" class="nav-btn" title="Next gap">&#9654;</button>
             </div>
             <div id="time-gap-progress" class="time-gap-progress hidden">
               <div class="progress-bar-mini">
@@ -201,29 +220,24 @@
               <p class="placeholder">Click Detect to find time gaps</p>
             </div>
           </div>
-        </div>
 
-        <!-- Bookmarks Section -->
-        <div class="sidebar-section" id="section-bookmarks">
-          <div class="section-header" data-section="bookmarks">
-            <span class="section-title">Bookmarks</span>
-            <button id="btn-export-bookmarks" class="icon-btn" title="Export Bookmarks">&#128190;</button>
-            <span class="section-toggle">&#9660;</span>
-          </div>
-          <div class="section-content">
+          <!-- Bookmarks Panel -->
+          <div class="panel-view" id="panel-bookmarks" data-panel="bookmarks">
+            <div class="section-header-inline">
+              <button id="btn-save-bookmark-set" class="icon-btn" title="Save as Bookmark Set">&#128230;</button>
+              <button id="btn-load-bookmark-set" class="icon-btn" title="Load Bookmark Set">&#128229;</button>
+              <button id="btn-export-bookmarks" class="icon-btn" title="Export Bookmarks">&#128190;</button>
+            </div>
+            <div id="bookmark-sets-bar" class="bookmark-sets-bar hidden">
+              <div id="bookmark-sets-list" class="bookmark-sets-list"></div>
+            </div>
             <div id="bookmarks-list" class="bookmarks-content">
               <p class="placeholder">No bookmarks</p>
             </div>
           </div>
-        </div>
 
-        <!-- Highlights Section -->
-        <div class="sidebar-section" id="section-highlights">
-          <div class="section-header" data-section="highlights">
-            <span class="section-title">Highlights</span>
-            <span class="section-toggle">&#9660;</span>
-          </div>
-          <div class="section-content">
+          <!-- Highlights Panel -->
+          <div class="panel-view" id="panel-highlights" data-panel="highlights">
             <div id="highlight-groups-bar" class="highlight-groups-bar">
               <div id="highlight-groups-chips" class="highlight-groups-chips"></div>
               <div class="highlight-groups-actions">
@@ -237,11 +251,10 @@
             <button id="btn-add-highlight" class="add-btn">+ Add Highlight Rule</button>
           </div>
         </div>
+      </div>
 
-      </aside>
-
-      <!-- Sidebar Resize Handle -->
-      <div id="sidebar-resize-handle" class="sidebar-resize-handle"></div>
+      <!-- Panel Resize Handle -->
+      <div id="panel-resize-handle" class="panel-resize-handle hidden"></div>
 
       <!-- Terminal Overlay (Quake-style drop-down) -->
       <div id="terminal-overlay" class="terminal-overlay hidden">
@@ -251,8 +264,28 @@
         </div>
       </div>
 
+      <!-- Hidden Matches Popup -->
+      <div id="hidden-matches-popup" class="hidden-matches-popup hidden">
+        <div class="hidden-matches-header">
+          <span>Matches in filtered-out lines</span>
+          <button id="btn-close-hidden-matches" class="hidden-matches-close">&times;</button>
+        </div>
+        <div id="hidden-matches-list" class="hidden-matches-list"></div>
+      </div>
+
       <!-- Log Viewer -->
       <main class="log-viewer">
+        <!-- Peek Preview Panel -->
+        <div id="peek-preview" class="peek-preview hidden">
+          <div class="peek-preview-header">
+            <span id="peek-preview-title" class="peek-preview-title">Hidden Match Preview</span>
+            <div class="peek-preview-actions">
+              <button id="btn-peek-clear-filter" class="peek-action-btn" title="Clear filter and go to this line">Clear Filter &amp; Go To Line</button>
+              <button id="btn-peek-close" class="peek-close-btn">&times;</button>
+            </div>
+          </div>
+          <div id="peek-preview-content" class="peek-preview-content"></div>
+        </div>
         <div id="editor-container" class="editor-container">
           <!-- Markdown Preview -->
           <div id="markdown-preview" class="markdown-preview hidden"></div>
@@ -522,6 +555,14 @@
             <div class="shortcut-list">
               <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>`</kbd><span>Toggle terminal panel</span></div>
               <div class="shortcut-item"><kbd>Esc</kbd><span>Close terminal (when focused)</span></div>
+            </div>
+          </div>
+          <div class="help-section">
+            <h4>Panels</h4>
+            <div class="shortcut-list">
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>1</kbd>...<kbd>6</kbd><span>Toggle panel (Folders/Stats/Analysis/Gaps/Bookmarks/Highlights)</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>\</kbd><span>Toggle panel visibility</span></div>
+              <div class="shortcut-item"><kbd>Esc</kbd><span>Close panel (when focused)</span></div>
             </div>
           </div>
           <div class="help-section">

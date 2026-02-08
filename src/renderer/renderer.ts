@@ -28,6 +28,13 @@ interface SearchResult {
   text: string;
 }
 
+interface HiddenMatch {
+  lineNumber: number;
+  column: number;
+  length: number;
+  lineText: string;
+}
+
 interface PatternGroup {
   pattern: string;
   template: string;
@@ -209,6 +216,7 @@ interface TabState {
   selectionEnd: number | null;
   searchResults: SearchResult[];
   currentSearchIndex: number;
+  hiddenSearchMatches: HiddenMatch[];
   bookmarks: Bookmark[];
   highlights: HighlightConfig[];
   cachedLines: Map<number, LogLine>;
@@ -244,6 +252,7 @@ interface AppState {
   appliedFilterSuggestion: { id: string; title: string } | null;
   searchResults: SearchResult[];
   currentSearchIndex: number;
+  hiddenSearchMatches: HiddenMatch[];
   bookmarks: Bookmark[];
   highlights: HighlightConfig[];
   visibleStartLine: number;
@@ -282,6 +291,7 @@ const state: AppState = {
   appliedFilterSuggestion: null,
   searchResults: [],
   currentSearchIndex: -1,
+  hiddenSearchMatches: [],
   bookmarks: [],
   highlights: [],
   visibleStartLine: 0,
@@ -317,6 +327,11 @@ const ZOOM_MIN = 50;
 const ZOOM_MAX = 200;
 const ZOOM_STEP = 10;
 let zoomLevel = 100; // Percentage (100 = default)
+
+// Panel resize state
+let isResizingSidebar = false;
+let sidebarStartX = 0;
+let sidebarStartWidth = 0;
 
 // User settings (persisted to localStorage)
 interface UserSettings {
@@ -391,10 +406,11 @@ function applySettings(): void {
 
 function applySidebarSectionVisibility(): void {
   for (const section of SIDEBAR_SECTIONS) {
-    const el = document.getElementById(`section-${section.id}`);
-    if (el) {
+    // Hide/show activity bar buttons based on section visibility settings
+    const btn = document.querySelector(`.activity-bar-btn[data-panel="${section.id}"]`) as HTMLElement;
+    if (btn) {
       const visible = userSettings.sidebarSections[section.id] !== false;
-      el.classList.toggle('section-hidden', !visible);
+      btn.style.display = visible ? '' : 'none';
     }
   }
 }
@@ -611,12 +627,21 @@ const elements = {
   searchWholeWord: document.getElementById('search-whole-word') as HTMLInputElement,
   searchResultCount: document.getElementById('search-result-count') as HTMLSpanElement,
   searchEngineBadge: document.getElementById('search-engine-badge') as HTMLSpanElement,
+  hiddenMatchesBadge: document.getElementById('hidden-matches-badge') as HTMLSpanElement,
+  hiddenMatchesPopup: document.getElementById('hidden-matches-popup') as HTMLDivElement,
+  hiddenMatchesList: document.getElementById('hidden-matches-list') as HTMLDivElement,
+  btnCloseHiddenMatches: document.getElementById('btn-close-hidden-matches') as HTMLButtonElement,
+  peekPreview: document.getElementById('peek-preview') as HTMLDivElement,
+  peekPreviewTitle: document.getElementById('peek-preview-title') as HTMLSpanElement,
+  peekPreviewContent: document.getElementById('peek-preview-content') as HTMLDivElement,
+  btnPeekClearFilter: document.getElementById('btn-peek-clear-filter') as HTMLButtonElement,
+  btnPeekClose: document.getElementById('btn-peek-close') as HTMLButtonElement,
   searchEngineInfo: document.getElementById('search-engine-info') as HTMLParagraphElement,
   btnSearchOptions: document.getElementById('btn-search-options') as HTMLButtonElement,
   searchOptionsPopup: document.getElementById('search-options-popup') as HTMLDivElement,
   searchDirection: document.getElementById('search-direction') as HTMLButtonElement,
   searchStartLine: document.getElementById('search-start-line') as HTMLInputElement,
-  sidebar: document.getElementById('sidebar') as HTMLElement,
+  activityBar: document.getElementById('activity-bar') as HTMLElement,
   editorContainer: document.getElementById('editor-container') as HTMLDivElement,
   welcomeMessage: document.getElementById('welcome-message') as HTMLDivElement,
   markdownPreview: document.getElementById('markdown-preview') as HTMLDivElement,
@@ -635,6 +660,8 @@ const elements = {
   duplicatesList: document.getElementById('duplicates-list') as HTMLDivElement,
   bookmarksList: document.getElementById('bookmarks-list') as HTMLDivElement,
   btnExportBookmarks: document.getElementById('btn-export-bookmarks') as HTMLButtonElement,
+  btnSaveBookmarkSet: document.getElementById('btn-save-bookmark-set') as HTMLButtonElement,
+  btnLoadBookmarkSet: document.getElementById('btn-load-bookmark-set') as HTMLButtonElement,
   highlightsList: document.getElementById('highlights-list') as HTMLDivElement,
   btnAddHighlight: document.getElementById('btn-add-highlight') as HTMLButtonElement,
   highlightGroupsChips: document.getElementById('highlight-groups-chips') as HTMLDivElement,
@@ -739,8 +766,12 @@ const elements = {
   terminalContainer: document.getElementById('terminal-container') as HTMLDivElement,
   terminalResizeHandle: document.getElementById('terminal-resize-handle') as HTMLDivElement,
   btnTerminalToggle: document.getElementById('btn-terminal-toggle') as HTMLButtonElement,
-  // Sidebar resize
-  sidebarResizeHandle: document.getElementById('sidebar-resize-handle') as HTMLDivElement,
+  // Panel resize
+  panelContainer: document.getElementById('panel-container') as HTMLDivElement,
+  panelTitle: document.getElementById('panel-title') as HTMLSpanElement,
+  panelResizeHandle: document.getElementById('panel-resize-handle') as HTMLDivElement,
+  btnClosePanel: document.getElementById('btn-close-panel') as HTMLButtonElement,
+  btnPinPanel: document.getElementById('btn-pin-panel') as HTMLButtonElement,
   // Advanced Filter
   btnAdvancedFilter: document.getElementById('btn-advanced-filter') as HTMLButtonElement,
   advancedFilterModal: document.getElementById('advanced-filter-modal') as HTMLDivElement,
@@ -820,6 +851,46 @@ let terminal: any = null;
 let fitAddon: any = null;
 let terminalDataUnsubscribe: (() => void) | null = null;
 let terminalExitUnsubscribe: (() => void) | null = null;
+
+// === Split/Diff View State ===
+interface DiffHunkInfo {
+  type: 'equal' | 'added' | 'removed' | 'modified';
+  leftStart: number;
+  leftCount: number;
+  rightStart: number;
+  rightCount: number;
+}
+
+interface DiffResultInfo {
+  hunks: DiffHunkInfo[];
+  stats: { additions: number; deletions: number; modifications: number };
+  leftTotalLines: number;
+  rightTotalLines: number;
+}
+
+interface DiffDisplayLineInfo {
+  type: 'equal' | 'added' | 'removed' | 'modified' | 'spacer';
+  realLineNumber: number; // -1 for spacers
+  hunkIndex: number;
+}
+
+let viewMode: 'single' | 'split' | 'diff' = 'single';
+let secondaryViewer: SecondaryViewerInstance | null = null;
+let splitDiffState = {
+  secondaryTabId: null as string | null,
+  secondaryFilePath: null as string | null,
+  diffResult: null as DiffResultInfo | null,
+  leftDisplayLines: null as DiffDisplayLineInfo[] | null,
+  rightDisplayLines: null as DiffDisplayLineInfo[] | null,
+  currentHunkIndex: -1,
+  syncScroll: true,
+  isSyncScrolling: false,
+};
+
+// Split resize state
+let isSplitResizing = false;
+let splitStartX = 0;
+let splitStartLeftWidth = 0;
 
 // Advanced Filter State
 let advancedFilterGroups: FilterGroup[] = [];
@@ -941,6 +1012,715 @@ class ElementPool {
 
 const lineElementPool = new ElementPool();
 
+// === Secondary Viewer for Split/Diff View ===
+interface SecondaryViewerInstance {
+  wrapper: HTMLDivElement;
+  viewerElement: HTMLDivElement;
+  contentElement: HTMLDivElement;
+  headerElement: HTMLDivElement;
+  filePath: string | null;
+  totalLines: number;
+  cache: LRUCache<number, LogLine>;
+  pool: ElementPool;
+  displayLines: DiffDisplayLineInfo[] | null;
+  visibleStartLine: number;
+  visibleEndLine: number;
+  lastScrollTop: number;
+  scrollDirection: 'up' | 'down';
+  scrollRAF: number | null;
+  resizeObserver: ResizeObserver | null;
+}
+
+function createSecondaryViewer(container: HTMLElement): SecondaryViewerInstance {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'split-pane secondary-pane';
+
+  const header = document.createElement('div');
+  header.className = 'split-pane-header';
+  header.innerHTML = '<span class="split-pane-filename"></span><button class="split-pane-close" title="Close split view">&times;</button>';
+  wrapper.appendChild(header);
+
+  const viewer = document.createElement('div');
+  viewer.className = 'virtual-log-viewer secondary-viewer';
+  const lineHeight = getLineHeight();
+  const fontSize = getFontSize();
+  viewer.style.setProperty('--line-height', `${lineHeight}px`);
+  viewer.style.setProperty('--font-size', `${fontSize}px`);
+  viewer.style.fontSize = `${fontSize}px`;
+
+  const content = document.createElement('div');
+  content.className = 'log-content';
+  viewer.appendChild(content);
+  wrapper.appendChild(viewer);
+  container.appendChild(wrapper);
+
+  const sv: SecondaryViewerInstance = {
+    wrapper,
+    viewerElement: viewer,
+    contentElement: content,
+    headerElement: header,
+    filePath: null,
+    totalLines: 0,
+    cache: new LRUCache<number, LogLine>(CACHE_SIZE),
+    pool: new ElementPool(),
+    displayLines: null,
+    visibleStartLine: 0,
+    visibleEndLine: 0,
+    lastScrollTop: 0,
+    scrollDirection: 'down',
+    scrollRAF: null,
+    resizeObserver: null,
+  };
+
+  // Close button handler
+  header.querySelector('.split-pane-close')?.addEventListener('click', () => {
+    deactivateSplitView();
+  });
+
+  // Scroll handler
+  viewer.addEventListener('scroll', () => secondaryHandleScroll(sv), { passive: true });
+
+  // Wheel zoom
+  viewer.addEventListener('wheel', (e: WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      if (e.deltaY < 0) zoomIn(); else zoomOut();
+      secondaryApplyZoom(sv);
+    }
+  }, { passive: false });
+
+  // ResizeObserver
+  const ro = new ResizeObserver(() => {
+    if (sv.totalLines > 0) {
+      const containerHeight = sv.viewerElement.clientHeight;
+      const visibleLines = Math.ceil(containerHeight / getLineHeight());
+      const startLine = secondaryScrollTopToLine(sv, sv.viewerElement.scrollTop);
+      sv.visibleStartLine = Math.max(0, startLine - BUFFER_LINES);
+      sv.visibleEndLine = Math.min(startLine + visibleLines + BUFFER_LINES, secondaryGetTotalLines(sv) - 1);
+      secondaryLoadVisibleLines(sv);
+    }
+  });
+  ro.observe(viewer);
+  sv.resizeObserver = ro;
+
+  return sv;
+}
+
+function secondaryGetTotalLines(sv: SecondaryViewerInstance): number {
+  if (sv.displayLines) return sv.displayLines.length;
+  return sv.totalLines;
+}
+
+function secondaryGetVirtualHeight(sv: SecondaryViewerInstance): number {
+  const totalLines = secondaryGetTotalLines(sv);
+  const naturalHeight = totalLines * getLineHeight();
+  return Math.min(naturalHeight, MAX_SCROLL_HEIGHT);
+}
+
+function secondaryIsUsingScaledScroll(sv: SecondaryViewerInstance): boolean {
+  return secondaryGetTotalLines(sv) * getLineHeight() > MAX_SCROLL_HEIGHT;
+}
+
+function secondaryScrollTopToLine(sv: SecondaryViewerInstance, scrollTop: number): number {
+  const totalLines = secondaryGetTotalLines(sv);
+  if (!secondaryIsUsingScaledScroll(sv)) {
+    return Math.floor(scrollTop / getLineHeight());
+  }
+  const virtualHeight = secondaryGetVirtualHeight(sv);
+  const scrollRatio = scrollTop / (virtualHeight - (sv.viewerElement.clientHeight || 0));
+  const maxLine = totalLines - Math.ceil((sv.viewerElement.clientHeight || 0) / getLineHeight());
+  return Math.floor(scrollRatio * maxLine);
+}
+
+function secondaryLineToScrollTop(sv: SecondaryViewerInstance, lineNumber: number): number {
+  const totalLines = secondaryGetTotalLines(sv);
+  if (!secondaryIsUsingScaledScroll(sv)) {
+    return lineNumber * getLineHeight();
+  }
+  const virtualHeight = secondaryGetVirtualHeight(sv);
+  const maxLine = totalLines - Math.ceil((sv.viewerElement.clientHeight || 0) / getLineHeight());
+  const scrollRatio = lineNumber / maxLine;
+  return scrollRatio * (virtualHeight - (sv.viewerElement.clientHeight || 0));
+}
+
+function secondaryHandleScroll(sv: SecondaryViewerInstance): void {
+  const scrollTop = sv.viewerElement.scrollTop;
+  const containerHeight = sv.viewerElement.clientHeight;
+
+  sv.scrollDirection = scrollTop > sv.lastScrollTop ? 'down' : 'up';
+  sv.lastScrollTop = scrollTop;
+
+  const startLine = secondaryScrollTopToLine(sv, scrollTop);
+  const visibleLines = Math.ceil(containerHeight / getLineHeight());
+
+  const prefetchUp = sv.scrollDirection === 'up' ? PREFETCH_LINES : BUFFER_LINES;
+  const prefetchDown = sv.scrollDirection === 'down' ? PREFETCH_LINES : BUFFER_LINES;
+
+  sv.visibleStartLine = Math.max(0, startLine - prefetchUp);
+  sv.visibleEndLine = Math.min(secondaryGetTotalLines(sv) - 1, startLine + visibleLines + prefetchDown);
+
+  secondaryRenderVisibleLines(sv);
+
+  if (sv.scrollRAF !== null) cancelAnimationFrame(sv.scrollRAF);
+  sv.scrollRAF = requestAnimationFrame(() => {
+    sv.scrollRAF = null;
+    secondaryLoadVisibleLines(sv);
+  });
+
+  // Sync scroll to primary (in diff mode)
+  if (viewMode === 'diff' && splitDiffState.syncScroll && !splitDiffState.isSyncScrolling) {
+    splitDiffState.isSyncScrolling = true;
+    requestAnimationFrame(() => {
+      if (logViewerElement) logViewerElement.scrollTop = scrollTop;
+      splitDiffState.isSyncScrolling = false;
+    });
+  }
+}
+
+function secondaryRenderVisibleLines(sv: SecondaryViewerInstance): void {
+  if (!sv.contentElement || !sv.viewerElement) return;
+
+  const totalLines = secondaryGetTotalLines(sv);
+  if (totalLines === 0) return;
+
+  const virtualHeight = secondaryGetVirtualHeight(sv);
+  const scrollLeft = sv.viewerElement.scrollLeft;
+
+  sv.pool.releaseAll();
+  const fragment = document.createDocumentFragment();
+
+  const scrollTop = sv.viewerElement.scrollTop;
+  const startLine = sv.visibleStartLine;
+  const endLine = sv.visibleEndLine;
+
+  const usingScaled = secondaryIsUsingScaledScroll(sv);
+  const firstVisibleLine = secondaryScrollTopToLine(sv, scrollTop);
+
+  let maxContentWidth = 0;
+
+  for (let i = startLine; i <= endLine; i++) {
+    const displayLine = sv.displayLines ? sv.displayLines[i] : null;
+
+    if (displayLine && displayLine.type === 'spacer') {
+      const spacerDiv = sv.pool.acquire();
+      spacerDiv.className = 'log-line diff-spacer';
+      spacerDiv.innerHTML = '<span class="line-number">&nbsp;</span><span class="line-content">&nbsp;</span>';
+      let top: number;
+      if (usingScaled) {
+        top = scrollTop + (i - firstVisibleLine) * getLineHeight();
+      } else {
+        top = i * getLineHeight();
+      }
+      spacerDiv.style.cssText = `position:absolute;top:0;left:0;transform:translateY(${top}px);will-change:transform;white-space:pre;`;
+      fragment.appendChild(spacerDiv);
+      continue;
+    }
+
+    const cacheKey = displayLine ? displayLine.realLineNumber : i;
+    const line = sv.cache.get(cacheKey);
+    if (line) {
+      const div = sv.pool.acquire();
+      let className = 'log-line';
+      if (line.level) className += ` level-${line.level}`;
+      if (displayLine) {
+        if (displayLine.type === 'added') className += ' diff-added';
+        else if (displayLine.type === 'removed') className += ' diff-removed';
+        else if (displayLine.type === 'modified') className += ' diff-modified';
+      }
+      div.className = className;
+      div.dataset.lineNumber = String(line.lineNumber);
+
+      const lineNumHtml = `<span class="line-number">${line.lineNumber + 1}</span>`;
+      const contentHtml = `<span class="line-content">${escapeHtml(line.text)}</span>`;
+      div.innerHTML = lineNumHtml + contentHtml;
+
+      let top: number;
+      if (usingScaled) {
+        top = scrollTop + (i - firstVisibleLine) * getLineHeight();
+      } else {
+        top = i * getLineHeight();
+      }
+      div.style.cssText = `position:absolute;top:0;left:0;transform:translateY(${top}px);will-change:transform;white-space:pre;`;
+      fragment.appendChild(div);
+
+      const estimatedWidth = 70 + (line.text.length * 8);
+      if (estimatedWidth > maxContentWidth) maxContentWidth = estimatedWidth;
+    }
+  }
+
+  sv.contentElement.innerHTML = '';
+  sv.contentElement.appendChild(fragment);
+  sv.contentElement.style.height = `${virtualHeight}px`;
+  sv.contentElement.style.minWidth = `${Math.max(maxContentWidth, sv.viewerElement.clientWidth)}px`;
+
+  if (scrollLeft > 0) sv.viewerElement.scrollLeft = scrollLeft;
+}
+
+async function secondaryLoadVisibleLines(sv: SecondaryViewerInstance): Promise<void> {
+  if (!sv.filePath) return;
+
+  const totalLines = secondaryGetTotalLines(sv);
+  const start = sv.visibleStartLine;
+  const end = Math.min(sv.visibleEndLine, totalLines - 1);
+
+  // Find cache gaps
+  const gaps: Array<{ start: number; end: number }> = [];
+  let gapStart: number | null = null;
+
+  for (let i = start; i <= end; i++) {
+    const displayLine = sv.displayLines ? sv.displayLines[i] : null;
+    if (displayLine && displayLine.type === 'spacer') {
+      if (gapStart !== null) { gaps.push({ start: gapStart, end: i - 1 }); gapStart = null; }
+      continue;
+    }
+    const cacheKey = displayLine ? displayLine.realLineNumber : i;
+    if (!sv.cache.has(cacheKey)) {
+      if (gapStart === null) gapStart = i;
+    } else {
+      if (gapStart !== null) { gaps.push({ start: gapStart, end: i - 1 }); gapStart = null; }
+    }
+  }
+  if (gapStart !== null) gaps.push({ start: gapStart, end });
+
+  if (gaps.length === 0) {
+    secondaryRenderVisibleLines(sv);
+    return;
+  }
+
+  try {
+    // When in diff mode with display lines, we need to fetch by real line numbers
+    if (sv.displayLines) {
+      // Collect real line numbers from gaps
+      const realLineNumbers: number[] = [];
+      for (const gap of gaps) {
+        for (let i = gap.start; i <= gap.end; i++) {
+          const dl = sv.displayLines[i];
+          if (dl && dl.type !== 'spacer') realLineNumbers.push(dl.realLineNumber);
+        }
+      }
+      if (realLineNumbers.length === 0) { secondaryRenderVisibleLines(sv); return; }
+
+      // Batch into contiguous ranges for efficiency
+      realLineNumbers.sort((a, b) => a - b);
+      const ranges: Array<{ start: number; end: number }> = [];
+      let rangeStart = realLineNumbers[0];
+      let rangeEnd = rangeStart;
+      for (let i = 1; i < realLineNumbers.length; i++) {
+        if (realLineNumbers[i] === rangeEnd + 1) { rangeEnd = realLineNumbers[i]; }
+        else { ranges.push({ start: rangeStart, end: rangeEnd }); rangeStart = realLineNumbers[i]; rangeEnd = rangeStart; }
+      }
+      ranges.push({ start: rangeStart, end: rangeEnd });
+
+      const loadPromises = ranges.map(async (range) => {
+        const count = range.end - range.start + 1;
+        const result = await window.api.getLinesForFile(sv.filePath!, range.start, count);
+        if (result.success && result.lines) {
+          for (const line of result.lines) {
+            sv.cache.set(line.lineNumber, line);
+          }
+        }
+      });
+      await Promise.all(loadPromises);
+    } else {
+      // Simple mode (split view without diff) - fetch by position
+      const loadPromises = gaps.map(async (gap) => {
+        const count = gap.end - gap.start + 1;
+        const result = await window.api.getLinesForFile(sv.filePath!, gap.start, count);
+        if (result.success && result.lines) {
+          for (let idx = 0; idx < result.lines.length; idx++) {
+            sv.cache.set(result.lines[idx].lineNumber, result.lines[idx]);
+          }
+        }
+      });
+      await Promise.all(loadPromises);
+    }
+    secondaryRenderVisibleLines(sv);
+  } catch (error) {
+    console.error('SecondaryViewer: Failed to load lines:', error);
+  }
+}
+
+function secondarySetFile(sv: SecondaryViewerInstance, filePath: string, totalLines: number): void {
+  sv.filePath = filePath;
+  sv.totalLines = totalLines;
+  sv.cache.clear();
+  sv.displayLines = null;
+  const fileNameSpan = sv.headerElement.querySelector('.split-pane-filename');
+  if (fileNameSpan) fileNameSpan.textContent = getFileName(filePath);
+
+  // Initial load
+  const containerHeight = sv.viewerElement.clientHeight || 600;
+  const visibleLines = Math.ceil(containerHeight / getLineHeight());
+  sv.visibleStartLine = 0;
+  sv.visibleEndLine = Math.min(visibleLines + BUFFER_LINES, totalLines - 1);
+  secondaryLoadVisibleLines(sv);
+}
+
+function secondarySetDiffDisplayLines(sv: SecondaryViewerInstance, lines: DiffDisplayLineInfo[]): void {
+  sv.displayLines = lines;
+  sv.cache.clear();
+  const total = lines.length;
+  const containerHeight = sv.viewerElement.clientHeight || 600;
+  const visibleLines = Math.ceil(containerHeight / getLineHeight());
+  sv.visibleStartLine = 0;
+  sv.visibleEndLine = Math.min(visibleLines + BUFFER_LINES, total - 1);
+  secondaryLoadVisibleLines(sv);
+}
+
+function secondaryApplyZoom(sv: SecondaryViewerInstance): void {
+  const lineHeight = getLineHeight();
+  const fontSize = getFontSize();
+  sv.viewerElement.style.setProperty('--line-height', `${lineHeight}px`);
+  sv.viewerElement.style.setProperty('--font-size', `${fontSize}px`);
+  sv.viewerElement.style.fontSize = `${fontSize}px`;
+
+  if (secondaryGetTotalLines(sv) > 0) {
+    const containerHeight = sv.viewerElement.clientHeight;
+    const visibleLines = Math.ceil(containerHeight / getLineHeight());
+    const startLine = secondaryScrollTopToLine(sv, sv.viewerElement.scrollTop);
+    sv.visibleStartLine = Math.max(0, startLine - BUFFER_LINES);
+    sv.visibleEndLine = Math.min(startLine + visibleLines + BUFFER_LINES, secondaryGetTotalLines(sv) - 1);
+    secondaryRenderVisibleLines(sv);
+  }
+}
+
+function destroySecondaryViewer(sv: SecondaryViewerInstance): void {
+  if (sv.resizeObserver) { sv.resizeObserver.disconnect(); sv.resizeObserver = null; }
+  if (sv.scrollRAF !== null) cancelAnimationFrame(sv.scrollRAF);
+  sv.cache.clear();
+  sv.pool.releaseAll();
+  sv.wrapper.remove();
+}
+
+// === Split/Diff Activation ===
+
+function buildDiffDisplayLines(result: DiffResultInfo): { left: DiffDisplayLineInfo[]; right: DiffDisplayLineInfo[] } {
+  const left: DiffDisplayLineInfo[] = [];
+  const right: DiffDisplayLineInfo[] = [];
+
+  for (let h = 0; h < result.hunks.length; h++) {
+    const hunk = result.hunks[h];
+
+    if (hunk.type === 'equal') {
+      for (let i = 0; i < hunk.leftCount; i++) {
+        left.push({ type: 'equal', realLineNumber: hunk.leftStart + i, hunkIndex: h });
+        right.push({ type: 'equal', realLineNumber: hunk.rightStart + i, hunkIndex: h });
+      }
+    } else if (hunk.type === 'added') {
+      for (let i = 0; i < hunk.rightCount; i++) {
+        left.push({ type: 'spacer', realLineNumber: -1, hunkIndex: h });
+        right.push({ type: 'added', realLineNumber: hunk.rightStart + i, hunkIndex: h });
+      }
+    } else if (hunk.type === 'removed') {
+      for (let i = 0; i < hunk.leftCount; i++) {
+        left.push({ type: 'removed', realLineNumber: hunk.leftStart + i, hunkIndex: h });
+        right.push({ type: 'spacer', realLineNumber: -1, hunkIndex: h });
+      }
+    } else if (hunk.type === 'modified') {
+      const maxCount = Math.max(hunk.leftCount, hunk.rightCount);
+      for (let i = 0; i < maxCount; i++) {
+        if (i < hunk.leftCount) {
+          left.push({ type: 'modified', realLineNumber: hunk.leftStart + i, hunkIndex: h });
+        } else {
+          left.push({ type: 'spacer', realLineNumber: -1, hunkIndex: h });
+        }
+        if (i < hunk.rightCount) {
+          right.push({ type: 'modified', realLineNumber: hunk.rightStart + i, hunkIndex: h });
+        } else {
+          right.push({ type: 'spacer', realLineNumber: -1, hunkIndex: h });
+        }
+      }
+    }
+  }
+
+  return { left, right };
+}
+
+function activateSplitView(targetTabId: string): void {
+  const targetTab = state.tabs.find(t => t.id === targetTabId);
+  if (!targetTab || !targetTab.filePath) return;
+
+  // Deactivate any existing split first
+  if (viewMode !== 'single') deactivateSplitView();
+
+  viewMode = 'split';
+  splitDiffState.secondaryTabId = targetTabId;
+  splitDiffState.secondaryFilePath = targetTab.filePath;
+
+  // Add split layout classes
+  elements.editorContainer.classList.add('split-view');
+
+  // Wrap primary viewer in a pane
+  if (logViewerWrapper) {
+    logViewerWrapper.classList.add('split-pane', 'primary-pane');
+    // Add primary header
+    const existingHeader = logViewerWrapper.querySelector('.split-pane-header');
+    if (!existingHeader) {
+      const primaryHeader = document.createElement('div');
+      primaryHeader.className = 'split-pane-header primary-header';
+      primaryHeader.innerHTML = `<span class="split-pane-filename">${escapeHtml(getFileName(state.filePath || ''))}</span>`;
+      logViewerWrapper.insertBefore(primaryHeader, logViewerWrapper.firstChild);
+    }
+  }
+
+  // Add resize handle
+  const resizeHandle = document.createElement('div');
+  resizeHandle.className = 'split-resize-handle';
+  elements.editorContainer.appendChild(resizeHandle);
+
+  // Create secondary viewer
+  secondaryViewer = createSecondaryViewer(elements.editorContainer);
+  secondarySetFile(secondaryViewer, targetTab.filePath, targetTab.totalLines);
+
+  // Resize handle drag
+  resizeHandle.addEventListener('mousedown', (e) => {
+    isSplitResizing = true;
+    splitStartX = e.clientX;
+    splitStartLeftWidth = logViewerWrapper?.offsetWidth || 0;
+    resizeHandle.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+}
+
+async function activateDiffView(targetTabId: string): Promise<void> {
+  const targetTab = state.tabs.find(t => t.id === targetTabId);
+  if (!targetTab || !targetTab.filePath || !state.filePath) return;
+
+  // Deactivate any existing split first
+  if (viewMode !== 'single') deactivateSplitView();
+
+  viewMode = 'diff';
+  splitDiffState.secondaryTabId = targetTabId;
+  splitDiffState.secondaryFilePath = targetTab.filePath;
+  splitDiffState.syncScroll = true;
+
+  // Show progress
+  showProgress('Computing diff...');
+
+  const progressUnsub = window.api.onDiffProgress((data) => {
+    showProgress(`${data.phase} (${data.percent}%)`);
+  });
+
+  try {
+    const result = await window.api.computeDiff(state.filePath, targetTab.filePath);
+
+    progressUnsub();
+    hideProgress();
+
+    if (!result.success || !result.result) {
+      alert(result.error || 'Diff computation failed');
+      viewMode = 'single';
+      splitDiffState.secondaryTabId = null;
+      splitDiffState.secondaryFilePath = null;
+      return;
+    }
+
+    splitDiffState.diffResult = result.result;
+
+    // Build display line mappings
+    const { left, right } = buildDiffDisplayLines(result.result);
+    splitDiffState.leftDisplayLines = left;
+    splitDiffState.rightDisplayLines = right;
+    splitDiffState.currentHunkIndex = -1;
+
+    // Add split layout classes
+    elements.editorContainer.classList.add('split-view', 'diff-mode');
+
+    // Wrap primary viewer in a pane
+    if (logViewerWrapper) {
+      logViewerWrapper.classList.add('split-pane', 'primary-pane');
+      const existingHeader = logViewerWrapper.querySelector('.split-pane-header');
+      if (!existingHeader) {
+        const primaryHeader = document.createElement('div');
+        primaryHeader.className = 'split-pane-header primary-header';
+        primaryHeader.innerHTML = `<span class="split-pane-filename">${escapeHtml(getFileName(state.filePath || ''))}</span>`;
+        logViewerWrapper.insertBefore(primaryHeader, logViewerWrapper.firstChild);
+      }
+    }
+
+    // Add resize handle
+    const resizeHandle = document.createElement('div');
+    resizeHandle.className = 'split-resize-handle';
+    elements.editorContainer.appendChild(resizeHandle);
+
+    resizeHandle.addEventListener('mousedown', (e) => {
+      isSplitResizing = true;
+      splitStartX = e.clientX;
+      splitStartLeftWidth = logViewerWrapper?.offsetWidth || 0;
+      resizeHandle.classList.add('dragging');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+
+    // Create secondary viewer
+    secondaryViewer = createSecondaryViewer(elements.editorContainer);
+    secondarySetFile(secondaryViewer, targetTab.filePath, targetTab.totalLines);
+    secondarySetDiffDisplayLines(secondaryViewer, right);
+
+    // Create diff nav bar
+    createDiffNavBar(result.result);
+
+    // Apply left display lines to primary (force re-render)
+    cachedLines.clear();
+    const totalDisplayLines = left.length;
+    const containerHeight = logViewerElement?.clientHeight || 600;
+    const visibleLines = Math.ceil(containerHeight / getLineHeight());
+    state.visibleStartLine = 0;
+    state.visibleEndLine = Math.min(visibleLines + BUFFER_LINES, totalDisplayLines - 1);
+    loadVisibleLines();
+  } catch (error) {
+    progressUnsub();
+    hideProgress();
+    console.error('Diff computation failed:', error);
+    viewMode = 'single';
+    splitDiffState.secondaryTabId = null;
+    splitDiffState.secondaryFilePath = null;
+  }
+}
+
+function deactivateSplitView(): void {
+  if (viewMode === 'single') return;
+
+  // Remove diff nav bar
+  const diffNavBar = document.querySelector('.diff-nav-bar');
+  if (diffNavBar) diffNavBar.remove();
+
+  // Remove resize handle
+  const resizeHandle = elements.editorContainer.querySelector('.split-resize-handle');
+  if (resizeHandle) resizeHandle.remove();
+
+  // Destroy secondary viewer
+  if (secondaryViewer) {
+    destroySecondaryViewer(secondaryViewer);
+    secondaryViewer = null;
+  }
+
+  // Remove primary pane header
+  if (logViewerWrapper) {
+    const primaryHeader = logViewerWrapper.querySelector('.primary-header');
+    if (primaryHeader) primaryHeader.remove();
+    logViewerWrapper.classList.remove('split-pane', 'primary-pane');
+    logViewerWrapper.style.width = '';
+  }
+
+  // Remove layout classes
+  elements.editorContainer.classList.remove('split-view', 'diff-mode');
+
+  // Reset state
+  const wasDiff = viewMode === 'diff';
+  viewMode = 'single';
+  splitDiffState.secondaryTabId = null;
+  splitDiffState.secondaryFilePath = null;
+  splitDiffState.diffResult = null;
+  splitDiffState.leftDisplayLines = null;
+  splitDiffState.rightDisplayLines = null;
+  splitDiffState.currentHunkIndex = -1;
+  splitDiffState.isSyncScrolling = false;
+
+  // If was diff mode, re-render primary with normal lines
+  if (wasDiff) {
+    cachedLines.clear();
+    if (state.totalLines > 0 && logViewerElement) {
+      const containerHeight = logViewerElement.clientHeight;
+      const visibleLines = Math.ceil(containerHeight / getLineHeight());
+      const startLine = scrollTopToLine(logViewerElement.scrollTop);
+      state.visibleStartLine = Math.max(0, startLine - BUFFER_LINES);
+      state.visibleEndLine = Math.min(startLine + visibleLines + BUFFER_LINES, getTotalLines() - 1);
+      loadVisibleLines();
+    }
+  }
+}
+
+function createDiffNavBar(result: DiffResultInfo): void {
+  const existing = document.querySelector('.diff-nav-bar');
+  if (existing) existing.remove();
+
+  const changeHunks = result.hunks.filter(h => h.type !== 'equal');
+  const totalChanges = changeHunks.length;
+
+  const navBar = document.createElement('div');
+  navBar.className = 'diff-nav-bar';
+  navBar.innerHTML = `
+    <div class="diff-stats">
+      <span class="diff-stat-added">+${result.stats.additions}</span>
+      <span class="diff-stat-removed">-${result.stats.deletions}</span>
+      <span class="diff-stat-modified">~${result.stats.modifications}</span>
+    </div>
+    <div class="diff-nav-position">
+      <span class="diff-nav-pos-text">${totalChanges} changes</span>
+    </div>
+    <div class="diff-nav-controls">
+      <button class="diff-nav-btn" id="diff-prev-hunk" title="Previous change (Shift+F7)">&#9650; Prev</button>
+      <button class="diff-nav-btn" id="diff-next-hunk" title="Next change (F7)">&#9660; Next</button>
+      <label class="diff-sync-toggle" title="Synchronized scrolling">
+        <input type="checkbox" id="diff-sync-scroll" ${splitDiffState.syncScroll ? 'checked' : ''}>
+        Sync Scroll
+      </label>
+      <button class="diff-nav-btn diff-close-btn" id="diff-close" title="Close diff view (Escape)">Close</button>
+    </div>
+  `;
+
+  // Insert before editor container
+  elements.editorContainer.parentElement?.insertBefore(navBar, elements.editorContainer);
+
+  // Event handlers
+  document.getElementById('diff-prev-hunk')?.addEventListener('click', () => navigateDiffHunk(-1));
+  document.getElementById('diff-next-hunk')?.addEventListener('click', () => navigateDiffHunk(1));
+  document.getElementById('diff-close')?.addEventListener('click', () => deactivateSplitView());
+  document.getElementById('diff-sync-scroll')?.addEventListener('change', (e) => {
+    splitDiffState.syncScroll = (e.target as HTMLInputElement).checked;
+  });
+}
+
+function navigateDiffHunk(direction: number): void {
+  if (!splitDiffState.diffResult || !splitDiffState.leftDisplayLines) return;
+
+  const changeHunkIndices: number[] = [];
+  for (let h = 0; h < splitDiffState.diffResult.hunks.length; h++) {
+    if (splitDiffState.diffResult.hunks[h].type !== 'equal') changeHunkIndices.push(h);
+  }
+  if (changeHunkIndices.length === 0) return;
+
+  let newIdx: number;
+  if (splitDiffState.currentHunkIndex < 0) {
+    newIdx = direction > 0 ? 0 : changeHunkIndices.length - 1;
+  } else {
+    const currentPos = changeHunkIndices.indexOf(splitDiffState.currentHunkIndex);
+    const nextPos = currentPos + direction;
+    if (nextPos < 0) newIdx = changeHunkIndices.length - 1;
+    else if (nextPos >= changeHunkIndices.length) newIdx = 0;
+    else newIdx = nextPos;
+  }
+
+  splitDiffState.currentHunkIndex = changeHunkIndices[newIdx];
+
+  // Find first display line index for this hunk
+  const displayLineIdx = splitDiffState.leftDisplayLines.findIndex(
+    dl => dl.hunkIndex === splitDiffState.currentHunkIndex
+  );
+  if (displayLineIdx >= 0) {
+    // Scroll primary
+    if (logViewerElement) {
+      const scrollTop = lineToScrollTop(displayLineIdx);
+      logViewerElement.scrollTop = scrollTop;
+    }
+    // Scroll secondary (sync)
+    if (secondaryViewer) {
+      const scrollTop = secondaryLineToScrollTop(secondaryViewer, displayLineIdx);
+      secondaryViewer.viewerElement.scrollTop = scrollTop;
+    }
+  }
+
+  // Update position text
+  const posText = document.querySelector('.diff-nav-pos-text');
+  if (posText) {
+    posText.textContent = `${newIdx + 1}/${changeHunkIndices.length} changes`;
+  }
+}
+
 function createLogViewer(): void {
   // Remove existing wrapper if any
   if (logViewerWrapper) {
@@ -1037,7 +1817,7 @@ function createLogViewer(): void {
       const visibleLines = Math.ceil(containerHeight / getLineHeight());
       const startLine = scrollTopToLine(logViewerElement!.scrollTop);
       state.visibleStartLine = Math.max(0, startLine - BUFFER_LINES);
-      state.visibleEndLine = Math.min(startLine + visibleLines + BUFFER_LINES, state.totalLines - 1);
+      state.visibleEndLine = Math.min(startLine + visibleLines + BUFFER_LINES, getTotalLines() - 1);
       loadVisibleLines();
     }
   });
@@ -1121,6 +1901,15 @@ function handleScroll(): void {
     loadVisibleLines();
   });
 
+  // Sync scroll to secondary (in diff mode)
+  if (viewMode === 'diff' && splitDiffState.syncScroll && !splitDiffState.isSyncScrolling && secondaryViewer) {
+    splitDiffState.isSyncScrolling = true;
+    requestAnimationFrame(() => {
+      if (secondaryViewer) secondaryViewer.viewerElement.scrollTop = scrollTop;
+      splitDiffState.isSyncScrolling = false;
+    });
+  }
+
   // Mark scrolling state
   isScrolling = true;
   if (scrollEndTimer) clearTimeout(scrollEndTimer);
@@ -1183,6 +1972,9 @@ function performScrollUpdate(): void {
 }
 
 function getTotalLines(): number {
+  if (viewMode === 'diff' && splitDiffState.leftDisplayLines) {
+    return splitDiffState.leftDisplayLines.length;
+  }
   return state.isFiltered && state.filteredLines !== null
     ? state.filteredLines
     : state.totalLines;
@@ -1190,6 +1982,55 @@ function getTotalLines(): number {
 
 async function loadVisibleLines(): Promise<void> {
   if (!logContentElement) return;
+
+  // Diff mode: load by real line numbers from display line mapping
+  if (viewMode === 'diff' && splitDiffState.leftDisplayLines) {
+    const totalLines = getTotalLines();
+    const start = state.visibleStartLine;
+    const end = Math.min(state.visibleEndLine, totalLines - 1);
+
+    // Collect real line numbers that need loading
+    const realLineNumbers: number[] = [];
+    for (let i = start; i <= end; i++) {
+      const dl = splitDiffState.leftDisplayLines[i];
+      if (dl && dl.type !== 'spacer' && !cachedLines.has(dl.realLineNumber)) {
+        realLineNumbers.push(dl.realLineNumber);
+      }
+    }
+
+    if (realLineNumbers.length === 0) {
+      renderVisibleLines();
+      return;
+    }
+
+    try {
+      // Batch into contiguous ranges
+      realLineNumbers.sort((a, b) => a - b);
+      const ranges: Array<{ start: number; end: number }> = [];
+      let rangeStart = realLineNumbers[0];
+      let rangeEnd = rangeStart;
+      for (let i = 1; i < realLineNumbers.length; i++) {
+        if (realLineNumbers[i] === rangeEnd + 1) { rangeEnd = realLineNumbers[i]; }
+        else { ranges.push({ start: rangeStart, end: rangeEnd }); rangeStart = realLineNumbers[i]; rangeEnd = rangeStart; }
+      }
+      ranges.push({ start: rangeStart, end: rangeEnd });
+
+      const loadPromises = ranges.map(async (range) => {
+        const count = range.end - range.start + 1;
+        const result = await window.api.getLines(range.start, count);
+        if (result.success && result.lines) {
+          for (const line of result.lines) {
+            cachedLines.set(line.lineNumber, line);
+          }
+        }
+      });
+      await Promise.all(loadPromises);
+      renderVisibleLines();
+    } catch (error) {
+      console.error('Failed to load diff lines:', error);
+    }
+    return;
+  }
 
   const totalLines = getTotalLines();
   const start = state.visibleStartLine;
@@ -1305,8 +2146,48 @@ function renderVisibleLines(): void {
   // Track max content width for horizontal scrolling
   let maxContentWidth = 0;
 
+  // Diff mode display lines (null in normal mode - zero cost check)
+  const diffDisplayLines = viewMode === 'diff' ? splitDiffState.leftDisplayLines : null;
+
   // Batch create all line elements
   for (let i = startLine; i <= endLine; i++) {
+    // Diff mode: handle spacers and real line number mapping
+    if (diffDisplayLines) {
+      const dl = diffDisplayLines[i];
+      if (!dl) continue;
+
+      if (dl.type === 'spacer') {
+        const spacerDiv = lineElementPool.acquire();
+        spacerDiv.className = 'log-line diff-spacer';
+        spacerDiv.innerHTML = '<span class="line-number">&nbsp;</span><span class="line-content">&nbsp;</span>';
+        let top: number;
+        if (usingScaled) { top = scrollTop + (i - firstVisibleLine) * getLineHeight(); }
+        else { top = i * getLineHeight(); }
+        spacerDiv.style.cssText = `position:absolute;top:0;left:0;transform:translateY(${top}px);will-change:transform;white-space:pre;`;
+        fragment.appendChild(spacerDiv);
+        continue;
+      }
+
+      const line = cachedLines.get(dl.realLineNumber);
+      if (line) {
+        const lineElement = createLineElementPooled(line);
+        // Add diff CSS class
+        if (dl.type === 'added') lineElement.classList.add('diff-added');
+        else if (dl.type === 'removed') lineElement.classList.add('diff-removed');
+        else if (dl.type === 'modified') lineElement.classList.add('diff-modified');
+
+        let top: number;
+        if (usingScaled) { top = scrollTop + (i - firstVisibleLine) * getLineHeight(); }
+        else { top = i * getLineHeight(); }
+        lineElement.style.cssText = `position:absolute;top:0;left:0;transform:translateY(${top}px);will-change:transform;white-space:pre;`;
+        fragment.appendChild(lineElement);
+
+        const estimatedWidth = 70 + (line.text.length * 8);
+        if (estimatedWidth > maxContentWidth) maxContentWidth = estimatedWidth;
+      }
+      continue;
+    }
+
     const line = cachedLines.get(i);
     if (line) {
       const lineElement = createLineElementPooled(line);
@@ -2274,34 +3155,46 @@ function handleContextMenu(event: MouseEvent): void {
   menu.style.left = `${event.clientX}px`;
   menu.style.top = `${event.clientY}px`;
 
+  // Helper to create menu item with icon
+  function menuItem(icon: string, text: string, className?: string): HTMLDivElement {
+    const item = document.createElement('div');
+    item.className = 'context-menu-item' + (className ? ' ' + className : '');
+    const iconEl = document.createElement('span');
+    iconEl.className = 'context-menu-icon';
+    iconEl.textContent = icon;
+    item.appendChild(iconEl);
+    const label = document.createElement('span');
+    label.textContent = text;
+    item.appendChild(label);
+    return item;
+  }
+
+  function menuSeparator(): HTMLDivElement {
+    const sep = document.createElement('div');
+    sep.className = 'context-menu-separator';
+    return sep;
+  }
+
   // If text is selected, show highlight option
   if (selectedText) {
     const displayText = selectedText.trim();
-    const highlightAll = document.createElement('div');
-    highlightAll.className = 'context-menu-item';
-    highlightAll.textContent = `Highlight "${displayText.substring(0, 20)}${displayText.length > 20 ? '...' : ''}"`;
+    const highlightAll = menuItem('\u{1F58C}', `Highlight "${displayText.substring(0, 20)}${displayText.length > 20 ? '...' : ''}"`);
     highlightAll.addEventListener('click', () => {
       createHighlightFromSelection(selectedText, true);
       menu.remove();
     });
     menu.appendChild(highlightAll);
 
-    const separator1 = document.createElement('div');
-    separator1.className = 'context-menu-separator';
-    menu.appendChild(separator1);
+    menu.appendChild(menuSeparator());
 
-    const copySelection = document.createElement('div');
-    copySelection.className = 'context-menu-item';
-    copySelection.textContent = 'Copy Selection';
+    const copySelection = menuItem('\u{1F4CB}', 'Copy Selection');
     copySelection.addEventListener('click', () => {
       navigator.clipboard.writeText(selectedText);
       menu.remove();
     });
     menu.appendChild(copySelection);
 
-    const separator2 = document.createElement('div');
-    separator2.className = 'context-menu-separator';
-    menu.appendChild(separator2);
+    menu.appendChild(menuSeparator());
   }
 
   // Save to Notes - check for text selection across lines, Shift+click range, or single line
@@ -2337,25 +3230,17 @@ function handleContextMenu(event: MouseEvent): void {
 
   const lineCount = saveEndLine - saveStartLine + 1;
 
-  const saveToNotesItem = document.createElement('div');
-  saveToNotesItem.className = 'context-menu-item';
-  saveToNotesItem.textContent = lineCount === 1
-    ? `Save Line to Notes`
-    : `Save ${lineCount} Lines to Notes`;
+  const saveToNotesItem = menuItem('\u{1F4DD}', lineCount === 1 ? `Save Line to Notes` : `Save ${lineCount} Lines to Notes`);
   saveToNotesItem.addEventListener('click', () => {
     menu.remove();
     saveToNotesWithRange(saveStartLine, saveEndLine);
   });
   menu.appendChild(saveToNotesItem);
 
-  const separatorSave = document.createElement('div');
-  separatorSave.className = 'context-menu-separator';
-  menu.appendChild(separatorSave);
+  menu.appendChild(menuSeparator());
 
   // Range selection items
-  const rangeFromItem = document.createElement('div');
-  rangeFromItem.className = 'context-menu-item';
-  rangeFromItem.textContent = rangeSelectStartLine !== null ? 'Range from here (reset)' : 'Range from here';
+  const rangeFromItem = menuItem('\u{2194}', rangeSelectStartLine !== null ? 'Range from here (reset)' : 'Range from here');
   rangeFromItem.addEventListener('click', () => {
     rangeSelectStartLine = lineNumber;
     state.selectionStart = lineNumber;
@@ -2367,9 +3252,7 @@ function handleContextMenu(event: MouseEvent): void {
   menu.appendChild(rangeFromItem);
 
   if (rangeSelectStartLine !== null && rangeSelectStartLine !== lineNumber) {
-    const rangeToItem = document.createElement('div');
-    rangeToItem.className = 'context-menu-item';
-    rangeToItem.textContent = 'Range to here';
+    const rangeToItem = menuItem('\u{2194}', 'Range to here');
     rangeToItem.addEventListener('click', () => {
       const start = Math.min(rangeSelectStartLine!, lineNumber);
       const end = Math.max(rangeSelectStartLine!, lineNumber);
@@ -2384,39 +3267,60 @@ function handleContextMenu(event: MouseEvent): void {
     menu.appendChild(rangeToItem);
   }
 
-  const separatorRange = document.createElement('div');
-  separatorRange.className = 'context-menu-separator';
-  menu.appendChild(separatorRange);
+  menu.appendChild(menuSeparator());
 
   const hasBookmark = state.bookmarks.some((b) => b.lineNumber === lineNumber);
 
   if (hasBookmark) {
-    const removeBookmark = document.createElement('div');
-    removeBookmark.className = 'context-menu-item danger';
-    removeBookmark.textContent = 'Remove Bookmark';
+    const removeBookmark = menuItem('\u{1F516}', 'Remove Bookmark', 'danger');
     removeBookmark.addEventListener('click', () => {
       removeBookmarkAtLine(lineNumber);
       menu.remove();
     });
     menu.appendChild(removeBookmark);
   } else {
-    const addBookmark = document.createElement('div');
-    addBookmark.className = 'context-menu-item';
-    addBookmark.textContent = 'Add Bookmark';
+    const addBookmark = menuItem('\u{1F516}', 'Add Bookmark');
     addBookmark.addEventListener('click', () => {
       addBookmarkAtLine(lineNumber);
       menu.remove();
     });
     menu.appendChild(addBookmark);
+
+    // If text is selected, offer "Bookmark with title" using selection as label
+    if (selectedText.trim()) {
+      const trimmedTitle = selectedText.trim().substring(0, 50);
+      const bookmarkWithTitle = menuItem('\u{1F3F7}', `Bookmark as "${trimmedTitle}${selectedText.trim().length > 50 ? '...' : ''}"`);
+      bookmarkWithTitle.addEventListener('click', () => {
+        addBookmarkAtLineWithLabel(lineNumber, selectedText.trim());
+        menu.remove();
+      });
+      menu.appendChild(bookmarkWithTitle);
+    }
   }
 
-  const separator = document.createElement('div');
-  separator.className = 'context-menu-separator';
-  menu.appendChild(separator);
+  // Filter from selection — add to include/exclude patterns
+  if (selectedText.trim()) {
+    menu.appendChild(menuSeparator());
 
-  const copyLine = document.createElement('div');
-  copyLine.className = 'context-menu-item';
-  copyLine.textContent = 'Copy Line';
+    const filterText = selectedText.trim().substring(0, 30);
+    const filterInclude = menuItem('\u{2795}', `Include: "${filterText}${selectedText.trim().length > 30 ? '...' : ''}"`);
+    filterInclude.addEventListener('click', () => {
+      addToFilterPattern(selectedText.trim(), 'include');
+      menu.remove();
+    });
+    menu.appendChild(filterInclude);
+
+    const filterExclude = menuItem('\u{2796}', `Exclude: "${filterText}${selectedText.trim().length > 30 ? '...' : ''}"`);
+    filterExclude.addEventListener('click', () => {
+      addToFilterPattern(selectedText.trim(), 'exclude');
+      menu.remove();
+    });
+    menu.appendChild(filterExclude);
+  }
+
+  menu.appendChild(menuSeparator());
+
+  const copyLine = menuItem('\u{1F4CB}', 'Copy Line');
   copyLine.addEventListener('click', () => {
     const line = cachedLines.get(lineNumber);
     if (line) {
@@ -2426,13 +3330,9 @@ function handleContextMenu(event: MouseEvent): void {
   });
   menu.appendChild(copyLine);
 
-  const separatorSearch = document.createElement('div');
-  separatorSearch.className = 'context-menu-separator';
-  menu.appendChild(separatorSearch);
+  menu.appendChild(menuSeparator());
 
-  const searchFromHere = document.createElement('div');
-  searchFromHere.className = 'context-menu-item';
-  searchFromHere.textContent = `Search from Ln ${lineNumber + 1}`;
+  const searchFromHere = menuItem('\u{1F50D}', `Search from Ln ${lineNumber + 1}`);
   searchFromHere.addEventListener('click', () => {
     elements.searchStartLine.value = String(lineNumber + 1);
     elements.searchInput.focus();
@@ -3148,6 +4048,7 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       state.filteredLines = null;
       state.searchResults = [];
       state.currentSearchIndex = -1;
+      state.hiddenSearchMatches = [];
       state.currentNotesFile = null; // Reset notes file for new log file
       cachedLines.clear();
 
@@ -3214,7 +4115,7 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
         const containerHeight = logViewerElement.clientHeight;
         const visibleLines = Math.ceil(containerHeight / getLineHeight());
         state.visibleStartLine = 0;
-        state.visibleEndLine = Math.min(visibleLines + BUFFER_LINES * 2, state.totalLines - 1);
+        state.visibleEndLine = Math.min(visibleLines + BUFFER_LINES * 2, getTotalLines() - 1);
       }
 
       await loadVisibleLines();
@@ -3367,16 +4268,19 @@ async function showColumnsModal(): Promise<void> {
         }
       }
 
-      elements.columnsDelimiter.textContent = delimiterName;
+      const hasHeader = (result.analysis as any).hasHeaderRow;
+      elements.columnsDelimiter.textContent = delimiterName + (hasHeader ? ' (header detected)' : '');
 
       // Render column list
       elements.columnsList.innerHTML = columns.map((col: ColumnInfo, idx: number) => {
+        const colName = (col as any).name;
+        const label = colName ? `Col ${idx + 1} (${escapeHtml(colName)})` : `Col ${idx + 1}`;
         const samples = col.sample.slice(0, 3).map((s: string) => s.length > 30 ? s.substring(0, 27) + '...' : s);
         return `
           <div class="column-item">
             <label class="checkbox-label">
               <input type="checkbox" data-col-index="${idx}" ${col.visible ? 'checked' : ''}>
-              <span class="column-index">Col ${idx + 1}</span>
+              <span class="column-index">${label}</span>
             </label>
             <div class="column-samples">${samples.map((s: string) => `<code>${escapeHtml(s)}</code>`).join(' ')}</div>
           </div>
@@ -3497,6 +4401,10 @@ async function performSearch(): Promise<void> {
 
     if (result.success && result.matches) {
       state.searchResults = result.matches;
+      // Merge hidden matches from filter and from hidden columns
+      const filterHidden: HiddenMatch[] = (result as any).hiddenMatches || [];
+      const columnHidden: HiddenMatch[] = (result as any).hiddenColumnMatches || [];
+      state.hiddenSearchMatches = [...filterHidden, ...columnHidden];
 
       // Determine starting match index based on direction and start line
       const startLineVal = parseInt(elements.searchStartLine.value, 10);
@@ -3519,6 +4427,7 @@ async function performSearch(): Promise<void> {
       }
 
       updateSearchUI();
+      updateHiddenMatchesBadge();
       renderMinimapMarkers(); // Update minimap with search markers
       renderVisibleLines(); // Re-render to show search highlights
 
@@ -3543,6 +4452,144 @@ function updateSearchUI(): void {
   elements.searchResultCount.textContent = label;
   elements.btnPrevResult.disabled = count === 0;
   elements.btnNextResult.disabled = count === 0;
+}
+
+// Hidden matches badge and peek preview
+let peekLineNumber: number | null = null;
+
+function updateHiddenMatchesBadge(): void {
+  const count = state.hiddenSearchMatches.length;
+  if (count > 0) {
+    elements.hiddenMatchesBadge.textContent = `+${count} hidden`;
+    elements.hiddenMatchesBadge.title = `${count} matches found in filtered-out lines. Click to preview.`;
+    elements.hiddenMatchesBadge.classList.remove('hidden');
+  } else {
+    elements.hiddenMatchesBadge.classList.add('hidden');
+    elements.hiddenMatchesPopup.classList.add('hidden');
+    closePeekPreview();
+  }
+}
+
+function showHiddenMatchesPopup(): void {
+  const matches = state.hiddenSearchMatches;
+  if (matches.length === 0) return;
+
+  const list = elements.hiddenMatchesList;
+  list.innerHTML = '';
+
+  const displayLimit = Math.min(matches.length, 200);
+  const searchPattern = elements.searchInput.value;
+
+  for (let i = 0; i < displayLimit; i++) {
+    const m = matches[i];
+    const item = document.createElement('div');
+    item.className = 'hidden-match-item';
+
+    const lineNum = document.createElement('span');
+    lineNum.className = 'hidden-match-line-num';
+    lineNum.textContent = `Ln ${m.lineNumber + 1}`;
+
+    const text = document.createElement('span');
+    text.className = 'hidden-match-text';
+    // Highlight match in text
+    const lineText = m.lineText || '';
+    const truncated = lineText.length > 200 ? lineText.substring(0, 200) + '...' : lineText;
+    if (searchPattern && m.column >= 0 && m.length > 0) {
+      const before = escapeHtml(truncated.substring(0, m.column));
+      const match = escapeHtml(truncated.substring(m.column, m.column + m.length));
+      const after = escapeHtml(truncated.substring(m.column + m.length));
+      text.innerHTML = `${before}<mark>${match}</mark>${after}`;
+    } else {
+      text.textContent = truncated;
+    }
+
+    item.appendChild(lineNum);
+    item.appendChild(text);
+    item.addEventListener('click', () => showPeekPreview(m));
+
+    list.appendChild(item);
+  }
+
+  if (matches.length > displayLimit) {
+    const more = document.createElement('div');
+    more.className = 'hidden-match-item';
+    more.style.justifyContent = 'center';
+    more.style.color = 'var(--text-muted)';
+    more.textContent = `... and ${matches.length - displayLimit} more`;
+    list.appendChild(more);
+  }
+
+  elements.hiddenMatchesPopup.classList.remove('hidden');
+}
+
+function showPeekPreview(match: HiddenMatch): void {
+  peekLineNumber = match.lineNumber;
+  const searchPattern = elements.searchInput.value;
+
+  elements.peekPreviewTitle.textContent = `Hidden Match - Line ${match.lineNumber + 1}`;
+
+  // Show the match line with 3 lines of context above and below
+  const contextLines = 3;
+  const startLine = Math.max(0, match.lineNumber - contextLines);
+  const endLine = Math.min(state.totalLines - 1, match.lineNumber + contextLines);
+
+  // Fetch lines around the match
+  window.api.getLines(startLine, endLine - startLine + 1).then(result => {
+    if (!result.success || !result.lines) return;
+
+    const content = elements.peekPreviewContent;
+    content.innerHTML = '';
+
+    for (const line of result.lines) {
+      const lineEl = document.createElement('div');
+      lineEl.className = 'peek-line';
+      if (line.lineNumber === match.lineNumber) {
+        lineEl.classList.add('peek-match-line');
+      }
+
+      const numEl = document.createElement('span');
+      numEl.className = 'peek-line-num';
+      numEl.textContent = String(line.lineNumber + 1);
+
+      const textEl = document.createElement('span');
+      textEl.className = 'peek-line-text';
+
+      // Highlight match text on the match line
+      if (line.lineNumber === match.lineNumber && searchPattern && match.column >= 0 && match.length > 0) {
+        const before = escapeHtml(line.text.substring(0, match.column));
+        const matchText = escapeHtml(line.text.substring(match.column, match.column + match.length));
+        const after = escapeHtml(line.text.substring(match.column + match.length));
+        textEl.innerHTML = `${before}<mark>${matchText}</mark>${after}`;
+      } else {
+        textEl.textContent = line.text;
+      }
+
+      lineEl.appendChild(numEl);
+      lineEl.appendChild(textEl);
+      content.appendChild(lineEl);
+    }
+  });
+
+  elements.peekPreview.classList.remove('hidden');
+}
+
+function closePeekPreview(): void {
+  elements.peekPreview.classList.add('hidden');
+  peekLineNumber = null;
+}
+
+async function peekClearFilterAndGoToLine(): Promise<void> {
+  if (peekLineNumber === null) return;
+  const lineNum = peekLineNumber;
+  closePeekPreview();
+  elements.hiddenMatchesPopup.classList.add('hidden');
+
+  // Clear filter
+  await clearFilter();
+
+  // Go to line
+  goToLine(lineNum);
+  renderVisibleLines();
 }
 
 function navigateSearchNext(): void {
@@ -4421,9 +5468,28 @@ async function addBookmarkAtLine(lineNumber: number, comment?: string): Promise<
   const apiResult = await window.api.addBookmark(bookmark);
   if (apiResult.success) {
     state.bookmarks.push(bookmark);
+    state.bookmarks.sort((a, b) => a.lineNumber - b.lineNumber);
     updateBookmarksUI();
     renderVisibleLines();
   }
+}
+
+async function addBookmarkAtLineWithLabel(lineNumber: number, label: string): Promise<void> {
+  await addBookmarkAtLine(lineNumber, label);
+}
+
+function addToFilterPattern(pattern: string, type: 'include' | 'exclude'): void {
+  const textarea = type === 'include'
+    ? document.getElementById('include-patterns') as HTMLTextAreaElement
+    : document.getElementById('exclude-patterns') as HTMLTextAreaElement;
+
+  if (textarea) {
+    const current = textarea.value.trim();
+    textarea.value = current ? `${current}\n${pattern}` : pattern;
+  }
+
+  // Open filter modal so user can see and apply
+  document.getElementById('filter-modal')?.classList.remove('hidden');
 }
 
 async function editBookmarkComment(bookmarkId: string): Promise<void> {
@@ -4456,13 +5522,15 @@ async function removeBookmarkAtLine(lineNumber: number): Promise<void> {
 }
 
 function updateBookmarksUI(): void {
+  // Always keep bookmarks sorted by line number
+  state.bookmarks.sort((a, b) => a.lineNumber - b.lineNumber);
+  updateActivityBadge('bookmarks', state.bookmarks.length);
   if (state.bookmarks.length === 0) {
     elements.bookmarksList.innerHTML = '<p class="placeholder">No bookmarks</p>';
     return;
   }
 
   elements.bookmarksList.innerHTML = state.bookmarks
-    .sort((a, b) => a.lineNumber - b.lineNumber)
     .map(
       (b) => `
       <div class="bookmark-item" data-id="${b.id}" data-line="${b.lineNumber}" title="${b.lineText ? escapeHtml(b.lineText) : (b.label ? escapeHtml(b.label) : 'Click to go to line, double-click to edit comment')}">
@@ -4511,6 +5579,109 @@ async function removeBookmarkById(id: string): Promise<void> {
     updateBookmarksUI();
     renderVisibleLines();
   }
+}
+
+// Bookmark Sets
+async function saveBookmarkSet(): Promise<void> {
+  if (state.bookmarks.length === 0) return;
+
+  const name = prompt('Enter a name for this bookmark set:');
+  if (!name) return;
+
+  const set = {
+    id: `set_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+    name,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    bookmarks: [...state.bookmarks],
+  };
+
+  await window.api.bookmarkSetSave(set);
+  refreshBookmarkSets();
+}
+
+async function refreshBookmarkSets(): Promise<void> {
+  const result = await window.api.bookmarkSetList();
+  if (!result.success || !result.sets) return;
+
+  const setsBar = document.getElementById('bookmark-sets-bar')!;
+  const setsList = document.getElementById('bookmark-sets-list')!;
+
+  if (result.sets.length === 0) {
+    setsBar.classList.add('hidden');
+    return;
+  }
+
+  setsBar.classList.remove('hidden');
+  setsList.innerHTML = result.sets
+    .sort((a: any, b: any) => b.updatedAt - a.updatedAt)
+    .map((s: any) => {
+      const date = new Date(s.updatedAt).toLocaleDateString();
+      return `
+        <div class="bookmark-set-item" data-set-id="${s.id}">
+          <div class="bookmark-set-info">
+            <span class="bookmark-set-name">${escapeHtml(s.name)}</span>
+            <span class="bookmark-set-meta">${s.bookmarks.length} bookmarks - ${date}</span>
+          </div>
+          <div class="bookmark-set-actions">
+            <button class="bookmark-set-action-btn set-load" data-set-id="${s.id}" title="Load this set">Load</button>
+            <button class="bookmark-set-action-btn set-overwrite" data-set-id="${s.id}" title="Overwrite with current bookmarks">Update</button>
+            <button class="bookmark-set-action-btn danger set-delete" data-set-id="${s.id}" title="Delete this set">&times;</button>
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+
+  // Event handlers
+  setsList.querySelectorAll('.set-load').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const setId = (btn as HTMLElement).dataset.setId!;
+      const loadResult = await window.api.bookmarkSetLoad(setId);
+      if (loadResult.success && loadResult.bookmarks) {
+        // Clear current bookmarks
+        await window.api.clearBookmarks();
+        state.bookmarks = [];
+        // Add loaded bookmarks (sorted by line number)
+        const sorted = [...loadResult.bookmarks].sort((a, b) => a.lineNumber - b.lineNumber);
+        for (const b of sorted) {
+          await window.api.addBookmark(b);
+          state.bookmarks.push(b);
+        }
+        updateBookmarksUI();
+        renderVisibleLines();
+      }
+    });
+  });
+
+  setsList.querySelectorAll('.set-overwrite').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (state.bookmarks.length === 0) return;
+      const setId = (btn as HTMLElement).dataset.setId!;
+      const sets = (await window.api.bookmarkSetList()).sets || [];
+      const existing = sets.find((s: any) => s.id === setId);
+      if (!existing) return;
+      if (!confirm(`Overwrite "${existing.name}" with current bookmarks?`)) return;
+      await window.api.bookmarkSetUpdate({
+        ...existing,
+        updatedAt: Date.now(),
+        bookmarks: [...state.bookmarks],
+      });
+      refreshBookmarkSets();
+    });
+  });
+
+  setsList.querySelectorAll('.set-delete').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const setId = (btn as HTMLElement).dataset.setId!;
+      if (!confirm('Delete this bookmark set?')) return;
+      await window.api.bookmarkSetDelete(setId);
+      refreshBookmarkSets();
+    });
+  });
 }
 
 // Highlights
@@ -4580,6 +5751,7 @@ async function toggleHighlightGlobal(highlightId: string): Promise<void> {
 }
 
 function updateHighlightsUI(): void {
+  updateActivityBadge('highlights', state.highlights.length);
   if (state.highlights.length === 0) {
     elements.highlightsList.innerHTML =
       '<p class="placeholder">No highlight rules</p>';
@@ -5320,10 +6492,13 @@ function applyZoom(): void {
     const visibleLines = Math.ceil(containerHeight / getLineHeight());
     const startLine = scrollTopToLine(logViewerElement.scrollTop);
     state.visibleStartLine = Math.max(0, startLine - BUFFER_LINES);
-    state.visibleEndLine = Math.min(startLine + visibleLines + BUFFER_LINES, state.totalLines - 1);
+    state.visibleEndLine = Math.min(startLine + visibleLines + BUFFER_LINES, getTotalLines() - 1);
     renderVisibleLines();
     updateMinimapViewport();
   }
+
+  // Propagate zoom to secondary viewer
+  if (secondaryViewer) secondaryApplyZoom(secondaryViewer);
 }
 
 // Utility functions
@@ -5340,11 +6515,196 @@ function formatBytes(bytes: number): string {
 }
 
 // Sidebar toggle
-function toggleSidebar(): void {
-  elements.sidebar.classList.toggle('collapsed');
+// Panel system
+const PANEL_IDS = ['folders', 'stats', 'analysis', 'time-gaps', 'bookmarks', 'highlights'];
+const PANEL_NAMES: Record<string, string> = {
+  'folders': 'Folders',
+  'stats': 'File Stats',
+  'analysis': 'Analysis',
+  'time-gaps': 'Time Gaps',
+  'bookmarks': 'Bookmarks',
+  'highlights': 'Highlights',
+};
+
+let activePanel: string | null = null;
+let lastActivePanel: string | null = null;
+let pinnedPanels: Set<string> = new Set();
+
+function togglePanel(panelId: string): void {
+  if (activePanel === panelId) {
+    // Close panel (but not if pinned)
+    if (!pinnedPanels.has(panelId)) {
+      closePanel();
+    }
+    return;
+  }
+  openPanel(panelId);
 }
 
-// Section toggle
+function openPanel(panelId: string): void {
+  activePanel = panelId;
+  lastActivePanel = panelId;
+
+  // Show panel container
+  elements.panelContainer.classList.remove('hidden');
+  elements.panelResizeHandle.classList.remove('hidden');
+  elements.panelTitle.textContent = PANEL_NAMES[panelId] || panelId;
+
+  // Show active view, hide others
+  document.querySelectorAll('.panel-view').forEach(view => {
+    view.classList.toggle('active', (view as HTMLElement).dataset.panel === panelId);
+  });
+
+  // Update activity bar buttons
+  document.querySelectorAll('.activity-bar-btn[data-panel]').forEach(btn => {
+    btn.classList.toggle('active', (btn as HTMLElement).dataset.panel === panelId);
+  });
+
+  // Update pin button state
+  elements.btnPinPanel.classList.toggle('pinned', pinnedPanels.has(panelId));
+
+  savePanelState();
+}
+
+function closePanel(): void {
+  activePanel = null;
+  elements.panelContainer.classList.add('hidden');
+  elements.panelResizeHandle.classList.add('hidden');
+
+  // Deactivate all activity bar buttons
+  document.querySelectorAll('.activity-bar-btn[data-panel]').forEach(btn => {
+    btn.classList.remove('active');
+  });
+
+  savePanelState();
+}
+
+function togglePanelVisibility(): void {
+  if (activePanel) {
+    closePanel();
+  } else if (lastActivePanel) {
+    openPanel(lastActivePanel);
+  } else {
+    openPanel('folders');
+  }
+}
+
+function togglePinPanel(): void {
+  if (!activePanel) return;
+  if (pinnedPanels.has(activePanel)) {
+    pinnedPanels.delete(activePanel);
+  } else {
+    pinnedPanels.add(activePanel);
+  }
+  elements.btnPinPanel.classList.toggle('pinned', pinnedPanels.has(activePanel));
+  savePanelState();
+}
+
+function savePanelState(): void {
+  localStorage.setItem('logan-panel', JSON.stringify({
+    activePanel,
+    lastActivePanel,
+    panelWidth: elements.panelContainer.style.width || '300px',
+    pinnedPanels: [...pinnedPanels],
+  }));
+}
+
+function restorePanelState(): void {
+  try {
+    const saved = localStorage.getItem('logan-panel');
+    if (saved) {
+      const data = JSON.parse(saved);
+      if (data.panelWidth) {
+        elements.panelContainer.style.width = data.panelWidth;
+      }
+      if (data.pinnedPanels) {
+        pinnedPanels = new Set(data.pinnedPanels);
+      }
+      lastActivePanel = data.lastActivePanel || null;
+      if (data.activePanel) {
+        openPanel(data.activePanel);
+      }
+    }
+  } catch {}
+}
+
+function updateActivityBadge(panelId: string, count: number): void {
+  const badge = document.getElementById(`badge-${panelId}`);
+  if (!badge) return;
+  if (count > 0) {
+    badge.textContent = count > 99 ? '99+' : String(count);
+    badge.classList.add('visible');
+  } else {
+    badge.classList.remove('visible');
+  }
+}
+
+function setupActivityBar(): void {
+  // Click handlers for activity bar icons
+  document.querySelectorAll('.activity-bar-btn[data-panel]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const panelId = (btn as HTMLElement).dataset.panel!;
+      togglePanel(panelId);
+    });
+  });
+
+  // Close panel button
+  elements.btnClosePanel.addEventListener('click', closePanel);
+
+  // Pin panel button
+  elements.btnPinPanel.addEventListener('click', togglePinPanel);
+
+  // Settings button in activity bar
+  document.getElementById('btn-activity-settings')?.addEventListener('click', () => {
+    document.getElementById('settings-modal')?.classList.remove('hidden');
+  });
+
+  // Panel resize handle
+  elements.panelResizeHandle.addEventListener('mousedown', (e) => {
+    isResizingSidebar = true;
+    sidebarStartX = e.clientX;
+    sidebarStartWidth = elements.panelContainer.offsetWidth;
+    elements.panelResizeHandle.classList.add('dragging');
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  // Keyboard shortcuts: Ctrl+1..6 toggle panels, Ctrl+B toggle visibility, Escape close
+  document.addEventListener('keydown', (e) => {
+    // Ctrl+1..6 — toggle panels
+    if (e.ctrlKey && !e.shiftKey && !e.altKey) {
+      const num = parseInt(e.key, 10);
+      if (num >= 1 && num <= 6) {
+        e.preventDefault();
+        togglePanel(PANEL_IDS[num - 1]);
+        return;
+      }
+    }
+
+    // Ctrl+\ — toggle panel visibility
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === '\\') {
+      e.preventDefault();
+      togglePanelVisibility();
+      return;
+    }
+
+    // Escape from panel — close and return focus to log viewer
+    if (e.key === 'Escape' && activePanel) {
+      const focusedEl = document.activeElement as HTMLElement;
+      if (focusedEl && elements.panelContainer.contains(focusedEl)) {
+        e.preventDefault();
+        closePanel();
+        logViewerElement?.focus();
+      }
+    }
+  });
+
+  // Restore saved state
+  restorePanelState();
+}
+
+// Section toggle (legacy - for collapsible sections within panels)
 function setupSectionToggles(): void {
   document.querySelectorAll('.section-header').forEach((header) => {
     header.addEventListener('click', () => {
@@ -5410,8 +6770,32 @@ function setupKeyboardShortcuts(): void {
       navigateSearchPrev();
     }
 
-    // Escape: Cancel range selection, close modals, or close terminal
+    // F7: Next diff hunk, Shift+F7: Previous diff hunk
+    if (e.key === 'F7' && viewMode === 'diff') {
+      e.preventDefault();
+      navigateDiffHunk(e.shiftKey ? -1 : 1);
+      return;
+    }
+
+    // Ctrl/Cmd + Shift + D: Toggle diff with next tab
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'D') {
+      e.preventDefault();
+      if (viewMode !== 'single') {
+        deactivateSplitView();
+      } else if (state.tabs.length >= 2 && state.activeTabId) {
+        const currentIdx = state.tabs.findIndex(t => t.id === state.activeTabId);
+        const nextIdx = (currentIdx + 1) % state.tabs.length;
+        activateDiffView(state.tabs[nextIdx].id);
+      }
+      return;
+    }
+
+    // Escape: Cancel range selection, close split/diff, close modals, or close terminal
     if (e.key === 'Escape') {
+      if (viewMode !== 'single') {
+        deactivateSplitView();
+        return;
+      }
       if (rangeSelectStartLine !== null) {
         rangeSelectStartLine = null;
         elements.statusCursor.textContent = 'Range cancelled';
@@ -5789,42 +7173,64 @@ function init(): void {
     }
   });
 
-  // Sidebar resize (horizontal)
-  let isResizingSidebar = false;
-  let sidebarStartX = 0;
-  let sidebarStartWidth = 0;
-
-  elements.sidebarResizeHandle.addEventListener('mousedown', (e) => {
-    isResizingSidebar = true;
-    sidebarStartX = e.clientX;
-    sidebarStartWidth = elements.sidebar.offsetWidth;
-    elements.sidebarResizeHandle.classList.add('dragging');
-    document.body.style.cursor = 'ew-resize';
-    document.body.style.userSelect = 'none';
-    e.preventDefault();
-  });
-
+  // Panel resize is handled in setupActivityBar
   document.addEventListener('mousemove', (e) => {
     if (!isResizingSidebar) return;
 
     const deltaX = e.clientX - sidebarStartX;
     const newWidth = Math.max(200, Math.min(window.innerWidth * 0.5, sidebarStartWidth + deltaX));
-    elements.sidebar.style.width = `${newWidth}px`;
+    elements.panelContainer.style.width = `${newWidth}px`;
   });
 
   document.addEventListener('mouseup', () => {
     if (isResizingSidebar) {
       isResizingSidebar = false;
-      elements.sidebarResizeHandle.classList.remove('dragging');
+      elements.panelResizeHandle.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      savePanelState();
+    }
+    if (isSplitResizing) {
+      isSplitResizing = false;
+      const resizeHandle = elements.editorContainer.querySelector('.split-resize-handle');
+      resizeHandle?.classList.remove('dragging');
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     }
+  });
+
+  // Split pane resize
+  document.addEventListener('mousemove', (e) => {
+    if (!isSplitResizing || !logViewerWrapper) return;
+    const deltaX = e.clientX - splitStartX;
+    const containerWidth = elements.editorContainer.clientWidth;
+    const newWidth = Math.max(200, Math.min(containerWidth - 200, splitStartLeftWidth + deltaX));
+    logViewerWrapper.style.width = `${newWidth}px`;
+    logViewerWrapper.style.flex = 'none';
   });
 
   // Search
   elements.btnSearch.addEventListener('click', performSearch);
   elements.btnPrevResult.addEventListener('click', () => navigateSearchPrev());
   elements.btnNextResult.addEventListener('click', () => navigateSearchNext());
+
+  // Hidden matches
+  elements.hiddenMatchesBadge.addEventListener('click', showHiddenMatchesPopup);
+  elements.btnCloseHiddenMatches.addEventListener('click', () => {
+    elements.hiddenMatchesPopup.classList.add('hidden');
+  });
+  elements.btnPeekClose.addEventListener('click', closePeekPreview);
+  elements.btnPeekClearFilter.addEventListener('click', peekClearFilterAndGoToLine);
+
+  // Close hidden matches popup when clicking outside
+  document.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+    if (!elements.hiddenMatchesPopup.classList.contains('hidden') &&
+        !elements.hiddenMatchesPopup.contains(target) &&
+        !elements.hiddenMatchesBadge.contains(target)) {
+      elements.hiddenMatchesPopup.classList.add('hidden');
+    }
+  });
 
   // Regex and Wildcard are mutually exclusive
   elements.searchRegex.addEventListener('change', () => {
@@ -6067,7 +7473,7 @@ function init(): void {
   elements.splitValue.addEventListener('input', updateSplitPreview);
 
   // Sidebar
-  elements.btnToggleSidebar.addEventListener('click', toggleSidebar);
+  elements.btnToggleSidebar.addEventListener('click', togglePanelVisibility);
 
   // Highlights
   elements.btnAddHighlight.addEventListener('click', showHighlightModal);
@@ -6194,6 +7600,10 @@ function init(): void {
     }
   });
 
+  // Bookmark Sets
+  elements.btnSaveBookmarkSet.addEventListener('click', saveBookmarkSet);
+  elements.btnLoadBookmarkSet.addEventListener('click', refreshBookmarkSets);
+
   // Notes modal
   elements.btnSaveNotes.addEventListener('click', () => hideNotesModal(true));
   elements.btnCancelNotes.addEventListener('click', () => hideNotesModal(false));
@@ -6207,6 +7617,7 @@ function init(): void {
   });
 
   // Setup utilities
+  setupActivityBar();
   setupSectionToggles();
   setupModalCloseHandlers();
   setupKeyboardShortcuts();
@@ -6413,6 +7824,7 @@ function saveCurrentTabState(): void {
     selectionEnd: state.selectionEnd,
     searchResults: state.searchResults,
     currentSearchIndex: state.currentSearchIndex,
+    hiddenSearchMatches: state.hiddenSearchMatches,
     bookmarks: [...state.bookmarks],
     highlights: [...state.highlights],
     cachedLines: cachedLines.toMap(),
@@ -6438,6 +7850,7 @@ function restoreTabState(tab: TabState): void {
   state.selectionEnd = tab.selectionEnd;
   state.searchResults = tab.searchResults;
   state.currentSearchIndex = tab.currentSearchIndex;
+  state.hiddenSearchMatches = tab.hiddenSearchMatches;
   state.bookmarks = [...tab.bookmarks];
   state.highlights = [...tab.highlights];
   state.splitFiles = tab.splitFiles;
@@ -6475,6 +7888,7 @@ function createTab(filePath: string): TabState {
     selectionEnd: null,
     searchResults: [],
     currentSearchIndex: -1,
+    hiddenSearchMatches: [],
     bookmarks: [],
     highlights: [],
     cachedLines: new Map(),
@@ -6500,6 +7914,9 @@ async function switchToTab(tabId: string): Promise<void> {
 
   const tab = state.tabs.find(t => t.id === tabId);
   if (!tab || !tab.filePath) return;
+
+  // Deactivate split/diff when switching primary tab
+  if (viewMode !== 'single') deactivateSplitView();
 
   // Save current tab state
   saveCurrentTabState();
@@ -6551,7 +7968,7 @@ async function switchToTab(tabId: string): Promise<void> {
         // Calculate visible range from saved scroll position
         const startLine = scrollTopToLine(tab.scrollTop);
         state.visibleStartLine = Math.max(0, startLine - BUFFER_LINES);
-        state.visibleEndLine = Math.min(startLine + visibleLines + BUFFER_LINES, state.totalLines - 1);
+        state.visibleEndLine = Math.min(startLine + visibleLines + BUFFER_LINES, getTotalLines() - 1);
       }
 
       await loadVisibleLines();
@@ -6594,6 +8011,11 @@ function closeTab(tabId: string): void {
   const tabIndex = state.tabs.findIndex(t => t.id === tabId);
   if (tabIndex === -1) return;
 
+  // If closing the secondary tab in split/diff mode, deactivate
+  if (viewMode !== 'single' && tabId === splitDiffState.secondaryTabId) {
+    deactivateSplitView();
+  }
+
   // Remove the tab
   state.tabs.splice(tabIndex, 1);
 
@@ -6611,6 +8033,7 @@ function closeTab(tabId: string): void {
       state.totalLines = 0;
       state.searchResults = [];
       state.currentSearchIndex = -1;
+      state.hiddenSearchMatches = [];
       state.bookmarks = [];
       state.highlights = [];
       cachedLines.clear();
@@ -6678,8 +8101,55 @@ function renderTabBar(): void {
       closeTab(tab.id);
     });
 
+    // Context menu for split/diff (only on non-active tabs)
+    tabElement.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (tab.id === state.activeTabId) return; // No context menu for active tab
+      if (state.tabs.length < 2) return; // Need at least 2 tabs
+      showTabContextMenu(e as MouseEvent, tab.id);
+    });
+
     elements.tabsContainer.appendChild(tabElement);
   }
+}
+
+function showTabContextMenu(e: MouseEvent, targetTabId: string): void {
+  // Remove existing context menu
+  const existing = document.querySelector('.tab-context-menu');
+  if (existing) existing.remove();
+
+  const menu = document.createElement('div');
+  menu.className = 'tab-context-menu';
+  menu.innerHTML = `
+    <div class="tab-context-item" data-action="split">Open in Split View</div>
+    <div class="tab-context-item" data-action="diff">Compare with Current Tab</div>
+  `;
+
+  menu.style.left = `${e.clientX}px`;
+  menu.style.top = `${e.clientY}px`;
+  document.body.appendChild(menu);
+
+  // Handle clicks
+  menu.addEventListener('click', (ev) => {
+    const target = (ev.target as HTMLElement).closest('.tab-context-item') as HTMLElement;
+    if (!target) return;
+    const action = target.dataset.action;
+    menu.remove();
+    if (action === 'split') {
+      activateSplitView(targetTabId);
+    } else if (action === 'diff') {
+      activateDiffView(targetTabId);
+    }
+  });
+
+  // Close on click outside
+  const closeMenu = (ev: MouseEvent) => {
+    if (!menu.contains(ev.target as Node)) {
+      menu.remove();
+      document.removeEventListener('click', closeMenu);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', closeMenu), 0);
 }
 
 function findTabByFilePath(filePath: string): TabState | undefined {

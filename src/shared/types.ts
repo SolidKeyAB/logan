@@ -42,6 +42,14 @@ export interface Bookmark {
   lineText?: string;
 }
 
+export interface BookmarkSet {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+  bookmarks: Bookmark[];
+}
+
 export interface Highlight {
   id: string;
   pattern: string;
@@ -102,4 +110,8 @@ export const IPC = {
   DATADOG_FETCH_LOGS: 'datadog-fetch-logs',
   DATADOG_FETCH_PROGRESS: 'datadog-fetch-progress',
   DATADOG_CANCEL_FETCH: 'datadog-cancel-fetch',
+  GET_LINES_FOR_FILE: 'get-lines-for-file',
+  DIFF_COMPUTE: 'diff-compute',
+  DIFF_CANCEL: 'diff-cancel',
+  DIFF_PROGRESS: 'diff-compute-progress',
 } as const;

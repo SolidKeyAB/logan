@@ -6,11 +6,13 @@ import { spawn } from 'child_process';
 import * as pty from 'node-pty';
 import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
 import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup } from '../shared/types';
+import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
 
 let mainWindow: BrowserWindow | null = null;
 let searchSignal: { cancelled: boolean } = { cancelled: false };
+let diffSignal: { cancelled: boolean } = { cancelled: false };
 let currentFilePath: string | null = null;
 
 // Filter state - maps file path to array of visible line indices
@@ -50,6 +52,7 @@ const getConfigDir = () => path.join(os.homedir(), '.logan');
 const getHighlightsPath = () => path.join(getConfigDir(), 'highlights.json');
 const getHighlightGroupsPath = () => path.join(getConfigDir(), 'highlight-groups.json');
 const getBookmarksPath = () => path.join(getConfigDir(), 'bookmarks.json');
+const getBookmarkSetsPath = () => path.join(getConfigDir(), 'bookmark-sets.json');
 
 // Ensure config directory exists
 function ensureConfigDir(): void {
@@ -226,7 +229,8 @@ function loadBookmarksForFile(filePath: string): void {
 function saveBookmarksForCurrentFile(): void {
   if (!currentFilePath) return;
   const store = loadBookmarksStore();
-  const currentBookmarks = Array.from(bookmarks.values());
+  const currentBookmarks = Array.from(bookmarks.values())
+    .sort((a, b) => a.lineNumber - b.lineNumber);
   if (currentBookmarks.length > 0) {
     store[currentFilePath] = currentBookmarks;
   } else {
@@ -517,6 +521,7 @@ ipcMain.handle(IPC.FOLDER_SEARCH_CANCEL, async () => {
 
 interface ColumnInfo {
   index: number;
+  name?: string;
   sample: string[];  // Sample values from this column
   visible: boolean;
 }
@@ -526,6 +531,38 @@ interface ColumnAnalysis {
   delimiterName: string;
   columns: ColumnInfo[];
   sampleLines: string[];
+  hasHeaderRow?: boolean;
+}
+
+// Split a line respecting quoted fields (basic CSV support)
+function splitWithQuotes(line: string, delimiter: string): string[] {
+  if (delimiter === ' ' || delimiter === '\t') {
+    // For whitespace delimiters, no quoting support needed
+    return delimiter === ' ' ? line.split(/\s+/) : line.split(delimiter);
+  }
+
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && i + 1 < line.length && line[i + 1] === '"') {
+        current += '"';
+        i++; // Skip escaped quote
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === delimiter && !inQuotes) {
+      result.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  result.push(current);
+  return result;
 }
 
 // Detect delimiter by analyzing character frequencies
@@ -535,13 +572,16 @@ function detectDelimiter(lines: string[]): { delimiter: string; name: string } {
     { char: ',', name: 'Comma' },
     { char: '|', name: 'Pipe' },
     { char: ';', name: 'Semicolon' },
+    { char: ':', name: 'Colon' },
+    { char: '=', name: 'Equals' },
   ];
 
   // Count occurrences of each delimiter and check consistency
   const scores: Map<string, number> = new Map();
 
   for (const { char } of candidates) {
-    const counts = lines.map(line => (line.match(new RegExp(char === '|' ? '\\|' : char, 'g')) || []).length);
+    const escapedChar = char === '|' ? '\\|' : char === '=' ? '=' : char;
+    const counts = lines.map(line => (line.match(new RegExp(escapedChar, 'g')) || []).length);
     const nonZeroCounts = counts.filter(c => c > 0);
 
     if (nonZeroCounts.length === 0) continue;
@@ -551,7 +591,17 @@ function detectDelimiter(lines: string[]): { delimiter: string; name: string } {
     const consistency = nonZeroCounts.filter(c => Math.abs(c - avgCount) <= 1).length / nonZeroCounts.length;
 
     // Score based on: presence, count, and consistency
-    const score = avgCount * consistency * (nonZeroCounts.length / lines.length);
+    let score = avgCount * consistency * (nonZeroCounts.length / lines.length);
+
+    // Colon heuristic: penalize if it looks like timestamps (e.g. 10:30:45)
+    if (char === ':' && avgCount <= 3) {
+      const timestampPattern = /\d{1,2}:\d{2}/;
+      const timestampLines = lines.filter(l => timestampPattern.test(l)).length;
+      if (timestampLines / lines.length > 0.8) {
+        score *= 0.3; // Strong penalty
+      }
+    }
+
     scores.set(char, score);
   }
 
@@ -568,6 +618,23 @@ function detectDelimiter(lines: string[]): { delimiter: string; name: string } {
   }
 
   return { delimiter: bestDelimiter.char, name: bestDelimiter.name };
+}
+
+// Check if the first row looks like a header row
+function inferHeaderRow(firstRow: string[]): { hasHeader: boolean; names: string[] } {
+  if (firstRow.length === 0) return { hasHeader: false, names: [] };
+
+  // Check if all values are non-empty, non-numeric, and unique
+  const trimmed = firstRow.map(v => v.trim());
+  const allNonEmpty = trimmed.every(v => v.length > 0);
+  const allNonNumeric = trimmed.every(v => isNaN(Number(v)));
+  const allUnique = new Set(trimmed.map(v => v.toLowerCase())).size === trimmed.length;
+
+  if (allNonEmpty && allNonNumeric && allUnique && trimmed.length >= 2) {
+    return { hasHeader: true, names: trimmed };
+  }
+
+  return { hasHeader: false, names: [] };
 }
 
 ipcMain.handle('analyze-columns', async () => {
@@ -587,28 +654,28 @@ ipcMain.handle('analyze-columns', async () => {
     // Detect delimiter
     const { delimiter, name: delimiterName } = detectDelimiter(nonEmptyLines);
 
-    // Split lines into columns
-    const splitLines = nonEmptyLines.map(line => {
-      if (delimiter === ' ') {
-        // For space delimiter, use whitespace splitting but preserve structure
-        return line.split(/\s+/);
-      }
-      return line.split(delimiter);
-    });
+    // Split lines into columns (with quoted field support)
+    const splitLines = nonEmptyLines.map(line => splitWithQuotes(line, delimiter));
 
     // Find max column count
     const maxColumns = Math.max(...splitLines.map(cols => cols.length));
 
-    // Build column info with samples
+    // Check if first row is a header
+    const { hasHeader, names: headerNames } = inferHeaderRow(splitLines[0] || []);
+
+    // Build column info with samples (skip header row for samples if detected)
+    const sampleStartIdx = hasHeader ? 1 : 0;
     const columns: ColumnInfo[] = [];
     for (let i = 0; i < maxColumns; i++) {
       const samples = splitLines
+        .slice(sampleStartIdx)
         .map(cols => cols[i] || '')
         .filter(s => s.trim().length > 0)
         .slice(0, 5); // Keep 5 samples per column
 
       columns.push({
         index: i,
+        name: hasHeader && i < headerNames.length ? headerNames[i] : undefined,
         sample: samples,
         visible: true, // All visible by default
       });
@@ -619,6 +686,7 @@ ipcMain.handle('analyze-columns', async () => {
       delimiterName,
       columns,
       sampleLines: nonEmptyLines.slice(0, 5), // First 5 lines as preview
+      hasHeaderRow: hasHeader,
     };
 
     return { success: true, analysis: result };
@@ -794,8 +862,7 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
     // Check if filter is active for current file
     const filteredIndices = getFilteredLines();
 
-    // If filter is active, only return matches within filtered lines
-    // and map line numbers to filtered indices
+    // If filter is active, separate matches into visible and hidden
     if (filteredIndices && filteredIndices.length > 0) {
       const filteredSet = new Set(filteredIndices);
       const lineToFilteredIndex = new Map<number, number>();
@@ -803,15 +870,51 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
         lineToFilteredIndex.set(lineNum, idx);
       });
 
-      const filteredMatches = matches
-        .filter(m => filteredSet.has(m.lineNumber))
-        .map(m => ({
-          ...m,
-          originalLineNumber: m.lineNumber,
-          lineNumber: lineToFilteredIndex.get(m.lineNumber) ?? m.lineNumber,
-        }));
+      const filteredMatches: any[] = [];
+      const hiddenMatches: any[] = [];
 
-      return { success: true, matches: filteredMatches };
+      for (const m of matches) {
+        if (filteredSet.has(m.lineNumber)) {
+          filteredMatches.push({
+            ...m,
+            originalLineNumber: m.lineNumber,
+            lineNumber: lineToFilteredIndex.get(m.lineNumber) ?? m.lineNumber,
+          });
+        } else {
+          hiddenMatches.push({
+            lineNumber: m.lineNumber,
+            column: m.column,
+            length: m.length,
+            lineText: m.lineText,
+          });
+        }
+      }
+
+      return { success: true, matches: filteredMatches, hiddenMatches };
+    }
+
+    // Check for hidden column matches (matches in columns that are filtered out)
+    if (options.columnConfig) {
+      const visibleCols = options.columnConfig.columns.filter(c => c.visible).map(c => c.index);
+      const hiddenCols = options.columnConfig.columns.filter(c => !c.visible).map(c => c.index);
+      if (hiddenCols.length > 0) {
+        // Do a full-text search (without column config) to find matches in hidden columns
+        const fullOptions = { ...options, columnConfig: undefined };
+        const fullMatches = await handler.search(fullOptions, () => {}, searchSignal);
+        // Find matches that are NOT in the visible column results
+        const visibleMatchSet = new Set(matches.map(m => `${m.lineNumber}:${m.column}`));
+        const hiddenColumnMatches = fullMatches
+          .filter(m => !visibleMatchSet.has(`${m.lineNumber}:${m.column}`))
+          .map(m => ({
+            lineNumber: m.lineNumber,
+            column: m.column,
+            length: m.length,
+            lineText: m.lineText,
+          }));
+        if (hiddenColumnMatches.length > 0) {
+          return { success: true, matches, hiddenColumnMatches };
+        }
+      }
     }
 
     return { success: true, matches };
@@ -822,6 +925,147 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
 
 ipcMain.handle(IPC.SEARCH_CANCEL, async () => {
   searchSignal.cancelled = true;
+  return { success: true };
+});
+
+// === Get Lines For File (used by secondary viewer in split/diff mode) ===
+
+ipcMain.handle(IPC.GET_LINES_FOR_FILE, async (_, filePath: string, startLine: number, count: number) => {
+  const handler = fileHandlerCache.get(filePath);
+  if (!handler) return { success: false, error: 'File not in cache' };
+
+  const filteredIndices = filterState.get(filePath) || null;
+
+  if (filteredIndices) {
+    const endIdx = Math.min(startLine + count, filteredIndices.length);
+    const lineNumbers = filteredIndices.slice(startLine, endIdx);
+    const lines = [];
+    for (const lineNum of lineNumbers) {
+      const [line] = handler.getLines(lineNum, 1);
+      if (line) lines.push(line);
+    }
+    return { success: true, lines };
+  }
+
+  const lines = handler.getLines(startLine, count);
+  return { success: true, lines };
+});
+
+// === Diff Compute ===
+
+const DIFF_MAX_LINES = 100000;
+
+ipcMain.handle(IPC.DIFF_COMPUTE, async (_, leftFilePath: string, rightFilePath: string) => {
+  const leftHandler = fileHandlerCache.get(leftFilePath);
+  const rightHandler = fileHandlerCache.get(rightFilePath);
+
+  if (!leftHandler || !rightHandler) {
+    return { success: false, error: 'Both files must be open in tabs' };
+  }
+
+  const leftTotal = leftHandler.getTotalLines();
+  const rightTotal = rightHandler.getTotalLines();
+
+  if (leftTotal > DIFF_MAX_LINES || rightTotal > DIFF_MAX_LINES) {
+    return { success: false, error: `Files too large for diff (limit: ${DIFF_MAX_LINES.toLocaleString()} lines). Left: ${leftTotal.toLocaleString()}, Right: ${rightTotal.toLocaleString()}` };
+  }
+
+  diffSignal = { cancelled: false };
+
+  try {
+    mainWindow?.webContents.send(IPC.DIFF_PROGRESS, { percent: 10, phase: 'Reading files...' });
+
+    // Read all lines from both files
+    const leftLines: string[] = [];
+    const rightLines: string[] = [];
+
+    const CHUNK = 10000;
+    for (let i = 0; i < leftTotal; i += CHUNK) {
+      if (diffSignal.cancelled) return { success: false, error: 'Cancelled' };
+      const lines = leftHandler.getLines(i, Math.min(CHUNK, leftTotal - i));
+      for (const l of lines) leftLines.push(l.text);
+    }
+
+    mainWindow?.webContents.send(IPC.DIFF_PROGRESS, { percent: 30, phase: 'Reading files...' });
+
+    for (let i = 0; i < rightTotal; i += CHUNK) {
+      if (diffSignal.cancelled) return { success: false, error: 'Cancelled' };
+      const lines = rightHandler.getLines(i, Math.min(CHUNK, rightTotal - i));
+      for (const l of lines) rightLines.push(l.text);
+    }
+
+    if (diffSignal.cancelled) return { success: false, error: 'Cancelled' };
+
+    mainWindow?.webContents.send(IPC.DIFF_PROGRESS, { percent: 50, phase: 'Computing diff...' });
+
+    // Compute line-level diff
+    const changes = Diff.diffArrays(leftLines, rightLines);
+
+    if (diffSignal.cancelled) return { success: false, error: 'Cancelled' };
+
+    mainWindow?.webContents.send(IPC.DIFF_PROGRESS, { percent: 80, phase: 'Building hunks...' });
+
+    // Build hunks from changes, merging adjacent removed+added into modified
+    interface DiffHunk {
+      type: 'equal' | 'added' | 'removed' | 'modified';
+      leftStart: number;
+      leftCount: number;
+      rightStart: number;
+      rightCount: number;
+    }
+
+    const hunks: DiffHunk[] = [];
+    let leftIdx = 0;
+    let rightIdx = 0;
+    let stats = { additions: 0, deletions: 0, modifications: 0 };
+
+    for (let c = 0; c < changes.length; c++) {
+      const change = changes[c];
+      const count = change.count || 0;
+
+      if (!change.added && !change.removed) {
+        // Equal
+        hunks.push({ type: 'equal', leftStart: leftIdx, leftCount: count, rightStart: rightIdx, rightCount: count });
+        leftIdx += count;
+        rightIdx += count;
+      } else if (change.removed && c + 1 < changes.length && changes[c + 1].added) {
+        // Removed followed by added → modified
+        const nextChange = changes[c + 1];
+        const nextCount = nextChange.count || 0;
+        hunks.push({ type: 'modified', leftStart: leftIdx, leftCount: count, rightStart: rightIdx, rightCount: nextCount });
+        stats.modifications += Math.max(count, nextCount);
+        leftIdx += count;
+        rightIdx += nextCount;
+        c++; // skip the added part
+      } else if (change.removed) {
+        hunks.push({ type: 'removed', leftStart: leftIdx, leftCount: count, rightStart: rightIdx, rightCount: 0 });
+        stats.deletions += count;
+        leftIdx += count;
+      } else if (change.added) {
+        hunks.push({ type: 'added', leftStart: leftIdx, leftCount: 0, rightStart: rightIdx, rightCount: count });
+        stats.additions += count;
+        rightIdx += count;
+      }
+    }
+
+    mainWindow?.webContents.send(IPC.DIFF_PROGRESS, { percent: 100, phase: 'Done' });
+
+    return {
+      success: true,
+      result: {
+        hunks,
+        stats,
+        leftTotalLines: leftTotal,
+        rightTotalLines: rightTotal,
+      },
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.DIFF_CANCEL, async () => {
+  diffSignal.cancelled = true;
   return { success: true };
 });
 
@@ -840,7 +1084,7 @@ ipcMain.handle('bookmark-remove', async (_, id: string) => {
 });
 
 ipcMain.handle('bookmark-list', async () => {
-  return { success: true, bookmarks: Array.from(bookmarks.values()) };
+  return { success: true, bookmarks: Array.from(bookmarks.values()).sort((a, b) => a.lineNumber - b.lineNumber) };
 });
 
 ipcMain.handle('bookmark-clear', async () => {
@@ -921,6 +1165,70 @@ ipcMain.handle('export-bookmarks', async () => {
   } catch (error) {
     return { success: false, error: String(error) };
   }
+});
+
+// === Bookmark Sets ===
+
+interface BookmarkSet {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+  bookmarks: Bookmark[];
+}
+
+function loadBookmarkSets(): BookmarkSet[] {
+  try {
+    const setsPath = getBookmarkSetsPath();
+    if (fs.existsSync(setsPath)) {
+      const data = JSON.parse(fs.readFileSync(setsPath, 'utf-8'));
+      return data.sets || [];
+    }
+  } catch {}
+  return [];
+}
+
+function saveBookmarkSets(sets: BookmarkSet[]): void {
+  ensureConfigDir();
+  fs.writeFileSync(getBookmarkSetsPath(), JSON.stringify({ sets }, null, 2), 'utf-8');
+}
+
+ipcMain.handle('bookmark-set-list', async () => {
+  return { success: true, sets: loadBookmarkSets() };
+});
+
+ipcMain.handle('bookmark-set-save', async (_, set: BookmarkSet) => {
+  const sets = loadBookmarkSets();
+  sets.push(set);
+  saveBookmarkSets(sets);
+  return { success: true };
+});
+
+ipcMain.handle('bookmark-set-update', async (_, set: BookmarkSet) => {
+  const sets = loadBookmarkSets();
+  const idx = sets.findIndex(s => s.id === set.id);
+  if (idx >= 0) {
+    sets[idx] = set;
+    saveBookmarkSets(sets);
+    return { success: true };
+  }
+  return { success: false, error: 'Set not found' };
+});
+
+ipcMain.handle('bookmark-set-delete', async (_, setId: string) => {
+  const sets = loadBookmarkSets();
+  const filtered = sets.filter(s => s.id !== setId);
+  saveBookmarkSets(filtered);
+  return { success: true };
+});
+
+ipcMain.handle('bookmark-set-load', async (_, setId: string) => {
+  const sets = loadBookmarkSets();
+  const set = sets.find(s => s.id === setId);
+  if (set) {
+    return { success: true, bookmarks: set.bookmarks };
+  }
+  return { success: false, error: 'Set not found' };
 });
 
 // === Highlights ===
@@ -1062,9 +1370,21 @@ ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: numb
   if (!handler) return { success: false, error: 'No file open' };
 
   try {
-    // Get the lines
-    const count = endLine - startLine + 1;
-    const lines = handler.getLines(startLine, count);
+    // Get the lines - respect filter if active
+    const filteredIndices = getFilteredLines();
+    let lines;
+    if (filteredIndices) {
+      // Filter is active - only fetch visible lines within the range
+      const visibleLineNumbers = filteredIndices.filter(ln => ln >= startLine && ln <= endLine);
+      lines = [];
+      for (const ln of visibleLineNumbers) {
+        const [line] = handler.getLines(ln, 1);
+        if (line) lines.push(line);
+      }
+    } else {
+      const count = endLine - startLine + 1;
+      lines = handler.getLines(startLine, count);
+    }
 
     if (lines.length === 0) {
       return { success: false, error: 'No lines to save' };
@@ -1168,9 +1488,21 @@ ipcMain.handle('save-to-notes', async (
   if (!handler) return { success: false, error: 'No file open' };
 
   try {
-    // Get the lines
-    const count = endLine - startLine + 1;
-    const lines = handler.getLines(startLine, count);
+    // Get the lines - respect filter if active
+    const filteredIndices = getFilteredLines();
+    let lines;
+    if (filteredIndices) {
+      // Filter is active - only fetch visible lines within the range
+      const visibleLineNumbers = filteredIndices.filter(ln => ln >= startLine && ln <= endLine);
+      lines = [];
+      for (const ln of visibleLineNumbers) {
+        const [line] = handler.getLines(ln, 1);
+        if (line) lines.push(line);
+      }
+    } else {
+      const count = endLine - startLine + 1;
+      lines = handler.getLines(startLine, count);
+    }
 
     if (lines.length === 0) {
       return { success: false, error: 'No lines to save' };
@@ -1222,20 +1554,33 @@ ipcMain.handle('save-to-notes', async (
       ].join('\n');
     }
 
-    // Add the note entry
+    // Build the note entry
     const noteDesc = note ? ` | ${note}` : '';
-    content += [
+    const newEntry = [
       '',
       `--- [${timestamp}] Lines ${startLine + 1}-${endLine + 1}${noteDesc} ---`,
       ...lines.map(l => filterLineToVisibleColumns(l.text, columnConfig)),
       '',
     ].join('\n');
 
-    // Write or append
     if (isNewFile) {
+      content += newEntry;
       fs.writeFileSync(notesFilePath, content, 'utf-8');
     } else {
-      fs.appendFileSync(notesFilePath, content, 'utf-8');
+      // Insert entry in line-number order among existing entries
+      const existing = fs.readFileSync(notesFilePath, 'utf-8');
+      const entryRegex = /\n--- \[.*?\] Lines (\d+)-/g;
+      let insertPos = existing.length; // default: append at end
+      let match;
+      while ((match = entryRegex.exec(existing)) !== null) {
+        const entryStartLine = parseInt(match[1], 10);
+        if (entryStartLine > startLine + 1) {
+          insertPos = match.index;
+          break;
+        }
+      }
+      const result = existing.substring(0, insertPos) + newEntry + existing.substring(insertPos);
+      fs.writeFileSync(notesFilePath, result, 'utf-8');
     }
 
     // Invalidate cache for this file so it gets re-indexed with new content

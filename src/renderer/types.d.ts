@@ -141,6 +141,27 @@ interface ColumnAnalysis {
   sampleLines: string[];
 }
 
+interface DiffHunk {
+  type: 'equal' | 'added' | 'removed' | 'modified';
+  leftStart: number;
+  leftCount: number;
+  rightStart: number;
+  rightCount: number;
+}
+
+interface DiffResult {
+  hunks: DiffHunk[];
+  stats: { additions: number; deletions: number; modifications: number };
+  leftTotalLines: number;
+  rightTotalLines: number;
+}
+
+interface DiffDisplayLine {
+  type: 'equal' | 'added' | 'removed' | 'modified' | 'spacer';
+  realLineNumber: number; // -1 for spacers
+  hunkIndex: number; // which hunk this belongs to
+}
+
 interface Api {
   // File operations
   openFileDialog: () => Promise<string | null>;
@@ -161,7 +182,7 @@ interface Api {
   checkSearchEngine: () => Promise<{ engine: 'ripgrep' | 'stream'; version: string | null }>;
 
   // Search
-  search: (options: SearchOptions) => Promise<{ success: boolean; matches?: SearchResult[]; error?: string }>;
+  search: (options: SearchOptions) => Promise<{ success: boolean; matches?: SearchResult[]; hiddenMatches?: Array<{ lineNumber: number; column: number; length: number; lineText: string }>; error?: string }>;
   cancelSearch: () => Promise<{ success: boolean }>;
 
   // Bookmarks
@@ -171,6 +192,13 @@ interface Api {
   listBookmarks: () => Promise<{ success: boolean; bookmarks?: Bookmark[] }>;
   clearBookmarks: () => Promise<{ success: boolean }>;
   exportBookmarks: () => Promise<{ success: boolean; filePath?: string; error?: string }>;
+
+  // Bookmark Sets
+  bookmarkSetList: () => Promise<{ success: boolean; sets?: Array<{ id: string; name: string; createdAt: number; updatedAt: number; bookmarks: Bookmark[] }> }>;
+  bookmarkSetSave: (set: { id: string; name: string; createdAt: number; updatedAt: number; bookmarks: Bookmark[] }) => Promise<{ success: boolean }>;
+  bookmarkSetUpdate: (set: { id: string; name: string; createdAt: number; updatedAt: number; bookmarks: Bookmark[] }) => Promise<{ success: boolean }>;
+  bookmarkSetDelete: (setId: string) => Promise<{ success: boolean }>;
+  bookmarkSetLoad: (setId: string) => Promise<{ success: boolean; bookmarks?: Bookmark[] }>;
 
   // Highlights
   addHighlight: (highlight: HighlightConfig) => Promise<{ success: boolean }>;
@@ -237,6 +265,12 @@ interface Api {
   datadogFetchLogs: (params: { query: string; from: string; to: string; maxLogs: number }) => Promise<{ success: boolean; filePath?: string; logCount?: number; error?: string }>;
   datadogCancelFetch: () => Promise<{ success: boolean }>;
   onDatadogFetchProgress: (callback: (data: { message: string; count: number }) => void) => () => void;
+
+  // Split/Diff view
+  getLinesForFile: (filePath: string, startLine: number, count: number) => Promise<{ success: boolean; lines?: LogLine[]; error?: string }>;
+  computeDiff: (leftFilePath: string, rightFilePath: string) => Promise<{ success: boolean; result?: DiffResult; error?: string }>;
+  cancelDiff: () => Promise<{ success: boolean }>;
+  onDiffProgress: (callback: (data: { percent: number; phase: string }) => void) => () => void;
 
   // Window controls
   windowMinimize: () => Promise<void>;

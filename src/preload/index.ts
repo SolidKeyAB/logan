@@ -18,6 +18,10 @@ const IPC = {
   DATADOG_FETCH_LOGS: 'datadog-fetch-logs',
   DATADOG_FETCH_PROGRESS: 'datadog-fetch-progress',
   DATADOG_CANCEL_FETCH: 'datadog-cancel-fetch',
+  GET_LINES_FOR_FILE: 'get-lines-for-file',
+  DIFF_COMPUTE: 'diff-compute',
+  DIFF_CANCEL: 'diff-cancel',
+  DIFF_PROGRESS: 'diff-compute-progress',
 } as const;
 
 // API exposed to renderer
@@ -84,6 +88,18 @@ const api = {
 
   exportBookmarks: (): Promise<{ success: boolean; filePath?: string; error?: string }> =>
     ipcRenderer.invoke('export-bookmarks'),
+
+  // Bookmark Sets
+  bookmarkSetList: (): Promise<{ success: boolean; sets?: any[] }> =>
+    ipcRenderer.invoke('bookmark-set-list'),
+  bookmarkSetSave: (set: any): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('bookmark-set-save', set),
+  bookmarkSetUpdate: (set: any): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('bookmark-set-update', set),
+  bookmarkSetDelete: (setId: string): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('bookmark-set-delete', setId),
+  bookmarkSetLoad: (setId: string): Promise<{ success: boolean; bookmarks?: any[] }> =>
+    ipcRenderer.invoke('bookmark-set-load', setId),
 
   // Highlights
   addHighlight: (highlight: any): Promise<{ success: boolean }> =>
@@ -250,6 +266,22 @@ const api = {
     const handler = (_: any, exitCode: number) => callback(exitCode);
     ipcRenderer.on('terminal-exit', handler);
     return () => ipcRenderer.removeListener('terminal-exit', handler);
+  },
+
+  // Split/Diff view
+  getLinesForFile: (filePath: string, startLine: number, count: number): Promise<{ success: boolean; lines?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.GET_LINES_FOR_FILE, filePath, startLine, count),
+
+  computeDiff: (leftFilePath: string, rightFilePath: string): Promise<{ success: boolean; result?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.DIFF_COMPUTE, leftFilePath, rightFilePath),
+
+  cancelDiff: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.DIFF_CANCEL),
+
+  onDiffProgress: (callback: (data: { percent: number; phase: string }) => void): (() => void) => {
+    const handler = (_: any, data: { percent: number; phase: string }) => callback(data);
+    ipcRenderer.on(IPC.DIFF_PROGRESS, handler);
+    return () => ipcRenderer.removeListener(IPC.DIFF_PROGRESS, handler);
   },
 
   // Window controls
