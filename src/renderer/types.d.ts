@@ -171,7 +171,7 @@ interface ActivityEntry {
 interface Api {
   // File operations
   openFileDialog: () => Promise<string | null>;
-  openFile: (path: string) => Promise<{ success: boolean; info?: FileInfo; error?: string; splitFiles?: string[]; splitIndex?: number; bookmarks?: Bookmark[]; highlights?: HighlightConfig[] }>;
+  openFile: (path: string) => Promise<{ success: boolean; info?: FileInfo; error?: string; splitFiles?: string[]; splitIndex?: number; bookmarks?: Bookmark[]; highlights?: HighlightConfig[]; hasLongLines?: boolean; maxLineLength?: number }>;
   getLines: (startLine: number, count: number) => Promise<{ success: boolean; lines?: LogLine[]; error?: string }>;
   getFileInfo: () => Promise<{ success: boolean; info?: FileInfo; error?: string }>;
 
@@ -223,7 +223,7 @@ interface Api {
   // Save selected lines
   saveSelectedLines: (startLine: number, endLine: number, columnConfig?: { delimiter: string; columns: Array<{ index: number; visible: boolean }> }) => Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }>;
 
-  // Notes files
+  // Save snippets (selected lines to file)
   findNotesFiles: () => Promise<{ success: boolean; files?: Array<{ name: string; path: string; created: string }>; logFilePath?: string; error?: string }>;
   saveToNotes: (startLine: number, endLine: number, note?: string, targetFilePath?: string, columnConfig?: { delimiter: string; columns: Array<{ index: number; visible: boolean }> }) => Promise<{ success: boolean; filePath?: string; lineCount?: number; isNewFile?: boolean; error?: string }>;
 
@@ -277,6 +277,10 @@ interface Api {
   computeDiff: (leftFilePath: string, rightFilePath: string) => Promise<{ success: boolean; result?: DiffResult; error?: string }>;
   cancelDiff: () => Promise<{ success: boolean }>;
   onDiffProgress: (callback: (data: { percent: number; phase: string }) => void) => () => void;
+
+  // Notes drawer
+  loadNotes: () => Promise<{ success: boolean; content?: string }>;
+  saveNotes: (content: string) => Promise<{ success: boolean; error?: string }>;
 
   // Local file status & activity history
   loadActivityHistory: () => Promise<{ success: boolean; history?: ActivityEntry[]; error?: string }>;

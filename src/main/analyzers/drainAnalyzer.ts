@@ -1,5 +1,4 @@
 import * as fs from 'fs';
-import * as readline from 'readline';
 import {
   LogAnalyzer,
   AnalyzerOptions,
@@ -177,65 +176,102 @@ export class DrainAnalyzer implements LogAnalyzer {
 
     onProgress?.({ phase: 'parsing', percent: 0, message: 'Parsing log structure...' });
 
-    const stream = fs.createReadStream(filePath, { encoding: 'utf-8', highWaterMark: 64 * 1024 });
-    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    // Use chunked reading instead of readline to prevent OOM on files with
+    // extremely long lines (e.g. 3GB minified JSON). readline buffers entire
+    // lines in memory, which crashes V8.
+    const MAX_LINE_LENGTH = 500;
+    const CHUNK_SIZE = 1024 * 1024; // 1MB
+    const readBuffer = Buffer.alloc(CHUNK_SIZE);
+    const fd = fs.openSync(filePath, 'r');
+    let lineBuffer = '';
+    let lineBufferFull = false;
 
-    try {
-      for await (const line of rl) {
-        if (signal?.cancelled) break;
+    const processLine = (line: string): void => {
+      lineNumber++;
+      bytesRead += line.length + 1;
 
-        lineNumber++;
-        bytesRead += line.length + 1;
+      const trimmed = line.trim();
+      if (!trimmed) return;
 
-        const trimmed = line.trim();
-        if (!trimmed) continue;
+      // Detect level
+      const level = detectLevel(line);
+      if (level) levelCounts[level]++;
 
-        // Detect level
-        const level = detectLevel(line);
-        if (level) levelCounts[level]++;
+      // Extract timestamp (simple pattern) - check first 100 chars only
+      const sample = line.length > 100 ? line.substring(0, 100) : line;
+      const tsMatch = sample.match(/(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})|(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})/);
+      if (tsMatch) {
+        if (!firstTimestamp) firstTimestamp = tsMatch[0];
+        lastTimestamp = tsMatch[0];
+      }
 
-        // Extract timestamp (simple pattern)
-        const tsMatch = line.match(/(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})|(\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})/);
-        if (tsMatch) {
-          if (!firstTimestamp) firstTimestamp = tsMatch[0];
-          lastTimestamp = tsMatch[0];
-        }
-
-        // True duplicates: strip timestamp prefix and hash
-        const contentOnly = trimmed.replace(TIMESTAMP_STRIP_PATTERN, '').trim();
-        if (contentOnly.length > 10) {
-          const hash = simpleHash(contentOnly);
-          const existing = duplicateMap.get(hash);
-          if (existing) {
-            existing.count++;
-          } else if (duplicateMap.size < 50000) {
-            duplicateMap.set(hash, {
-              text: contentOnly.length > 200 ? contentOnly.substring(0, 200) + '...' : contentOnly,
-              count: 1,
-              firstLine: lineNumber
-            });
-          }
-        }
-
-        // Drain: parse into pattern
-        if (this.clusterCount < MAX_CLUSTERS) {
-          const tokens = tokenize(trimmed);
-          if (tokens.length > 0 && tokens.length < 100) {
-            this.addLogMessage(tokens, lineNumber, level, trimmed);
-          }
-        }
-
-        // Progress update
-        const now = Date.now();
-        if (now - lastProgressUpdate > 200) {
-          lastProgressUpdate = now;
-          const percent = Math.round((bytesRead / fileSize) * 80);
-          onProgress?.({ phase: 'parsing', percent, message: `Parsing line ${lineNumber.toLocaleString()}...` });
+      // True duplicates: strip timestamp prefix and hash
+      const contentOnly = trimmed.replace(TIMESTAMP_STRIP_PATTERN, '').trim();
+      if (contentOnly.length > 10) {
+        const hash = simpleHash(contentOnly);
+        const existing = duplicateMap.get(hash);
+        if (existing) {
+          existing.count++;
+        } else if (duplicateMap.size < 50000) {
+          duplicateMap.set(hash, {
+            text: contentOnly.length > 200 ? contentOnly.substring(0, 200) + '...' : contentOnly,
+            count: 1,
+            firstLine: lineNumber
+          });
         }
       }
+
+      // Drain: parse into pattern
+      if (this.clusterCount < MAX_CLUSTERS) {
+        const tokens = tokenize(trimmed);
+        if (tokens.length > 0 && tokens.length < 100) {
+          this.addLogMessage(tokens, lineNumber, level, trimmed);
+        }
+      }
+
+      // Progress update
+      const now = Date.now();
+      if (now - lastProgressUpdate > 200) {
+        lastProgressUpdate = now;
+        const percent = Math.round((bytesRead / fileSize) * 80);
+        onProgress?.({ phase: 'parsing', percent, message: `Parsing line ${lineNumber.toLocaleString()}...` });
+      }
+    };
+
+    try {
+      let filePos = 0;
+      while (filePos < fileSize) {
+        if (signal?.cancelled) break;
+
+        const bytesReadChunk = fs.readSync(fd, readBuffer, 0, CHUNK_SIZE, filePos);
+        if (bytesReadChunk === 0) break;
+        filePos += bytesReadChunk;
+
+        const chunk = readBuffer.toString('utf-8', 0, bytesReadChunk);
+
+        for (let i = 0; i < chunk.length; i++) {
+          const ch = chunk[i];
+          if (ch === '\n' || ch === '\r') {
+            processLine(lineBuffer);
+            lineBuffer = '';
+            lineBufferFull = false;
+            if (ch === '\r' && i + 1 < chunk.length && chunk[i + 1] === '\n') {
+              i++;
+            }
+          } else if (!lineBufferFull) {
+            lineBuffer += ch;
+            if (lineBuffer.length >= MAX_LINE_LENGTH) {
+              lineBufferFull = true;
+            }
+          }
+        }
+      }
+
+      if (lineBuffer.length > 0) {
+        processLine(lineBuffer);
+      }
     } finally {
-      rl.close();
-      stream.destroy();
+      fs.closeSync(fd);
     }
 
     if (signal?.cancelled) {

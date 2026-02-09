@@ -75,6 +75,7 @@
         <button id="btn-datadog" class="toolbar-btn" title="Connect to Datadog">DD</button>
       </div>
       <div class="toolbar-right">
+        <button id="btn-notes-toggle" class="toolbar-btn small" title="Toggle Notes (Ctrl+Shift+N)">&#128221;</button>
         <button id="btn-terminal-toggle" class="toolbar-btn small" title="Toggle Terminal (Ctrl+`)">&#9000;</button>
         <button id="btn-settings" class="toolbar-btn small" title="Settings">&#9881;</button>
         <button id="btn-help" class="toolbar-btn small" title="Keyboard shortcuts & help (F1)">&#9432;</button>
@@ -167,10 +168,6 @@
 
           <!-- Analysis Panel (includes duplicates) -->
           <div class="panel-view" id="panel-analysis" data-panel="analysis">
-            <div id="analysis-progress" class="analysis-progress" style="display: none;">
-              <div class="analysis-progress-text">Analyzing...</div>
-              <div class="analysis-progress-bar"><div class="analysis-progress-fill"></div></div>
-            </div>
             <div id="analysis-results" class="analysis-content">
               <p class="placeholder">Run analysis to see results</p>
             </div>
@@ -197,12 +194,6 @@
               <button id="btn-prev-gap" class="nav-btn" title="Previous gap">&#9664;</button>
               <span id="gap-nav-position" class="nav-position">0/0</span>
               <button id="btn-next-gap" class="nav-btn" title="Next gap">&#9654;</button>
-            </div>
-            <div id="time-gap-progress" class="time-gap-progress hidden">
-              <div class="progress-bar-mini">
-                <div id="time-gap-progress-fill" class="progress-fill-mini"></div>
-              </div>
-              <span id="time-gap-progress-text" class="progress-text-mini">0%</span>
             </div>
             <div class="time-gap-range">
               <div class="range-row">
@@ -309,6 +300,12 @@
           </div>
           <div id="peek-preview-content" class="peek-preview-content"></div>
         </div>
+        <div id="long-lines-warning" class="long-lines-warning hidden">
+          <span class="warning-icon">&#9888;</span>
+          <span class="warning-text">This file has very long lines which may cause slow scrolling. Click <strong>JSON</strong> in the toolbar to reformat for better performance.</span>
+          <button id="btn-format-warning" class="warning-action-btn">Format Now</button>
+          <button id="btn-dismiss-warning" class="warning-close-btn">&times;</button>
+        </div>
         <div id="editor-container" class="editor-container">
           <!-- Markdown Preview -->
           <div id="markdown-preview" class="markdown-preview hidden"></div>
@@ -334,6 +331,20 @@
           </div>
         </div>
       </main>
+    </div>
+
+    <!-- Notes Drawer (slide-up from bottom) -->
+    <div id="notes-overlay" class="notes-overlay hidden">
+      <div id="notes-drawer" class="notes-drawer">
+        <div id="notes-resize-handle" class="notes-resize-handle-top"></div>
+        <div class="notes-drawer-header">
+          <span class="notes-title">Notes</span>
+          <span id="notes-save-status" class="notes-save-status"></span>
+          <button id="btn-notes-close" class="notes-close-btn" title="Close (Esc)">&times;</button>
+        </div>
+        <textarea id="notes-textarea" class="notes-textarea"
+                  placeholder="Type your notes here... (auto-saved)"></textarea>
+      </div>
     </div>
 
     <!-- Status Bar -->
@@ -575,10 +586,11 @@
             </div>
           </div>
           <div class="help-section">
-            <h4>Terminal</h4>
+            <h4>Terminal & Notes</h4>
             <div class="shortcut-list">
               <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>`</kbd><span>Toggle terminal panel</span></div>
-              <div class="shortcut-item"><kbd>Esc</kbd><span>Close terminal (when focused)</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd><span>Toggle notes drawer</span></div>
+              <div class="shortcut-item"><kbd>Esc</kbd><span>Close terminal/notes (when focused)</span></div>
             </div>
           </div>
           <div class="help-section">
@@ -665,6 +677,10 @@
             <label for="bookmark-comment">Comment (optional)</label>
             <input type="text" id="bookmark-comment" class="modal-input" placeholder="Enter a comment for this bookmark...">
           </div>
+          <div class="filter-group">
+            <label>Color</label>
+            <div id="bookmark-color-palette" class="bookmark-color-palette"></div>
+          </div>
           <p id="bookmark-line-info" class="hint"></p>
         </div>
         <div class="modal-footer">
@@ -674,16 +690,16 @@
       </div>
     </div>
 
-    <!-- Save to Notes Modal -->
+    <!-- Save Snippet Modal (save selected lines to file) -->
     <div id="notes-modal" class="modal hidden">
       <div class="modal-content" style="width: 500px;">
         <div class="modal-header">
-          <h3>Save to Notes</h3>
+          <h3>Save Snippet</h3>
           <button class="modal-close" data-modal="notes-modal">&times;</button>
         </div>
         <div class="modal-body">
           <div class="filter-group" id="notes-file-group">
-            <label>Notes File</label>
+            <label>Snippet File</label>
             <div id="notes-file-options" class="radio-group">
               <!-- Will be populated dynamically -->
             </div>
@@ -696,7 +712,7 @@
         </div>
         <div class="modal-footer">
           <button id="btn-cancel-notes" class="secondary-btn">Cancel</button>
-          <button id="btn-save-notes" class="primary-btn">Save to Notes</button>
+          <button id="btn-save-notes" class="primary-btn">Save Snippet</button>
         </div>
       </div>
     </div>

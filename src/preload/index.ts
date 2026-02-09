@@ -287,6 +287,13 @@ const api = {
     return () => ipcRenderer.removeListener(IPC.DIFF_PROGRESS, handler);
   },
 
+  // JSON format progress
+  onJsonFormatProgress: (callback: (data: { percent: number }) => void): (() => void) => {
+    const handler = (_: any, data: { percent: number }) => callback(data);
+    ipcRenderer.on('json-format-progress', handler);
+    return () => ipcRenderer.removeListener('json-format-progress', handler);
+  },
+
   // Local file status & activity history
   loadActivityHistory: (): Promise<{ success: boolean; history?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.LOAD_ACTIVITY_HISTORY),
@@ -296,6 +303,13 @@ const api = {
 
   getLocalFileStatus: (): Promise<{ exists: boolean; writable: boolean; localPath: string | null }> =>
     ipcRenderer.invoke(IPC.GET_LOCAL_FILE_STATUS),
+
+  // Notes drawer
+  loadNotes: (): Promise<{ success: boolean; content?: string }> =>
+    ipcRenderer.invoke('load-notes'),
+
+  saveNotes: (content: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('save-notes', content),
 
   // Window controls
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),

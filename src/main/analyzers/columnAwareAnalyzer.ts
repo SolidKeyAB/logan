@@ -1,5 +1,4 @@
 import * as fs from 'fs';
-import * as readline from 'readline';
 import {
   LogAnalyzer,
   AnalyzerOptions,
@@ -98,111 +97,145 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
       let firstTimestamp: string | null = null;
       let lastTimestamp: string | null = null;
 
-      const stream = fs.createReadStream(filePath, { encoding: 'utf-8', highWaterMark: 64 * 1024 });
-      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+      // Use chunked reading instead of readline to prevent OOM on files with
+      // extremely long lines. readline buffers entire lines in memory.
+      const MAX_LINE_LENGTH = 500;
+      const CHUNK_SIZE = 1024 * 1024; // 1MB
+      const readBuffer = Buffer.alloc(CHUNK_SIZE);
+      const fd = fs.openSync(filePath, 'r');
+      let lineBuffer = '';
+      let lineBufferFull = false;
+
+      const processLine = (line: string): void => {
+        lineNumber++;
+        bytesRead += line.length + 1;
+
+        if (lineNumber === 1 && this.looksLikeHeader(line)) return;
+        if (!line.trim() || line.startsWith('#')) return;
+
+        const fields = this.splitLine(line);
+
+        // Extract channel
+        let channel: string | undefined;
+        if (channelCol && fields[channelCol.index]) {
+          channel = fields[channelCol.index].trim();
+          if (channel && channel !== '--' && channel !== '-') {
+            channelCounts.set(channel, (channelCounts.get(channel) || 0) + 1);
+          } else {
+            channel = undefined;
+          }
+        }
+
+        // Extract source (simplified)
+        if (sourceCol && fields[sourceCol.index]) {
+          const source = fields[sourceCol.index].trim();
+          if (source && source !== '--' && source !== '-') {
+            const simpleSource = this.simplifySource(source);
+            sourceCounts.set(simpleSource, (sourceCounts.get(simpleSource) || 0) + 1);
+          }
+        }
+
+        // Extract level
+        let level: string | undefined;
+        if (levelCol && fields[levelCol.index]) {
+          const rawLevel = fields[levelCol.index].trim().toLowerCase();
+          level = this.normalizeLevel(rawLevel) || undefined;
+        } else {
+          level = this.detectLevelFromText(line) || undefined;
+        }
+        if (level) levelCounts[level]++;
+
+        // Extract and analyze message
+        let message = '';
+        if (messageCol && fields[messageCol.index]) {
+          message = fields[messageCol.index].trim();
+        } else if (fields.length > 0) {
+          message = fields[fields.length - 1].trim();
+        }
+
+        if (message) {
+          const pattern = this.extractPattern(message);
+          const existing = messageMap.get(pattern);
+
+          if (existing) {
+            existing.count++;
+            existing.lastLine = lineNumber;
+            if (!existing.level && level) existing.level = level;
+            if (!existing.channel && channel) existing.channel = channel;
+          } else if (messageMap.size < 50000) {
+            const info: MessageInfo = {
+              pattern,
+              sample: message.length > 200 ? message.substring(0, 200) + '...' : message,
+              count: 1,
+              level,
+              channel,
+              firstLine: lineNumber,
+              lastLine: lineNumber
+            };
+            messageMap.set(pattern, info);
+
+            if (rareMessages.length < 1000) {
+              rareMessages.push({
+                text: message.length > 150 ? message.substring(0, 150) + '...' : message,
+                line: lineNumber,
+                level,
+                channel
+              });
+            }
+          }
+        }
+
+        // Timestamp - check first 100 chars only
+        const tsSample = line.length > 100 ? line.substring(0, 100) : line;
+        const tsMatch = tsSample.match(/(\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2})|(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})/);
+        if (tsMatch) {
+          if (!firstTimestamp) firstTimestamp = tsMatch[0];
+          lastTimestamp = tsMatch[0];
+        }
+
+        // Progress
+        const now = Date.now();
+        if (now - lastProgressUpdate > 200) {
+          lastProgressUpdate = now;
+          const percent = Math.round(5 + (bytesRead / fileSize) * 75);
+          onProgress?.({ phase: 'parsing', percent, message: `Line ${lineNumber.toLocaleString()}...` });
+        }
+      };
 
       try {
-        for await (const line of rl) {
+        let filePos = 0;
+        while (filePos < fileSize) {
           if (signal?.cancelled) break;
 
-          lineNumber++;
-          bytesRead += line.length + 1;
+          const bytesReadChunk = fs.readSync(fd, readBuffer, 0, CHUNK_SIZE, filePos);
+          if (bytesReadChunk === 0) break;
+          filePos += bytesReadChunk;
 
-          if (lineNumber === 1 && this.looksLikeHeader(line)) continue;
-          if (!line.trim() || line.startsWith('#')) continue;
+          const chunk = readBuffer.toString('utf-8', 0, bytesReadChunk);
 
-          const fields = this.splitLine(line);
-
-          // Extract channel
-          let channel: string | undefined;
-          if (channelCol && fields[channelCol.index]) {
-            channel = fields[channelCol.index].trim();
-            if (channel && channel !== '--' && channel !== '-') {
-              channelCounts.set(channel, (channelCounts.get(channel) || 0) + 1);
-            } else {
-              channel = undefined;
-            }
-          }
-
-          // Extract source (simplified)
-          if (sourceCol && fields[sourceCol.index]) {
-            const source = fields[sourceCol.index].trim();
-            if (source && source !== '--' && source !== '-') {
-              const simpleSource = this.simplifySource(source);
-              sourceCounts.set(simpleSource, (sourceCounts.get(simpleSource) || 0) + 1);
-            }
-          }
-
-          // Extract level
-          let level: string | undefined;
-          if (levelCol && fields[levelCol.index]) {
-            const rawLevel = fields[levelCol.index].trim().toLowerCase();
-            level = this.normalizeLevel(rawLevel) || undefined;
-          } else {
-            level = this.detectLevelFromText(line) || undefined;
-          }
-          if (level) levelCounts[level]++;
-
-          // Extract and analyze message
-          let message = '';
-          if (messageCol && fields[messageCol.index]) {
-            message = fields[messageCol.index].trim();
-          } else if (fields.length > 0) {
-            // Use last field as message if no message column
-            message = fields[fields.length - 1].trim();
-          }
-
-          if (message) {
-            const pattern = this.extractPattern(message);
-            const existing = messageMap.get(pattern);
-
-            if (existing) {
-              existing.count++;
-              existing.lastLine = lineNumber;
-              if (!existing.level && level) existing.level = level;
-              if (!existing.channel && channel) existing.channel = channel;
-            } else if (messageMap.size < 50000) {
-              const info: MessageInfo = {
-                pattern,
-                sample: message.length > 200 ? message.substring(0, 200) + '...' : message,
-                count: 1,
-                level,
-                channel,
-                firstLine: lineNumber,
-                lastLine: lineNumber
-              };
-              messageMap.set(pattern, info);
-
-              // Track potential anomalies (collect first 1000 unique messages)
-              if (rareMessages.length < 1000) {
-                rareMessages.push({
-                  text: message.length > 150 ? message.substring(0, 150) + '...' : message,
-                  line: lineNumber,
-                  level,
-                  channel
-                });
+          for (let i = 0; i < chunk.length; i++) {
+            const ch = chunk[i];
+            if (ch === '\n' || ch === '\r') {
+              processLine(lineBuffer);
+              lineBuffer = '';
+              lineBufferFull = false;
+              if (ch === '\r' && i + 1 < chunk.length && chunk[i + 1] === '\n') {
+                i++;
+              }
+            } else if (!lineBufferFull) {
+              lineBuffer += ch;
+              if (lineBuffer.length >= MAX_LINE_LENGTH) {
+                lineBufferFull = true;
               }
             }
           }
+        }
 
-          // Timestamp
-          const tsMatch = line.match(/(\d{2}\.\d{2}\.\d{4}\s+\d{2}:\d{2}:\d{2})|(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})/);
-          if (tsMatch) {
-            if (!firstTimestamp) firstTimestamp = tsMatch[0];
-            lastTimestamp = tsMatch[0];
-          }
-
-          // Progress
-          const now = Date.now();
-          if (now - lastProgressUpdate > 200) {
-            lastProgressUpdate = now;
-            const percent = Math.round(5 + (bytesRead / fileSize) * 75);
-            onProgress?.({ phase: 'parsing', percent, message: `Line ${lineNumber.toLocaleString()}...` });
-          }
+        if (lineBuffer.length > 0) {
+          processLine(lineBuffer);
         }
       } finally {
-        rl.close();
-        stream.destroy();
+        fs.closeSync(fd);
       }
 
       if (signal?.cancelled) {
@@ -492,7 +525,7 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
   }
 
   private detectLevelFromText(text: string): string | null {
-    const upper = text.toUpperCase();
+    const upper = (text.length > 200 ? text.substring(0, 200) : text).toUpperCase();
     if (/\b(ERROR|FATAL|CRITICAL|EXCEPTION|PANIC)\b/.test(upper)) return 'error';
     if (/\b(WARN|WARNING)\b/.test(upper)) return 'warning';
     if (/\b(INFO)\b/.test(upper)) return 'info';
@@ -515,25 +548,24 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
 
   private async detectColumns(filePath: string): Promise<ColumnInfo[]> {
     const columns: ColumnInfo[] = [];
-    const stream = fs.createReadStream(filePath, { encoding: 'utf-8', highWaterMark: 4096 });
-    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
-    let lineCount = 0;
+    // Read first few KB to detect column structure (no readline to avoid OOM on long lines)
+    const buf = Buffer.alloc(8192);
+    const fd = fs.openSync(filePath, 'r');
     let headerLine: string | null = null;
-
     try {
-      for await (const line of rl) {
-        lineCount++;
+      const bytesRead = fs.readSync(fd, buf, 0, 8192, 0);
+      const text = buf.toString('utf-8', 0, bytesRead);
+      const lines = text.split(/\r?\n/).slice(0, 10);
+      for (const line of lines) {
         if (line.startsWith('#')) continue;
-        if (!headerLine && this.looksLikeHeader(line)) {
+        if (this.looksLikeHeader(line)) {
           headerLine = line;
           break;
         }
-        if (lineCount > 5) break;
       }
     } finally {
-      rl.close();
-      stream.destroy();
+      fs.closeSync(fd);
     }
 
     if (!headerLine) return columns;

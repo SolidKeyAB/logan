@@ -922,17 +922,23 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
       currentFilePath = filePath;
     }
 
+    // Detect long lines for warning
+    const LONG_LINE_THRESHOLD = 5000; // chars
+    const maxLineLength = fileHandler.getMaxLineLength();
+    const hasLongLines = maxLineLength > LONG_LINE_THRESHOLD && !filePath.includes('.formatted.');
+
     // Load bookmarks and highlights for this file
-    loadBookmarksForFile(filePath);
-    loadHighlightsForFile(filePath);
+    const persistPath = filePath;
+    loadBookmarksForFile(persistPath);
+    loadHighlightsForFile(persistPath);
 
     // Update lastOpened in local sidecar
-    if (canWriteLocal(filePath)) {
-      const localData = loadLocalFileData(filePath);
+    if (canWriteLocal(persistPath)) {
+      const localData = loadLocalFileData(persistPath);
       localData.lastOpened = new Date().toISOString();
-      saveLocalFileData(filePath, localData);
+      saveLocalFileData(persistPath, localData);
     }
-    logActivity(filePath, 'file_opened', { filePath });
+    logActivity(persistPath, 'file_opened', { filePath: persistPath });
 
     // Check for split metadata in file header (preferred)
     const splitMeta = fileHandler.getSplitMetadata();
@@ -980,7 +986,9 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
       splitFiles: splitInfo?.files,
       splitIndex: splitInfo?.currentIndex,
       bookmarks: Array.from(bookmarks.values()),
-      highlights: Array.from(highlights.values())
+      highlights: Array.from(highlights.values()),
+      hasLongLines,
+      maxLineLength,
     };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -2492,41 +2500,154 @@ ipcMain.handle('split-file', async (_, options: SplitOptions) => {
   }
 });
 
-// === Format JSON File ===
+// === Format JSON File (streaming - handles any file size) ===
+
+function streamFormatJson(inputPath: string, outputPath: string, onProgress?: (percent: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const stats = fs.statSync(inputPath);
+    const fileSize = stats.size;
+
+    const readStream = fs.createReadStream(inputPath, { encoding: 'utf-8', highWaterMark: 1024 * 1024 }); // 1MB chunks
+    const writeStream = fs.createWriteStream(outputPath, { encoding: 'utf-8' });
+
+    let inString = false;
+    let escaped = false;
+    let depth = 0;
+    let afterOpenOrComma = false;
+    let bytesRead = 0;
+    let lastProgressPercent = 0;
+    let outputBuffer = '';
+    const FLUSH_SIZE = 256 * 1024; // Flush every 256KB
+
+    const indent = (d: number) => '  '.repeat(d);
+
+    const flush = () => {
+      if (outputBuffer.length > 0) {
+        writeStream.write(outputBuffer);
+        outputBuffer = '';
+      }
+    };
+
+    const write = (s: string) => {
+      outputBuffer += s;
+      if (outputBuffer.length >= FLUSH_SIZE) flush();
+    };
+
+    readStream.on('data', (rawChunk: string | Buffer) => {
+      const chunk = typeof rawChunk === 'string' ? rawChunk : rawChunk.toString('utf-8');
+      bytesRead += Buffer.byteLength(chunk, 'utf-8');
+
+      for (let i = 0; i < chunk.length; i++) {
+        const char = chunk[i];
+
+        if (escaped) {
+          write(char);
+          escaped = false;
+          continue;
+        }
+
+        if (inString) {
+          if (char === '\\') { escaped = true; }
+          else if (char === '"') { inString = false; }
+          write(char);
+          continue;
+        }
+
+        // Outside string - skip existing whitespace
+        if (char === ' ' || char === '\t' || char === '\n' || char === '\r') continue;
+
+        if (char === '"') {
+          if (afterOpenOrComma) { write('\n' + indent(depth)); afterOpenOrComma = false; }
+          write(char);
+          inString = true;
+          continue;
+        }
+
+        if (char === '{' || char === '[') {
+          if (afterOpenOrComma) { write('\n' + indent(depth)); afterOpenOrComma = false; }
+          write(char);
+          depth++;
+          afterOpenOrComma = true;
+          continue;
+        }
+
+        if (char === '}' || char === ']') {
+          afterOpenOrComma = false;
+          depth--;
+          write('\n' + indent(depth) + char);
+          continue;
+        }
+
+        if (char === ',') {
+          write(char);
+          afterOpenOrComma = true;
+          continue;
+        }
+
+        if (char === ':') {
+          write(': ');
+          continue;
+        }
+
+        // Literal characters (digits, -, t, r, u, e, f, a, l, s, n)
+        if (afterOpenOrComma) { write('\n' + indent(depth)); afterOpenOrComma = false; }
+        write(char);
+      }
+
+      // Report progress
+      const percent = Math.min(99, Math.round((bytesRead / fileSize) * 100));
+      if (percent > lastProgressPercent) {
+        lastProgressPercent = percent;
+        if (onProgress) onProgress(percent);
+      }
+    });
+
+    readStream.on('end', () => {
+      write('\n');
+      flush();
+      writeStream.end(() => {
+        if (onProgress) onProgress(100);
+        resolve();
+      });
+    });
+
+    readStream.on('error', (err) => {
+      writeStream.destroy();
+      reject(err);
+    });
+
+    writeStream.on('error', (err) => {
+      readStream.destroy();
+      reject(err);
+    });
+  });
+}
 
 ipcMain.handle('format-json-file', async (_, filePath: string) => {
   try {
-    // Get file size first
     const stats = fs.statSync(filePath);
     console.log(`[JSON Format] File size: ${stats.size} bytes`);
 
-    // Read the original file
-    const content = fs.readFileSync(filePath, 'utf-8');
-    console.log(`[JSON Format] Content length: ${content.length} characters`);
-
-    // Try to parse as JSON
-    const parsed = JSON.parse(content);
-    console.log(`[JSON Format] Parsed successfully, type: ${Array.isArray(parsed) ? 'array' : typeof parsed}`);
-    if (Array.isArray(parsed)) {
-      console.log(`[JSON Format] Array length: ${parsed.length}`);
-    }
-
-    // Pretty-print with 2-space indentation
-    const formatted = JSON.stringify(parsed, null, 2);
-    console.log(`[JSON Format] Formatted length: ${formatted.length} characters`);
-
-    // Generate output path
     const dir = path.dirname(filePath);
     const baseName = path.basename(filePath, path.extname(filePath));
     const ext = path.extname(filePath);
     const formattedPath = path.join(dir, `${baseName}.formatted${ext}`);
 
-    // Write formatted file
-    fs.writeFileSync(formattedPath, formatted, 'utf-8');
+    // For very large files, warn about size limits
+    const MAX_FORMATTED_SIZE = 1.5 * 1024 * 1024 * 1024; // 1.5GB
 
-    // Verify written file
+    await streamFormatJson(filePath, formattedPath, (percent) => {
+      mainWindow?.webContents.send('json-format-progress', { percent });
+    });
+
     const writtenStats = fs.statSync(formattedPath);
-    console.log(`[JSON Format] Written file size: ${writtenStats.size} bytes`);
+    console.log(`[JSON Format] Done. Output: ${writtenStats.size} bytes`);
+
+    if (writtenStats.size > MAX_FORMATTED_SIZE) {
+      // Clean up - file too large to index efficiently
+      try { fs.unlinkSync(formattedPath); } catch { /* ignore */ }
+      return { success: false, error: `Formatted output is too large (${(writtenStats.size / 1024 / 1024 / 1024).toFixed(1)} GB). The file has too many nested elements to reformat in-app. Try using the integrated terminal: jq . "${path.basename(filePath)}" > formatted.json` };
+    }
 
     return { success: true, formattedPath };
   } catch (error) {
@@ -2690,5 +2811,29 @@ ipcMain.handle(IPC.CLEAR_ACTIVITY_HISTORY, async () => {
   const data = loadLocalFileData(currentFilePath);
   data.activityHistory = [];
   saveLocalFileData(currentFilePath, data);
+  return { success: true };
+});
+
+// Notes drawer — load/save freeform notes from .logan/<filename>.notes.txt
+ipcMain.handle('load-notes', async () => {
+  if (!currentFilePath) return { success: false, error: 'No file open' };
+  const notesPath = path.join(getLocalLoganDir(currentFilePath),
+    path.basename(currentFilePath) + '.notes.txt');
+  try {
+    const content = fs.readFileSync(notesPath, 'utf-8');
+    return { success: true, content };
+  } catch {
+    return { success: true, content: '' };
+  }
+});
+
+ipcMain.handle('save-notes', async (_e: any, content: string) => {
+  if (!currentFilePath) return { success: false, error: 'No file open' };
+  if (!ensureLocalLoganDir(currentFilePath)) {
+    return { success: false, error: 'Cannot write to local .logan/ directory' };
+  }
+  const notesPath = path.join(getLocalLoganDir(currentFilePath),
+    path.basename(currentFilePath) + '.notes.txt');
+  fs.writeFileSync(notesPath, content, 'utf-8');
   return { success: true };
 });

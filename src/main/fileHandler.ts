@@ -1,5 +1,4 @@
 import * as fs from 'fs';
-import * as readline from 'readline';
 import { spawn } from 'child_process';
 import { FileInfo, LineData, SearchMatch, SearchOptions } from '../shared/types';
 
@@ -67,6 +66,7 @@ export class FileHandler {
   private fileInfo: FileInfo | null = null;
   private fd: number | null = null;
   private splitMetadata: SplitMetadata | null = null;
+  private _maxLineLength: number = 0;
   private headerLineCount: number = 0; // Lines to skip (hidden header)
 
   async open(
@@ -122,6 +122,7 @@ export class FileHandler {
             }
 
             this.lineOffsets.push({ offset: lineStart, length: actualLength });
+            if (actualLength > this._maxLineLength) this._maxLineLength = actualLength;
 
             // Check first line for split header
             if (firstLine) {
@@ -151,6 +152,7 @@ export class FileHandler {
                 const lineEnd = effectiveOffset + chunkPos;
                 const lineLength = lineEnd - lineStart;
                 this.lineOffsets.push({ offset: lineStart, length: lineLength });
+                if (lineLength > this._maxLineLength) this._maxLineLength = lineLength;
 
                 if (firstLine) {
                   firstLine = false;
@@ -188,6 +190,7 @@ export class FileHandler {
       if (lineStart < fileSize) {
         const lastLineLength = fileSize - lineStart;
         this.lineOffsets.push({ offset: lineStart, length: lastLineLength });
+        if (lastLineLength > this._maxLineLength) this._maxLineLength = lastLineLength;
 
         if (firstLine) {
           const lineBuffer = Buffer.alloc(Math.min(lastLineLength, 500));
@@ -250,6 +253,13 @@ export class FileHandler {
     return this.splitMetadata;
   }
 
+  getMaxLineLength(): number {
+    return this._maxLineLength;
+  }
+
+  // Max characters to read per line — prevents OOM on files with extremely long lines
+  private static readonly MAX_LINE_READ = 10000;
+
   getLines(startLine: number, count: number): LineData[] {
     if (!this.fd || !this.filePath) return [];
 
@@ -260,9 +270,14 @@ export class FileHandler {
 
     for (let i = actualStart; i < actualEnd; i++) {
       const { offset, length } = this.lineOffsets[i];
-      const buffer = Buffer.alloc(length);
-      fs.readSync(this.fd, buffer, 0, length, offset);
-      const text = buffer.toString('utf-8');
+      // Cap read size to prevent OOM on lines with millions of characters
+      const readLength = Math.min(length, FileHandler.MAX_LINE_READ);
+      const buffer = Buffer.alloc(readLength);
+      fs.readSync(this.fd, buffer, 0, readLength, offset);
+      let text = buffer.toString('utf-8');
+      if (length > FileHandler.MAX_LINE_READ) {
+        text += ' \u2026 (truncated)';
+      }
       lines.push({
         // Return visible line number (without header offset)
         lineNumber: i - this.headerLineCount,
@@ -275,7 +290,10 @@ export class FileHandler {
   }
 
   private detectLevel(text: string): LineData['level'] {
-    const upperText = text.toUpperCase();
+    // Only check the first 200 chars — log levels appear near the start of a line.
+    // This prevents OOM on files with extremely long lines (e.g. minified JSON).
+    const sample = text.length > 200 ? text.substring(0, 200) : text;
+    const upperText = sample.toUpperCase();
 
     // Check for common log level patterns
     if (/\b(ERROR|FATAL|CRITICAL|SEVERE)\b/.test(upperText)) {
@@ -517,27 +535,27 @@ export class FileHandler {
       return [];
     }
 
-    const fileSize = fs.statSync(this.filePath).size;
+    const stat = fs.statSync(this.filePath);
+    const fileSize = stat.size;
     let bytesRead = 0;
     let lineNumber = 0;
     let lastProgressUpdate = Date.now();
 
-    const stream = fs.createReadStream(this.filePath, { encoding: 'utf-8' });
-    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    // Use chunked reading instead of readline to prevent OOM on files with
+    // extremely long lines. Cap at 10K chars for search (need more context than analyzers).
+    const MAX_SEARCH_LINE = 10000;
+    const CHUNK_SIZE = 1024 * 1024; // 1MB
+    const readBuffer = Buffer.alloc(CHUNK_SIZE);
+    const searchFd = fs.openSync(this.filePath, 'r');
+    let lineBuffer = '';
+    let lineBufferFull = false;
+    let done = false;
 
-    for await (const line of rl) {
-      if (signal?.cancelled) {
-        rl.close();
-        stream.destroy();
-        break;
-      }
-
-      bytesRead += Buffer.byteLength(line, 'utf-8') + 1;
-
+    const processSearchLine = (line: string): void => {
       // Skip header lines
       if (lineNumber < this.headerLineCount) {
         lineNumber++;
-        continue;
+        return;
       }
 
       const visibleLineNum = lineNumber - this.headerLineCount;
@@ -553,13 +571,12 @@ export class FileHandler {
           lineNumber: visibleLineNum,
           column: match.index,
           length: match[0].length,
-          lineText: searchText, // Return filtered text for display
+          lineText: searchText,
         });
 
         if (matches.length >= 50000) {
-          rl.close();
-          stream.destroy();
-          return matches;
+          done = true;
+          return;
         }
       }
 
@@ -572,6 +589,44 @@ export class FileHandler {
         const progress = Math.round((bytesRead / fileSize) * 100);
         onProgress(Math.min(progress, 99), matches.length);
       }
+    };
+
+    try {
+      let filePos = 0;
+      while (filePos < fileSize && !done) {
+        if (signal?.cancelled) break;
+
+        const bytesReadChunk = fs.readSync(searchFd, readBuffer, 0, CHUNK_SIZE, filePos);
+        if (bytesReadChunk === 0) break;
+        filePos += bytesReadChunk;
+
+        const chunk = readBuffer.toString('utf-8', 0, bytesReadChunk);
+
+        for (let i = 0; i < chunk.length && !done; i++) {
+          const ch = chunk[i];
+          if (ch === '\n' || ch === '\r') {
+            bytesRead += lineBuffer.length + 1;
+            processSearchLine(lineBuffer);
+            lineBuffer = '';
+            lineBufferFull = false;
+            if (ch === '\r' && i + 1 < chunk.length && chunk[i + 1] === '\n') {
+              i++;
+            }
+          } else if (!lineBufferFull) {
+            lineBuffer += ch;
+            if (lineBuffer.length >= MAX_SEARCH_LINE) {
+              lineBufferFull = true;
+            }
+          }
+        }
+      }
+
+      if (lineBuffer.length > 0 && !done) {
+        bytesRead += lineBuffer.length + 1;
+        processSearchLine(lineBuffer);
+      }
+    } finally {
+      fs.closeSync(searchFd);
     }
 
     onProgress?.(100, matches.length);

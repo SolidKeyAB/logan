@@ -278,6 +278,8 @@ interface AppState {
   // Terminal
   terminalVisible: boolean;
   terminalInitialized: boolean;
+  // Notes drawer
+  notesVisible: boolean;
 }
 
 const state: AppState = {
@@ -311,6 +313,7 @@ const state: AppState = {
   isFolderSearching: false,
   terminalVisible: false,
   terminalInitialized: false,
+  notesVisible: false,
 };
 
 // Constants
@@ -377,7 +380,8 @@ function loadSettings(): void {
       // Deep-merge sidebarSections so new sections get defaults
       userSettings.sidebarSections = { ...DEFAULT_SIDEBAR_SECTIONS, ...(parsed.sidebarSections || {}) };
     }
-  } catch {
+  } catch (e) {
+    console.warn('Failed to load settings from localStorage:', e);
     userSettings = { ...DEFAULT_SETTINGS };
   }
 }
@@ -602,12 +606,35 @@ function getFontSize(): number {
   return Math.round(BASE_FONT_SIZE * (zoomLevel / 100));
 }
 
+// Measure monospace character width at current zoom level
+let _cachedCharWidth = 0;
+let _charWidthZoom = 0;
+function getCharWidth(): number {
+  if (_charWidthZoom === zoomLevel && _cachedCharWidth > 0) return _cachedCharWidth;
+  const span = document.createElement('span');
+  span.style.cssText = `position:absolute;visibility:hidden;white-space:pre;font-family:var(--font-family);font-size:${getFontSize()}px;`;
+  span.textContent = 'M';
+  document.body.appendChild(span);
+  _cachedCharWidth = span.getBoundingClientRect().width;
+  document.body.removeChild(span);
+  _charWidthZoom = zoomLevel;
+  return _cachedCharWidth;
+}
+
+// Get line number gutter width (min-width 60px + padding-right 15px + margin-right 10px + border 1px)
+const LINE_NUMBER_GUTTER_EXTRA = 86;
+
 // Scroll state for optimizations
 let lastScrollTop = 0;
 let scrollDirection: 'up' | 'down' = 'down';
 let scrollRAF: number | null = null;
 let isScrolling = false;
 let scrollEndTimer: ReturnType<typeof setTimeout> | null = null;
+// Scroll slowness detection
+let slowScrollFrames = 0;
+let scrollSlownessWarningShown = false;
+const SLOW_SCROLL_THRESHOLD_MS = 50; // Frame time above this = slow
+const SLOW_SCROLL_FRAME_COUNT = 10; // Number of slow frames before warning
 
 // DOM Elements
 const elements = {
@@ -654,9 +681,6 @@ const elements = {
   folderSearchResults: document.getElementById('folder-search-results') as HTMLDivElement,
   fileStats: document.getElementById('file-stats') as HTMLDivElement,
   analysisResults: document.getElementById('analysis-results') as HTMLDivElement,
-  analysisProgress: document.getElementById('analysis-progress') as HTMLDivElement,
-  analysisProgressText: document.querySelector('.analysis-progress-text') as HTMLDivElement,
-  analysisProgressFill: document.querySelector('.analysis-progress-fill') as HTMLDivElement,
   duplicatesList: document.getElementById('duplicates-list') as HTMLDivElement,
   bookmarksList: document.getElementById('bookmarks-list') as HTMLDivElement,
   btnExportBookmarks: document.getElementById('btn-export-bookmarks') as HTMLButtonElement,
@@ -746,10 +770,15 @@ const elements = {
   themeSelect: document.getElementById('theme-select') as HTMLSelectElement,
   btnResetSettings: document.getElementById('btn-reset-settings') as HTMLButtonElement,
   btnCloseSettings: document.getElementById('btn-close-settings') as HTMLButtonElement,
+  // Long lines warning
+  longLinesWarning: document.getElementById('long-lines-warning') as HTMLDivElement,
+  btnFormatWarning: document.getElementById('btn-format-warning') as HTMLButtonElement,
+  btnDismissWarning: document.getElementById('btn-dismiss-warning') as HTMLButtonElement,
   // Bookmark modal
   bookmarkModal: document.getElementById('bookmark-modal') as HTMLDivElement,
   bookmarkModalTitle: document.getElementById('bookmark-modal-title') as HTMLHeadingElement,
   bookmarkComment: document.getElementById('bookmark-comment') as HTMLInputElement,
+  bookmarkColorPalette: document.getElementById('bookmark-color-palette') as HTMLDivElement,
   bookmarkLineInfo: document.getElementById('bookmark-line-info') as HTMLParagraphElement,
   btnSaveBookmark: document.getElementById('btn-save-bookmark') as HTMLButtonElement,
   btnCancelBookmark: document.getElementById('btn-cancel-bookmark') as HTMLButtonElement,
@@ -766,6 +795,14 @@ const elements = {
   terminalContainer: document.getElementById('terminal-container') as HTMLDivElement,
   terminalResizeHandle: document.getElementById('terminal-resize-handle') as HTMLDivElement,
   btnTerminalToggle: document.getElementById('btn-terminal-toggle') as HTMLButtonElement,
+  // Notes drawer
+  notesOverlay: document.getElementById('notes-overlay') as HTMLDivElement,
+  notesDrawer: document.getElementById('notes-drawer') as HTMLDivElement,
+  notesTextarea: document.getElementById('notes-textarea') as HTMLTextAreaElement,
+  notesSaveStatus: document.getElementById('notes-save-status') as HTMLSpanElement,
+  notesResizeHandle: document.getElementById('notes-resize-handle') as HTMLDivElement,
+  btnNotesToggle: document.getElementById('btn-notes-toggle') as HTMLButtonElement,
+  btnNotesClose: document.getElementById('btn-notes-close') as HTMLButtonElement,
   // Panel resize
   panelContainer: document.getElementById('panel-container') as HTMLDivElement,
   panelTitle: document.getElementById('panel-title') as HTMLSpanElement,
@@ -788,9 +825,6 @@ const elements = {
   btnDetectGaps: document.getElementById('btn-detect-gaps') as HTMLButtonElement,
   btnCancelGaps: document.getElementById('btn-cancel-gaps') as HTMLButtonElement,
   btnClearGaps: document.getElementById('btn-clear-gaps') as HTMLButtonElement,
-  timeGapProgress: document.getElementById('time-gap-progress') as HTMLDivElement,
-  timeGapProgressFill: document.getElementById('time-gap-progress-fill') as HTMLDivElement,
-  timeGapProgressText: document.getElementById('time-gap-progress-text') as HTMLSpanElement,
   timeGapsList: document.getElementById('time-gaps-list') as HTMLDivElement,
   timeGapStartLine: document.getElementById('time-gap-start-line') as HTMLInputElement,
   timeGapEndLine: document.getElementById('time-gap-end-line') as HTMLInputElement,
@@ -854,6 +888,7 @@ let activeHighlightGroupId: string | null = null;
 let terminal: any = null;
 // @ts-ignore - FitAddon loaded via script tag
 let fitAddon: any = null;
+let terminalInputDisposable: { dispose(): void } | null = null;
 let terminalDataUnsubscribe: (() => void) | null = null;
 let terminalExitUnsubscribe: (() => void) | null = null;
 
@@ -1248,7 +1283,7 @@ function secondaryRenderVisibleLines(sv: SecondaryViewerInstance): void {
       div.style.cssText = `position:absolute;top:0;left:0;transform:translateY(${top}px);will-change:transform;white-space:pre;`;
       fragment.appendChild(div);
 
-      const estimatedWidth = 70 + (line.text.length * 8);
+      const estimatedWidth = LINE_NUMBER_GUTTER_EXTRA + (line.text.length * getCharWidth());
       if (estimatedWidth > maxContentWidth) maxContentWidth = estimatedWidth;
     }
   }
@@ -1789,27 +1824,39 @@ function createLogViewer(): void {
       return;
     }
 
-    // Normalize scroll speed for trackpad vs mouse
+    // Normalize scroll deltas for trackpad vs mouse
     // deltaMode: 0 = pixels (trackpad), 1 = lines (mouse), 2 = pages
     e.preventDefault();
 
-    let delta = e.deltaY;
+    let deltaY = e.deltaY;
+    let deltaX = e.deltaX;
 
     if (e.deltaMode === 0) {
-      // Pixel-based scrolling (trackpad) - use user's scroll speed setting
-      delta = delta * (userSettings.scrollSpeed / 100);
+      // Pixel-based scrolling (trackpad) - apply user's scroll speed setting
+      const speedFactor = userSettings.scrollSpeed / 100;
+      deltaY = deltaY * speedFactor;
+      deltaX = deltaX * speedFactor;
     } else if (e.deltaMode === 1) {
       // Line-based scrolling (mouse wheel) - convert to pixels
-      delta = delta * getLineHeight();
+      deltaY = deltaY * getLineHeight();
+      deltaX = deltaX * getLineHeight();
     } else if (e.deltaMode === 2) {
       // Page-based scrolling - convert to pixels
-      delta = delta * logViewerElement!.clientHeight;
+      deltaY = deltaY * logViewerElement!.clientHeight;
+      deltaX = deltaX * logViewerElement!.clientWidth;
     }
 
-    // Apply the normalized scroll
-    const newScrollTop = logViewerElement!.scrollTop + delta;
-    const maxScroll = logViewerElement!.scrollHeight - logViewerElement!.clientHeight;
-    logViewerElement!.scrollTop = Math.max(0, Math.min(maxScroll, newScrollTop));
+    // Apply normalized vertical scroll
+    const newScrollTop = logViewerElement!.scrollTop + deltaY;
+    const maxScrollY = logViewerElement!.scrollHeight - logViewerElement!.clientHeight;
+    logViewerElement!.scrollTop = Math.max(0, Math.min(maxScrollY, newScrollTop));
+
+    // Apply normalized horizontal scroll
+    if (deltaX !== 0) {
+      const newScrollLeft = logViewerElement!.scrollLeft + deltaX;
+      const maxScrollX = logViewerElement!.scrollWidth - logViewerElement!.clientWidth;
+      logViewerElement!.scrollLeft = Math.max(0, Math.min(maxScrollX, newScrollLeft));
+    }
   }, { passive: false });
   minimapElement.addEventListener('click', handleMinimapClick);
   minimapElement.addEventListener('mousedown', handleMinimapDrag);
@@ -1893,8 +1940,21 @@ function handleScroll(): void {
   state.visibleEndLine = Math.min(getTotalLines() - 1, startLine + visibleLines + prefetchDown);
 
   // Immediate render with cached data (synchronous, no delay)
+  const renderStart = performance.now();
   renderVisibleLines();
+  const renderTime = performance.now() - renderStart;
   updateMinimapViewport();
+
+  // Detect scroll slowness and suggest formatting
+  if (!scrollSlownessWarningShown && renderTime > SLOW_SCROLL_THRESHOLD_MS) {
+    slowScrollFrames++;
+    if (slowScrollFrames >= SLOW_SCROLL_FRAME_COUNT) {
+      scrollSlownessWarningShown = true;
+      elements.longLinesWarning.classList.remove('hidden');
+    }
+  } else if (renderTime <= SLOW_SCROLL_THRESHOLD_MS) {
+    slowScrollFrames = Math.max(0, slowScrollFrames - 1);
+  }
 
   // Defer data loading to RAF to avoid blocking scroll
   if (scrollRAF !== null) {
@@ -2185,9 +2245,12 @@ function renderVisibleLines(): void {
         if (usingScaled) { top = scrollTop + (i - firstVisibleLine) * getLineHeight(); }
         else { top = i * getLineHeight(); }
         lineElement.style.cssText = `position:absolute;top:0;left:0;transform:translateY(${top}px);will-change:transform;white-space:pre;`;
+        if (lineElement.dataset.bookmarkColor) {
+          lineElement.style.borderLeftColor = lineElement.dataset.bookmarkColor;
+        }
         fragment.appendChild(lineElement);
 
-        const estimatedWidth = 70 + (line.text.length * 8);
+        const estimatedWidth = LINE_NUMBER_GUTTER_EXTRA + (line.text.length * getCharWidth());
         if (estimatedWidth > maxContentWidth) maxContentWidth = estimatedWidth;
       }
       continue;
@@ -2214,12 +2277,14 @@ function renderVisibleLines(): void {
       } else {
         lineElement.style.cssText = `position:absolute;top:0;left:0;transform:translateY(${top}px);will-change:transform;white-space:pre;`;
       }
+      // Apply bookmark color after cssText (which overwrites all inline styles)
+      if (lineElement.dataset.bookmarkColor) {
+        lineElement.style.borderLeftColor = lineElement.dataset.bookmarkColor;
+      }
 
       fragment.appendChild(lineElement);
 
-      // Estimate width based on text length (rough calculation for performance)
-      // 8px per character is a reasonable estimate for monospace font at 13px
-      const estimatedWidth = 70 + (line.text.length * 8); // 70 = line number width + padding
+      const estimatedWidth = LINE_NUMBER_GUTTER_EXTRA + (line.text.length * getCharWidth());
       if (estimatedWidth > maxContentWidth) {
         maxContentWidth = estimatedWidth;
       }
@@ -2269,14 +2334,28 @@ function createLineElementPooled(line: LogLine): HTMLDivElement {
   if (bookmark) {
     className += ' bookmarked';
     div.title = bookmark.label ? `Bookmark: ${bookmark.label}` : 'Bookmarked line';
+    if (bookmark.color) {
+      div.dataset.bookmarkColor = bookmark.color;
+    } else {
+      delete div.dataset.bookmarkColor;
+    }
   } else {
     div.title = '';
+    delete div.dataset.bookmarkColor;
   }
   div.className = className;
 
   // Create content using innerHTML for speed (single parse)
   const lineNumHtml = `<span class="line-number">${line.lineNumber + 1}</span>`;
-  const displayText = applyColumnFilter(line.text);
+  let displayText = applyColumnFilter(line.text);
+
+  // Truncate very long lines to prevent DOM/rendering slowness
+  const MAX_RENDER_LENGTH = 5000;
+  let truncated = false;
+  if (displayText.length > MAX_RENDER_LENGTH) {
+    displayText = displayText.substring(0, MAX_RENDER_LENGTH);
+    truncated = true;
+  }
 
   // Check if there are active highlights or search
   const hasActiveHighlights = state.highlights.length > 0 || state.searchResults.length > 0;
@@ -2296,6 +2375,9 @@ function createLineElementPooled(line: LogLine): HTMLDivElement {
   } else {
     const searchResult = applySearchHighlightsRaw(displayText, line.lineNumber);
     formattedContent = applyHighlightsWithSearch(displayText, searchResult.searchRanges);
+  }
+  if (truncated) {
+    formattedContent += '<span class="truncation-indicator"> \u2026 (truncated)</span>';
   }
   const contentHtml = `<span class="line-content">${formattedContent}</span>`;
   div.innerHTML = lineNumHtml + contentHtml;
@@ -2996,8 +3078,8 @@ async function buildMinimap(onProgress?: (percent: number) => void): Promise<voi
             minimapData[idx] = { level: line.level };
             cachedLines.set(lineNum, line);
           }
-        } catch {
-          // Ignore fetch errors for minimap
+        } catch (e) {
+          console.warn('Minimap: failed to fetch line', samplesToFetch[idx], e);
         }
       });
 
@@ -3235,7 +3317,7 @@ function handleContextMenu(event: MouseEvent): void {
 
   const lineCount = saveEndLine - saveStartLine + 1;
 
-  const saveToNotesItem = menuItem('\u{1F4DD}', lineCount === 1 ? `Save Line to Notes` : `Save ${lineCount} Lines to Notes`);
+  const saveToNotesItem = menuItem('\u{1F4DD}', lineCount === 1 ? `Save Snippet` : `Save ${lineCount} Lines as Snippet`);
   saveToNotesItem.addEventListener('click', () => {
     menu.remove();
     saveToNotesWithRange(saveStartLine, saveEndLine);
@@ -3358,6 +3440,19 @@ function handleContextMenu(event: MouseEvent): void {
   setTimeout(() => document.addEventListener('click', closeMenu), 0);
 }
 
+async function commitHighlight(highlight: HighlightConfig): Promise<boolean> {
+  const result = await window.api.addHighlight(highlight);
+  if (result.success) {
+    state.highlights.push(highlight);
+    activeHighlightGroupId = null;
+    updateHighlightGroupsUI();
+    updateHighlightsUI();
+    renderVisibleLines();
+    return true;
+  }
+  return false;
+}
+
 async function createHighlightFromSelection(text: string, highlightAll: boolean): Promise<void> {
   // Check for duplicate pattern — if it exists, remove it instead (toggle)
   const existing = state.highlights.find(h => h.pattern === text && !h.isRegex);
@@ -3377,26 +3472,17 @@ async function createHighlightFromSelection(text: string, highlightAll: boolean)
   const colorResult = await window.api.getNextHighlightColor();
   const backgroundColor = colorResult.success && colorResult.color ? colorResult.color : '#ffff00';
 
-  const highlight: HighlightConfig = {
+  await commitHighlight({
     id: `highlight-${Date.now()}`,
     pattern: text,
     isRegex: false,
-    matchCase: true, // Exact match for selection
+    matchCase: true,
     wholeWord: false,
     backgroundColor,
     textColor: '#000000',
     includeWhitespace: false,
     highlightAll,
-  };
-
-  const result = await window.api.addHighlight(highlight);
-  if (result.success) {
-    state.highlights.push(highlight);
-    activeHighlightGroupId = null;
-    updateHighlightGroupsUI();
-    updateHighlightsUI();
-    renderVisibleLines();
-  }
+  });
 }
 
 async function saveSelectedLinesToFile(): Promise<void> {
@@ -3446,7 +3532,7 @@ async function showNotesModal(startLine: number, endLine: number): Promise<Notes
   let optionsHtml = `
     <label class="radio-option">
       <input type="radio" name="notes-file" value="new" ${selectedPath === null ? 'checked' : ''}>
-      <span>Create new notes file</span>
+      <span>Create new snippet file</span>
     </label>
   `;
 
@@ -3871,11 +3957,9 @@ async function initTerminal(): Promise<void> {
   terminal.loadAddon(fitAddon);
 
   terminal.open(elements.terminalContainer);
-  // Delay fit until after slide animation completes
-  setTimeout(() => fitTerminalToPanel(), 300);
 
   // Handle terminal input
-  terminal.onData((data: string) => {
+  terminalInputDisposable = terminal.onData((data: string) => {
     window.api.terminalWrite(data);
   });
 
@@ -3898,11 +3982,6 @@ async function initTerminal(): Promise<void> {
   await startTerminalProcess();
 
   state.terminalInitialized = true;
-
-  // Focus terminal after init
-  setTimeout(() => {
-    terminal?.focus();
-  }, 100);
 
   // Handle window resize
   window.addEventListener('resize', () => fitTerminalToPanel());
@@ -3933,29 +4012,38 @@ async function startTerminalProcess(): Promise<void> {
 function showTerminalOverlay(): void {
   const overlay = elements.terminalOverlay;
   overlay.classList.remove('hidden');
-  // Force reflow so the transition triggers
+  // Force reflow so the transition triggers from initial state
   void overlay.offsetHeight;
   overlay.classList.add('visible');
   elements.btnTerminalToggle.classList.add('active');
+
+  // Fit terminal and focus after slide animation completes
+  const panel = overlay.querySelector('.terminal-drop-panel') as HTMLElement;
+  if (panel) {
+    const onShown = () => {
+      panel.removeEventListener('transitionend', onShown);
+      fitTerminalToPanel();
+      terminal?.focus();
+    };
+    panel.addEventListener('transitionend', onShown);
+  }
 }
 
 function hideTerminalOverlay(): void {
   const overlay = elements.terminalOverlay;
   overlay.classList.remove('visible');
   elements.btnTerminalToggle.classList.remove('active');
-  const onEnd = () => {
+  // Fallback if transitionend doesn't fire (e.g., display:none, no transition)
+  const fallback = setTimeout(() => hide(), 350);
+  const hide = () => {
+    clearTimeout(fallback);
     overlay.removeEventListener('transitionend', onEnd);
     if (!overlay.classList.contains('visible')) {
       overlay.classList.add('hidden');
     }
   };
+  const onEnd = () => hide();
   overlay.addEventListener('transitionend', onEnd);
-  // Fallback if transitionend doesn't fire
-  setTimeout(() => {
-    if (!overlay.classList.contains('visible')) {
-      overlay.classList.add('hidden');
-    }
-  }, 350);
 }
 
 function fitTerminalToPanel(): void {
@@ -3976,11 +4064,6 @@ async function toggleTerminal(): Promise<void> {
 
     if (!state.terminalInitialized) {
       await initTerminal();
-    } else {
-      setTimeout(() => {
-        fitTerminalToPanel();
-        terminal?.focus();
-      }, 280); // After slide animation
     }
   } else {
     hideTerminalOverlay();
@@ -4004,6 +4087,125 @@ async function terminalCdToFile(filePath: string): Promise<void> {
     if (terminal) {
       terminal.clear();
     }
+  }
+}
+
+// ─── Notes Drawer ───────────────────────────────────────────────────
+let notesSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showNotesDrawer(): void {
+  const overlay = elements.notesOverlay;
+  overlay.classList.remove('hidden');
+  // Force reflow so the transition triggers from initial state
+  void overlay.offsetHeight;
+  overlay.classList.add('visible');
+  elements.btnNotesToggle.classList.add('active');
+
+  // Focus textarea after slide animation completes
+  const drawer = overlay.querySelector('.notes-drawer') as HTMLElement;
+  if (drawer) {
+    const onShown = () => {
+      drawer.removeEventListener('transitionend', onShown);
+      elements.notesTextarea.focus();
+    };
+    drawer.addEventListener('transitionend', onShown);
+  }
+
+  // Load notes content
+  window.api.loadNotes().then((result) => {
+    if (result.success && result.content) {
+      elements.notesTextarea.value = result.content;
+    } else {
+      elements.notesTextarea.value = '';
+    }
+  });
+}
+
+function hideNotesDrawer(): void {
+  const overlay = elements.notesOverlay;
+  overlay.classList.remove('visible');
+  elements.btnNotesToggle.classList.remove('active');
+  // Fallback if transitionend doesn't fire (e.g., display:none, no transition)
+  const fallback = setTimeout(() => hide(), 350);
+  const hide = () => {
+    clearTimeout(fallback);
+    overlay.removeEventListener('transitionend', onEnd);
+    if (!overlay.classList.contains('visible')) {
+      overlay.classList.add('hidden');
+    }
+  };
+  const onEnd = () => hide();
+  overlay.addEventListener('transitionend', onEnd);
+}
+
+function toggleNotesDrawer(): void {
+  state.notesVisible = !state.notesVisible;
+  if (state.notesVisible) {
+    showNotesDrawer();
+  } else {
+    hideNotesDrawer();
+  }
+}
+
+function closeNotesDrawer(): void {
+  if (!state.notesVisible) return;
+  state.notesVisible = false;
+  hideNotesDrawer();
+}
+
+function saveNotesDebounced(): void {
+  if (notesSaveTimer) clearTimeout(notesSaveTimer);
+  elements.notesSaveStatus.textContent = 'Saving...';
+  elements.notesSaveStatus.classList.add('saving');
+  notesSaveTimer = setTimeout(async () => {
+    const content = elements.notesTextarea.value;
+    const result = await window.api.saveNotes(content);
+    if (result.success) {
+      elements.notesSaveStatus.textContent = 'Saved';
+    } else {
+      elements.notesSaveStatus.textContent = 'Save failed';
+    }
+    elements.notesSaveStatus.classList.remove('saving');
+    // Clear status after 3s
+    setTimeout(() => {
+      if (elements.notesSaveStatus.textContent === 'Saved' ||
+          elements.notesSaveStatus.textContent === 'Save failed') {
+        elements.notesSaveStatus.textContent = '';
+      }
+    }, 3000);
+  }, 1000);
+}
+
+function setupNotesDrawerResize(): void {
+  const handle = elements.notesResizeHandle;
+  const drawer = elements.notesDrawer;
+  let startY = 0;
+  let startHeight = 0;
+  let isDragging = false;
+
+  handle.addEventListener('mousedown', (e: MouseEvent) => {
+    e.preventDefault();
+    isDragging = true;
+    startY = e.clientY;
+    startHeight = drawer.offsetHeight;
+    handle.classList.add('dragging');
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+
+  function onMouseMove(e: MouseEvent): void {
+    if (!isDragging) return;
+    // Dragging up increases height (startY - e.clientY is positive when moving up)
+    const delta = startY - e.clientY;
+    const newHeight = Math.max(120, Math.min(window.innerHeight * 0.7, startHeight + delta));
+    drawer.style.height = newHeight + 'px';
+  }
+
+  function onMouseUp(): void {
+    isDragging = false;
+    handle.classList.remove('dragging');
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
   }
 }
 
@@ -4129,6 +4331,25 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       elements.btnSplit.disabled = false;
       elements.btnColumns.disabled = false;
       state.columnConfig = null; // Reset column config for new file
+
+      // Show warning for files with long lines
+      if (result.hasLongLines) {
+        elements.longLinesWarning.classList.remove('hidden');
+      } else {
+        elements.longLinesWarning.classList.add('hidden');
+      }
+
+      // Reset JSON formatting state for non-formatted files
+      if (!filePath.includes('.formatted.')) {
+        jsonFormattingEnabled = false;
+        jsonOriginalFile = null;
+        elements.btnJsonFormat.classList.remove('active');
+      }
+
+      // Reset scroll slowness detection
+      slowScrollFrames = 0;
+      scrollSlownessWarningShown = false;
+
       updateStatusBar();
       updateLocalStorageStatus();
       updateSplitNavigation();
@@ -4219,16 +4440,13 @@ async function refreshActiveTab(): Promise<void> {
 async function analyzeFile(): Promise<void> {
   if (!state.filePath) return;
 
-  // Show inline progress (non-blocking)
-  elements.analysisProgress.style.display = 'block';
-  elements.analysisProgressText.textContent = 'Analyzing...';
-  elements.analysisProgressFill.style.width = '0%';
+  showProgress('Analyzing...');
   elements.btnAnalyze.disabled = true;
 
   const unsubscribe = window.api.onAnalyzeProgress((progress) => {
     const message = progress.message || progress.phase;
-    elements.analysisProgressText.textContent = `${message} ${progress.percent}%`;
-    elements.analysisProgressFill.style.width = `${progress.percent}%`;
+    updateProgressText(`${message} ${progress.percent}%`);
+    updateProgress(progress.percent);
   });
 
   try {
@@ -4245,7 +4463,7 @@ async function analyzeFile(): Promise<void> {
     elements.analysisResults.innerHTML = `<p class="placeholder" style="color: var(--error-color);">Analysis error: ${error}</p>`;
   } finally {
     unsubscribe();
-    elements.analysisProgress.style.display = 'none';
+    hideProgress();
     elements.btnAnalyze.disabled = false;
   }
 }
@@ -5165,14 +5383,12 @@ async function detectTimeGaps(): Promise<void> {
   elements.timeGapsList.innerHTML = '<p class="placeholder">Detecting time gaps...</p>';
   elements.btnDetectGaps.classList.add('hidden');
   elements.btnCancelGaps.classList.remove('hidden');
-  elements.timeGapProgress.classList.remove('hidden');
-  elements.timeGapProgressFill.style.width = '0%';
-  elements.timeGapProgressText.textContent = '0%';
+  showProgress('Detecting time gaps...');
 
   // Subscribe to progress updates
   timeGapProgressUnsubscribe = window.api.onTimeGapProgress((data) => {
-    elements.timeGapProgressFill.style.width = `${data.percent}%`;
-    elements.timeGapProgressText.textContent = `${data.percent}%`;
+    updateProgress(data.percent);
+    updateProgressText(`Detecting time gaps... ${data.percent}%`);
   });
 
   try {
@@ -5195,7 +5411,7 @@ async function detectTimeGaps(): Promise<void> {
     }
     elements.btnDetectGaps.classList.remove('hidden');
     elements.btnCancelGaps.classList.add('hidden');
-    elements.timeGapProgress.classList.add('hidden');
+    hideProgress();
   }
 }
 
@@ -5210,11 +5426,7 @@ function clearTimeGaps(): void {
   elements.timeGapEndLine.value = '';
   elements.timeGapStartPattern.value = '';
   elements.timeGapEndPattern.value = '';
-  // Hide progress bar
-  const progressContainer = document.querySelector('.time-gap-progress') as HTMLElement;
-  if (progressContainer) {
-    progressContainer.style.display = 'none';
-  }
+  hideProgress();
   // Reset navigation state
   currentTimeGaps = [];
   currentGapIndex = -1;
@@ -5417,11 +5629,48 @@ async function loadPreviousSplitFile(): Promise<void> {
 }
 
 // Bookmark modal state
-let pendingBookmarkResolve: ((comment: string | null) => void) | null = null;
+let pendingBookmarkResolve: ((result: { comment: string; color: string } | null) => void) | null = null;
 let pendingBookmarkLineNumber: number | null = null;
 let pendingBookmarkId: string | null = null;
+let selectedBookmarkColor: string = '';
 
-function showBookmarkModal(lineNumber: number, existingComment?: string, isEdit: boolean = false): Promise<string | null> {
+const BOOKMARK_COLORS = [
+  '',          // No color (default accent)
+  '#3b82f6',  // Blue
+  '#22c55e',  // Green
+  '#eab308',  // Yellow
+  '#f97316',  // Orange
+  '#ef4444',  // Red
+  '#a855f7',  // Purple
+  '#ec4899',  // Pink
+  '#14b8a6',  // Teal
+  '#6b7280',  // Gray
+];
+
+function renderBookmarkColorPalette(activeColor: string): void {
+  selectedBookmarkColor = activeColor;
+  elements.bookmarkColorPalette.innerHTML = BOOKMARK_COLORS.map(color => {
+    const isActive = color === activeColor;
+    const bg = color || 'var(--accent-color)';
+    const label = color ? '' : '&#10003;';
+    return `<button class="bookmark-color-swatch${isActive ? ' active' : ''}" data-color="${color}" style="background:${bg}" title="${color || 'Default'}">${!color && isActive ? label : (isActive ? '&#10003;' : '')}</button>`;
+  }).join('');
+
+  elements.bookmarkColorPalette.querySelectorAll('.bookmark-color-swatch').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const color = (btn as HTMLElement).dataset.color || '';
+      selectedBookmarkColor = color;
+      elements.bookmarkColorPalette.querySelectorAll('.bookmark-color-swatch').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      btn.innerHTML = '&#10003;';
+      // Remove checkmark from others
+      elements.bookmarkColorPalette.querySelectorAll('.bookmark-color-swatch:not(.active)').forEach(b => { b.innerHTML = ''; });
+    });
+  });
+}
+
+function showBookmarkModal(lineNumber: number, existingComment?: string, isEdit: boolean = false, existingColor?: string): Promise<{ comment: string; color: string } | null> {
   return new Promise((resolve) => {
     pendingBookmarkResolve = resolve;
     pendingBookmarkLineNumber = lineNumber;
@@ -5429,18 +5678,19 @@ function showBookmarkModal(lineNumber: number, existingComment?: string, isEdit:
     elements.bookmarkModalTitle.textContent = isEdit ? 'Edit Bookmark' : 'Add Bookmark';
     elements.bookmarkComment.value = existingComment || '';
     elements.bookmarkLineInfo.textContent = `Line ${lineNumber + 1}`;
+    renderBookmarkColorPalette(existingColor || '');
     elements.bookmarkModal.classList.remove('hidden');
     elements.bookmarkComment.focus();
   });
 }
 
 function hideBookmarkModal(save: boolean): void {
-  const comment = save ? elements.bookmarkComment.value : null;
+  const result = save ? { comment: elements.bookmarkComment.value, color: selectedBookmarkColor } : null;
   elements.bookmarkModal.classList.add('hidden');
   elements.bookmarkComment.value = '';
 
   if (pendingBookmarkResolve) {
-    pendingBookmarkResolve(comment);
+    pendingBookmarkResolve(result);
     pendingBookmarkResolve = null;
   }
   pendingBookmarkLineNumber = null;
@@ -5452,14 +5702,16 @@ async function addBookmarkAtLine(lineNumber: number, comment?: string): Promise<
   // Prevent duplicate bookmark on the same line
   if (state.bookmarks.some(b => b.lineNumber === lineNumber)) return;
 
-  // Show modal for comment if not provided
+  // Show modal for comment and color if not provided
   let label: string | undefined;
+  let color: string | undefined;
   if (comment !== undefined) {
     label = comment || undefined;
   } else {
     const result = await showBookmarkModal(lineNumber);
     if (result === null) return; // User cancelled
-    label = result || undefined;
+    label = result.comment || undefined;
+    color = result.color || undefined;
   }
 
   const cachedLine = cachedLines.get(lineNumber);
@@ -5467,6 +5719,7 @@ async function addBookmarkAtLine(lineNumber: number, comment?: string): Promise<
     id: `bookmark-${Date.now()}`,
     lineNumber,
     label,
+    color,
     lineText: cachedLine?.text,
     createdAt: Date.now(),
   };
@@ -5503,10 +5756,11 @@ async function editBookmarkComment(bookmarkId: string): Promise<void> {
   if (!bookmark) return;
 
   pendingBookmarkId = bookmarkId;
-  const newComment = await showBookmarkModal(bookmark.lineNumber, bookmark.label, true);
-  if (newComment === null) return; // User cancelled
+  const result = await showBookmarkModal(bookmark.lineNumber, bookmark.label, true, bookmark.color);
+  if (result === null) return; // User cancelled
 
-  bookmark.label = newComment || undefined;
+  bookmark.label = result.comment || undefined;
+  bookmark.color = result.color || undefined;
 
   // Update in backend
   await window.api.updateBookmark(bookmark);
@@ -5538,19 +5792,24 @@ function updateBookmarksUI(): void {
 
   elements.bookmarksList.innerHTML = state.bookmarks
     .map(
-      (b) => `
-      <div class="bookmark-item" data-id="${b.id}" data-line="${b.lineNumber}" title="${b.lineText ? escapeHtml(b.lineText) : (b.label ? escapeHtml(b.label) : 'Click to go to line, double-click to edit comment')}">
+      (b) => {
+        const colorDot = b.color
+          ? `<span class="bookmark-color-dot" style="background:${b.color}"></span>`
+          : '';
+        return `
+      <div class="bookmark-item" data-id="${b.id}" data-line="${b.lineNumber}" title="${b.lineText ? escapeHtml(b.lineText) : (b.label ? escapeHtml(b.label) : 'Click to go to line, double-click to edit')}">
         <div class="bookmark-info">
-          <span class="bookmark-line">Line ${b.lineNumber + 1}</span>
+          ${colorDot}<span class="bookmark-line">Line ${b.lineNumber + 1}</span>
           ${b.lineText ? `<span class="bookmark-text">${escapeHtml(b.lineText.substring(0, 120))}</span>` : ''}
           ${b.label ? `<span class="bookmark-label">${escapeHtml(b.label)}</span>` : '<span class="bookmark-label placeholder-text">No comment</span>'}
         </div>
         <div class="bookmark-actions">
-          <button class="bookmark-edit" data-id="${b.id}" title="Edit comment">&#9998;</button>
+          <button class="bookmark-edit" data-id="${b.id}" title="Edit">&#9998;</button>
           <button class="bookmark-delete" data-id="${b.id}" title="Delete bookmark">&times;</button>
         </div>
       </div>
-    `
+    `;
+      }
     )
     .join('');
 
@@ -5720,7 +5979,7 @@ async function saveHighlight(): Promise<void> {
   const pattern = elements.highlightPattern.value;
   if (!pattern) return;
 
-  const highlight: HighlightConfig = {
+  const saved = await commitHighlight({
     id: `highlight-${Date.now()}`,
     pattern,
     isRegex: elements.highlightRegex.checked,
@@ -5731,15 +5990,9 @@ async function saveHighlight(): Promise<void> {
     includeWhitespace: elements.highlightIncludeWhitespace.checked,
     highlightAll: elements.highlightAll.checked,
     isGlobal: elements.highlightGlobal.checked,
-  };
+  });
 
-  const result = await window.api.addHighlight(highlight);
-  if (result.success) {
-    state.highlights.push(highlight);
-    activeHighlightGroupId = null;
-    updateHighlightGroupsUI();
-    updateHighlightsUI();
-    renderVisibleLines();
+  if (saved) {
     hideHighlightModal();
   }
 }
@@ -6637,7 +6890,9 @@ function restorePanelState(): void {
         openPanel(data.activePanel);
       }
     }
-  } catch {}
+  } catch (e) {
+    console.warn('Failed to restore panel state:', e);
+  }
 }
 
 function updateActivityBadge(panelId: string, count: number): void {
@@ -6833,7 +7088,7 @@ function renderActivityHistory(entries: ActivityEntry[]): void {
         } else if (action === 'bookmark_added' && typeof details.lineNumber === 'number') {
           goToLine(details.lineNumber);
         }
-      } catch { /* ignore parse errors */ }
+      } catch (e) { console.warn('Failed to parse history action details:', e); }
     });
   });
 
@@ -6853,7 +7108,8 @@ async function updateLocalStorageStatus(): Promise<void> {
       elements.statusLocalStorage.classList.remove('hidden');
       elements.statusLocalStorage.classList.add('readonly');
     }
-  } catch {
+  } catch (e) {
+    console.warn('Failed to check local storage status:', e);
     elements.statusLocalStorage.classList.add('hidden');
   }
 }
@@ -6952,7 +7208,12 @@ function setupModalCloseHandlers(): void {
     btn.addEventListener('click', () => {
       const modalId = (btn as HTMLElement).dataset.modal;
       if (modalId) {
-        document.getElementById(modalId)?.classList.add('hidden');
+        // Bookmark modal needs special handling to resolve the pending promise
+        if (modalId === 'bookmark-modal') {
+          hideBookmarkModal(false);
+        } else {
+          document.getElementById(modalId)?.classList.add('hidden');
+        }
       }
     });
   });
@@ -6961,7 +7222,12 @@ function setupModalCloseHandlers(): void {
   document.querySelectorAll('.modal').forEach((modal) => {
     modal.addEventListener('click', (e) => {
       if (e.target === modal) {
-        modal.classList.add('hidden');
+        // Bookmark modal needs special handling to resolve the pending promise
+        if ((modal as HTMLElement).id === 'bookmark-modal') {
+          hideBookmarkModal(false);
+        } else {
+          modal.classList.add('hidden');
+        }
       }
     });
   });
@@ -7031,6 +7297,8 @@ function setupKeyboardShortcuts(): void {
       if (rangeSelectStartLine !== null) {
         rangeSelectStartLine = null;
         elements.statusCursor.textContent = 'Range cancelled';
+      } else if (state.notesVisible) {
+        closeNotesDrawer();
       } else if (state.terminalVisible) {
         closeTerminal();
       } else {
@@ -7044,6 +7312,12 @@ function setupKeyboardShortcuts(): void {
     if ((e.ctrlKey || e.metaKey) && e.key === '`') {
       e.preventDefault();
       toggleTerminal();
+    }
+
+    // Ctrl/Cmd + Shift + N: Toggle notes drawer
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'N') {
+      e.preventDefault();
+      toggleNotesDrawer();
     }
 
     // Ctrl/Cmd + PageDown: Next split file
@@ -7107,8 +7381,10 @@ function setupKeyboardShortcuts(): void {
       e.preventDefault();
       if (state.tabs.length > 1 && state.activeTabId) {
         const currentIndex = state.tabs.findIndex(t => t.id === state.activeTabId);
-        const nextIndex = (currentIndex + 1) % state.tabs.length;
-        switchToTab(state.tabs[nextIndex].id);
+        if (currentIndex >= 0) {
+          const nextIndex = (currentIndex + 1) % state.tabs.length;
+          switchToTab(state.tabs[nextIndex].id);
+        }
       }
     }
 
@@ -7117,8 +7393,10 @@ function setupKeyboardShortcuts(): void {
       e.preventDefault();
       if (state.tabs.length > 1 && state.activeTabId) {
         const currentIndex = state.tabs.findIndex(t => t.id === state.activeTabId);
-        const prevIndex = (currentIndex - 1 + state.tabs.length) % state.tabs.length;
-        switchToTab(state.tabs[prevIndex].id);
+        if (currentIndex >= 0) {
+          const prevIndex = (currentIndex - 1 + state.tabs.length) % state.tabs.length;
+          switchToTab(state.tabs[prevIndex].id);
+        }
       }
     }
 
@@ -7271,7 +7549,8 @@ async function checkSearchEngine(): Promise<void> {
         info.style.color = '#ffd27f';
       }
     }
-  } catch {
+  } catch (e) {
+    console.warn('Failed to detect search engine:', e);
     elements.searchEngineBadge.textContent = '';
   }
 }
@@ -7404,6 +7683,17 @@ function init(): void {
       fitTerminalToPanel();
     }
   });
+
+  // Notes drawer events
+  elements.btnNotesToggle.addEventListener('click', toggleNotesDrawer);
+  elements.btnNotesClose.addEventListener('click', closeNotesDrawer);
+  elements.notesOverlay.addEventListener('click', (e) => {
+    if (e.target === elements.notesOverlay) {
+      closeNotesDrawer();
+    }
+  });
+  elements.notesTextarea.addEventListener('input', saveNotesDebounced);
+  setupNotesDrawerResize();
 
   // Panel resize is handled in setupActivityBar
   document.addEventListener('mousemove', (e) => {
@@ -7549,33 +7839,42 @@ function init(): void {
   elements.btnWordWrap.addEventListener('click', toggleMarkdownPreview);
 
   // JSON formatting toggle
-  elements.btnJsonFormat.addEventListener('click', async () => {
+  async function formatAndLoadJson(): Promise<void> {
     if (!state.filePath) return;
 
     if (!jsonFormattingEnabled) {
       // Enable JSON mode - format and open formatted file
       elements.btnJsonFormat.classList.add('active');
-
-      // Store original file path
       const originalPath = state.filePath;
 
+      showProgress('Formatting JSON... 0%');
+      const unsubFormatProgress = (window.api as any).onJsonFormatProgress?.((data: { percent: number }) => {
+        updateProgress(data.percent);
+        updateProgressText(`Formatting JSON... ${data.percent}%`);
+      });
       try {
-        // Format the file (creates .formatted.json)
         const result = await (window.api as any).formatJsonFile(originalPath);
+        if (unsubFormatProgress) unsubFormatProgress();
         if (result.success && result.formattedPath) {
-          // Store that we're in JSON mode and track the original file
           jsonFormattingEnabled = true;
           jsonOriginalFile = originalPath;
-
-          // Open the formatted file
+          elements.longLinesWarning.classList.add('hidden');
           await loadFile(result.formattedPath);
         } else {
           elements.btnJsonFormat.classList.remove('active');
-          console.error('Failed to format JSON:', result.error);
+          hideProgress();
+          // Show error in the warning bar
+          const warningText = elements.longLinesWarning.querySelector('.warning-text');
+          if (warningText && result.error) {
+            warningText.innerHTML = `<strong>Format failed:</strong> ${escapeHtml(result.error)}`;
+            elements.longLinesWarning.classList.remove('hidden');
+            elements.btnFormatWarning.classList.add('hidden');
+          }
         }
       } catch (error) {
+        if (unsubFormatProgress) unsubFormatProgress();
         elements.btnJsonFormat.classList.remove('active');
-        console.error('Error formatting JSON:', error);
+        hideProgress();
       }
     } else {
       // Disable JSON mode - go back to original file
@@ -7587,6 +7886,14 @@ function init(): void {
         jsonOriginalFile = null;
       }
     }
+  }
+
+  elements.btnJsonFormat.addEventListener('click', formatAndLoadJson);
+
+  // Long lines warning buttons
+  elements.btnFormatWarning.addEventListener('click', formatAndLoadJson);
+  elements.btnDismissWarning.addEventListener('click', () => {
+    elements.longLinesWarning.classList.add('hidden');
   });
 
   // Datadog integration

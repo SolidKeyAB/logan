@@ -1,5 +1,4 @@
 import * as fs from 'fs';
-import * as readline from 'readline';
 import {
   LogAnalyzer,
   AnalyzerOptions,
@@ -162,89 +161,135 @@ export class RuleBasedAnalyzer implements LogAnalyzer {
       message: shouldSample ? 'Sampling large file...' : 'Reading file...'
     });
 
-    const stream = fs.createReadStream(filePath, { encoding: 'utf-8', highWaterMark: 64 * 1024 });
-    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    // Use chunked reading instead of readline to prevent OOM on files with
+    // extremely long lines (e.g. 3GB minified JSON). readline buffers entire
+    // lines in memory, which crashes V8. This approach caps line content.
+    const CHUNK_SIZE = 1024 * 1024; // 1MB
+    const readBuffer = Buffer.alloc(CHUNK_SIZE);
+    const fd = fs.openSync(filePath, 'r');
+    let lineBuffer = '';
+    let lineBufferFull = false; // true when line exceeds MAX_LINE_LENGTH
 
-    try {
-      for await (const line of rl) {
-        if (signal?.cancelled) break;
+    function processLine(line: string): void {
+      lineNumber++;
+      bytesRead += line.length + 1;
 
-        lineNumber++;
-        bytesRead += line.length + 1;
+      // Sampling for large files
+      if (shouldSample && lineNumber % SAMPLE_RATE !== 0) {
+        return;
+      }
 
-        // Sampling for large files
-        if (shouldSample && lineNumber % SAMPLE_RATE !== 0) {
-          continue;
-        }
+      analyzedLines++;
 
-        analyzedLines++;
+      // Skip empty lines
+      const trimmed = line.trim();
+      if (!trimmed) return;
 
-        // Skip empty lines
-        const trimmed = line.trim();
-        if (!trimmed) continue;
+      // 1. Detect and count log level
+      const level = detectLevel(line);
+      if (level) {
+        levelCounts[level]++;
+      }
 
-        // 1. Detect and count log level
-        const level = detectLevel(line);
-        if (level) {
-          levelCounts[level]++;
-        }
-
-        // 2. Extract timestamp for time range (only check first and recent lines)
-        if (!firstTimestamp || lineNumber % 1000 === 0) {
-          const timestamp = extractTimestamp(line);
-          if (timestamp) {
-            if (!firstTimestamp) firstTimestamp = timestamp;
-            lastTimestamp = timestamp;
-          }
-        }
-
-        // 3. Track duplicates (with size limit)
-        const hash = simpleHash(line);
-        const existing = duplicateMap.get(hash);
-        if (existing) {
-          existing.count++;
-          existing.lastLine = lineNumber;
-        } else if (duplicateMap.size < MAX_MAP_SIZE) {
-          const truncated = line.length > 200 ? line.substring(0, 200) + '...' : line;
-          duplicateMap.set(hash, {
-            text: truncated,
-            count: 1,
-            firstLine: lineNumber,
-            lastLine: lineNumber
-          });
-        }
-
-        // 4. Normalize and track patterns (with size limit)
-        const normalized = normalizeLine(line);
-        const patternEntry = patternMap.get(normalized);
-        if (patternEntry) {
-          patternEntry.count++;
-          if (patternEntry.lines.length < MAX_STORED_LINE_NUMBERS) {
-            patternEntry.lines.push(lineNumber);
-          }
-        } else if (patternMap.size < MAX_MAP_SIZE) {
-          patternMap.set(normalized, {
-            count: 1,
-            lines: [lineNumber],
-            level
-          });
-        }
-
-        // Throttle progress updates (every 200ms)
-        const now = Date.now();
-        if (now - lastProgressUpdate > 200) {
-          lastProgressUpdate = now;
-          const percent = Math.round((bytesRead / fileSize) * 80);
-          onProgress?.({
-            phase: 'reading',
-            percent,
-            message: `${shouldSample ? 'Sampling' : 'Reading'} line ${lineNumber.toLocaleString()}...`
-          });
+      // 2. Extract timestamp for time range (only check first and recent lines)
+      if (!firstTimestamp || lineNumber % 1000 === 0) {
+        const timestamp = extractTimestamp(line);
+        if (timestamp) {
+          if (!firstTimestamp) firstTimestamp = timestamp;
+          lastTimestamp = timestamp;
         }
       }
+
+      // 3. Track duplicates (with size limit)
+      const hash = simpleHash(line);
+      const existing = duplicateMap.get(hash);
+      if (existing) {
+        existing.count++;
+        existing.lastLine = lineNumber;
+      } else if (duplicateMap.size < MAX_MAP_SIZE) {
+        const truncated = line.length > 200 ? line.substring(0, 200) + '...' : line;
+        duplicateMap.set(hash, {
+          text: truncated,
+          count: 1,
+          firstLine: lineNumber,
+          lastLine: lineNumber
+        });
+      }
+
+      // 4. Normalize and track patterns (with size limit)
+      const normalized = normalizeLine(line);
+      const patternEntry = patternMap.get(normalized);
+      if (patternEntry) {
+        patternEntry.count++;
+        if (patternEntry.lines.length < MAX_STORED_LINE_NUMBERS) {
+          patternEntry.lines.push(lineNumber);
+        }
+      } else if (patternMap.size < MAX_MAP_SIZE) {
+        patternMap.set(normalized, {
+          count: 1,
+          lines: [lineNumber],
+          level
+        });
+      }
+
+      // Throttle progress updates (every 200ms)
+      const now = Date.now();
+      if (now - lastProgressUpdate > 200) {
+        lastProgressUpdate = now;
+        const percent = Math.round((bytesRead / fileSize) * 80);
+        onProgress?.({
+          phase: 'reading',
+          percent,
+          message: `${shouldSample ? 'Sampling' : 'Reading'} line ${lineNumber.toLocaleString()}...`
+        });
+      }
+    }
+
+    try {
+      let filePos = 0;
+      while (filePos < fileSize) {
+        if (signal?.cancelled) break;
+
+        const bytesReadChunk = fs.readSync(fd, readBuffer, 0, CHUNK_SIZE, filePos);
+        if (bytesReadChunk === 0) break;
+        filePos += bytesReadChunk;
+
+        const chunk = readBuffer.toString('utf-8', 0, bytesReadChunk);
+
+        for (let i = 0; i < chunk.length; i++) {
+          const ch = chunk[i];
+          if (ch === '\n' || ch === '\r') {
+            // End of line — process accumulated buffer
+            if (lineBuffer.length > 0 || !lineBufferFull) {
+              processLine(lineBuffer);
+            } else {
+              // Line was too long, just count it
+              lineNumber++;
+              bytesRead += lineBuffer.length + 1;
+            }
+            lineBuffer = '';
+            lineBufferFull = false;
+            // Skip \n after \r (CRLF)
+            if (ch === '\r' && i + 1 < chunk.length && chunk[i + 1] === '\n') {
+              i++;
+            }
+          } else if (!lineBufferFull) {
+            lineBuffer += ch;
+            if (lineBuffer.length >= MAX_LINE_LENGTH) {
+              lineBufferFull = true;
+              // Keep the truncated content for analysis
+            }
+          }
+          // If lineBufferFull, skip remaining chars until newline
+        }
+      }
+
+      // Process last line if no trailing newline
+      if (lineBuffer.length > 0) {
+        processLine(lineBuffer);
+      }
     } finally {
-      rl.close();
-      stream.destroy();
+      fs.closeSync(fd);
     }
 
     if (signal?.cancelled) {
