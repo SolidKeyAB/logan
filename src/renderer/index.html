@@ -31,9 +31,40 @@
           <span class="icon">&#128194;</span> Open File
         </button>
         <div class="separator"></div>
-        <button id="btn-search-toggle" class="toolbar-btn" title="Search (Ctrl+F)">
-          <span class="icon">&#128269;</span> Search
-        </button>
+        <div class="search-container">
+          <input type="text" id="search-input" placeholder="Search..." class="toolbar-input">
+          <label class="checkbox-label">
+            <input type="checkbox" id="search-regex"> Regex
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="search-wildcard"> Wildcard
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="search-case"> Match Case
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="search-whole-word"> Whole Word
+          </label>
+          <button id="btn-search" class="toolbar-btn" title="Search">Search</button>
+          <div class="search-options-wrapper">
+            <button id="btn-search-options" class="toolbar-btn small" title="Search options">&#9881;</button>
+            <div id="search-options-popup" class="search-options-popup hidden">
+              <div class="search-option-row">
+                <label class="search-option-label">Direction</label>
+                <button id="search-direction" class="toolbar-btn small search-direction-btn" title="Toggle search direction">&#8595; Top to Bottom</button>
+              </div>
+              <div class="search-option-row">
+                <label class="search-option-label" for="search-start-line">Start from line</label>
+                <input type="number" id="search-start-line" class="search-start-line-input" placeholder="1" min="1">
+              </div>
+            </div>
+          </div>
+          <button id="btn-prev-result" class="toolbar-btn small" title="Previous result" disabled>&lt;</button>
+          <span id="search-result-count" class="result-count"></span>
+          <span id="search-engine-badge" class="search-engine-badge" title="Search engine"></span>
+          <span id="hidden-matches-badge" class="hidden-matches-badge hidden" title="Click to see matches in filtered-out lines"></span>
+          <button id="btn-next-result" class="toolbar-btn small" title="Next result" disabled>&gt;</button>
+        </div>
         <div class="separator"></div>
         <button id="btn-filter" class="toolbar-btn" title="Filter settings">Filter</button>
         <button id="btn-split" class="toolbar-btn" title="Split file into parts" disabled>Split</button>
@@ -316,80 +347,6 @@
       </div>
     </div>
 
-    <!-- Search Results Panel (slide-up from bottom) -->
-    <div id="search-results-overlay" class="search-results-overlay hidden">
-      <div id="search-results-panel" class="search-results-panel">
-        <div id="search-results-resize-handle" class="search-results-resize-handle"></div>
-        <div class="search-panel-tabs">
-          <button class="search-panel-tab active" data-search-tab="file">File</button>
-          <button class="search-panel-tab" data-search-tab="folder">Folder</button>
-          <div class="search-panel-tabs-spacer"></div>
-          <button id="btn-search-results-close" class="search-results-close-btn" title="Close (Esc)">&times;</button>
-        </div>
-        <!-- File Search Tab -->
-        <div id="search-tab-file" class="search-tab-content active">
-          <div class="search-results-header">
-            <div class="search-results-input-row">
-              <input type="text" id="search-input" placeholder="Search in file..." class="search-panel-input">
-              <button id="btn-search" class="toolbar-btn small" title="Search">Search</button>
-              <button id="btn-prev-result" class="toolbar-btn small" title="Previous result (Shift+F3)" disabled>&lt;</button>
-              <span id="search-result-count" class="result-count"></span>
-              <button id="btn-next-result" class="toolbar-btn small" title="Next result (F3)" disabled>&gt;</button>
-              <span id="search-engine-badge" class="search-engine-badge" title="Search engine"></span>
-              <span id="hidden-matches-badge" class="hidden-matches-badge hidden" title="Click to see matches in filtered-out lines"></span>
-            </div>
-            <div class="search-results-options-row">
-              <label class="checkbox-label">
-                <input type="checkbox" id="search-regex"> Regex
-              </label>
-              <label class="checkbox-label">
-                <input type="checkbox" id="search-wildcard"> Wildcard
-              </label>
-              <label class="checkbox-label">
-                <input type="checkbox" id="search-case"> Match Case
-              </label>
-              <label class="checkbox-label">
-                <input type="checkbox" id="search-whole-word"> Whole Word
-              </label>
-              <div class="search-options-wrapper">
-                <button id="btn-search-options" class="toolbar-btn small" title="Search options">&#9881;</button>
-                <div id="search-options-popup" class="search-options-popup hidden">
-                  <div class="search-option-row">
-                    <label class="search-option-label">Direction</label>
-                    <button id="search-direction" class="toolbar-btn small search-direction-btn" title="Toggle search direction">&#8595; Top to Bottom</button>
-                  </div>
-                  <div class="search-option-row">
-                    <label class="search-option-label" for="search-start-line">Start from line</label>
-                    <input type="number" id="search-start-line" class="search-start-line-input" placeholder="1" min="1">
-                  </div>
-                </div>
-              </div>
-              <span id="search-results-badge" class="search-results-badge"></span>
-            </div>
-          </div>
-          <div id="search-results-list" class="search-results-list"></div>
-        </div>
-        <!-- Folder Search Tab -->
-        <div id="search-tab-folder" class="search-tab-content">
-          <div class="search-results-header">
-            <div class="search-results-input-row">
-              <input type="text" id="folder-search-panel-input" placeholder="Search in folders..." class="search-panel-input">
-              <label class="checkbox-label">
-                <input type="checkbox" id="folder-search-regex"> Regex
-              </label>
-              <label class="checkbox-label">
-                <input type="checkbox" id="folder-search-case"> Match Case
-              </label>
-              <button id="btn-folder-search-panel" class="toolbar-btn small" title="Search">Search</button>
-              <button id="btn-folder-search-panel-cancel" class="toolbar-btn small hidden" title="Cancel search">Cancel</button>
-              <span id="folder-search-status" class="result-count"></span>
-            </div>
-          </div>
-          <div id="folder-search-panel-results" class="search-results-list"></div>
-        </div>
-      </div>
-    </div>
-
     <!-- Status Bar -->
     <footer class="status-bar">
       <div class="status-left">
@@ -633,7 +590,6 @@
             <div class="shortcut-list">
               <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>`</kbd><span>Toggle terminal panel</span></div>
               <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd><span>Toggle notes drawer</span></div>
-              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd><span>Toggle search results panel</span></div>
               <div class="shortcut-item"><kbd>Esc</kbd><span>Close terminal/notes (when focused)</span></div>
             </div>
           </div>

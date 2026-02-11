@@ -220,10 +220,6 @@ const api = {
   openExternalUrl: (url: string): Promise<void> =>
     ipcRenderer.invoke('open-external-url', url),
 
-  // Show item in system file manager (Finder/Explorer)
-  showItemInFolder: (filePath: string): Promise<void> =>
-    ipcRenderer.invoke('show-item-in-folder', filePath),
-
   // JSON formatting
   formatJsonFile: (filePath: string): Promise<{ success: boolean; formattedPath?: string; error?: string }> =>
     ipcRenderer.invoke('format-json-file', filePath),
