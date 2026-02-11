@@ -1611,6 +1611,11 @@ ipcMain.handle('open-external-url', async (_, url: string) => {
   }
 });
 
+// Show item in system file manager (Finder/Explorer)
+ipcMain.handle('show-item-in-folder', async (_, filePath: string) => {
+  shell.showItemInFolder(filePath);
+});
+
 // === Save Selected Lines ===
 
 ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: number, columnConfig?: ColumnConfig) => {
@@ -1817,19 +1822,9 @@ ipcMain.handle('save-to-notes', async (
       content += newEntry;
       fs.writeFileSync(notesFilePath, content, 'utf-8');
     } else {
-      // Insert entry in line-number order among existing entries
+      // Append new entry at end of file
       const existing = fs.readFileSync(notesFilePath, 'utf-8');
-      const entryRegex = /\n--- \[.*?\] Lines (\d+)-/g;
-      let insertPos = existing.length; // default: append at end
-      let match;
-      while ((match = entryRegex.exec(existing)) !== null) {
-        const entryStartLine = parseInt(match[1], 10);
-        if (entryStartLine > startLine + 1) {
-          insertPos = match.index;
-          break;
-        }
-      }
-      const result = existing.substring(0, insertPos) + newEntry + existing.substring(insertPos);
+      const result = existing.endsWith('\n') ? existing + newEntry : existing + '\n' + newEntry;
       fs.writeFileSync(notesFilePath, result, 'utf-8');
     }
 
@@ -1969,9 +1964,9 @@ function compileAdvancedFilter(config: AdvancedFilterConfig): CompiledMatcher {
           return (text: string, _level: string) =>
             !(rule.caseSensitive ? text : text.toLowerCase()).includes(pattern);
         case 'level':
-          return (_text: string, level: string) => level === rule.value;
+          return (_text: string, level: string) => level.toLowerCase() === rule.value.toLowerCase();
         case 'not_level':
-          return (_text: string, level: string) => level !== rule.value;
+          return (_text: string, level: string) => level.toLowerCase() !== rule.value.toLowerCase();
         default:
           return (_text: string, _level: string) => true;
       }

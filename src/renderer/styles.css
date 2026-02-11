@@ -281,7 +281,7 @@ body.platform-darwin .titlebar {
 
 .search-options-popup {
   position: absolute;
-  top: calc(100% + 4px);
+  bottom: calc(100% + 4px);
   left: 0;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-color);
@@ -1812,6 +1812,13 @@ body.platform-darwin .titlebar {
   height: 16px;
   border-radius: 3px;
   border: 1px solid var(--border-color);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.highlight-item .highlight-color:hover {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 1px var(--accent-color);
 }
 
 .highlight-item .highlight-scope {
@@ -4202,6 +4209,12 @@ kbd {
   background: var(--bg-hover);
 }
 
+.tab-context-separator {
+  height: 1px;
+  background: var(--border-color);
+  margin: 4px 0;
+}
+
 /* === History Panel === */
 
 .history-content {
@@ -4368,4 +4381,270 @@ kbd {
 
 .long-lines-warning .warning-close-btn:hover {
   color: var(--text-primary);
+}
+
+/* Search Results Panel (slide-up from bottom) */
+.search-results-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+
+.search-results-overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.search-results-overlay.hidden {
+  display: none;
+}
+
+.search-results-panel {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 35vh;
+  min-height: 150px;
+  max-height: 70vh;
+  background: rgba(30, 30, 30, 0.95);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-top: 2px solid var(--accent-color);
+  display: flex;
+  flex-direction: column;
+  transform: translateY(100%);
+  transition: transform 0.25s ease-out;
+}
+
+.search-results-overlay.visible .search-results-panel {
+  transform: translateY(0);
+}
+
+.search-results-resize-handle {
+  height: 6px;
+  cursor: ns-resize;
+  flex-shrink: 0;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.search-results-resize-handle:hover,
+.search-results-resize-handle.dragging {
+  background: var(--accent-color);
+}
+
+.search-results-header {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
+}
+
+.search-results-input-row {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  gap: 6px;
+}
+
+.search-panel-input {
+  flex: 1;
+  max-width: 400px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 4px 8px;
+  border-radius: 3px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.search-panel-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.search-results-options-row {
+  display: flex;
+  align-items: center;
+  padding: 2px 12px 6px;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.search-results-badge {
+  font-size: 11px;
+  color: #888;
+  margin-left: auto;
+}
+
+.search-results-close-btn {
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  font-size: 18px;
+  padding: 0 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.search-results-close-btn:hover {
+  color: #fff;
+}
+
+.search-results-list {
+  flex: 1;
+  overflow-y: auto;
+  font-family: var(--font-mono, 'Menlo', 'Consolas', monospace);
+  font-size: 12px;
+}
+
+.search-results-item {
+  display: flex;
+  align-items: baseline;
+  padding: 3px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  gap: 12px;
+}
+
+.search-results-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.search-results-item.current {
+  background: rgba(227, 148, 34, 0.18);
+  border-left: 3px solid var(--accent-color);
+  padding-left: 9px;
+}
+
+.search-results-item .line-number {
+  color: #666;
+  min-width: 50px;
+  text-align: right;
+  flex-shrink: 0;
+  font-size: 11px;
+  user-select: none;
+}
+
+.search-results-item .match-text {
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+}
+
+.search-results-item .match-text mark {
+  background: rgba(255, 200, 0, 0.35);
+  color: #fff;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.search-results-item.current .match-text mark {
+  background: rgba(227, 148, 34, 0.5);
+}
+
+.search-results-empty {
+  padding: 20px;
+  text-align: center;
+  color: #666;
+  font-size: 13px;
+}
+
+.search-results-cap-notice {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: #888;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Search Panel Tabs */
+.search-panel-tabs {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
+  padding: 0 8px;
+}
+
+.search-panel-tab {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 12px;
+  padding: 6px 14px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.search-panel-tab:hover {
+  color: #ccc;
+}
+
+.search-panel-tab.active {
+  color: var(--accent-color);
+  border-bottom-color: var(--accent-color);
+}
+
+.search-panel-tabs-spacer {
+  flex: 1;
+}
+
+.search-tab-content {
+  display: none;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.search-tab-content.active {
+  display: flex;
+}
+
+/* Folder search results items (inside search panel) */
+.folder-search-panel-item {
+  display: flex;
+  align-items: baseline;
+  padding: 3px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  gap: 8px;
+  font-family: var(--font-mono, 'Menlo', 'Consolas', monospace);
+  font-size: 12px;
+}
+
+.folder-search-panel-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.folder-search-panel-item .file-info {
+  color: var(--accent-color);
+  flex-shrink: 0;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.folder-search-panel-item .match-text {
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-primary, #ccc);
+}
+
+.folder-search-panel-item .match-text mark {
+  background: rgba(255, 200, 0, 0.35);
+  color: #fff;
+  border-radius: 2px;
+  padding: 0 1px;
 }

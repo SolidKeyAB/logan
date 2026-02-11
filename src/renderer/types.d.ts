@@ -255,6 +255,7 @@ interface Api {
 
   // Utilities
   openExternalUrl: (url: string) => Promise<void>;
+  showItemInFolder: (filePath: string) => Promise<void>;
 
   // Terminal
   terminalCreate: (options?: { cwd?: string; cols?: number; rows?: number }) => Promise<{ success: boolean; pid?: number; error?: string }>;

@@ -280,6 +280,8 @@ interface AppState {
   terminalInitialized: boolean;
   // Notes drawer
   notesVisible: boolean;
+  // Search results panel
+  searchResultsPanelVisible: boolean;
 }
 
 const state: AppState = {
@@ -314,6 +316,7 @@ const state: AppState = {
   terminalVisible: false,
   terminalInitialized: false,
   notesVisible: false,
+  searchResultsPanelVisible: false,
 };
 
 // Constants
@@ -803,6 +806,24 @@ const elements = {
   notesResizeHandle: document.getElementById('notes-resize-handle') as HTMLDivElement,
   btnNotesToggle: document.getElementById('btn-notes-toggle') as HTMLButtonElement,
   btnNotesClose: document.getElementById('btn-notes-close') as HTMLButtonElement,
+  // Search results panel
+  searchResultsOverlay: document.getElementById('search-results-overlay') as HTMLDivElement,
+  searchResultsPanel: document.getElementById('search-results-panel') as HTMLDivElement,
+  searchResultsList: document.getElementById('search-results-list') as HTMLDivElement,
+  searchResultsBadge: document.getElementById('search-results-badge') as HTMLSpanElement,
+  btnSearchResultsClose: document.getElementById('btn-search-results-close') as HTMLButtonElement,
+  searchResultsResizeHandle: document.getElementById('search-results-resize-handle') as HTMLDivElement,
+  btnSearchToggle: document.getElementById('btn-search-toggle') as HTMLButtonElement,
+  // Search panel - folder tab
+  folderSearchPanelInput: document.getElementById('folder-search-panel-input') as HTMLInputElement,
+  folderSearchRegex: document.getElementById('folder-search-regex') as HTMLInputElement,
+  folderSearchCase: document.getElementById('folder-search-case') as HTMLInputElement,
+  btnFolderSearchPanel: document.getElementById('btn-folder-search-panel') as HTMLButtonElement,
+  btnFolderSearchPanelCancel: document.getElementById('btn-folder-search-panel-cancel') as HTMLButtonElement,
+  folderSearchStatus: document.getElementById('folder-search-status') as HTMLSpanElement,
+  folderSearchPanelResults: document.getElementById('folder-search-panel-results') as HTMLDivElement,
+  searchTabFile: document.getElementById('search-tab-file') as HTMLDivElement,
+  searchTabFolder: document.getElementById('search-tab-folder') as HTMLDivElement,
   // Panel resize
   panelContainer: document.getElementById('panel-container') as HTMLDivElement,
   panelTitle: document.getElementById('panel-title') as HTMLSpanElement,
@@ -2043,6 +2064,23 @@ function getTotalLines(): number {
   return state.isFiltered && state.filteredLines !== null
     ? state.filteredLines
     : state.totalLines;
+}
+
+// Count visible lines in range (accounts for filter)
+function getVisibleLineCount(startLine: number, endLine: number): number {
+  if (!state.isFiltered) {
+    return endLine - startLine + 1;
+  }
+  // When filtered, count only the cached lines whose original lineNumber falls in range
+  let count = 0;
+  cachedLines.forEach((line) => {
+    if (line.lineNumber >= startLine && line.lineNumber <= endLine) {
+      count++;
+    }
+  });
+  // If cache doesn't cover the full range, fall back to the range size
+  // (the backend will still correctly filter)
+  return count > 0 ? count : endLine - startLine + 1;
 }
 
 async function loadVisibleLines(): Promise<void> {
@@ -3315,7 +3353,7 @@ function handleContextMenu(event: MouseEvent): void {
     saveEndLine = state.selectionEnd;
   }
 
-  const lineCount = saveEndLine - saveStartLine + 1;
+  const lineCount = getVisibleLineCount(saveStartLine, saveEndLine);
 
   const saveToNotesItem = menuItem('\u{1F4DD}', lineCount === 1 ? `Save Snippet` : `Save ${lineCount} Lines as Snippet`);
   saveToNotesItem.addEventListener('click', () => {
@@ -3416,6 +3454,15 @@ function handleContextMenu(event: MouseEvent): void {
     menu.remove();
   });
   menu.appendChild(copyLine);
+
+  if (state.filePath) {
+    const copyAll = menuItem('\u{1F4C4}', 'Copy All Content');
+    copyAll.addEventListener('click', () => {
+      menu.remove();
+      copyAllFileContent(state.filePath!);
+    });
+    menu.appendChild(copyAll);
+  }
 
   menu.appendChild(menuSeparator());
 
@@ -3559,7 +3606,7 @@ async function showNotesModal(startLine: number, endLine: number): Promise<Notes
 
   return new Promise((resolve) => {
     pendingNotesResolve = resolve;
-    const lineCount = endLine - startLine + 1;
+    const lineCount = getVisibleLineCount(startLine, endLine);
     elements.notesDescription.value = '';
     elements.notesLineInfo.textContent = lineCount === 1
       ? `Line ${startLine + 1}`
@@ -3796,6 +3843,15 @@ function renderFolderTree(): void {
         renderFolderTree(); // Update active state
       }
     });
+
+    // Right-click context menu
+    fileEl.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const filePath = (fileEl as HTMLElement).dataset.path;
+      if (filePath) {
+        showFileContextMenu(e as MouseEvent, filePath);
+      }
+    });
   });
 }
 
@@ -3986,6 +4042,36 @@ async function initTerminal(): Promise<void> {
   // Handle window resize
   window.addEventListener('resize', () => fitTerminalToPanel());
 
+  // Handle Ctrl+C (copy when selected), Ctrl+V (paste), Ctrl+A (select all)
+  terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+    // Only handle keydown
+    if (e.type !== 'keydown') return true;
+    const isMod = e.ctrlKey || e.metaKey;
+
+    // Ctrl/Cmd+C with selection → copy to clipboard, don't send to shell
+    if (isMod && e.key === 'c' && terminal.hasSelection()) {
+      navigator.clipboard.writeText(terminal.getSelection());
+      terminal.clearSelection();
+      return false; // prevent xterm from sending \x03
+    }
+
+    // Ctrl/Cmd+V → paste from clipboard
+    if (isMod && e.key === 'v') {
+      navigator.clipboard.readText().then((text: string) => {
+        if (text) window.api.terminalWrite(text);
+      });
+      return false;
+    }
+
+    // Ctrl/Cmd+A → select all terminal content
+    if (isMod && e.key === 'a') {
+      terminal.selectAll();
+      return false;
+    }
+
+    return true; // let all other keys pass through
+  });
+
   // Click to focus terminal
   elements.terminalContainer.addEventListener('click', () => {
     terminal?.focus();
@@ -4094,6 +4180,10 @@ async function terminalCdToFile(filePath: string): Promise<void> {
 let notesSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
 function showNotesDrawer(): void {
+  // Close search results panel if open (they share the bottom slot)
+  if (state.searchResultsPanelVisible) {
+    closeSearchResultsPanel();
+  }
   const overlay = elements.notesOverlay;
   overlay.classList.remove('hidden');
   // Force reflow so the transition triggers from initial state
@@ -4209,6 +4299,302 @@ function setupNotesDrawerResize(): void {
   }
 }
 
+// ─── Search Results Panel ────────────────────────────────────────────
+
+function showSearchResultsPanel(): void {
+  // Close notes drawer if open (they share the bottom slot)
+  if (state.notesVisible) {
+    closeNotesDrawer();
+  }
+  const overlay = elements.searchResultsOverlay;
+  overlay.classList.remove('hidden');
+  void overlay.offsetHeight;
+  overlay.classList.add('visible');
+  state.searchResultsPanelVisible = true;
+  elements.btnSearchToggle.classList.add('active');
+  renderSearchResultsList();
+
+  // Focus the active tab's input after slide animation
+  const panel = overlay.querySelector('.search-results-panel') as HTMLElement;
+  if (panel) {
+    const onShown = () => {
+      panel.removeEventListener('transitionend', onShown);
+      if (activeSearchTab === 'folder') {
+        elements.folderSearchPanelInput.focus();
+      } else {
+        elements.searchInput.focus();
+      }
+    };
+    panel.addEventListener('transitionend', onShown);
+  }
+}
+
+function hideSearchResultsPanel(): void {
+  const overlay = elements.searchResultsOverlay;
+  overlay.classList.remove('visible');
+  state.searchResultsPanelVisible = false;
+  elements.btnSearchToggle.classList.remove('active');
+  const fallback = setTimeout(() => hide(), 350);
+  const hide = () => {
+    clearTimeout(fallback);
+    overlay.removeEventListener('transitionend', onEnd);
+    if (!overlay.classList.contains('visible')) {
+      overlay.classList.add('hidden');
+    }
+  };
+  const onEnd = () => hide();
+  overlay.addEventListener('transitionend', onEnd);
+}
+
+function toggleSearchResultsPanel(): void {
+  if (state.searchResultsPanelVisible) {
+    hideSearchResultsPanel();
+  } else {
+    showSearchResultsPanel();
+  }
+}
+
+function closeSearchResultsPanel(): void {
+  if (!state.searchResultsPanelVisible) return;
+  hideSearchResultsPanel();
+}
+
+const SEARCH_RESULTS_RENDER_CAP = 500;
+
+function renderSearchResultsList(): void {
+  const list = elements.searchResultsList;
+  const results = state.searchResults;
+
+  if (results.length === 0) {
+    if (elements.searchInput.value) {
+      list.innerHTML = '<div class="search-results-empty">No matches found</div>';
+    } else {
+      list.innerHTML = '<div class="search-results-empty">Enter a search term and press Enter</div>';
+    }
+    elements.searchResultsBadge.textContent = '';
+    return;
+  }
+
+  const capped = results.length > SEARCH_RESULTS_RENDER_CAP;
+  const renderCount = capped ? SEARCH_RESULTS_RENDER_CAP : results.length;
+  elements.searchResultsBadge.textContent = `${results.length} matches`;
+
+  let html = '';
+  if (capped) {
+    html += `<div class="search-results-cap-notice">Showing first ${SEARCH_RESULTS_RENDER_CAP} of ${results.length} matches</div>`;
+  }
+
+  const searchPattern = elements.searchInput.value;
+  const isRegex = elements.searchRegex.checked;
+  const matchCase = elements.searchCase.checked;
+
+  for (let i = 0; i < renderCount; i++) {
+    const r = results[i];
+    const isCurrent = i === state.currentSearchIndex;
+    const lineNum = r.lineNumber + 1; // Display as 1-indexed
+    const escapedText = escapeHtmlSimple(r.text);
+    const highlightedText = highlightSearchMatch(escapedText, searchPattern, isRegex, matchCase, r);
+    html += `<div class="search-results-item${isCurrent ? ' current' : ''}" data-index="${i}">`;
+    html += `<span class="line-number">${lineNum}</span>`;
+    html += `<span class="match-text">${highlightedText}</span>`;
+    html += `</div>`;
+  }
+
+  list.innerHTML = html;
+  scrollSearchResultIntoView();
+}
+
+function highlightSearchMatch(
+  escapedText: string,
+  pattern: string,
+  isRegex: boolean,
+  matchCase: boolean,
+  result: SearchResult
+): string {
+  // Use column and length from search result to highlight the exact match
+  try {
+    const rawText = result.text;
+    const col = result.column;
+    const len = result.length;
+    if (col >= 0 && len > 0 && col + len <= rawText.length) {
+      const before = escapeHtmlSimple(rawText.substring(0, col));
+      const match = escapeHtmlSimple(rawText.substring(col, col + len));
+      const after = escapeHtmlSimple(rawText.substring(col + len));
+      return `${before}<mark>${match}</mark>${after}`;
+    }
+  } catch {
+    // Fall through to return escaped text
+  }
+  return escapedText;
+}
+
+function scrollSearchResultIntoView(): void {
+  const list = elements.searchResultsList;
+  const currentEl = list.querySelector('.search-results-item.current') as HTMLElement;
+  if (currentEl) {
+    currentEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+}
+
+function updateSearchResultsCurrent(): void {
+  if (!state.searchResultsPanelVisible) return;
+  const list = elements.searchResultsList;
+  const prev = list.querySelector('.search-results-item.current');
+  if (prev) prev.classList.remove('current');
+
+  // If current index is within rendered cap
+  if (state.currentSearchIndex >= 0 && state.currentSearchIndex < SEARCH_RESULTS_RENDER_CAP) {
+    const item = list.querySelector(`[data-index="${state.currentSearchIndex}"]`) as HTMLElement;
+    if (item) {
+      item.classList.add('current');
+      item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }
+}
+
+function setupSearchResultsPanelResize(): void {
+  const handle = elements.searchResultsResizeHandle;
+  const panel = elements.searchResultsPanel;
+  let startY = 0;
+  let startHeight = 0;
+  let isDragging = false;
+
+  handle.addEventListener('mousedown', (e: MouseEvent) => {
+    e.preventDefault();
+    isDragging = true;
+    startY = e.clientY;
+    startHeight = panel.offsetHeight;
+    handle.classList.add('dragging');
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+
+  function onMouseMove(e: MouseEvent): void {
+    if (!isDragging) return;
+    const delta = startY - e.clientY;
+    const newHeight = Math.max(150, Math.min(window.innerHeight * 0.7, startHeight + delta));
+    panel.style.height = newHeight + 'px';
+  }
+
+  function onMouseUp(): void {
+    isDragging = false;
+    handle.classList.remove('dragging');
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  }
+}
+
+// ─── Search Panel Tabs ───────────────────────────────────────────────
+
+let activeSearchTab: 'file' | 'folder' = 'file';
+
+function switchSearchTab(tab: 'file' | 'folder'): void {
+  activeSearchTab = tab;
+  // Update tab buttons
+  const tabs = elements.searchResultsPanel.querySelectorAll('.search-panel-tab');
+  tabs.forEach(t => t.classList.toggle('active', (t as HTMLElement).dataset.searchTab === tab));
+  // Update tab content
+  elements.searchTabFile.classList.toggle('active', tab === 'file');
+  elements.searchTabFolder.classList.toggle('active', tab === 'folder');
+  // Focus the appropriate input
+  if (tab === 'file') {
+    elements.searchInput.focus();
+  } else {
+    elements.folderSearchPanelInput.focus();
+  }
+}
+
+// ─── Folder Search (Panel) ───────────────────────────────────────────
+
+async function performFolderSearchPanel(): Promise<void> {
+  const pattern = elements.folderSearchPanelInput.value.trim();
+  if (!pattern || state.folders.length === 0) {
+    if (state.folders.length === 0) {
+      elements.folderSearchPanelResults.innerHTML = '<div class="search-results-empty">No folders open. Add folders from the sidebar first.</div>';
+    }
+    return;
+  }
+
+  state.isFolderSearching = true;
+  elements.btnFolderSearchPanel.classList.add('hidden');
+  elements.btnFolderSearchPanelCancel.classList.remove('hidden');
+  elements.folderSearchStatus.textContent = 'Searching...';
+  elements.folderSearchPanelResults.innerHTML = '<div class="search-results-empty">Searching...</div>';
+
+  const unsubscribe = window.api.onFolderSearchProgress((data) => {
+    if (state.isFolderSearching) {
+      elements.folderSearchStatus.textContent = `${data.matchCount} matches...`;
+      elements.folderSearchPanelResults.innerHTML = `<div class="search-results-empty">Searching... ${data.matchCount} matches found</div>`;
+    }
+  });
+
+  try {
+    const folderPaths = state.folders.map(f => f.path);
+    const isRegex = elements.folderSearchRegex.checked;
+    const matchCase = elements.folderSearchCase.checked;
+    const result = await window.api.folderSearch(folderPaths, pattern, { isRegex, matchCase });
+
+    if (result.success && result.matches) {
+      state.folderSearchResults = result.matches;
+      renderFolderSearchPanelResults(pattern, result.cancelled);
+    } else {
+      elements.folderSearchPanelResults.innerHTML = `<div class="search-results-empty">${result.error || 'Search failed'}</div>`;
+      elements.folderSearchStatus.textContent = 'Failed';
+    }
+  } catch (error) {
+    elements.folderSearchPanelResults.innerHTML = `<div class="search-results-empty">Error: ${error}</div>`;
+    elements.folderSearchStatus.textContent = 'Error';
+  } finally {
+    unsubscribe();
+    state.isFolderSearching = false;
+    elements.btnFolderSearchPanel.classList.remove('hidden');
+    elements.btnFolderSearchPanelCancel.classList.add('hidden');
+  }
+}
+
+function cancelFolderSearchPanel(): void {
+  if (state.isFolderSearching) {
+    window.api.cancelFolderSearch();
+  }
+}
+
+function renderFolderSearchPanelResults(pattern: string, cancelled?: boolean): void {
+  const matches = state.folderSearchResults;
+
+  if (matches.length === 0) {
+    elements.folderSearchPanelResults.innerHTML = '<div class="search-results-empty">No matches found</div>';
+    elements.folderSearchStatus.textContent = 'No results';
+    return;
+  }
+
+  elements.folderSearchStatus.textContent = `${matches.length}${cancelled ? '+' : ''} match${matches.length !== 1 ? 'es' : ''}`;
+
+  const renderCap = 500;
+  const capped = matches.length > renderCap;
+  const renderCount = capped ? renderCap : matches.length;
+
+  let html = '';
+  if (capped) {
+    html += `<div class="search-results-cap-notice">Showing first ${renderCap} of ${matches.length} matches</div>`;
+  }
+
+  const patternEscaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const highlightRegex = new RegExp(`(${patternEscaped})`, 'gi');
+
+  for (let i = 0; i < renderCount; i++) {
+    const m = matches[i];
+    const lineText = m.lineText.length > 200 ? m.lineText.substring(0, 200) + '...' : m.lineText;
+    const escapedText = escapeHtmlSimple(lineText);
+    const highlighted = escapedText.replace(highlightRegex, '<mark>$1</mark>');
+    html += `<div class="folder-search-panel-item" data-index="${i}">`;
+    html += `<span class="file-info">${escapeHtmlSimple(m.fileName)}:${m.lineNumber}</span>`;
+    html += `<span class="match-text">${highlighted}</span>`;
+    html += `</div>`;
+  }
+
+  elements.folderSearchPanelResults.innerHTML = html;
+}
+
 async function loadFile(filePath: string, createNewTab: boolean = true): Promise<void> {
   // Check if file is already open in a tab BEFORE calling backend
   const existingTab = findTabByFilePath(filePath);
@@ -4256,6 +4642,7 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       state.searchResults = [];
       state.currentSearchIndex = -1;
       state.hiddenSearchMatches = [];
+      if (state.searchResultsPanelVisible) renderSearchResultsList();
       state.currentNotesFile = null; // Reset notes file for new log file
       cachedLines.clear();
 
@@ -4658,6 +5045,9 @@ async function performSearch(): Promise<void> {
       if (state.currentSearchIndex >= 0) {
         goToSearchResult(state.currentSearchIndex);
       }
+
+      // Update search results panel (always render so list is ready)
+      renderSearchResultsList();
     }
   } finally {
     unsubscribe();
@@ -4838,6 +5228,7 @@ function goToSearchResult(index: number): void {
   goToLine(result.lineNumber);
   updateSearchUI();
   renderVisibleLines(); // Update current match highlight
+  updateSearchResultsCurrent(); // Sync panel highlight
 }
 
 function goToLine(lineNumber: number): void {
@@ -5249,9 +5640,13 @@ function attachAdvancedFilterEventListeners(): void {
 
 async function applyAdvancedFilter(): Promise<void> {
   // Validate that we have at least one group with rules
-  const validGroups = advancedFilterGroups.filter(g =>
-    g.rules.some(r => r.value.trim() !== '' || r.type === 'level' || r.type === 'not_level')
-  );
+  // Filter out groups with no valid rules, and strip empty non-level rules within each group
+  const validGroups = advancedFilterGroups
+    .map(g => ({
+      ...g,
+      rules: g.rules.filter(r => r.value.trim() !== '' || r.type === 'level' || r.type === 'not_level'),
+    }))
+    .filter(g => g.rules.length > 0);
 
   if (validGroups.length === 0) {
     alert('Please add at least one filter rule with a value.');
@@ -6027,7 +6422,8 @@ function updateHighlightsUI(): void {
         return `
       <div class="highlight-item" data-id="${h.id}" title="${h.isGlobal ? 'Global - applies to all files' : 'Local - applies to this file only'}">
         <div class="highlight-preview">
-          <span class="highlight-color" style="background-color: ${h.backgroundColor}"></span>
+          <span class="highlight-color" data-id="${h.id}" style="background-color: ${h.backgroundColor}" title="Click to change color"></span>
+          <input type="color" class="highlight-color-picker" data-id="${h.id}" value="${h.backgroundColor}" style="display:none">
           <span class="highlight-pattern">${escapeHtml(h.pattern)}</span>
           <span class="highlight-scope ${h.isGlobal ? 'global' : 'local'}">${h.isGlobal ? 'G' : 'L'}</span>
         </div>
@@ -6088,6 +6484,32 @@ function updateHighlightsUI(): void {
       e.stopPropagation();
       const id = (e.target as HTMLElement).dataset.id!;
       await navigateHighlight(id, 'next');
+    });
+  });
+
+  // Add click handlers for color picker
+  elements.highlightsList.querySelectorAll('.highlight-color').forEach((swatch) => {
+    swatch.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = (swatch as HTMLElement).dataset.id!;
+      const picker = elements.highlightsList.querySelector(`.highlight-color-picker[data-id="${id}"]`) as HTMLInputElement;
+      if (picker) picker.click();
+    });
+  });
+
+  elements.highlightsList.querySelectorAll('.highlight-color-picker').forEach((picker) => {
+    picker.addEventListener('input', async (e) => {
+      const input = e.target as HTMLInputElement;
+      const id = input.dataset.id!;
+      const newColor = input.value;
+      const highlight = state.highlights.find(h => h.id === id);
+      if (!highlight) return;
+      highlight.backgroundColor = newColor;
+      await window.api.updateHighlight(highlight);
+      // Update swatch color immediately
+      const swatch = elements.highlightsList.querySelector(`.highlight-color[data-id="${id}"]`) as HTMLElement;
+      if (swatch) swatch.style.backgroundColor = newColor;
+      renderVisibleLines();
     });
   });
 }
@@ -7082,6 +7504,7 @@ function renderActivityHistory(entries: ActivityEntry[]): void {
       try {
         const details = JSON.parse((el as HTMLElement).dataset.details || '{}');
         if (action === 'search' && details.pattern) {
+          if (!state.searchResultsPanelVisible) showSearchResultsPanel();
           elements.searchInput.value = details.pattern;
           if (details.isRegex) elements.searchRegex.checked = true;
           elements.btnSearch.click();
@@ -7242,10 +7665,15 @@ function setupKeyboardShortcuts(): void {
       openFile();
     }
 
-    // Ctrl/Cmd + F: Focus search
+    // Ctrl/Cmd + F: Open search panel and focus input
     if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
       e.preventDefault();
-      elements.searchInput.focus();
+      if (!state.searchResultsPanelVisible) {
+        showSearchResultsPanel();
+      } else {
+        elements.searchInput.focus();
+        elements.searchInput.select();
+      }
     }
 
     // Enter in search: Search
@@ -7297,6 +7725,8 @@ function setupKeyboardShortcuts(): void {
       if (rangeSelectStartLine !== null) {
         rangeSelectStartLine = null;
         elements.statusCursor.textContent = 'Range cancelled';
+      } else if (state.searchResultsPanelVisible) {
+        closeSearchResultsPanel();
       } else if (state.notesVisible) {
         closeNotesDrawer();
       } else if (state.terminalVisible) {
@@ -7318,6 +7748,12 @@ function setupKeyboardShortcuts(): void {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'N') {
       e.preventDefault();
       toggleNotesDrawer();
+    }
+
+    // Ctrl/Cmd + Shift + R: Toggle search results panel
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'R') {
+      e.preventDefault();
+      toggleSearchResultsPanel();
     }
 
     // Ctrl/Cmd + PageDown: Next split file
@@ -7694,6 +8130,49 @@ function init(): void {
   });
   elements.notesTextarea.addEventListener('input', saveNotesDebounced);
   setupNotesDrawerResize();
+
+  // Search results panel events
+  elements.btnSearchToggle.addEventListener('click', toggleSearchResultsPanel);
+  elements.btnSearchResultsClose.addEventListener('click', closeSearchResultsPanel);
+  elements.searchResultsOverlay.addEventListener('click', (e) => {
+    if (e.target === elements.searchResultsOverlay) {
+      closeSearchResultsPanel();
+    }
+  });
+  elements.searchResultsList.addEventListener('click', (e) => {
+    const item = (e.target as HTMLElement).closest('.search-results-item') as HTMLElement;
+    if (item) {
+      const index = parseInt(item.dataset.index || '0', 10);
+      goToSearchResult(index);
+    }
+  });
+  // Search panel tab switching
+  elements.searchResultsPanel.querySelectorAll('.search-panel-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const tabName = (tab as HTMLElement).dataset.searchTab as 'file' | 'folder';
+      if (tabName) switchSearchTab(tabName);
+    });
+  });
+  // Folder search panel events
+  elements.btnFolderSearchPanel.addEventListener('click', performFolderSearchPanel);
+  elements.btnFolderSearchPanelCancel.addEventListener('click', cancelFolderSearchPanel);
+  elements.folderSearchPanelInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      performFolderSearchPanel();
+    }
+  });
+  elements.folderSearchPanelResults.addEventListener('click', async (e) => {
+    const item = (e.target as HTMLElement).closest('.folder-search-panel-item') as HTMLElement;
+    if (item) {
+      const index = parseInt(item.dataset.index || '0', 10);
+      const match = state.folderSearchResults[index];
+      if (match) {
+        await loadFile(match.filePath);
+        goToLine(match.lineNumber - 1); // Convert to 0-based
+      }
+    }
+  });
+  setupSearchResultsPanelResize();
 
   // Panel resize is handled in setupActivityBar
   document.addEventListener('mousemove', (e) => {
@@ -8573,6 +9052,7 @@ function closeTab(tabId: string): void {
       state.searchResults = [];
       state.currentSearchIndex = -1;
       state.hiddenSearchMatches = [];
+      closeSearchResultsPanel();
       state.bookmarks = [];
       state.highlights = [];
       cachedLines.clear();
@@ -8640,33 +9120,111 @@ function renderTabBar(): void {
       closeTab(tab.id);
     });
 
-    // Context menu for split/diff (only on non-active tabs)
+    // Context menu for tabs
     tabElement.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      if (tab.id === state.activeTabId) return; // No context menu for active tab
-      if (state.tabs.length < 2) return; // Need at least 2 tabs
-      showTabContextMenu(e as MouseEvent, tab.id);
+      showTabContextMenu(e as MouseEvent, tab.id, tab.filePath);
     });
 
     elements.tabsContainer.appendChild(tabElement);
   }
 }
 
-function showTabContextMenu(e: MouseEvent, targetTabId: string): void {
+function showTabContextMenu(e: MouseEvent, targetTabId: string, filePath: string): void {
+  showFileContextMenu(e, filePath, targetTabId);
+}
+
+async function copyAllFileContent(filePath: string): Promise<void> {
+  // Find total lines for this file
+  const tab = state.tabs.find(t => t.filePath === filePath);
+  const totalLines = tab ? tab.totalLines : state.totalLines;
+  const fileSize = state.fileStats?.path === filePath ? state.fileStats.size : 0;
+
+  // Warn for large files (>10MB or >100K lines)
+  const MAX_COPY_SIZE = 50 * 1024 * 1024; // 50MB hard limit
+  const WARN_SIZE = 10 * 1024 * 1024; // 10MB warning
+  const WARN_LINES = 100000;
+
+  if (fileSize > MAX_COPY_SIZE || totalLines > 500000) {
+    alert(`File is too large to copy to clipboard (${(fileSize / 1024 / 1024).toFixed(1)} MB, ${totalLines.toLocaleString()} lines).`);
+    return;
+  }
+
+  if ((fileSize > WARN_SIZE || totalLines > WARN_LINES) && !confirm(
+    `This file is ${(fileSize / 1024 / 1024).toFixed(1)} MB with ${totalLines.toLocaleString()} lines. Copying may take a moment. Continue?`
+  )) {
+    return;
+  }
+
+  showProgress('Copying file content...');
+  try {
+    const result = filePath === state.filePath
+      ? await window.api.getLines(0, totalLines)
+      : await window.api.getLinesForFile(filePath, 0, totalLines);
+    if (result.success && result.lines) {
+      const content = result.lines.map((l: LogLine) => l.text).join('\n');
+      await navigator.clipboard.writeText(content);
+      hideProgress();
+      elements.statusCursor.textContent = `Copied ${result.lines.length.toLocaleString()} lines to clipboard`;
+    } else {
+      hideProgress();
+      alert('Failed to read file content');
+    }
+  } catch (error) {
+    hideProgress();
+    alert(`Failed to copy: ${error}`);
+  }
+}
+
+function showFileContextMenu(e: MouseEvent, filePath: string, tabId?: string): void {
   // Remove existing context menu
   const existing = document.querySelector('.tab-context-menu');
   if (existing) existing.remove();
 
+  const fileName = getFileName(filePath);
   const menu = document.createElement('div');
   menu.className = 'tab-context-menu';
-  menu.innerHTML = `
+
+  let items = `
+    <div class="tab-context-item" data-action="copy-name">Copy File Name</div>
+    <div class="tab-context-item" data-action="copy-path">Copy Full Path</div>
+    <div class="tab-context-item" data-action="copy-all">Copy All Content</div>
+    <div class="tab-context-item" data-action="show-in-folder">Show in Folder</div>
+  `;
+
+  // Add split/diff options for non-active tabs when there are 2+ tabs
+  if (tabId && tabId !== state.activeTabId && state.tabs.length >= 2) {
+    items += `
+    <div class="tab-context-separator"></div>
     <div class="tab-context-item" data-action="split">Open in Split View</div>
     <div class="tab-context-item" data-action="diff">Compare with Current Tab</div>
-  `;
+    `;
+  }
+
+  // Add close tab option for tabs
+  if (tabId) {
+    items += `
+    <div class="tab-context-separator"></div>
+    <div class="tab-context-item" data-action="close-tab">Close Tab</div>
+    `;
+  }
+
+  menu.innerHTML = items;
 
   menu.style.left = `${e.clientX}px`;
   menu.style.top = `${e.clientY}px`;
   document.body.appendChild(menu);
+
+  // Clamp menu to viewport
+  requestAnimationFrame(() => {
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) {
+      menu.style.left = `${window.innerWidth - rect.width - 4}px`;
+    }
+    if (rect.bottom > window.innerHeight) {
+      menu.style.top = `${window.innerHeight - rect.height - 4}px`;
+    }
+  });
 
   // Handle clicks
   menu.addEventListener('click', (ev) => {
@@ -8674,10 +9232,20 @@ function showTabContextMenu(e: MouseEvent, targetTabId: string): void {
     if (!target) return;
     const action = target.dataset.action;
     menu.remove();
-    if (action === 'split') {
-      activateSplitView(targetTabId);
-    } else if (action === 'diff') {
-      activateDiffView(targetTabId);
+    if (action === 'copy-name') {
+      navigator.clipboard.writeText(fileName);
+    } else if (action === 'copy-path') {
+      navigator.clipboard.writeText(filePath);
+    } else if (action === 'copy-all') {
+      copyAllFileContent(filePath);
+    } else if (action === 'show-in-folder') {
+      window.api.showItemInFolder(filePath);
+    } else if (action === 'split' && tabId) {
+      activateSplitView(tabId);
+    } else if (action === 'diff' && tabId) {
+      activateDiffView(tabId);
+    } else if (action === 'close-tab' && tabId) {
+      closeTab(tabId);
     }
   });
 
