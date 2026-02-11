@@ -311,6 +311,13 @@ const api = {
   saveNotes: (content: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('save-notes', content),
 
+  // File context menu actions
+  showItemInFolder: (filePath: string): Promise<void> =>
+    ipcRenderer.invoke('show-item-in-folder', filePath),
+
+  readFileContent: (filePath: string): Promise<{ success: boolean; content?: string; sizeMB?: number; error?: string }> =>
+    ipcRenderer.invoke('read-file-content', filePath),
+
   // Window controls
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),
   windowMaximize: (): Promise<void> => ipcRenderer.invoke('window-maximize'),

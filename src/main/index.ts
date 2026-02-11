@@ -1611,6 +1611,26 @@ ipcMain.handle('open-external-url', async (_, url: string) => {
   }
 });
 
+// Show file in OS file manager
+ipcMain.handle('show-item-in-folder', async (_, filePath: string) => {
+  shell.showItemInFolder(filePath);
+});
+
+// Read entire file content (for Copy All)
+ipcMain.handle('read-file-content', async (_, filePath: string) => {
+  try {
+    const stats = fs.statSync(filePath);
+    const sizeMB = stats.size / (1024 * 1024);
+    if (sizeMB > 50) {
+      return { success: false, error: 'File too large to copy (>50MB)' };
+    }
+    const content = fs.readFileSync(filePath, 'utf-8');
+    return { success: true, content, sizeMB };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
 // === Save Selected Lines ===
 
 ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: number, columnConfig?: ColumnConfig) => {
@@ -1817,20 +1837,8 @@ ipcMain.handle('save-to-notes', async (
       content += newEntry;
       fs.writeFileSync(notesFilePath, content, 'utf-8');
     } else {
-      // Insert entry in line-number order among existing entries
-      const existing = fs.readFileSync(notesFilePath, 'utf-8');
-      const entryRegex = /\n--- \[.*?\] Lines (\d+)-/g;
-      let insertPos = existing.length; // default: append at end
-      let match;
-      while ((match = entryRegex.exec(existing)) !== null) {
-        const entryStartLine = parseInt(match[1], 10);
-        if (entryStartLine > startLine + 1) {
-          insertPos = match.index;
-          break;
-        }
-      }
-      const result = existing.substring(0, insertPos) + newEntry + existing.substring(insertPos);
-      fs.writeFileSync(notesFilePath, result, 'utf-8');
+      // Simple append to existing file
+      fs.appendFileSync(notesFilePath, newEntry, 'utf-8');
     }
 
     // Invalidate cache for this file so it gets re-indexed with new content
@@ -1969,9 +1977,9 @@ function compileAdvancedFilter(config: AdvancedFilterConfig): CompiledMatcher {
           return (text: string, _level: string) =>
             !(rule.caseSensitive ? text : text.toLowerCase()).includes(pattern);
         case 'level':
-          return (_text: string, level: string) => level === rule.value;
+          return (_text: string, level: string) => level.toLowerCase() === rule.value.toLowerCase();
         case 'not_level':
-          return (_text: string, level: string) => level !== rule.value;
+          return (_text: string, level: string) => level.toLowerCase() !== rule.value.toLowerCase();
         default:
           return (_text: string, _level: string) => true;
       }

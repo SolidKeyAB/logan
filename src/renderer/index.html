@@ -347,6 +347,19 @@
       </div>
     </div>
 
+    <!-- Search Results Panel (slide-up from bottom) -->
+    <div id="search-results-overlay" class="search-results-overlay hidden">
+      <div id="search-results-panel" class="search-results-panel">
+        <div id="search-results-resize-handle" class="search-results-resize-handle-top"></div>
+        <div class="search-results-header">
+          <span class="search-results-title">Search Results</span>
+          <span id="search-results-summary" class="search-results-summary"></span>
+          <button id="btn-search-results-close" class="search-results-close-btn" title="Close (Esc)">&times;</button>
+        </div>
+        <div id="search-results-list" class="search-results-list"></div>
+      </div>
+    </div>
+
     <!-- Status Bar -->
     <footer class="status-bar">
       <div class="status-left">
@@ -590,7 +603,8 @@
             <div class="shortcut-list">
               <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>`</kbd><span>Toggle terminal panel</span></div>
               <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd><span>Toggle notes drawer</span></div>
-              <div class="shortcut-item"><kbd>Esc</kbd><span>Close terminal/notes (when focused)</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd><span>Toggle search results panel</span></div>
+              <div class="shortcut-item"><kbd>Esc</kbd><span>Close terminal/notes/search results (when focused)</span></div>
             </div>
           </div>
           <div class="help-section">

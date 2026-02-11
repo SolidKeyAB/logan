@@ -287,6 +287,10 @@ interface Api {
   clearActivityHistory: () => Promise<{ success: boolean; error?: string }>;
   getLocalFileStatus: () => Promise<{ exists: boolean; writable: boolean; localPath: string | null }>;
 
+  // File context menu actions
+  showItemInFolder: (filePath: string) => Promise<void>;
+  readFileContent: (filePath: string) => Promise<{ success: boolean; content?: string; sizeMB?: number; error?: string }>;
+
   // Window controls
   windowMinimize: () => Promise<void>;
   windowMaximize: () => Promise<void>;

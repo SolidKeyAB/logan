@@ -280,6 +280,8 @@ interface AppState {
   terminalInitialized: boolean;
   // Notes drawer
   notesVisible: boolean;
+  // Search results panel
+  searchResultsPanelVisible: boolean;
 }
 
 const state: AppState = {
@@ -314,6 +316,7 @@ const state: AppState = {
   terminalVisible: false,
   terminalInitialized: false,
   notesVisible: false,
+  searchResultsPanelVisible: false,
 };
 
 // Constants
@@ -858,6 +861,13 @@ const elements = {
   btnDdSaveConfig: document.getElementById('btn-dd-save-config') as HTMLButtonElement,
   btnDdClearConfig: document.getElementById('btn-dd-clear-config') as HTMLButtonElement,
   ddConfigStatus: document.getElementById('dd-config-status') as HTMLSpanElement,
+  // Search results panel
+  searchResultsOverlay: document.getElementById('search-results-overlay') as HTMLDivElement,
+  searchResultsPanel: document.getElementById('search-results-panel') as HTMLDivElement,
+  searchResultsResizeHandle: document.getElementById('search-results-resize-handle') as HTMLDivElement,
+  searchResultsSummary: document.getElementById('search-results-summary') as HTMLSpanElement,
+  searchResultsList: document.getElementById('search-results-list') as HTMLDivElement,
+  btnSearchResultsClose: document.getElementById('btn-search-results-close') as HTMLButtonElement,
 };
 
 // Virtual Log Viewer
@@ -2044,6 +2054,7 @@ function getTotalLines(): number {
     ? state.filteredLines
     : state.totalLines;
 }
+
 
 async function loadVisibleLines(): Promise<void> {
   if (!logContentElement) return;
@@ -3796,6 +3807,15 @@ function renderFolderTree(): void {
         renderFolderTree(); // Update active state
       }
     });
+    // Right-click context menu on folder tree files
+    fileEl.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const filePath = (fileEl as HTMLElement).dataset.path;
+      if (filePath) {
+        showFileContextMenu(e as MouseEvent, filePath);
+      }
+    });
   });
 }
 
@@ -3978,6 +3998,27 @@ async function initTerminal(): Promise<void> {
     });
   });
 
+  // Handle Ctrl+C/V/A in terminal (copy/paste/select-all)
+  terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.type === 'keydown') {
+      if (e.key === 'c' && terminal.hasSelection()) {
+        navigator.clipboard.writeText(terminal.getSelection());
+        return false; // Prevent sending Ctrl+C to shell when copying
+      }
+      if (e.key === 'v') {
+        navigator.clipboard.readText().then((text: string) => {
+          window.api.terminalWrite(text);
+        });
+        return false;
+      }
+      if (e.key === 'a') {
+        terminal.selectAll();
+        return false;
+      }
+    }
+    return true; // Let all other keys pass through to terminal
+  });
+
   // Start the terminal process
   await startTerminalProcess();
 
@@ -4094,6 +4135,10 @@ async function terminalCdToFile(filePath: string): Promise<void> {
 let notesSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
 function showNotesDrawer(): void {
+  // Close search results panel if open (shared bottom slot)
+  if (state.searchResultsPanelVisible) {
+    closeSearchResultsPanel();
+  }
   const overlay = elements.notesOverlay;
   overlay.classList.remove('hidden');
   // Force reflow so the transition triggers from initial state
@@ -4209,6 +4254,170 @@ function setupNotesDrawerResize(): void {
   }
 }
 
+// ─── Search Results Panel ────────────────────────────────────────────
+
+function showSearchResultsPanel(): void {
+  // Close notes drawer if open (shared bottom slot)
+  if (state.notesVisible) {
+    closeNotesDrawer();
+  }
+  state.searchResultsPanelVisible = true;
+  const overlay = elements.searchResultsOverlay;
+  overlay.classList.remove('hidden');
+  void overlay.offsetHeight;
+  overlay.classList.add('visible');
+}
+
+function hideSearchResultsPanel(): void {
+  const overlay = elements.searchResultsOverlay;
+  overlay.classList.remove('visible');
+  const fallback = setTimeout(() => hide(), 350);
+  const hide = () => {
+    clearTimeout(fallback);
+    overlay.removeEventListener('transitionend', onEnd);
+    if (!overlay.classList.contains('visible')) {
+      overlay.classList.add('hidden');
+    }
+  };
+  const onEnd = () => hide();
+  overlay.addEventListener('transitionend', onEnd);
+}
+
+function toggleSearchResultsPanel(): void {
+  state.searchResultsPanelVisible = !state.searchResultsPanelVisible;
+  if (state.searchResultsPanelVisible) {
+    showSearchResultsPanel();
+  } else {
+    hideSearchResultsPanel();
+  }
+}
+
+function closeSearchResultsPanel(): void {
+  if (!state.searchResultsPanelVisible) return;
+  state.searchResultsPanelVisible = false;
+  hideSearchResultsPanel();
+}
+
+const SEARCH_RESULTS_LIST_CAP = 500;
+
+function renderSearchResultsList(): void {
+  const list = elements.searchResultsList;
+  const results = state.searchResults;
+  const searchPattern = elements.searchInput.value;
+
+  if (results.length === 0) {
+    list.innerHTML = '<div class="search-results-cap-notice">No results</div>';
+    elements.searchResultsSummary.textContent = '';
+    return;
+  }
+
+  const displayCount = Math.min(results.length, SEARCH_RESULTS_LIST_CAP);
+  elements.searchResultsSummary.textContent = results.length > SEARCH_RESULTS_LIST_CAP
+    ? `Showing ${SEARCH_RESULTS_LIST_CAP} of ${results.length}`
+    : `${results.length} results`;
+
+  const fragment = document.createDocumentFragment();
+
+  for (let i = 0; i < displayCount; i++) {
+    const r = results[i];
+    const item = document.createElement('div');
+    item.className = 'search-result-item';
+    if (i === state.currentSearchIndex) {
+      item.classList.add('current');
+    }
+    item.dataset.index = String(i);
+
+    const lineNum = document.createElement('span');
+    lineNum.className = 'search-result-line-num';
+    lineNum.textContent = `${r.lineNumber + 1}`;
+
+    const text = document.createElement('span');
+    text.className = 'search-result-text';
+    const lineText = r.lineText || '';
+    const truncated = lineText.length > 300 ? lineText.substring(0, 300) + '...' : lineText;
+    if (searchPattern && r.column >= 0 && r.length > 0) {
+      const before = escapeHtml(truncated.substring(0, r.column));
+      const match = escapeHtml(truncated.substring(r.column, r.column + r.length));
+      const after = escapeHtml(truncated.substring(r.column + r.length));
+      text.innerHTML = `${before}<mark>${match}</mark>${after}`;
+    } else {
+      text.textContent = truncated;
+    }
+
+    item.appendChild(lineNum);
+    item.appendChild(text);
+    item.addEventListener('click', () => {
+      goToSearchResult(i);
+      updateSearchResultsCurrent();
+      scrollSearchResultIntoView();
+    });
+    fragment.appendChild(item);
+  }
+
+  if (results.length > SEARCH_RESULTS_LIST_CAP) {
+    const notice = document.createElement('div');
+    notice.className = 'search-results-cap-notice';
+    notice.textContent = `... and ${results.length - SEARCH_RESULTS_LIST_CAP} more results`;
+    fragment.appendChild(notice);
+  }
+
+  list.innerHTML = '';
+  list.appendChild(fragment);
+}
+
+function updateSearchResultsCurrent(): void {
+  const list = elements.searchResultsList;
+  const prev = list.querySelector('.search-result-item.current');
+  if (prev) prev.classList.remove('current');
+
+  const idx = state.currentSearchIndex;
+  if (idx >= 0 && idx < SEARCH_RESULTS_LIST_CAP) {
+    const item = list.querySelector(`.search-result-item[data-index="${idx}"]`);
+    if (item) item.classList.add('current');
+  }
+}
+
+function scrollSearchResultIntoView(): void {
+  const idx = state.currentSearchIndex;
+  if (idx < 0 || idx >= SEARCH_RESULTS_LIST_CAP) return;
+  const item = elements.searchResultsList.querySelector(`.search-result-item[data-index="${idx}"]`);
+  if (item) {
+    item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+}
+
+function setupSearchResultsResize(): void {
+  const handle = elements.searchResultsResizeHandle;
+  const panel = elements.searchResultsPanel;
+  let startY = 0;
+  let startHeight = 0;
+  let isDragging = false;
+
+  handle.addEventListener('mousedown', (e: MouseEvent) => {
+    e.preventDefault();
+    isDragging = true;
+    startY = e.clientY;
+    startHeight = panel.offsetHeight;
+    handle.classList.add('dragging');
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+
+  function onMouseMove(e: MouseEvent): void {
+    if (!isDragging) return;
+    const delta = startY - e.clientY;
+    const newHeight = Math.max(120, Math.min(window.innerHeight * 0.6, startHeight + delta));
+    panel.style.height = newHeight + 'px';
+  }
+
+  function onMouseUp(): void {
+    isDragging = false;
+    handle.classList.remove('dragging');
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  }
+}
+
 async function loadFile(filePath: string, createNewTab: boolean = true): Promise<void> {
   // Check if file is already open in a tab BEFORE calling backend
   const existingTab = findTabByFilePath(filePath);
@@ -4256,6 +4465,9 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       state.searchResults = [];
       state.currentSearchIndex = -1;
       state.hiddenSearchMatches = [];
+      if (state.searchResultsPanelVisible) {
+        renderSearchResultsList();
+      }
       state.currentNotesFile = null; // Reset notes file for new log file
       cachedLines.clear();
 
@@ -4655,6 +4867,12 @@ async function performSearch(): Promise<void> {
       renderMinimapMarkers(); // Update minimap with search markers
       renderVisibleLines(); // Re-render to show search highlights
 
+      // Always render search results list and auto-show panel if results exist
+      renderSearchResultsList();
+      if (result.matches.length > 0 && !state.searchResultsPanelVisible) {
+        showSearchResultsPanel();
+      }
+
       if (state.currentSearchIndex >= 0) {
         goToSearchResult(state.currentSearchIndex);
       }
@@ -4838,6 +5056,8 @@ function goToSearchResult(index: number): void {
   goToLine(result.lineNumber);
   updateSearchUI();
   renderVisibleLines(); // Update current match highlight
+  updateSearchResultsCurrent();
+  scrollSearchResultIntoView();
 }
 
 function goToLine(lineNumber: number): void {
@@ -5248,10 +5468,13 @@ function attachAdvancedFilterEventListeners(): void {
 }
 
 async function applyAdvancedFilter(): Promise<void> {
-  // Validate that we have at least one group with rules
-  const validGroups = advancedFilterGroups.filter(g =>
-    g.rules.some(r => r.value.trim() !== '' || r.type === 'level' || r.type === 'not_level')
-  );
+  // Strip empty rules from each group, then filter out empty groups
+  const validGroups = advancedFilterGroups
+    .map(g => ({
+      ...g,
+      rules: g.rules.filter(r => r.value.trim() !== '' || r.type === 'level' || r.type === 'not_level'),
+    }))
+    .filter(g => g.rules.length > 0);
 
   if (validGroups.length === 0) {
     alert('Please add at least one filter rule with a value.');
@@ -6027,7 +6250,8 @@ function updateHighlightsUI(): void {
         return `
       <div class="highlight-item" data-id="${h.id}" title="${h.isGlobal ? 'Global - applies to all files' : 'Local - applies to this file only'}">
         <div class="highlight-preview">
-          <span class="highlight-color" style="background-color: ${h.backgroundColor}"></span>
+          <span class="highlight-color" data-id="${h.id}" style="background-color: ${h.backgroundColor}" title="Click to change color"></span>
+          <input type="color" class="highlight-color-picker" data-id="${h.id}" value="${h.backgroundColor}" style="display:none">
           <span class="highlight-pattern">${escapeHtml(h.pattern)}</span>
           <span class="highlight-scope ${h.isGlobal ? 'global' : 'local'}">${h.isGlobal ? 'G' : 'L'}</span>
         </div>
@@ -6088,6 +6312,33 @@ function updateHighlightsUI(): void {
       e.stopPropagation();
       const id = (e.target as HTMLElement).dataset.id!;
       await navigateHighlight(id, 'next');
+    });
+  });
+
+  // Click on color swatch opens the hidden color picker
+  elements.highlightsList.querySelectorAll('.highlight-color').forEach((swatch) => {
+    swatch.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = (swatch as HTMLElement).dataset.id!;
+      const picker = elements.highlightsList.querySelector(`.highlight-color-picker[data-id="${id}"]`) as HTMLInputElement;
+      if (picker) picker.click();
+    });
+  });
+
+  // Color picker change updates highlight
+  elements.highlightsList.querySelectorAll('.highlight-color-picker').forEach((picker) => {
+    picker.addEventListener('input', async (e) => {
+      const input = e.target as HTMLInputElement;
+      const id = input.dataset.id!;
+      const newColor = input.value;
+      const highlight = state.highlights.find(h => h.id === id);
+      if (!highlight) return;
+      highlight.backgroundColor = newColor;
+      await window.api.updateHighlight(highlight);
+      // Update swatch color immediately without full re-render
+      const swatch = elements.highlightsList.querySelector(`.highlight-color[data-id="${id}"]`) as HTMLElement;
+      if (swatch) swatch.style.backgroundColor = newColor;
+      renderVisibleLines();
     });
   });
 }
@@ -7297,6 +7548,8 @@ function setupKeyboardShortcuts(): void {
       if (rangeSelectStartLine !== null) {
         rangeSelectStartLine = null;
         elements.statusCursor.textContent = 'Range cancelled';
+      } else if (state.searchResultsPanelVisible) {
+        closeSearchResultsPanel();
       } else if (state.notesVisible) {
         closeNotesDrawer();
       } else if (state.terminalVisible) {
@@ -7318,6 +7571,12 @@ function setupKeyboardShortcuts(): void {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'N') {
       e.preventDefault();
       toggleNotesDrawer();
+    }
+
+    // Ctrl/Cmd + Shift + R: Toggle search results panel
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'R') {
+      e.preventDefault();
+      toggleSearchResultsPanel();
     }
 
     // Ctrl/Cmd + PageDown: Next split file
@@ -7694,6 +7953,10 @@ function init(): void {
   });
   elements.notesTextarea.addEventListener('input', saveNotesDebounced);
   setupNotesDrawerResize();
+
+  // Search results panel events
+  elements.btnSearchResultsClose.addEventListener('click', closeSearchResultsPanel);
+  setupSearchResultsResize();
 
   // Panel resize is handled in setupActivityBar
   document.addEventListener('mousemove', (e) => {
@@ -8412,6 +8675,9 @@ function restoreTabState(tab: TabState): void {
   updateStatusBar();
   updateBookmarksUI();
   updateSearchUI();
+  if (state.searchResultsPanelVisible) {
+    renderSearchResultsList();
+  }
 }
 
 function createTab(filePath: string): TabState {
@@ -8588,6 +8854,7 @@ function closeTab(tabId: string): void {
       }
       elements.welcomeMessage.classList.remove('hidden');
       elements.tabBar.classList.add('hidden');
+      closeSearchResultsPanel();
       updateStatusBar();
       updateFileStatsUI();
       updateBookmarksUI();
@@ -8640,44 +8907,79 @@ function renderTabBar(): void {
       closeTab(tab.id);
     });
 
-    // Context menu for split/diff (only on non-active tabs)
+    // Context menu for tabs
     tabElement.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      if (tab.id === state.activeTabId) return; // No context menu for active tab
-      if (state.tabs.length < 2) return; // Need at least 2 tabs
-      showTabContextMenu(e as MouseEvent, tab.id);
+      showFileContextMenu(e as MouseEvent, tab.filePath, tab.id);
     });
 
     elements.tabsContainer.appendChild(tabElement);
   }
 }
 
-function showTabContextMenu(e: MouseEvent, targetTabId: string): void {
+function showFileContextMenu(e: MouseEvent, filePath: string, tabId?: string): void {
   // Remove existing context menu
   const existing = document.querySelector('.tab-context-menu');
   if (existing) existing.remove();
 
   const menu = document.createElement('div');
   menu.className = 'tab-context-menu';
-  menu.innerHTML = `
-    <div class="tab-context-item" data-action="split">Open in Split View</div>
-    <div class="tab-context-item" data-action="diff">Compare with Current Tab</div>
-  `;
+
+  const fileName = getFileName(filePath);
+  const items: string[] = [];
+
+  items.push(`<div class="tab-context-item" data-action="copy-name">Copy Name</div>`);
+  items.push(`<div class="tab-context-item" data-action="copy-path">Copy Path</div>`);
+  items.push(`<div class="tab-context-item" data-action="copy-all">Copy All Content</div>`);
+  items.push(`<div class="tab-context-item" data-action="show-in-folder">Show in Folder</div>`);
+
+  // Split/Diff only for non-active tabs when there are 2+ tabs
+  if (tabId && tabId !== state.activeTabId && state.tabs.length >= 2) {
+    items.push(`<div class="tab-context-separator"></div>`);
+    items.push(`<div class="tab-context-item" data-action="split">Open in Split View</div>`);
+    items.push(`<div class="tab-context-item" data-action="diff">Compare with Current Tab</div>`);
+  }
+
+  // Close tab
+  if (tabId) {
+    items.push(`<div class="tab-context-separator"></div>`);
+    items.push(`<div class="tab-context-item" data-action="close">Close Tab</div>`);
+  }
+
+  menu.innerHTML = items.join('');
 
   menu.style.left = `${e.clientX}px`;
   menu.style.top = `${e.clientY}px`;
   document.body.appendChild(menu);
 
   // Handle clicks
-  menu.addEventListener('click', (ev) => {
+  menu.addEventListener('click', async (ev) => {
     const target = (ev.target as HTMLElement).closest('.tab-context-item') as HTMLElement;
     if (!target) return;
     const action = target.dataset.action;
     menu.remove();
-    if (action === 'split') {
-      activateSplitView(targetTabId);
-    } else if (action === 'diff') {
-      activateDiffView(targetTabId);
+    switch (action) {
+      case 'copy-name':
+        navigator.clipboard.writeText(fileName);
+        break;
+      case 'copy-path':
+        navigator.clipboard.writeText(filePath);
+        break;
+      case 'copy-all':
+        await copyAllFileContent(filePath);
+        break;
+      case 'show-in-folder':
+        window.api.showItemInFolder(filePath);
+        break;
+      case 'split':
+        if (tabId) activateSplitView(tabId);
+        break;
+      case 'diff':
+        if (tabId) activateDiffView(tabId);
+        break;
+      case 'close':
+        if (tabId) closeTab(tabId);
+        break;
     }
   });
 
@@ -8689,6 +8991,21 @@ function showTabContextMenu(e: MouseEvent, targetTabId: string): void {
     }
   };
   setTimeout(() => document.addEventListener('click', closeMenu), 0);
+}
+
+async function copyAllFileContent(filePath: string): Promise<void> {
+  const result = await window.api.readFileContent(filePath);
+  if (!result.success) {
+    alert(result.error || 'Failed to read file');
+    return;
+  }
+  if (result.sizeMB && result.sizeMB > 10) {
+    const proceed = confirm(`This file is ${result.sizeMB.toFixed(1)}MB. Copying to clipboard may be slow. Continue?`);
+    if (!proceed) return;
+  }
+  if (result.content !== undefined) {
+    await navigator.clipboard.writeText(result.content);
+  }
 }
 
 function findTabByFilePath(filePath: string): TabState | undefined {
