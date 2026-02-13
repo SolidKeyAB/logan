@@ -168,6 +168,19 @@ interface ActivityEntry {
   details: Record<string, unknown>;
 }
 
+interface SearchConfigDef {
+  id: string;
+  pattern: string;
+  isRegex: boolean;
+  matchCase: boolean;
+  wholeWord: boolean;
+  color: string;
+  textColor?: string;
+  enabled: boolean;
+  isGlobal: boolean;
+  createdAt: number;
+}
+
 interface Api {
   // File operations
   openFileDialog: () => Promise<string | null>;
@@ -281,6 +294,14 @@ interface Api {
   // Notes drawer
   loadNotes: () => Promise<{ success: boolean; content?: string }>;
   saveNotes: (content: string) => Promise<{ success: boolean; error?: string }>;
+
+  // Search configs
+  searchConfigSave: (config: SearchConfigDef) => Promise<{ success: boolean }>;
+  searchConfigLoad: () => Promise<{ success: boolean; configs?: SearchConfigDef[] }>;
+  searchConfigDelete: (id: string) => Promise<{ success: boolean }>;
+  searchConfigBatch: (configs: Array<{ id: string; pattern: string; isRegex: boolean; matchCase: boolean; wholeWord: boolean }>) => Promise<{ success: boolean; results?: Record<string, SearchResult[]>; error?: string }>;
+  onSearchConfigBatchProgress: (callback: (data: { percent: number; configId: string }) => void) => () => void;
+  searchConfigExport: (configId: string, lines: string[]) => Promise<{ success: boolean; filePath?: string; error?: string }>;
 
   // Local file status & activity history
   loadActivityHistory: () => Promise<{ success: boolean; history?: ActivityEntry[]; error?: string }>;

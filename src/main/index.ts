@@ -5,7 +5,7 @@ import * as os from 'os';
 import { spawn } from 'child_process';
 import * as pty from 'node-pty';
 import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
-import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, ActivityEntry, LocalFileData } from '../shared/types';
+import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, ActivityEntry, LocalFileData } from '../shared/types';
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
@@ -1568,6 +1568,181 @@ ipcMain.handle('highlight-group-delete', async (_, groupId: string) => {
   const groups = loadHighlightGroups().filter(g => g.id !== groupId);
   saveHighlightGroups(groups);
   return { success: true };
+});
+
+// === Search Configs ===
+
+const getSearchConfigsPath = () => path.join(getConfigDir(), 'search-configs.json');
+const GLOBAL_SEARCH_CONFIGS_KEY = '_global';
+
+interface SearchConfigsStore {
+  [key: string]: SearchConfig[];
+}
+
+function loadSearchConfigsStore(): SearchConfigsStore {
+  try {
+    ensureConfigDir();
+    const configPath = getSearchConfigsPath();
+    if (fs.existsSync(configPath)) {
+      const data = fs.readFileSync(configPath, 'utf-8');
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    console.error('Failed to load search configs:', error);
+  }
+  return {};
+}
+
+function saveSearchConfigsStore(store: SearchConfigsStore): void {
+  try {
+    ensureConfigDir();
+    const configPath = getSearchConfigsPath();
+    const cleanStore: SearchConfigsStore = {};
+    for (const [key, value] of Object.entries(store)) {
+      if (value.length > 0) {
+        cleanStore[key] = value;
+      }
+    }
+    fs.writeFileSync(configPath, JSON.stringify(cleanStore, null, 2), 'utf-8');
+  } catch (error) {
+    console.error('Failed to save search configs:', error);
+  }
+}
+
+function loadSearchConfigsForFile(filePath: string): SearchConfig[] {
+  const store = loadSearchConfigsStore();
+  const configs: SearchConfig[] = [];
+
+  // Load global configs
+  const globalConfigs = store[GLOBAL_SEARCH_CONFIGS_KEY] || [];
+  for (const c of globalConfigs) {
+    configs.push({ ...c, isGlobal: true });
+  }
+
+  // Load file-specific configs
+  if (filePath) {
+    const fileConfigs = store[filePath] || [];
+    for (const c of fileConfigs) {
+      configs.push({ ...c, isGlobal: false });
+    }
+  }
+
+  return configs;
+}
+
+function saveSearchConfig(config: SearchConfig): void {
+  const store = loadSearchConfigsStore();
+
+  // Remove from all keys first
+  for (const k of Object.keys(store)) {
+    store[k] = store[k].filter(c => c.id !== config.id);
+  }
+
+  const key = config.isGlobal ? GLOBAL_SEARCH_CONFIGS_KEY : (currentFilePath || GLOBAL_SEARCH_CONFIGS_KEY);
+  if (!store[key]) store[key] = [];
+  store[key].push(config);
+  saveSearchConfigsStore(store);
+}
+
+function removeSearchConfigFromStore(id: string): void {
+  const store = loadSearchConfigsStore();
+  let changed = false;
+  for (const k of Object.keys(store)) {
+    const before = store[k].length;
+    store[k] = store[k].filter(c => c.id !== id);
+    if (store[k].length !== before) changed = true;
+  }
+  if (changed) saveSearchConfigsStore(store);
+}
+
+ipcMain.handle(IPC.SEARCH_CONFIG_SAVE, async (_, config: SearchConfig) => {
+  saveSearchConfig(config);
+  return { success: true };
+});
+
+ipcMain.handle(IPC.SEARCH_CONFIG_LOAD, async () => {
+  const configs = loadSearchConfigsForFile(currentFilePath || '');
+  return { success: true, configs };
+});
+
+ipcMain.handle(IPC.SEARCH_CONFIG_DELETE, async (_, id: string) => {
+  removeSearchConfigFromStore(id);
+  return { success: true };
+});
+
+ipcMain.handle(IPC.SEARCH_CONFIG_BATCH, async (_, configs: Array<{ id: string; pattern: string; isRegex: boolean; matchCase: boolean; wholeWord: boolean }>) => {
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+
+  const results: Record<string, Array<{ lineNumber: number; column: number; length: number; lineText: string }>> = {};
+  const totalConfigs = configs.length;
+
+  for (let i = 0; i < configs.length; i++) {
+    const cfg = configs[i];
+    try {
+      const searchOpts: SearchOptions = {
+        pattern: cfg.pattern,
+        isRegex: cfg.isRegex,
+        isWildcard: false,
+        matchCase: cfg.matchCase,
+        wholeWord: cfg.wholeWord,
+      };
+
+      // Add filtered lines if filter is active
+      const filteredIndices = getFilteredLines();
+      if (filteredIndices) {
+        searchOpts.filteredLineIndices = filteredIndices;
+      }
+
+      const matches = await handler.search(searchOpts, (percent) => {
+        const overallPercent = Math.round(((i + percent / 100) / totalConfigs) * 100);
+        mainWindow?.webContents.send(IPC.SEARCH_CONFIG_BATCH_PROGRESS, { percent: overallPercent, configId: cfg.id });
+      }, { cancelled: false });
+
+      // If filter is active, remap line numbers
+      if (filteredIndices && filteredIndices.length > 0) {
+        const filteredSet = new Set(filteredIndices);
+        const lineToFilteredIndex = new Map<number, number>();
+        filteredIndices.forEach((lineNum, idx) => lineToFilteredIndex.set(lineNum, idx));
+
+        results[cfg.id] = matches
+          .filter(m => filteredSet.has(m.lineNumber))
+          .map(m => ({
+            lineNumber: lineToFilteredIndex.get(m.lineNumber) ?? m.lineNumber,
+            column: m.column,
+            length: m.length,
+            lineText: m.lineText,
+          }));
+      } else {
+        results[cfg.id] = matches.map(m => ({
+          lineNumber: m.lineNumber,
+          column: m.column,
+          length: m.length,
+          lineText: m.lineText,
+        }));
+      }
+    } catch (error) {
+      console.error(`Search config batch error for ${cfg.id}:`, error);
+      results[cfg.id] = [];
+    }
+  }
+
+  return { success: true, results };
+});
+
+ipcMain.handle(IPC.SEARCH_CONFIG_EXPORT, async (_, configId: string, lines: string[]) => {
+  if (!currentFilePath) return { success: false, error: 'No file open' };
+
+  try {
+    const baseName = path.basename(currentFilePath, path.extname(currentFilePath));
+    const date = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+    const exportName = `${baseName}_search_${configId.substring(0, 8)}_${date}.txt`;
+    const exportPath = path.join(path.dirname(currentFilePath), exportName);
+    fs.writeFileSync(exportPath, lines.join('\n'), 'utf-8');
+    return { success: true, filePath: exportPath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
 });
 
 // === Utility ===

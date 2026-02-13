@@ -282,6 +282,10 @@ interface AppState {
   notesVisible: boolean;
   // Search results panel
   searchResultsPanelVisible: boolean;
+  // Search configs panel
+  searchConfigsPanelVisible: boolean;
+  searchConfigs: SearchConfigDef[];
+  searchConfigResults: Map<string, SearchResult[]>;
 }
 
 const state: AppState = {
@@ -317,6 +321,9 @@ const state: AppState = {
   terminalInitialized: false,
   notesVisible: false,
   searchResultsPanelVisible: false,
+  searchConfigsPanelVisible: false,
+  searchConfigs: [],
+  searchConfigResults: new Map(),
 };
 
 // Constants
@@ -861,6 +868,25 @@ const elements = {
   btnDdSaveConfig: document.getElementById('btn-dd-save-config') as HTMLButtonElement,
   btnDdClearConfig: document.getElementById('btn-dd-clear-config') as HTMLButtonElement,
   ddConfigStatus: document.getElementById('dd-config-status') as HTMLSpanElement,
+  // Search configs panel
+  searchConfigsOverlay: document.getElementById('search-configs-overlay') as HTMLDivElement,
+  searchConfigsPanel: document.getElementById('search-configs-panel') as HTMLDivElement,
+  searchConfigsResizeHandle: document.getElementById('search-configs-resize-handle') as HTMLDivElement,
+  searchConfigsSummary: document.getElementById('search-configs-summary') as HTMLSpanElement,
+  searchConfigsChips: document.getElementById('search-configs-chips') as HTMLDivElement,
+  searchConfigsForm: document.getElementById('search-configs-form') as HTMLDivElement,
+  searchConfigsResults: document.getElementById('search-configs-results') as HTMLDivElement,
+  btnSearchConfigsClose: document.getElementById('btn-search-configs-close') as HTMLButtonElement,
+  btnAddSearchConfig: document.getElementById('btn-add-search-config') as HTMLButtonElement,
+  btnSearchConfigs: document.getElementById('btn-search-configs') as HTMLButtonElement,
+  scPatternInput: document.getElementById('sc-pattern-input') as HTMLInputElement,
+  scRegex: document.getElementById('sc-regex') as HTMLInputElement,
+  scMatchCase: document.getElementById('sc-match-case') as HTMLInputElement,
+  scWholeWord: document.getElementById('sc-whole-word') as HTMLInputElement,
+  scGlobal: document.getElementById('sc-global') as HTMLInputElement,
+  scColorInput: document.getElementById('sc-color-input') as HTMLInputElement,
+  btnScSave: document.getElementById('btn-sc-save') as HTMLButtonElement,
+  btnScCancel: document.getElementById('btn-sc-cancel') as HTMLButtonElement,
   // Search results panel
   searchResultsOverlay: document.getElementById('search-results-overlay') as HTMLDivElement,
   searchResultsPanel: document.getElementById('search-results-panel') as HTMLDivElement,
@@ -2369,7 +2395,7 @@ function createLineElementPooled(line: LogLine): HTMLDivElement {
   }
 
   // Check if there are active highlights or search
-  const hasActiveHighlights = state.highlights.length > 0 || state.searchResults.length > 0;
+  const hasActiveHighlights = state.highlights.length > 0 || state.searchResults.length > 0 || state.searchConfigs.some(c => c.enabled);
 
   let formattedContent: string;
   if (jsonFormattingEnabled && containsJson(displayText)) {
@@ -2432,7 +2458,7 @@ function createLineElement(line: LogLine): HTMLDivElement {
   const displayText = applyColumnFilter(line.text);
 
   // Check if there are active highlights or search
-  const hasActiveHighlights = state.highlights.length > 0 || state.searchResults.length > 0;
+  const hasActiveHighlights = state.highlights.length > 0 || state.searchResults.length > 0 || state.searchConfigs.some(c => c.enabled);
 
   let finalHtml: string;
   if (jsonFormattingEnabled && containsJson(displayText)) {
@@ -2671,6 +2697,38 @@ function applyHighlightsWithSearch(text: string, searchRanges: SearchRange[]): s
     }
   }
 
+  // Add search config ranges (enabled configs)
+  for (const config of state.searchConfigs) {
+    if (!config.enabled) continue;
+    try {
+      let flags = 'g';
+      if (!config.matchCase) flags += 'i';
+
+      let pattern = config.pattern;
+      if (!config.isRegex) {
+        pattern = escapeRegex(pattern);
+      }
+      if (config.wholeWord) {
+        pattern = `\\b${pattern}\\b`;
+      }
+
+      const regex = new RegExp(pattern, flags);
+      let match;
+      const style = `background-color: ${config.color}; ${config.textColor ? `color: ${config.textColor}` : 'color: #000'}`;
+      while ((match = regex.exec(text)) !== null) {
+        ranges.push({
+          start: match.index,
+          end: match.index + match[0].length,
+          type: 'highlight',
+          className: 'highlight search-config-highlight',
+          style,
+        });
+      }
+    } catch {
+      // Invalid regex, skip
+    }
+  }
+
   // If no ranges, just escape and return
   if (ranges.length === 0) {
     return escapeHtml(text);
@@ -2799,6 +2857,36 @@ function applyHighlightsWithSearchJson(text: string, searchRanges: SearchRange[]
             style,
           });
         }
+      }
+    } catch {
+      // Invalid regex, skip
+    }
+  }
+
+  // Add search config ranges (enabled configs) - JSON version
+  for (const scConfig of state.searchConfigs) {
+    if (!scConfig.enabled) continue;
+    try {
+      let flags = 'g';
+      if (!scConfig.matchCase) flags += 'i';
+      let pattern = scConfig.pattern;
+      if (!scConfig.isRegex) {
+        pattern = escapeRegex(pattern);
+      }
+      if (scConfig.wholeWord) {
+        pattern = `\\b${pattern}\\b`;
+      }
+      const regex = new RegExp(pattern, flags);
+      let match;
+      const style = `background-color: ${scConfig.color}; ${scConfig.textColor ? `color: ${scConfig.textColor}` : 'color: #000'}`;
+      while ((match = regex.exec(text)) !== null) {
+        ranges.push({
+          start: match.index,
+          end: match.index + match[0].length,
+          type: 'highlight',
+          className: 'highlight search-config-highlight',
+          style,
+        });
       }
     } catch {
       // Invalid regex, skip
@@ -3141,7 +3229,7 @@ function renderMinimapMarkers(): void {
   if (!minimapElement) return;
 
   // Remove existing markers
-  minimapElement.querySelectorAll('.minimap-bookmark, .minimap-search-marker, .minimap-notes-marker').forEach(el => el.remove());
+  minimapElement.querySelectorAll('.minimap-bookmark, .minimap-search-marker, .minimap-notes-marker, .minimap-sc-marker').forEach(el => el.remove());
 
   const totalLines = getTotalLines();
   if (totalLines === 0) return;
@@ -3181,6 +3269,22 @@ function renderMinimapMarkers(): void {
     marker.className = 'minimap-search-marker';
     marker.style.top = `${(result.lineNumber / totalLines) * minimapHeight}px`;
     minimapElement.appendChild(marker);
+  }
+
+  // Add search config markers (colored by config)
+  for (const config of state.searchConfigs) {
+    if (!config.enabled) continue;
+    const results = state.searchConfigResults.get(config.id) || [];
+    const maxScMarkers = 50;
+    const scStep = Math.max(1, Math.floor(results.length / maxScMarkers));
+    for (let i = 0; i < results.length; i += scStep) {
+      const r = results[i];
+      const marker = document.createElement('div');
+      marker.className = 'minimap-sc-marker';
+      marker.style.top = `${(r.lineNumber / totalLines) * minimapHeight}px`;
+      marker.style.backgroundColor = config.color;
+      minimapElement.appendChild(marker);
+    }
   }
 }
 
@@ -4135,9 +4239,12 @@ async function terminalCdToFile(filePath: string): Promise<void> {
 let notesSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
 function showNotesDrawer(): void {
-  // Close search results panel if open (shared bottom slot)
+  // Close search results panel and search configs if open (shared bottom slot)
   if (state.searchResultsPanelVisible) {
     closeSearchResultsPanel();
+  }
+  if (state.searchConfigsPanelVisible) {
+    closeSearchConfigsPanel();
   }
   const overlay = elements.notesOverlay;
   overlay.classList.remove('hidden');
@@ -4257,9 +4364,12 @@ function setupNotesDrawerResize(): void {
 // ─── Search Results Panel ────────────────────────────────────────────
 
 function showSearchResultsPanel(): void {
-  // Close notes drawer if open (shared bottom slot)
+  // Close notes drawer and search configs if open (shared bottom slot)
   if (state.notesVisible) {
     closeNotesDrawer();
+  }
+  if (state.searchConfigsPanelVisible) {
+    closeSearchConfigsPanel();
   }
   state.searchResultsPanelVisible = true;
   const overlay = elements.searchResultsOverlay;
@@ -4415,6 +4525,439 @@ function setupSearchResultsResize(): void {
     handle.classList.remove('dragging');
     document.removeEventListener('mousemove', onMouseMove);
     document.removeEventListener('mouseup', onMouseUp);
+  }
+}
+
+// ─── Search Configs Panel ────────────────────────────────────────────
+
+let editingSearchConfigId: string | null = null;
+
+function showSearchConfigsPanel(): void {
+  // Close notes drawer and search results if open (shared bottom slot)
+  if (state.notesVisible) closeNotesDrawer();
+  if (state.searchResultsPanelVisible) closeSearchResultsPanel();
+  state.searchConfigsPanelVisible = true;
+  const overlay = elements.searchConfigsOverlay;
+  overlay.classList.remove('hidden');
+  void overlay.offsetHeight;
+  overlay.classList.add('visible');
+  elements.btnSearchConfigs.classList.add('active');
+}
+
+function hideSearchConfigsPanel(): void {
+  const overlay = elements.searchConfigsOverlay;
+  overlay.classList.remove('visible');
+  elements.btnSearchConfigs.classList.remove('active');
+  const fallback = setTimeout(() => hide(), 350);
+  const hide = () => {
+    clearTimeout(fallback);
+    overlay.removeEventListener('transitionend', onEnd);
+    if (!overlay.classList.contains('visible')) {
+      overlay.classList.add('hidden');
+    }
+  };
+  const onEnd = () => hide();
+  overlay.addEventListener('transitionend', onEnd);
+}
+
+function toggleSearchConfigsPanel(): void {
+  state.searchConfigsPanelVisible = !state.searchConfigsPanelVisible;
+  if (state.searchConfigsPanelVisible) {
+    showSearchConfigsPanel();
+  } else {
+    hideSearchConfigsPanel();
+  }
+}
+
+function closeSearchConfigsPanel(): void {
+  if (!state.searchConfigsPanelVisible) return;
+  state.searchConfigsPanelVisible = false;
+  hideSearchConfigsPanel();
+}
+
+function setupSearchConfigsResize(): void {
+  const handle = elements.searchConfigsResizeHandle;
+  const panel = elements.searchConfigsPanel;
+  let startY = 0;
+  let startHeight = 0;
+  let isDragging = false;
+
+  handle.addEventListener('mousedown', (e: MouseEvent) => {
+    e.preventDefault();
+    isDragging = true;
+    startY = e.clientY;
+    startHeight = panel.offsetHeight;
+    handle.classList.add('dragging');
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+
+  function onMouseMove(e: MouseEvent): void {
+    if (!isDragging) return;
+    const delta = startY - e.clientY;
+    const newHeight = Math.max(150, Math.min(window.innerHeight * 0.65, startHeight + delta));
+    panel.style.height = newHeight + 'px';
+  }
+
+  function onMouseUp(): void {
+    isDragging = false;
+    handle.classList.remove('dragging');
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  }
+}
+
+// Search Configs Color Palette (reuse from main process palette)
+const SC_COLOR_PALETTE = [
+  '#ffff00', '#ff9900', '#00ff00', '#00ffff', '#ff00ff',
+  '#ff6b6b', '#4ecdc4', '#a55eea', '#26de81', '#fd79a8',
+];
+
+function getNextSearchConfigColor(): string {
+  const usedColors = state.searchConfigs.map(c => c.color);
+  for (const color of SC_COLOR_PALETTE) {
+    if (!usedColors.includes(color)) return color;
+  }
+  return SC_COLOR_PALETTE[Math.floor(Math.random() * SC_COLOR_PALETTE.length)];
+}
+
+function showSearchConfigForm(configId?: string): void {
+  editingSearchConfigId = configId || null;
+  const form = elements.searchConfigsForm;
+  form.classList.remove('hidden');
+
+  if (configId) {
+    const config = state.searchConfigs.find(c => c.id === configId);
+    if (config) {
+      elements.scPatternInput.value = config.pattern;
+      elements.scRegex.checked = config.isRegex;
+      elements.scMatchCase.checked = config.matchCase;
+      elements.scWholeWord.checked = config.wholeWord;
+      elements.scGlobal.checked = config.isGlobal;
+      elements.scColorInput.value = config.color;
+    }
+  } else {
+    elements.scPatternInput.value = '';
+    elements.scRegex.checked = false;
+    elements.scMatchCase.checked = false;
+    elements.scWholeWord.checked = false;
+    elements.scGlobal.checked = false;
+    elements.scColorInput.value = getNextSearchConfigColor();
+  }
+
+  elements.scPatternInput.focus();
+}
+
+function hideSearchConfigForm(): void {
+  elements.searchConfigsForm.classList.add('hidden');
+  editingSearchConfigId = null;
+}
+
+async function addSearchConfig(): Promise<void> {
+  const pattern = elements.scPatternInput.value.trim();
+  if (!pattern) return;
+
+  const config: SearchConfigDef = {
+    id: editingSearchConfigId || `sc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    pattern,
+    isRegex: elements.scRegex.checked,
+    matchCase: elements.scMatchCase.checked,
+    wholeWord: elements.scWholeWord.checked,
+    color: elements.scColorInput.value,
+    enabled: true,
+    isGlobal: elements.scGlobal.checked,
+    createdAt: editingSearchConfigId
+      ? (state.searchConfigs.find(c => c.id === editingSearchConfigId)?.createdAt || Date.now())
+      : Date.now(),
+  };
+
+  // Remove old if editing
+  state.searchConfigs = state.searchConfigs.filter(c => c.id !== config.id);
+  state.searchConfigs.push(config);
+
+  await window.api.searchConfigSave(config);
+  hideSearchConfigForm();
+  renderSearchConfigsChips();
+  await runSearchConfigsBatch();
+}
+
+async function deleteSearchConfig(id: string): Promise<void> {
+  state.searchConfigs = state.searchConfigs.filter(c => c.id !== id);
+  state.searchConfigResults.delete(id);
+  await window.api.searchConfigDelete(id);
+  renderSearchConfigsChips();
+  renderSearchConfigsResults();
+  renderVisibleLines();
+}
+
+async function toggleSearchConfigEnabled(id: string): Promise<void> {
+  const config = state.searchConfigs.find(c => c.id === id);
+  if (!config) return;
+  config.enabled = !config.enabled;
+  await window.api.searchConfigSave(config);
+  renderSearchConfigsChips();
+
+  if (config.enabled) {
+    // Run batch just for this one
+    await runSearchConfigsBatch();
+  } else {
+    renderSearchConfigsResults();
+    renderVisibleLines();
+  }
+}
+
+async function runSearchConfigsBatch(): Promise<void> {
+  const enabledConfigs = state.searchConfigs.filter(c => c.enabled);
+  if (enabledConfigs.length === 0) {
+    state.searchConfigResults.clear();
+    renderSearchConfigsResults();
+    renderVisibleLines();
+    return;
+  }
+
+  const batchArgs = enabledConfigs.map(c => ({
+    id: c.id,
+    pattern: c.pattern,
+    isRegex: c.isRegex,
+    matchCase: c.matchCase,
+    wholeWord: c.wholeWord,
+  }));
+
+  const result = await window.api.searchConfigBatch(batchArgs);
+  if (result.success && result.results) {
+    for (const [configId, matches] of Object.entries(result.results)) {
+      state.searchConfigResults.set(configId, matches as SearchResult[]);
+    }
+    // Clear results for configs that were removed
+    for (const key of state.searchConfigResults.keys()) {
+      if (!enabledConfigs.some(c => c.id === key)) {
+        state.searchConfigResults.delete(key);
+      }
+    }
+  }
+
+  renderSearchConfigsChips(); // Update counts
+  renderSearchConfigsResults();
+  renderVisibleLines();
+}
+
+function renderSearchConfigsChips(): void {
+  const container = elements.searchConfigsChips;
+  // Keep the add button, remove existing chips
+  const addBtn = elements.btnAddSearchConfig;
+  container.innerHTML = '';
+
+  for (const config of state.searchConfigs) {
+    const chip = document.createElement('div');
+    chip.className = `search-config-chip${config.enabled ? '' : ' disabled'}`;
+    chip.dataset.configId = config.id;
+
+    const swatch = document.createElement('span');
+    swatch.className = 'sc-chip-swatch';
+    swatch.style.backgroundColor = config.color;
+
+    const patternText = document.createElement('span');
+    patternText.className = 'sc-chip-pattern';
+    patternText.textContent = config.pattern;
+    patternText.title = config.pattern;
+
+    const count = document.createElement('span');
+    count.className = 'sc-chip-count';
+    const resultCount = state.searchConfigResults.get(config.id)?.length || 0;
+    count.textContent = config.enabled ? `(${resultCount})` : '';
+
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'sc-chip-toggle';
+    toggleBtn.innerHTML = config.enabled ? '&#9673;' : '&#9675;';
+    toggleBtn.title = config.enabled ? 'Disable' : 'Enable';
+    toggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleSearchConfigEnabled(config.id);
+    });
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'sc-chip-delete';
+    deleteBtn.innerHTML = '&times;';
+    deleteBtn.title = 'Delete';
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteSearchConfig(config.id);
+    });
+
+    chip.appendChild(swatch);
+    chip.appendChild(patternText);
+    chip.appendChild(count);
+    chip.appendChild(toggleBtn);
+    chip.appendChild(deleteBtn);
+
+    // Right-click context menu
+    chip.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showSearchConfigContextMenu(e, config);
+    });
+
+    container.appendChild(chip);
+  }
+
+  container.appendChild(addBtn);
+
+  // Update badge
+  const badge = document.getElementById('badge-search-configs');
+  const enabledCount = state.searchConfigs.filter(c => c.enabled).length;
+  if (badge) {
+    badge.textContent = enabledCount > 0 ? String(enabledCount) : '';
+  }
+}
+
+const SC_RESULTS_LIST_CAP = 1000;
+
+function renderSearchConfigsResults(): void {
+  const list = elements.searchConfigsResults;
+  const enabledConfigs = state.searchConfigs.filter(c => c.enabled);
+
+  if (enabledConfigs.length === 0) {
+    list.innerHTML = '<div class="sc-results-cap-notice">No active search configs</div>';
+    elements.searchConfigsSummary.textContent = '';
+    return;
+  }
+
+  // Merge all results sorted by line number
+  const allResults: Array<{ lineNumber: number; column: number; length: number; lineText: string; configId: string; color: string }> = [];
+  for (const config of enabledConfigs) {
+    const matches = state.searchConfigResults.get(config.id) || [];
+    for (const m of matches) {
+      allResults.push({ ...m, configId: config.id, color: config.color });
+    }
+  }
+
+  allResults.sort((a, b) => a.lineNumber - b.lineNumber);
+
+  if (allResults.length === 0) {
+    list.innerHTML = '<div class="sc-results-cap-notice">No matches found</div>';
+    elements.searchConfigsSummary.textContent = '0 matches';
+    return;
+  }
+
+  const displayCount = Math.min(allResults.length, SC_RESULTS_LIST_CAP);
+  elements.searchConfigsSummary.textContent = allResults.length > SC_RESULTS_LIST_CAP
+    ? `Showing ${SC_RESULTS_LIST_CAP} of ${allResults.length}`
+    : `${allResults.length} matches`;
+
+  const fragment = document.createDocumentFragment();
+
+  for (let i = 0; i < displayCount; i++) {
+    const r = allResults[i];
+    const item = document.createElement('div');
+    item.className = 'sc-result-item';
+
+    const dot = document.createElement('span');
+    dot.className = 'sc-result-dot';
+    dot.style.backgroundColor = r.color;
+
+    const lineNum = document.createElement('span');
+    lineNum.className = 'sc-result-line-num';
+    lineNum.textContent = `${r.lineNumber + 1}`;
+
+    const text = document.createElement('span');
+    text.className = 'sc-result-text';
+    const lineText = r.lineText || '';
+    const truncated = lineText.length > 300 ? lineText.substring(0, 300) + '...' : lineText;
+    if (r.column >= 0 && r.length > 0) {
+      const before = escapeHtml(truncated.substring(0, r.column));
+      const match = escapeHtml(truncated.substring(r.column, r.column + r.length));
+      const after = escapeHtml(truncated.substring(r.column + r.length));
+      text.innerHTML = `${before}<mark style="background:${r.color};color:#000">${match}</mark>${after}`;
+    } else {
+      text.textContent = truncated;
+    }
+
+    item.appendChild(dot);
+    item.appendChild(lineNum);
+    item.appendChild(text);
+    item.addEventListener('click', () => {
+      goToLine(r.lineNumber);
+    });
+    fragment.appendChild(item);
+  }
+
+  if (allResults.length > SC_RESULTS_LIST_CAP) {
+    const notice = document.createElement('div');
+    notice.className = 'sc-results-cap-notice';
+    notice.textContent = `Showing first ${SC_RESULTS_LIST_CAP} of ${allResults.length} matches`;
+    fragment.appendChild(notice);
+  }
+
+  list.innerHTML = '';
+  list.appendChild(fragment);
+}
+
+function showSearchConfigContextMenu(e: MouseEvent, config: SearchConfigDef): void {
+  // Remove existing context menu
+  document.querySelectorAll('.sc-context-menu').forEach(el => el.remove());
+
+  const menu = document.createElement('div');
+  menu.className = 'sc-context-menu';
+  menu.style.left = `${e.clientX}px`;
+  menu.style.top = `${e.clientY}px`;
+
+  const editItem = document.createElement('button');
+  editItem.className = 'sc-context-menu-item';
+  editItem.textContent = 'Edit';
+  editItem.addEventListener('click', () => {
+    menu.remove();
+    showSearchConfigForm(config.id);
+  });
+
+  const exportItem = document.createElement('button');
+  exportItem.className = 'sc-context-menu-item';
+  exportItem.textContent = 'Export Results';
+  exportItem.addEventListener('click', async () => {
+    menu.remove();
+    const results = state.searchConfigResults.get(config.id) || [];
+    if (results.length === 0) return;
+    const lines = results.map(r => `${r.lineNumber + 1}: ${r.lineText}`);
+    const result = await window.api.searchConfigExport(config.id, lines);
+    if (result.success && result.filePath) {
+      elements.searchConfigsSummary.textContent = `Exported to ${result.filePath.split('/').pop()}`;
+    }
+  });
+
+  const deleteItem = document.createElement('button');
+  deleteItem.className = 'sc-context-menu-item danger';
+  deleteItem.textContent = 'Delete';
+  deleteItem.addEventListener('click', () => {
+    menu.remove();
+    deleteSearchConfig(config.id);
+  });
+
+  menu.appendChild(editItem);
+  menu.appendChild(exportItem);
+  menu.appendChild(deleteItem);
+  document.body.appendChild(menu);
+
+  // Close on click outside
+  const closeMenu = (ev: MouseEvent) => {
+    if (!menu.contains(ev.target as Node)) {
+      menu.remove();
+      document.removeEventListener('click', closeMenu);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', closeMenu), 0);
+}
+
+async function loadSearchConfigs(): Promise<void> {
+  const result = await window.api.searchConfigLoad();
+  if (result.success && result.configs) {
+    state.searchConfigs = result.configs;
+  } else {
+    state.searchConfigs = [];
+  }
+  state.searchConfigResults.clear();
+  renderSearchConfigsChips();
+
+  // Auto-run batch if any enabled configs
+  if (state.searchConfigs.some(c => c.enabled)) {
+    await runSearchConfigsBatch();
   }
 }
 
@@ -4586,6 +5129,9 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
           wrapper.style.display = '';
         }
       }
+
+      // Load search configs for this file
+      loadSearchConfigs();
 
       // Build minimap with progress
       unsubscribe(); // Stop listening to indexing progress
@@ -7548,6 +8094,8 @@ function setupKeyboardShortcuts(): void {
       if (rangeSelectStartLine !== null) {
         rangeSelectStartLine = null;
         elements.statusCursor.textContent = 'Range cancelled';
+      } else if (state.searchConfigsPanelVisible) {
+        closeSearchConfigsPanel();
       } else if (state.searchResultsPanelVisible) {
         closeSearchResultsPanel();
       } else if (state.notesVisible) {
@@ -7577,6 +8125,12 @@ function setupKeyboardShortcuts(): void {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'R') {
       e.preventDefault();
       toggleSearchResultsPanel();
+    }
+
+    // Ctrl/Cmd + 8: Toggle search configs panel
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === '8') {
+      e.preventDefault();
+      toggleSearchConfigsPanel();
     }
 
     // Ctrl/Cmd + PageDown: Next split file
@@ -7957,6 +8511,18 @@ function init(): void {
   // Search results panel events
   elements.btnSearchResultsClose.addEventListener('click', closeSearchResultsPanel);
   setupSearchResultsResize();
+
+  // Search configs panel events
+  elements.btnSearchConfigsClose.addEventListener('click', closeSearchConfigsPanel);
+  elements.btnSearchConfigs.addEventListener('click', toggleSearchConfigsPanel);
+  elements.btnAddSearchConfig.addEventListener('click', () => showSearchConfigForm());
+  elements.btnScSave.addEventListener('click', addSearchConfig);
+  elements.btnScCancel.addEventListener('click', hideSearchConfigForm);
+  elements.scPatternInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); addSearchConfig(); }
+    if (e.key === 'Escape') { e.preventDefault(); hideSearchConfigForm(); }
+  });
+  setupSearchConfigsResize();
 
   // Panel resize is handled in setupActivityBar
   document.addEventListener('mousemove', (e) => {
@@ -8759,6 +9325,9 @@ async function switchToTab(tabId: string): Promise<void> {
         state.highlights = result.highlights;
       }
       updateHighlightsUI();
+
+      // Reload search configs for the new file
+      loadSearchConfigs();
 
       createLogViewer();
 

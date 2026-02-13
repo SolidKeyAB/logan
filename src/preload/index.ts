@@ -25,6 +25,12 @@ const IPC = {
   LOAD_ACTIVITY_HISTORY: 'load-activity-history',
   CLEAR_ACTIVITY_HISTORY: 'clear-activity-history',
   GET_LOCAL_FILE_STATUS: 'get-local-file-status',
+  SEARCH_CONFIG_SAVE: 'search-config-save',
+  SEARCH_CONFIG_LOAD: 'search-config-load',
+  SEARCH_CONFIG_DELETE: 'search-config-delete',
+  SEARCH_CONFIG_BATCH: 'search-config-batch',
+  SEARCH_CONFIG_BATCH_PROGRESS: 'search-config-batch-progress',
+  SEARCH_CONFIG_EXPORT: 'search-config-export',
 } as const;
 
 // API exposed to renderer
@@ -317,6 +323,28 @@ const api = {
 
   readFileContent: (filePath: string): Promise<{ success: boolean; content?: string; sizeMB?: number; error?: string }> =>
     ipcRenderer.invoke('read-file-content', filePath),
+
+  // Search configs
+  searchConfigSave: (config: any): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.SEARCH_CONFIG_SAVE, config),
+
+  searchConfigLoad: (): Promise<{ success: boolean; configs?: any[] }> =>
+    ipcRenderer.invoke(IPC.SEARCH_CONFIG_LOAD),
+
+  searchConfigDelete: (id: string): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.SEARCH_CONFIG_DELETE, id),
+
+  searchConfigBatch: (configs: any[]): Promise<{ success: boolean; results?: Record<string, any[]>; error?: string }> =>
+    ipcRenderer.invoke(IPC.SEARCH_CONFIG_BATCH, configs),
+
+  onSearchConfigBatchProgress: (callback: (data: { percent: number; configId: string }) => void): (() => void) => {
+    const handler = (_: any, data: { percent: number; configId: string }) => callback(data);
+    ipcRenderer.on(IPC.SEARCH_CONFIG_BATCH_PROGRESS, handler);
+    return () => ipcRenderer.removeListener(IPC.SEARCH_CONFIG_BATCH_PROGRESS, handler);
+  },
+
+  searchConfigExport: (configId: string, lines: string[]): Promise<{ success: boolean; filePath?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.SEARCH_CONFIG_EXPORT, configId, lines),
 
   // Window controls
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),

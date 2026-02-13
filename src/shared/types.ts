@@ -123,6 +123,20 @@ export interface LocalFileData {
   activityHistory: ActivityEntry[]; // capped at 500
 }
 
+// Search config definition
+export interface SearchConfig {
+  id: string;
+  pattern: string;
+  isRegex: boolean;
+  matchCase: boolean;
+  wholeWord: boolean;
+  color: string;
+  textColor?: string;
+  enabled: boolean;
+  isGlobal: boolean;
+  createdAt: number;
+}
+
 // IPC Channels
 export const IPC = {
   OPEN_FILE_DIALOG: 'open-file-dialog',
@@ -149,4 +163,10 @@ export const IPC = {
   LOAD_ACTIVITY_HISTORY: 'load-activity-history',
   CLEAR_ACTIVITY_HISTORY: 'clear-activity-history',
   GET_LOCAL_FILE_STATUS: 'get-local-file-status',
+  SEARCH_CONFIG_SAVE: 'search-config-save',
+  SEARCH_CONFIG_LOAD: 'search-config-load',
+  SEARCH_CONFIG_DELETE: 'search-config-delete',
+  SEARCH_CONFIG_BATCH: 'search-config-batch',
+  SEARCH_CONFIG_BATCH_PROGRESS: 'search-config-batch-progress',
+  SEARCH_CONFIG_EXPORT: 'search-config-export',
 } as const;
