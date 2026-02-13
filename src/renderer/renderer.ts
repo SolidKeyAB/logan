@@ -8695,6 +8695,15 @@ function init(): void {
   // Check search engine on startup
   checkSearchEngine();
 
+  // MCP navigation — allow main process to scroll the viewer to a specific line
+  window.api.onNavigateToLine((lineNumber: number) => {
+    if (lineNumber >= 0 && lineNumber < getTotalLines()) {
+      goToLine(lineNumber);
+      state.selectedLine = lineNumber;
+      renderVisibleLines();
+    }
+  });
+
   // Logo click - open GitHub
   elements.logo.addEventListener('click', () => {
     window.api.openExternalUrl(GITHUB_URL);

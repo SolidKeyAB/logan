@@ -17,7 +17,8 @@
     "package": "npm run build && electron-builder --mac",
     "package:win": "npm run build && electron-builder --win",
     "package:linux": "npm run build && electron-builder --linux",
-    "package:all": "npm run build && electron-builder --mac --win --linux"
+    "package:all": "npm run build && electron-builder --mac --win --linux",
+    "mcp": "node dist/mcp-server/index.js"
   },
   "author": {
     "name": "SolidKey AB",
@@ -38,11 +39,13 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "diff": "^8.0.3",
     "marked": "^17.0.1",
     "node-pty": "^1.1.0",
     "xterm": "^5.3.0",
-    "xterm-addon-fit": "^0.8.0"
+    "xterm-addon-fit": "^0.8.0",
+    "zod": "^4.3.6"
   },
   "build": {
     "appId": "com.solidkey.logan",

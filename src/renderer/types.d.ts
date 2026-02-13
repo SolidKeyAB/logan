@@ -315,6 +315,9 @@ interface Api {
   // Video player
   getLineTimestamp: (lineNumber: number) => Promise<{ epochMs: number | null; timestampStr: string | null }>;
 
+  // MCP navigation
+  onNavigateToLine: (callback: (lineNumber: number) => void) => () => void;
+
   // Window controls
   windowMinimize: () => Promise<void>;
   windowMaximize: () => Promise<void>;

@@ -351,6 +351,13 @@ const api = {
   getLineTimestamp: (lineNumber: number): Promise<{ epochMs: number | null; timestampStr: string | null }> =>
     ipcRenderer.invoke(IPC.GET_LINE_TIMESTAMP, lineNumber),
 
+  // MCP navigation
+  onNavigateToLine: (callback: (lineNumber: number) => void): (() => void) => {
+    const handler = (_: any, lineNumber: number) => callback(lineNumber);
+    ipcRenderer.on('navigate-to-line', handler);
+    return () => ipcRenderer.removeListener('navigate-to-line', handler);
+  },
+
   // Window controls
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),
   windowMaximize: (): Promise<void> => ipcRenderer.invoke('window-maximize'),

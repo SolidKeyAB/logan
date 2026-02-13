@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "logan": {
+      "command": "node",
+      "args": ["dist/mcp-server/index.js"],
+      "cwd": "/Users/storm/MY/REPOS/log-analyzer"
+    }
+  }
+}

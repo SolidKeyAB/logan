@@ -9,6 +9,7 @@ import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, 
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
+import { startApiServer, stopApiServer, ApiContext } from './api-server';
 
 let mainWindow: BrowserWindow | null = null;
 let searchSignal: { cancelled: boolean } = { cancelled: false };
@@ -484,6 +485,194 @@ function createWindow() {
 app.whenReady().then(() => {
   ensureConfigDir();
   createWindow();
+
+  // Start HTTP API server for MCP integration
+  const apiContext: ApiContext = {
+    getMainWindow: () => mainWindow,
+    getCurrentFilePath: () => currentFilePath,
+    getFileHandler: () => getFileHandler(),
+    getFileHandlerForPath: (fp: string) => fileHandlerCache.get(fp) || null,
+    getFilteredLines: () => getFilteredLines(),
+    getBookmarks: () => bookmarks,
+    getHighlights: () => highlights,
+    openFile: async (filePath: string) => {
+      // Reuse the same logic as the IPC.OPEN_FILE handler
+      let fileHandler = fileHandlerCache.get(filePath);
+      let info;
+      if (fileHandler) {
+        currentFilePath = filePath;
+        info = fileHandler.getFileInfo();
+      } else {
+        fileHandler = new FileHandler();
+        info = await fileHandler.open(filePath, () => {});
+        addToCache(filePath, fileHandler);
+        currentFilePath = filePath;
+      }
+      loadBookmarksForFile(filePath);
+      loadHighlightsForFile(filePath);
+      if (canWriteLocal(filePath)) {
+        const localData = loadLocalFileData(filePath);
+        localData.lastOpened = new Date().toISOString();
+        saveLocalFileData(filePath, localData);
+      }
+      logActivity(filePath, 'file_opened', { filePath });
+      return { success: true, info };
+    },
+    getLines: (startLine: number, count: number) => {
+      const handler = getFileHandler();
+      if (!handler) return { success: false, error: 'No file open' };
+      const filteredIndices = getFilteredLines();
+      if (filteredIndices) {
+        const endIdx = Math.min(startLine + count, filteredIndices.length);
+        const lineNumbers = filteredIndices.slice(startLine, endIdx);
+        const lines = [];
+        for (const lineNum of lineNumbers) {
+          const [line] = handler.getLines(lineNum, 1);
+          if (line) lines.push(line);
+        }
+        return { success: true, lines };
+      }
+      const lines = handler.getLines(startLine, count);
+      return { success: true, lines };
+    },
+    search: async (options: SearchOptions) => {
+      const handler = getFileHandler();
+      if (!handler) return { success: false, error: 'No file open' };
+      searchSignal = { cancelled: false };
+      try {
+        const matches = await handler.search(options, () => {}, searchSignal);
+        if (currentFilePath) logActivity(currentFilePath, 'search', { pattern: options.pattern, isRegex: options.isRegex, matchCount: matches.length });
+        return { success: true, matches };
+      } catch (error) {
+        return { success: false, error: String(error) };
+      }
+    },
+    analyze: async (analyzerName?: string) => {
+      if (!currentFilePath) return { success: false, error: 'No file open' };
+      const analyzer = analyzerName ? analyzerRegistry.get(analyzerName) : analyzerRegistry.getDefault();
+      if (!analyzer) return { success: false, error: 'Analyzer not found' };
+      analyzeSignal = { cancelled: false };
+      try {
+        const result = await analyzer.analyze(currentFilePath, {}, () => {}, analyzeSignal);
+        logActivity(currentFilePath, 'analysis_run', { analyzerName: analyzer.name });
+        return { success: true, result };
+      } catch (error) {
+        return { success: false, error: String(error) };
+      }
+    },
+    applyFilter: async (config: any) => {
+      const handler = getFileHandler();
+      if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
+      filterSignal = { cancelled: false };
+      try {
+        const totalLines = handler.getTotalLines();
+        const matchingLines: Set<number> = new Set();
+        const batchSize = 10000;
+        for (let start = 0; start < totalLines; start += batchSize) {
+          if (filterSignal.cancelled) return { success: false, error: 'Cancelled' };
+          const count = Math.min(batchSize, totalLines - start);
+          const lines = handler.getLines(start, count);
+          for (const line of lines) {
+            let matches = true;
+            const lineLevel = line.level || 'other';
+            if (config.levels && config.levels.length > 0) {
+              matches = config.levels.includes(lineLevel);
+            }
+            if (matches && config.includePatterns && config.includePatterns.length > 0) {
+              matches = config.includePatterns.some((p: string) => {
+                try { return new RegExp(p, config.matchCase ? '' : 'i').test(line.text); }
+                catch { return line.text.toLowerCase().includes(p.toLowerCase()); }
+              });
+            }
+            if (matches && config.excludePatterns && config.excludePatterns.length > 0) {
+              const excluded = config.excludePatterns.some((p: string) => {
+                try { return new RegExp(p, config.matchCase ? '' : 'i').test(line.text); }
+                catch { return line.text.toLowerCase().includes(p.toLowerCase()); }
+              });
+              if (excluded) matches = false;
+            }
+            if (matches) matchingLines.add(line.lineNumber);
+          }
+        }
+        const sortedLines = Array.from(matchingLines).sort((a, b) => a - b);
+        filterState.set(currentFilePath, sortedLines);
+        logActivity(currentFilePath, 'filter_applied', { levels: config.levels, filteredLines: sortedLines.length });
+        return { success: true, stats: { filteredLines: sortedLines.length } };
+      } catch (error) {
+        return { success: false, error: String(error) };
+      }
+    },
+    clearFilter: () => {
+      if (currentFilePath) {
+        filterState.delete(currentFilePath);
+        logActivity(currentFilePath, 'filter_cleared', {});
+      }
+      return { success: true };
+    },
+    addBookmark: (bookmark: Bookmark) => {
+      bookmarks.set(bookmark.id, bookmark);
+      saveBookmarksForCurrentFile();
+      if (currentFilePath) logActivity(currentFilePath, 'bookmark_added', { lineNumber: bookmark.lineNumber, label: bookmark.label });
+      return { success: true };
+    },
+    addHighlight: (highlight: Highlight) => {
+      highlights.set(highlight.id, highlight);
+      saveHighlight(highlight);
+      if (currentFilePath) logActivity(currentFilePath, 'highlight_added', { pattern: highlight.pattern, isGlobal: !!highlight.isGlobal });
+      return { success: true };
+    },
+    detectTimeGaps: async (options: any) => {
+      const handler = getFileHandler();
+      if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
+      timeGapSignal = { cancelled: false };
+      try {
+        const totalLines = handler.getTotalLines();
+        const gaps: any[] = [];
+        const MAX_GAPS = 500;
+        const thresholdSeconds = options.thresholdSeconds || 30;
+        let prevTimestamp: Date | null = null;
+        let prevTimestampStr: string | null = null;
+        let prevLineNumber = 0;
+        const batchSize = 5000;
+        for (let start = 0; start < totalLines && gaps.length < MAX_GAPS; start += batchSize) {
+          if (timeGapSignal.cancelled) return { success: false, error: 'Cancelled' };
+          const count = Math.min(batchSize, totalLines - start);
+          const lines = handler.getLines(start, count);
+          for (const line of lines) {
+            const parsed = parseTimestampFast(line.text);
+            if (parsed && prevTimestamp) {
+              const diffSeconds = (parsed.date.getTime() - prevTimestamp.getTime()) / 1000;
+              if (Math.abs(diffSeconds) >= thresholdSeconds) {
+                gaps.push({
+                  lineNumber: line.lineNumber,
+                  prevLineNumber,
+                  gapSeconds: Math.abs(diffSeconds),
+                  prevTimestamp: prevTimestampStr || '',
+                  currTimestamp: parsed.str,
+                  linePreview: line.text.length > 80 ? line.text.substring(0, 80) + '...' : line.text,
+                });
+                if (gaps.length >= MAX_GAPS) break;
+              }
+            }
+            if (parsed) {
+              prevTimestamp = parsed.date;
+              prevTimestampStr = parsed.str;
+              prevLineNumber = line.lineNumber;
+            }
+          }
+        }
+        gaps.sort((a, b) => b.gapSeconds - a.gapSeconds);
+        logActivity(currentFilePath, 'time_gap_analysis', { threshold: thresholdSeconds, gapsFound: gaps.length });
+        return { success: true, gaps, totalLines };
+      } catch (error) {
+        return { success: false, error: String(error) };
+      }
+    },
+    navigateToLine: (lineNumber: number) => {
+      mainWindow?.webContents.send('navigate-to-line', lineNumber);
+    },
+  };
+  startApiServer(apiContext);
 });
 
 app.on('activate', () => {
@@ -496,6 +685,10 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('will-quit', () => {
+  stopApiServer();
 });
 
 // === Window Controls ===
