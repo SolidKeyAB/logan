@@ -4756,12 +4756,20 @@ function setVideoSyncFromCurrentLine(): void {
       setTimeout(() => { elements.videoSyncStatus.textContent = ''; }, 3000);
       return;
     }
-    state.videoSyncOffsetMs = result.epochMs;
+    const currentVideoTimeMs = (elements.videoElement.currentTime || 0) * 1000;
+    state.videoSyncOffsetMs = result.epochMs - currentVideoTimeMs;
     elements.videoSyncInput.value = result.timestampStr || '';
-    elements.videoSyncStatus.textContent = 'Sync set from line ' + (state.selectedLine! + 1);
+    const videoTimeStr = formatVideoTime(elements.videoElement.currentTime || 0);
+    elements.videoSyncStatus.textContent = 'Sync set: line ' + (state.selectedLine! + 1) + ' → ' + videoTimeStr;
     setTimeout(() => { elements.videoSyncStatus.textContent = ''; }, 3000);
     saveVideoState();
   });
+}
+
+function formatVideoTime(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return mins + ':' + String(secs).padStart(2, '0');
 }
 
 function saveVideoState(): void {
