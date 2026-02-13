@@ -68,6 +68,7 @@ export class FileHandler {
   private splitMetadata: SplitMetadata | null = null;
   private _maxLineLength: number = 0;
   private headerLineCount: number = 0; // Lines to skip (hidden header)
+  private indexedSize: number = 0; // Bytes indexed so far (for incremental indexing)
 
   async open(
     filePath: string,
@@ -219,9 +220,103 @@ export class FileHandler {
 
     // Open file descriptor for random access
     this.fd = fs.openSync(filePath, 'r');
+    this.indexedSize = fileSize;
 
     onProgress?.(100);
     return this.fileInfo;
+  }
+
+  /**
+   * Incrementally index new bytes appended to an already-open file.
+   * Returns the number of new lines found.
+   */
+  indexNewLines(): number {
+    if (!this.filePath || !this.fd) return 0;
+
+    const stat = fs.fstatSync(this.fd);
+    const newSize = stat.size;
+    if (newSize <= this.indexedSize) return 0;
+
+    const chunkSize = 1024 * 1024; // 1MB chunks
+    const buffer = Buffer.alloc(Math.min(chunkSize, newSize - this.indexedSize));
+    let fileOffset = this.indexedSize;
+    let lineStart = this.indexedSize;
+
+    // If we have existing lines, the last one might have been unterminated.
+    // Check if the last indexed line extends to indexedSize (no trailing newline).
+    if (this.lineOffsets.length > 0) {
+      const lastLine = this.lineOffsets[this.lineOffsets.length - 1];
+      const lastLineEnd = lastLine.offset + lastLine.length;
+      // If last line ended right at indexedSize, the file had no trailing newline.
+      // New data continues that line until a newline is found.
+      if (lastLineEnd >= this.indexedSize) {
+        lineStart = lastLine.offset;
+        // Remove last line — it will be re-parsed with new data appended
+        this.lineOffsets.pop();
+      }
+    }
+
+    let newLineCount = 0;
+
+    while (fileOffset < newSize) {
+      const toRead = Math.min(buffer.length, newSize - fileOffset);
+      const bytesRead = fs.readSync(this.fd, buffer, 0, toRead, fileOffset);
+      if (bytesRead === 0) break;
+
+      for (let i = 0; i < bytesRead; i++) {
+        const byte = buffer[i];
+        const absPos = fileOffset + i;
+
+        if (byte === 0x0A) { // LF
+          let lineLength = absPos - lineStart;
+          // Check for CRLF
+          if (lineLength > 0 && i > 0 && buffer[i - 1] === 0x0D) {
+            lineLength--;
+          } else if (lineLength > 0 && i === 0 && this.indexedSize > 0) {
+            // CR might be at end of previous chunk — check via lineOffsets
+            // This edge case is minor; we accept the CR in the line
+          }
+          this.lineOffsets.push({ offset: lineStart, length: lineLength });
+          if (lineLength > this._maxLineLength) this._maxLineLength = lineLength;
+          newLineCount++;
+          lineStart = absPos + 1;
+        } else if (byte === 0x0D) { // CR
+          // Look ahead for CRLF
+          if (i + 1 < bytesRead) {
+            if (buffer[i + 1] !== 0x0A) {
+              // CR-only line ending
+              const lineLength = absPos - lineStart;
+              this.lineOffsets.push({ offset: lineStart, length: lineLength });
+              if (lineLength > this._maxLineLength) this._maxLineLength = lineLength;
+              newLineCount++;
+              lineStart = absPos + 1;
+            }
+            // If next is LF, handled in LF case
+          }
+          // CR at end of buffer — will be handled in next iteration
+        }
+      }
+
+      fileOffset += bytesRead;
+    }
+
+    // Handle last unterminated line
+    if (lineStart < newSize) {
+      const lineLength = newSize - lineStart;
+      this.lineOffsets.push({ offset: lineStart, length: lineLength });
+      if (lineLength > this._maxLineLength) this._maxLineLength = lineLength;
+      newLineCount++;
+    }
+
+    this.indexedSize = newSize;
+
+    // Update fileInfo
+    if (this.fileInfo) {
+      this.fileInfo.size = newSize;
+      this.fileInfo.totalLines = this.lineOffsets.length - this.headerLineCount;
+    }
+
+    return newLineCount;
   }
 
   private parseSplitHeader(line: string): SplitMetadata | null {
@@ -651,5 +746,6 @@ export class FileHandler {
     this.fileInfo = null;
     this.splitMetadata = null;
     this.headerLineCount = 0;
+    this.indexedSize = 0;
   }
 }

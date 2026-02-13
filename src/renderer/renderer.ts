@@ -290,6 +290,11 @@ interface AppState {
   videoPlayerVisible: boolean;
   videoSyncOffsetMs: number;
   videoFilePath: string | null;
+  // Serial port
+  serialPanelVisible: boolean;
+  serialConnected: boolean;
+  serialFollowMode: boolean;
+  serialConnectionName: string;
 }
 
 const state: AppState = {
@@ -331,6 +336,10 @@ const state: AppState = {
   videoPlayerVisible: false,
   videoSyncOffsetMs: 0,
   videoFilePath: null,
+  serialPanelVisible: false,
+  serialConnected: false,
+  serialFollowMode: true,
+  serialConnectionName: '',
 };
 
 // Constants
@@ -913,6 +922,23 @@ const elements = {
   btnVideoClose: document.getElementById('btn-video-close') as HTMLButtonElement,
   btnVideoOpen: document.getElementById('btn-video-open') as HTMLButtonElement,
   btnVideoSyncFromLine: document.getElementById('btn-video-sync-from-line') as HTMLButtonElement,
+  // Serial port panel
+  serialOverlay: document.getElementById('serial-overlay') as HTMLDivElement,
+  serialPanel: document.getElementById('serial-panel') as HTMLDivElement,
+  serialResizeHandle: document.getElementById('serial-resize-handle') as HTMLDivElement,
+  serialStatusText: document.getElementById('serial-status-text') as HTMLSpanElement,
+  serialNameInput: document.getElementById('serial-name-input') as HTMLInputElement,
+  serialPortSelect: document.getElementById('serial-port-select') as HTMLSelectElement,
+  serialBaudSelect: document.getElementById('serial-baud-select') as HTMLSelectElement,
+  btnSerialRefresh: document.getElementById('btn-serial-refresh') as HTMLButtonElement,
+  btnSerialConnect: document.getElementById('btn-serial-connect') as HTMLButtonElement,
+  btnSerialClose: document.getElementById('btn-serial-close') as HTMLButtonElement,
+  btnSerial: document.getElementById('btn-serial') as HTMLButtonElement,
+  btnSerialSave: document.getElementById('btn-serial-save') as HTMLButtonElement,
+  serialLineCount: document.getElementById('serial-line-count') as HTMLSpanElement,
+  serialDuration: document.getElementById('serial-duration') as HTMLSpanElement,
+  serialFollow: document.getElementById('serial-follow') as HTMLInputElement,
+  serialMinimapCanvas: document.getElementById('serial-minimap-canvas') as HTMLCanvasElement,
 };
 
 // Virtual Log Viewer
@@ -4290,6 +4316,9 @@ function showNotesDrawer(): void {
   if (state.videoPlayerVisible) {
     closeVideoPlayer();
   }
+  if (state.serialPanelVisible) {
+    closeSerialPanel();
+  }
   elements.notesOverlay.classList.remove('hidden');
   elements.btnNotesToggle.classList.add('active');
   elements.notesTextarea.focus();
@@ -4392,6 +4421,9 @@ function showSearchResultsPanel(): void {
   }
   if (state.videoPlayerVisible) {
     closeVideoPlayer();
+  }
+  if (state.serialPanelVisible) {
+    closeSerialPanel();
   }
   state.searchResultsPanelVisible = true;
   elements.searchResultsOverlay.classList.remove('hidden');
@@ -4551,6 +4583,7 @@ function showSearchConfigsPanel(): void {
   if (state.notesVisible) closeNotesDrawer();
   if (state.searchResultsPanelVisible) closeSearchResultsPanel();
   if (state.videoPlayerVisible) closeVideoPlayer();
+  if (state.serialPanelVisible) closeSerialPanel();
   state.searchConfigsPanelVisible = true;
   elements.searchConfigsOverlay.classList.remove('hidden');
   elements.btnSearchConfigs.classList.add('active');
@@ -4615,6 +4648,7 @@ function showVideoPlayer(): void {
   if (state.notesVisible) closeNotesDrawer();
   if (state.searchResultsPanelVisible) closeSearchResultsPanel();
   if (state.searchConfigsPanelVisible) closeSearchConfigsPanel();
+  if (state.serialPanelVisible) closeSerialPanel();
   state.videoPlayerVisible = true;
   elements.videoOverlay.classList.remove('hidden');
   elements.btnVideoPlayer.classList.add('active');
@@ -4669,6 +4703,331 @@ function setupVideoResize(): void {
     handle.classList.remove('dragging');
     document.removeEventListener('mousemove', onMouseMove);
     document.removeEventListener('mouseup', onMouseUp);
+  }
+}
+
+// ─── Serial Port Panel ───────────────────────────────────────────────
+
+let serialLinesAddedUnsub: (() => void) | null = null;
+let serialErrorUnsub: (() => void) | null = null;
+let serialDisconnectedUnsub: (() => void) | null = null;
+let serialDurationTimer: ReturnType<typeof setInterval> | null = null;
+let serialConnectedSince: number | null = null;
+
+// Minimap level buffer for canvas rendering
+const serialMinimapLevels: Array<string | undefined> = [];
+
+function showSerialPanel(): void {
+  // Close other bottom panels (shared bottom slot)
+  if (state.notesVisible) closeNotesDrawer();
+  if (state.searchResultsPanelVisible) closeSearchResultsPanel();
+  if (state.searchConfigsPanelVisible) closeSearchConfigsPanel();
+  if (state.videoPlayerVisible) closeVideoPlayer();
+  state.serialPanelVisible = true;
+  elements.serialOverlay.classList.remove('hidden');
+  elements.btnSerial.classList.add('active');
+  refreshSerialPorts();
+}
+
+function hideSerialPanel(): void {
+  elements.serialOverlay.classList.add('hidden');
+  elements.btnSerial.classList.remove('active');
+}
+
+function toggleSerialPanel(): void {
+  state.serialPanelVisible = !state.serialPanelVisible;
+  if (state.serialPanelVisible) {
+    showSerialPanel();
+  } else {
+    hideSerialPanel();
+  }
+}
+
+function closeSerialPanel(): void {
+  if (!state.serialPanelVisible) return;
+  state.serialPanelVisible = false;
+  hideSerialPanel();
+}
+
+async function refreshSerialPorts(): Promise<void> {
+  const result = await window.api.serialListPorts();
+  const select = elements.serialPortSelect;
+  const currentValue = select.value;
+  select.innerHTML = '<option value="">Select port...</option>';
+  if (result.success && result.ports) {
+    for (const port of result.ports) {
+      const opt = document.createElement('option');
+      opt.value = port.path;
+      opt.textContent = port.manufacturer
+        ? `${port.path} (${port.manufacturer})`
+        : port.path;
+      select.appendChild(opt);
+    }
+    // Restore previous selection if still available
+    if (currentValue) {
+      select.value = currentValue;
+    }
+  }
+}
+
+async function serialConnect(): Promise<void> {
+  const portPath = elements.serialPortSelect.value;
+  if (!portPath) {
+    alert('Select a serial port first.');
+    return;
+  }
+  const baudRate = parseInt(elements.serialBaudSelect.value, 10);
+
+  state.serialConnectionName = elements.serialNameInput.value.trim();
+
+  elements.btnSerialConnect.textContent = 'Connecting...';
+  elements.btnSerialConnect.disabled = true;
+
+  const result = await window.api.serialConnect({ path: portPath, baudRate });
+
+  if (!result.success) {
+    alert(`Failed to connect: ${result.error}`);
+    elements.btnSerialConnect.textContent = 'Connect';
+    elements.btnSerialConnect.disabled = false;
+    return;
+  }
+
+  state.serialConnected = true;
+  elements.btnSerialConnect.textContent = 'Disconnect';
+  elements.btnSerialConnect.classList.add('disconnect');
+  elements.btnSerialConnect.disabled = false;
+  elements.btnSerialSave.disabled = false;
+  elements.serialPortSelect.disabled = true;
+  elements.serialBaudSelect.disabled = true;
+  elements.serialNameInput.disabled = true;
+
+  // Display connection name or port path
+  const displayName = state.serialConnectionName || portPath;
+  elements.serialStatusText.textContent = `Connected to ${displayName} @ ${baudRate}`;
+  elements.serialStatusText.classList.add('connected');
+
+  // Open the temp file in the viewer
+  if (result.tempFilePath) {
+    const openResult = await window.api.openFile(result.tempFilePath);
+    if (openResult.success && openResult.info) {
+      const tab = createTab(result.tempFilePath);
+      state.tabs.push(tab);
+      state.activeTabId = tab.id;
+      state.filePath = result.tempFilePath;
+      state.totalLines = openResult.info.totalLines;
+      createLogViewer();
+      renderTabBar();
+    }
+  }
+
+  // Subscribe to serial events
+  serialLinesAddedUnsub = window.api.onSerialLinesAdded((data) => {
+    state.totalLines = data.totalLines;
+    elements.serialLineCount.textContent = `Lines: ${data.totalLines.toLocaleString()}`;
+
+    // Append levels for minimap (approximate — mark new lines as undefined since we don't know levels yet)
+    for (let i = 0; i < data.newLines; i++) {
+      serialMinimapLevels.push(undefined);
+    }
+
+    // Invalidate cache for the last screen of lines so they get re-fetched
+    invalidateLineCache();
+
+    if (state.serialFollowMode && logViewerElement) {
+      // Follow mode: scroll to bottom
+      goToLine(Math.max(0, data.totalLines - 1));
+    } else if (logViewerElement) {
+      // Not following — update scroll height but don't move viewport
+      renderVisibleLines();
+    }
+
+    // Render minimap periodically (throttled by requestAnimationFrame)
+    requestSerialMinimapRender();
+  });
+
+  serialErrorUnsub = window.api.onSerialError((message) => {
+    elements.serialStatusText.textContent = `Error: ${message}`;
+    elements.serialStatusText.classList.remove('connected');
+  });
+
+  serialDisconnectedUnsub = window.api.onSerialDisconnected(() => {
+    serialCleanupUI();
+  });
+
+  // Start duration timer
+  serialConnectedSince = Date.now();
+  serialDurationTimer = setInterval(updateSerialDuration, 1000);
+  updateSerialDuration();
+}
+
+function serialDisconnect(): void {
+  window.api.serialDisconnect();
+  serialCleanupUI();
+}
+
+function serialCleanupUI(): void {
+  state.serialConnected = false;
+  elements.btnSerialConnect.textContent = 'Connect';
+  elements.btnSerialConnect.classList.remove('disconnect');
+  elements.btnSerialConnect.disabled = false;
+  elements.serialPortSelect.disabled = false;
+  elements.serialBaudSelect.disabled = false;
+  elements.serialNameInput.disabled = false;
+  elements.serialStatusText.textContent = 'Disconnected';
+  elements.serialStatusText.classList.remove('connected');
+
+  if (serialLinesAddedUnsub) { serialLinesAddedUnsub(); serialLinesAddedUnsub = null; }
+  if (serialErrorUnsub) { serialErrorUnsub(); serialErrorUnsub = null; }
+  if (serialDisconnectedUnsub) { serialDisconnectedUnsub(); serialDisconnectedUnsub = null; }
+  if (serialDurationTimer) { clearInterval(serialDurationTimer); serialDurationTimer = null; }
+  serialConnectedSince = null;
+}
+
+function updateSerialDuration(): void {
+  if (!serialConnectedSince) {
+    elements.serialDuration.textContent = '';
+    return;
+  }
+  const elapsed = Date.now() - serialConnectedSince;
+  const secs = Math.floor(elapsed / 1000);
+  const mins = Math.floor(secs / 60);
+  const hrs = Math.floor(mins / 60);
+  if (hrs > 0) {
+    elements.serialDuration.textContent = `${hrs}h ${mins % 60}m ${secs % 60}s`;
+  } else if (mins > 0) {
+    elements.serialDuration.textContent = `${mins}m ${secs % 60}s`;
+  } else {
+    elements.serialDuration.textContent = `${secs}s`;
+  }
+}
+
+async function serialSaveSession(): Promise<void> {
+  const result = await window.api.serialSaveSession();
+  if (result.success) {
+    alert(`Session saved to:\n${result.filePath}`);
+  } else if (result.error && result.error !== 'Cancelled') {
+    alert(`Save failed: ${result.error}`);
+  }
+}
+
+function setupSerialResize(): void {
+  const handle = elements.serialResizeHandle;
+  const panel = elements.serialPanel;
+  let startY = 0;
+  let startHeight = 0;
+  let isDragging = false;
+
+  handle.addEventListener('mousedown', (e: MouseEvent) => {
+    e.preventDefault();
+    isDragging = true;
+    startY = e.clientY;
+    startHeight = panel.offsetHeight;
+    handle.classList.add('dragging');
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+
+  function onMouseMove(e: MouseEvent): void {
+    if (!isDragging) return;
+    const delta = startY - e.clientY;
+    const newHeight = Math.max(120, Math.min(window.innerHeight * 0.5, startHeight + delta));
+    panel.style.height = newHeight + 'px';
+  }
+
+  function onMouseUp(): void {
+    isDragging = false;
+    handle.classList.remove('dragging');
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  }
+}
+
+// Line cache invalidation for live streaming
+function invalidateLineCache(): void {
+  // Clear the line cache to force re-fetch of current visible lines
+  cachedLines.clear();
+}
+
+// Serial minimap rendering (canvas-based for performance)
+let serialMinimapRafPending = false;
+
+function requestSerialMinimapRender(): void {
+  if (serialMinimapRafPending) return;
+  serialMinimapRafPending = true;
+  requestAnimationFrame(() => {
+    serialMinimapRafPending = false;
+    renderSerialMinimap();
+  });
+}
+
+function renderSerialMinimap(): void {
+  const canvas = elements.serialMinimapCanvas;
+  if (!canvas) return;
+
+  const rect = canvas.parentElement?.getBoundingClientRect();
+  if (!rect || rect.width === 0 || rect.height === 0) return;
+
+  // Set canvas size to match container (retina-aware)
+  const dpr = window.devicePixelRatio || 1;
+  const w = rect.width;
+  const h = rect.height;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.scale(dpr, dpr);
+
+  const totalLines = serialMinimapLevels.length;
+  if (totalLines === 0) {
+    ctx.clearRect(0, 0, w, h);
+    return;
+  }
+
+  // Draw log flow as colored line density
+  const rowHeight = Math.max(1, h / Math.max(totalLines, 1));
+  const sampleRate = Math.max(1, Math.floor(totalLines / h));
+
+  ctx.clearRect(0, 0, w, h);
+
+  for (let y = 0; y < h; y++) {
+    const lineIdx = Math.floor((y / h) * totalLines);
+    const endIdx = Math.min(lineIdx + sampleRate, totalLines);
+
+    // Count levels in this sample
+    let hasError = false;
+    let hasWarning = false;
+    let hasInfo = false;
+
+    for (let i = lineIdx; i < endIdx; i++) {
+      const level = serialMinimapLevels[i];
+      if (level === 'error') hasError = true;
+      else if (level === 'warning') hasWarning = true;
+      else if (level === 'info') hasInfo = true;
+    }
+
+    // Pick color based on priority
+    if (hasError) {
+      ctx.fillStyle = '#e74c3c';
+    } else if (hasWarning) {
+      ctx.fillStyle = '#f39c12';
+    } else if (hasInfo) {
+      ctx.fillStyle = '#3498db';
+    } else {
+      ctx.fillStyle = 'rgba(150, 150, 150, 0.3)';
+    }
+
+    ctx.fillRect(0, y, w, Math.max(1, rowHeight));
+  }
+
+  // Draw viewport indicator
+  if (logViewerElement && state.totalLines > 0) {
+    const viewStart = state.visibleStartLine / state.totalLines;
+    const viewEnd = state.visibleEndLine / state.totalLines;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
+    ctx.fillRect(0, viewStart * h, w, Math.max(2, (viewEnd - viewStart) * h));
   }
 }
 
@@ -8360,6 +8719,8 @@ function setupKeyboardShortcuts(): void {
       if (rangeSelectStartLine !== null) {
         rangeSelectStartLine = null;
         elements.statusCursor.textContent = 'Range cancelled';
+      } else if (state.serialPanelVisible) {
+        closeSerialPanel();
       } else if (state.videoPlayerVisible) {
         closeVideoPlayer();
       } else if (state.searchConfigsPanelVisible) {
@@ -8405,6 +8766,12 @@ function setupKeyboardShortcuts(): void {
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === '9') {
       e.preventDefault();
       toggleVideoPlayer();
+    }
+
+    // Ctrl/Cmd + Shift + P: Toggle serial port panel
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'P') {
+      e.preventDefault();
+      toggleSerialPanel();
     }
 
     // Ctrl/Cmd + PageDown: Next split file
@@ -8813,6 +9180,26 @@ function init(): void {
   });
   setupVideoResize();
   setupVideoDragDrop();
+
+  // Serial port panel events
+  elements.btnSerial.addEventListener('click', toggleSerialPanel);
+  elements.btnSerialClose.addEventListener('click', closeSerialPanel);
+  elements.btnSerialRefresh.addEventListener('click', refreshSerialPorts);
+  elements.btnSerialConnect.addEventListener('click', () => {
+    if (state.serialConnected) {
+      serialDisconnect();
+    } else {
+      serialConnect();
+    }
+  });
+  elements.btnSerialSave.addEventListener('click', serialSaveSession);
+  elements.serialFollow.addEventListener('change', () => {
+    state.serialFollowMode = elements.serialFollow.checked;
+    if (state.serialFollowMode && state.serialConnected && state.totalLines > 0) {
+      goToLine(state.totalLines - 1);
+    }
+  });
+  setupSerialResize();
 
   // Panel resize is handled in setupActivityBar
   document.addEventListener('mousemove', (e) => {

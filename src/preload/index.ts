@@ -32,6 +32,14 @@ const IPC = {
   SEARCH_CONFIG_BATCH_PROGRESS: 'search-config-batch-progress',
   SEARCH_CONFIG_EXPORT: 'search-config-export',
   GET_LINE_TIMESTAMP: 'get-line-timestamp',
+  SERIAL_LIST_PORTS: 'serial-list-ports',
+  SERIAL_CONNECT: 'serial-connect',
+  SERIAL_DISCONNECT: 'serial-disconnect',
+  SERIAL_STATUS: 'serial-status',
+  SERIAL_SAVE_SESSION: 'serial-save-session',
+  SERIAL_LINES_ADDED: 'serial-lines-added',
+  SERIAL_ERROR: 'serial-error',
+  SERIAL_DISCONNECTED: 'serial-disconnected',
 } as const;
 
 // API exposed to renderer
@@ -356,6 +364,40 @@ const api = {
     const handler = (_: any, lineNumber: number) => callback(lineNumber);
     ipcRenderer.on('navigate-to-line', handler);
     return () => ipcRenderer.removeListener('navigate-to-line', handler);
+  },
+
+  // Serial port
+  serialListPorts: (): Promise<{ success: boolean; ports?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.SERIAL_LIST_PORTS),
+
+  serialConnect: (config: { path: string; baudRate: number }): Promise<{ success: boolean; info?: any; tempFilePath?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.SERIAL_CONNECT, config),
+
+  serialDisconnect: (): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.SERIAL_DISCONNECT),
+
+  serialStatus: (): Promise<{ connected: boolean; portPath: string | null; baudRate: number; linesReceived: number; connectedSince: number | null; tempFilePath: string | null }> =>
+    ipcRenderer.invoke(IPC.SERIAL_STATUS),
+
+  serialSaveSession: (): Promise<{ success: boolean; filePath?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.SERIAL_SAVE_SESSION),
+
+  onSerialLinesAdded: (callback: (data: { totalLines: number; newLines: number }) => void): (() => void) => {
+    const handler = (_: any, data: { totalLines: number; newLines: number }) => callback(data);
+    ipcRenderer.on(IPC.SERIAL_LINES_ADDED, handler);
+    return () => ipcRenderer.removeListener(IPC.SERIAL_LINES_ADDED, handler);
+  },
+
+  onSerialError: (callback: (message: string) => void): (() => void) => {
+    const handler = (_: any, message: string) => callback(message);
+    ipcRenderer.on(IPC.SERIAL_ERROR, handler);
+    return () => ipcRenderer.removeListener(IPC.SERIAL_ERROR, handler);
+  },
+
+  onSerialDisconnected: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on(IPC.SERIAL_DISCONNECTED, handler);
+    return () => ipcRenderer.removeListener(IPC.SERIAL_DISCONNECTED, handler);
   },
 
   // Window controls

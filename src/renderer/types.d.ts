@@ -318,6 +318,16 @@ interface Api {
   // MCP navigation
   onNavigateToLine: (callback: (lineNumber: number) => void) => () => void;
 
+  // Serial port
+  serialListPorts: () => Promise<{ success: boolean; ports?: Array<{ path: string; manufacturer?: string; vendorId?: string; productId?: string }>; error?: string }>;
+  serialConnect: (config: { path: string; baudRate: number }) => Promise<{ success: boolean; info?: FileInfo; tempFilePath?: string; error?: string }>;
+  serialDisconnect: () => Promise<{ success: boolean; error?: string }>;
+  serialStatus: () => Promise<{ connected: boolean; portPath: string | null; baudRate: number; linesReceived: number; connectedSince: number | null; tempFilePath: string | null }>;
+  serialSaveSession: () => Promise<{ success: boolean; filePath?: string; error?: string }>;
+  onSerialLinesAdded: (callback: (data: { totalLines: number; newLines: number }) => void) => () => void;
+  onSerialError: (callback: (message: string) => void) => () => void;
+  onSerialDisconnected: (callback: () => void) => () => void;
+
   // Window controls
   windowMinimize: () => Promise<void>;
   windowMaximize: () => Promise<void>;

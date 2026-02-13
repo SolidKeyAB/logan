@@ -139,6 +139,28 @@ export interface SearchConfig {
   createdAt: number;
 }
 
+// Serial port types
+export interface SerialPortConfig {
+  path: string;
+  baudRate: number;
+}
+
+export interface SerialPortInfo {
+  path: string;
+  manufacturer?: string;
+  vendorId?: string;
+  productId?: string;
+}
+
+export interface SerialStatus {
+  connected: boolean;
+  portPath: string | null;
+  baudRate: number;
+  linesReceived: number;
+  connectedSince: number | null; // epoch ms
+  tempFilePath: string | null;
+}
+
 // IPC Channels
 export const IPC = {
   OPEN_FILE_DIALOG: 'open-file-dialog',
@@ -172,4 +194,13 @@ export const IPC = {
   SEARCH_CONFIG_BATCH_PROGRESS: 'search-config-batch-progress',
   SEARCH_CONFIG_EXPORT: 'search-config-export',
   GET_LINE_TIMESTAMP: 'get-line-timestamp',
+  // Serial port
+  SERIAL_LIST_PORTS: 'serial-list-ports',
+  SERIAL_CONNECT: 'serial-connect',
+  SERIAL_DISCONNECT: 'serial-disconnect',
+  SERIAL_STATUS: 'serial-status',
+  SERIAL_SAVE_SESSION: 'serial-save-session',
+  SERIAL_LINES_ADDED: 'serial-lines-added',
+  SERIAL_ERROR: 'serial-error',
+  SERIAL_DISCONNECTED: 'serial-disconnected',
 } as const;

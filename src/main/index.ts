@@ -10,11 +10,15 @@ import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
 import { startApiServer, stopApiServer, ApiContext } from './api-server';
+import { SerialHandler } from './serialHandler';
 
 let mainWindow: BrowserWindow | null = null;
 let searchSignal: { cancelled: boolean } = { cancelled: false };
 let diffSignal: { cancelled: boolean } = { cancelled: false };
 let currentFilePath: string | null = null;
+
+// Serial port handler
+const serialHandler = new SerialHandler();
 
 // Filter state - maps file path to array of visible line indices
 const filterState = new Map<string, number[] | null>();
@@ -688,6 +692,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('will-quit', () => {
+  serialHandler.cleanupTempFile();
   stopApiServer();
 });
 
@@ -711,6 +716,103 @@ ipcMain.handle('window-close', () => {
 
 ipcMain.handle('get-platform', () => {
   return process.platform;
+});
+
+// === Serial Port ===
+
+ipcMain.handle(IPC.SERIAL_LIST_PORTS, async () => {
+  try {
+    const ports = await serialHandler.listPorts();
+    return { success: true, ports };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.SERIAL_CONNECT, async (_, config: { path: string; baudRate: number }) => {
+  try {
+    const tempFilePath = await serialHandler.connect(config);
+
+    // Open temp file with FileHandler
+    const fileHandler = new FileHandler();
+    const info = await fileHandler.open(tempFilePath, () => {});
+    addToCache(tempFilePath, fileHandler);
+    currentFilePath = tempFilePath;
+
+    // Forward events to renderer
+    const onLinesAdded = (count: number) => {
+      // Incrementally index new bytes in the file handler
+      const handler = fileHandlerCache.get(tempFilePath);
+      if (handler) {
+        const newLines = handler.indexNewLines();
+        if (newLines > 0) {
+          mainWindow?.webContents.send(IPC.SERIAL_LINES_ADDED, {
+            totalLines: handler.getTotalLines(),
+            newLines,
+          });
+        }
+      }
+    };
+
+    const onError = (message: string) => {
+      mainWindow?.webContents.send(IPC.SERIAL_ERROR, message);
+    };
+
+    const onDisconnected = () => {
+      mainWindow?.webContents.send(IPC.SERIAL_DISCONNECTED);
+      serialHandler.removeListener('lines-added', onLinesAdded);
+      serialHandler.removeListener('error', onError);
+      serialHandler.removeListener('disconnected', onDisconnected);
+    };
+
+    serialHandler.on('lines-added', onLinesAdded);
+    serialHandler.on('error', onError);
+    serialHandler.on('disconnected', onDisconnected);
+
+    return { success: true, info, tempFilePath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.SERIAL_DISCONNECT, async () => {
+  try {
+    serialHandler.disconnect();
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.SERIAL_STATUS, async () => {
+  return serialHandler.getStatus();
+});
+
+ipcMain.handle(IPC.SERIAL_SAVE_SESSION, async () => {
+  const tempPath = serialHandler.getTempFilePath();
+  if (!tempPath || !fs.existsSync(tempPath)) {
+    return { success: false, error: 'No serial session data' };
+  }
+
+  const result = await dialog.showSaveDialog(mainWindow!, {
+    title: 'Save Serial Session',
+    defaultPath: path.basename(tempPath),
+    filters: [
+      { name: 'Log Files', extensions: ['log', 'txt'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+
+  if (result.canceled || !result.filePath) {
+    return { success: false, error: 'Cancelled' };
+  }
+
+  try {
+    fs.copyFileSync(tempPath, result.filePath);
+    return { success: true, filePath: result.filePath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
 });
 
 // === File Operations ===
