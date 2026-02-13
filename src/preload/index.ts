@@ -31,6 +31,7 @@ const IPC = {
   SEARCH_CONFIG_BATCH: 'search-config-batch',
   SEARCH_CONFIG_BATCH_PROGRESS: 'search-config-batch-progress',
   SEARCH_CONFIG_EXPORT: 'search-config-export',
+  GET_LINE_TIMESTAMP: 'get-line-timestamp',
 } as const;
 
 // API exposed to renderer
@@ -345,6 +346,10 @@ const api = {
 
   searchConfigExport: (configId: string, lines: string[]): Promise<{ success: boolean; filePath?: string; error?: string }> =>
     ipcRenderer.invoke(IPC.SEARCH_CONFIG_EXPORT, configId, lines),
+
+  // Video player
+  getLineTimestamp: (lineNumber: number): Promise<{ epochMs: number | null; timestampStr: string | null }> =>
+    ipcRenderer.invoke(IPC.GET_LINE_TIMESTAMP, lineNumber),
 
   // Window controls
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),

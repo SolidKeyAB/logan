@@ -286,6 +286,10 @@ interface AppState {
   searchConfigsPanelVisible: boolean;
   searchConfigs: SearchConfigDef[];
   searchConfigResults: Map<string, SearchResult[]>;
+  // Video player
+  videoPlayerVisible: boolean;
+  videoSyncOffsetMs: number;
+  videoFilePath: string | null;
 }
 
 const state: AppState = {
@@ -324,6 +328,9 @@ const state: AppState = {
   searchConfigsPanelVisible: false,
   searchConfigs: [],
   searchConfigResults: new Map(),
+  videoPlayerVisible: false,
+  videoSyncOffsetMs: 0,
+  videoFilePath: null,
 };
 
 // Constants
@@ -892,6 +899,20 @@ const elements = {
   searchResultsSummary: document.getElementById('search-results-summary') as HTMLSpanElement,
   searchResultsList: document.getElementById('search-results-list') as HTMLDivElement,
   btnSearchResultsClose: document.getElementById('btn-search-results-close') as HTMLButtonElement,
+  // Video player panel
+  videoOverlay: document.getElementById('video-overlay') as HTMLDivElement,
+  videoPanel: document.getElementById('video-panel') as HTMLDivElement,
+  videoResizeHandle: document.getElementById('video-resize-handle') as HTMLDivElement,
+  videoElement: document.getElementById('video-element') as HTMLVideoElement,
+  videoContainer: document.getElementById('video-container') as HTMLDivElement,
+  videoDropZone: document.getElementById('video-drop-zone') as HTMLDivElement,
+  videoFileName: document.getElementById('video-file-name') as HTMLSpanElement,
+  videoSyncInput: document.getElementById('video-sync-input') as HTMLInputElement,
+  videoSyncStatus: document.getElementById('video-sync-status') as HTMLSpanElement,
+  btnVideoPlayer: document.getElementById('btn-video-player') as HTMLButtonElement,
+  btnVideoClose: document.getElementById('btn-video-close') as HTMLButtonElement,
+  btnVideoOpen: document.getElementById('btn-video-open') as HTMLButtonElement,
+  btnVideoSyncFromLine: document.getElementById('btn-video-sync-from-line') as HTMLButtonElement,
 };
 
 // Virtual Log Viewer
@@ -3345,6 +3366,11 @@ function handleLogClick(event: MouseEvent): void {
       elements.searchStartLine.value = String(lineNumber + 1);
       updateCursorStatus(lineNumber);
       renderVisibleLines();
+
+      // Sync video player if visible and synced
+      if (state.videoPlayerVisible && state.videoFilePath && state.videoSyncOffsetMs) {
+        syncVideoToLine(lineNumber);
+      }
     }
   }
 }
@@ -4254,12 +4280,15 @@ async function terminalCdToFile(filePath: string): Promise<void> {
 let notesSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
 function showNotesDrawer(): void {
-  // Close search results panel and search configs if open (shared bottom slot)
+  // Close other bottom panels (shared bottom slot)
   if (state.searchResultsPanelVisible) {
     closeSearchResultsPanel();
   }
   if (state.searchConfigsPanelVisible) {
     closeSearchConfigsPanel();
+  }
+  if (state.videoPlayerVisible) {
+    closeVideoPlayer();
   }
   elements.notesOverlay.classList.remove('hidden');
   elements.btnNotesToggle.classList.add('active');
@@ -4354,12 +4383,15 @@ function setupNotesDrawerResize(): void {
 // ─── Search Results Panel ────────────────────────────────────────────
 
 function showSearchResultsPanel(): void {
-  // Close notes drawer and search configs if open (shared bottom slot)
+  // Close other bottom panels (shared bottom slot)
   if (state.notesVisible) {
     closeNotesDrawer();
   }
   if (state.searchConfigsPanelVisible) {
     closeSearchConfigsPanel();
+  }
+  if (state.videoPlayerVisible) {
+    closeVideoPlayer();
   }
   state.searchResultsPanelVisible = true;
   elements.searchResultsOverlay.classList.remove('hidden');
@@ -4515,9 +4547,10 @@ function setupSearchResultsResize(): void {
 let editingSearchConfigId: string | null = null;
 
 function showSearchConfigsPanel(): void {
-  // Close notes drawer and search results if open (shared bottom slot)
+  // Close other bottom panels (shared bottom slot)
   if (state.notesVisible) closeNotesDrawer();
   if (state.searchResultsPanelVisible) closeSearchResultsPanel();
+  if (state.videoPlayerVisible) closeVideoPlayer();
   state.searchConfigsPanelVisible = true;
   elements.searchConfigsOverlay.classList.remove('hidden');
   elements.btnSearchConfigs.classList.add('active');
@@ -4573,6 +4606,221 @@ function setupSearchConfigsResize(): void {
     document.removeEventListener('mousemove', onMouseMove);
     document.removeEventListener('mouseup', onMouseUp);
   }
+}
+
+// ─── Video Player Panel ─────────────────────────────────────────────
+
+function showVideoPlayer(): void {
+  // Close other bottom panels (shared bottom slot)
+  if (state.notesVisible) closeNotesDrawer();
+  if (state.searchResultsPanelVisible) closeSearchResultsPanel();
+  if (state.searchConfigsPanelVisible) closeSearchConfigsPanel();
+  state.videoPlayerVisible = true;
+  elements.videoOverlay.classList.remove('hidden');
+  elements.btnVideoPlayer.classList.add('active');
+}
+
+function hideVideoPlayer(): void {
+  elements.videoOverlay.classList.add('hidden');
+  elements.btnVideoPlayer.classList.remove('active');
+}
+
+function toggleVideoPlayer(): void {
+  state.videoPlayerVisible = !state.videoPlayerVisible;
+  if (state.videoPlayerVisible) {
+    showVideoPlayer();
+  } else {
+    hideVideoPlayer();
+  }
+}
+
+function closeVideoPlayer(): void {
+  if (!state.videoPlayerVisible) return;
+  state.videoPlayerVisible = false;
+  hideVideoPlayer();
+}
+
+function setupVideoResize(): void {
+  const handle = elements.videoResizeHandle;
+  const panel = elements.videoPanel;
+  let startY = 0;
+  let startHeight = 0;
+  let isDragging = false;
+
+  handle.addEventListener('mousedown', (e: MouseEvent) => {
+    e.preventDefault();
+    isDragging = true;
+    startY = e.clientY;
+    startHeight = panel.offsetHeight;
+    handle.classList.add('dragging');
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+
+  function onMouseMove(e: MouseEvent): void {
+    if (!isDragging) return;
+    const delta = startY - e.clientY;
+    const newHeight = Math.max(150, Math.min(window.innerHeight * 0.7, startHeight + delta));
+    panel.style.height = newHeight + 'px';
+  }
+
+  function onMouseUp(): void {
+    isDragging = false;
+    handle.classList.remove('dragging');
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  }
+}
+
+function openVideoFile(): void {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'video/mp4,video/webm,video/ogg,.mp4,.webm,.ogv,.ogg';
+  input.onchange = () => {
+    const file = input.files?.[0];
+    if (file) {
+      loadVideoFromPath(file.path);
+    }
+  };
+  input.click();
+}
+
+function loadVideoFromPath(videoPath: string): void {
+  state.videoFilePath = videoPath;
+  elements.videoElement.src = 'file://' + videoPath;
+  elements.videoContainer.classList.add('has-video');
+  const fileName = videoPath.split('/').pop() || videoPath;
+  elements.videoFileName.textContent = fileName;
+  saveVideoState();
+}
+
+function syncVideoToLine(lineNumber: number): void {
+  if (!state.videoFilePath || !state.videoSyncOffsetMs || !elements.videoElement.src) return;
+
+  window.api.getLineTimestamp(lineNumber).then((result) => {
+    if (result.epochMs === null) return;
+    const videoTime = (result.epochMs - state.videoSyncOffsetMs) / 1000;
+    if (videoTime < 0 || videoTime > elements.videoElement.duration) return;
+    elements.videoElement.currentTime = videoTime;
+  });
+}
+
+function setVideoSyncFromInput(): void {
+  const input = elements.videoSyncInput.value.trim();
+  if (!input) {
+    state.videoSyncOffsetMs = 0;
+    elements.videoSyncStatus.textContent = '';
+    saveVideoState();
+    return;
+  }
+  // Try to parse as a timestamp by asking the main process for epoch ms
+  // We'll search for a line that starts with this timestamp — or just parse it ourselves
+  // Simple approach: try to parse common timestamp formats
+  const parsed = tryParseTimestamp(input);
+  if (parsed) {
+    state.videoSyncOffsetMs = parsed;
+    elements.videoSyncStatus.textContent = 'Sync set';
+    setTimeout(() => { elements.videoSyncStatus.textContent = ''; }, 3000);
+    saveVideoState();
+  } else {
+    elements.videoSyncStatus.textContent = 'Invalid timestamp';
+    setTimeout(() => { elements.videoSyncStatus.textContent = ''; }, 3000);
+  }
+}
+
+function tryParseTimestamp(text: string): number | null {
+  // Try ISO format: 2024-01-15T10:30:00 or 2024-01-15 10:30:00
+  const isoMatch = text.match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/);
+  if (isoMatch) {
+    const [, year, month, day, hour, min, sec] = isoMatch;
+    return new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hour), parseInt(min), parseInt(sec)).getTime();
+  }
+  // Try European format: DD.MM.YYYY HH:mm:ss
+  const euroMatch = text.match(/(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/);
+  if (euroMatch) {
+    const [, day, month, year, hour, min, sec] = euroMatch;
+    return new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hour), parseInt(min), parseInt(sec)).getTime();
+  }
+  return null;
+}
+
+function setVideoSyncFromCurrentLine(): void {
+  if (state.selectedLine === null) {
+    elements.videoSyncStatus.textContent = 'No line selected';
+    setTimeout(() => { elements.videoSyncStatus.textContent = ''; }, 3000);
+    return;
+  }
+  window.api.getLineTimestamp(state.selectedLine).then((result) => {
+    if (result.epochMs === null) {
+      elements.videoSyncStatus.textContent = 'No timestamp found';
+      setTimeout(() => { elements.videoSyncStatus.textContent = ''; }, 3000);
+      return;
+    }
+    state.videoSyncOffsetMs = result.epochMs;
+    elements.videoSyncInput.value = result.timestampStr || '';
+    elements.videoSyncStatus.textContent = 'Sync set from line ' + (state.selectedLine! + 1);
+    setTimeout(() => { elements.videoSyncStatus.textContent = ''; }, 3000);
+    saveVideoState();
+  });
+}
+
+function saveVideoState(): void {
+  // Save to LocalFileData via the existing persistence mechanism
+  if (!state.filePath) return;
+  // We update the local file data by re-loading, patching, and saving via IPC
+  // Since we don't have a direct IPC for partial update, we'll store in a local variable
+  // and hook into the existing save flow — but for now, use localStorage as a lightweight approach
+  const key = 'logan-video-' + state.filePath;
+  const data = {
+    videoFilePath: state.videoFilePath,
+    videoSyncOffsetMs: state.videoSyncOffsetMs,
+  };
+  localStorage.setItem(key, JSON.stringify(data));
+}
+
+function restoreVideoState(): void {
+  if (!state.filePath) return;
+  const key = 'logan-video-' + state.filePath;
+  const stored = localStorage.getItem(key);
+  if (stored) {
+    try {
+      const data = JSON.parse(stored);
+      if (data.videoFilePath) {
+        state.videoFilePath = data.videoFilePath;
+        state.videoSyncOffsetMs = data.videoSyncOffsetMs || 0;
+        loadVideoFromPath(data.videoFilePath);
+        if (data.videoSyncOffsetMs) {
+          elements.videoSyncInput.value = new Date(data.videoSyncOffsetMs).toISOString().replace('T', ' ').substring(0, 19);
+        }
+      }
+    } catch { /* ignore */ }
+  }
+}
+
+function setupVideoDragDrop(): void {
+  const dropZone = elements.videoDropZone;
+  const container = elements.videoContainer;
+
+  const prevent = (e: DragEvent) => { e.preventDefault(); e.stopPropagation(); };
+
+  container.addEventListener('dragover', (e) => {
+    prevent(e);
+    dropZone.classList.add('drag-over');
+  });
+
+  container.addEventListener('dragleave', (e) => {
+    prevent(e);
+    dropZone.classList.remove('drag-over');
+  });
+
+  container.addEventListener('drop', (e) => {
+    prevent(e);
+    dropZone.classList.remove('drag-over');
+    const file = e.dataTransfer?.files?.[0];
+    if (file && file.type.startsWith('video/')) {
+      loadVideoFromPath(file.path);
+    }
+  });
 }
 
 // Search Configs Color Palette (reuse from main process palette)
@@ -5111,6 +5359,9 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
           wrapper.style.display = '';
         }
       }
+
+      // Restore video player state for this file
+      restoreVideoState();
 
       // Load search configs for this file
       loadSearchConfigs();
@@ -8101,6 +8352,8 @@ function setupKeyboardShortcuts(): void {
       if (rangeSelectStartLine !== null) {
         rangeSelectStartLine = null;
         elements.statusCursor.textContent = 'Range cancelled';
+      } else if (state.videoPlayerVisible) {
+        closeVideoPlayer();
       } else if (state.searchConfigsPanelVisible) {
         closeSearchConfigsPanel();
       } else if (state.searchResultsPanelVisible) {
@@ -8138,6 +8391,12 @@ function setupKeyboardShortcuts(): void {
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === '8') {
       e.preventDefault();
       toggleSearchConfigsPanel();
+    }
+
+    // Ctrl/Cmd + 9: Toggle video player
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === '9') {
+      e.preventDefault();
+      toggleVideoPlayer();
     }
 
     // Ctrl/Cmd + PageDown: Next split file
@@ -8525,6 +8784,18 @@ function init(): void {
     if (e.key === 'Escape') { e.preventDefault(); hideSearchConfigForm(); }
   });
   setupSearchConfigsResize();
+
+  // Video player panel events
+  elements.btnVideoPlayer.addEventListener('click', toggleVideoPlayer);
+  elements.btnVideoClose.addEventListener('click', closeVideoPlayer);
+  elements.btnVideoOpen.addEventListener('click', openVideoFile);
+  elements.btnVideoSyncFromLine.addEventListener('click', setVideoSyncFromCurrentLine);
+  elements.videoSyncInput.addEventListener('change', setVideoSyncFromInput);
+  elements.videoSyncInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); setVideoSyncFromInput(); }
+  });
+  setupVideoResize();
+  setupVideoDragDrop();
 
   // Panel resize is handled in setupActivityBar
   document.addEventListener('mousemove', (e) => {

@@ -121,6 +121,8 @@ export interface LocalFileData {
   bookmarks: Bookmark[];
   highlights: Highlight[]; // file-specific only (non-global)
   activityHistory: ActivityEntry[]; // capped at 500
+  videoFilePath?: string;
+  videoSyncOffsetMs?: number;
 }
 
 // Search config definition
@@ -169,4 +171,5 @@ export const IPC = {
   SEARCH_CONFIG_BATCH: 'search-config-batch',
   SEARCH_CONFIG_BATCH_PROGRESS: 'search-config-batch-progress',
   SEARCH_CONFIG_EXPORT: 'search-config-export',
+  GET_LINE_TIMESTAMP: 'get-line-timestamp',
 } as const;

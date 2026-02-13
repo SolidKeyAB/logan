@@ -312,6 +312,9 @@ interface Api {
   showItemInFolder: (filePath: string) => Promise<void>;
   readFileContent: (filePath: string) => Promise<{ success: boolean; content?: string; sizeMB?: number; error?: string }>;
 
+  // Video player
+  getLineTimestamp: (lineNumber: number) => Promise<{ epochMs: number | null; timestampStr: string | null }>;
+
   // Window controls
   windowMinimize: () => Promise<void>;
   windowMaximize: () => Promise<void>;

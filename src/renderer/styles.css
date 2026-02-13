@@ -4851,3 +4851,202 @@ kbd {
 .long-lines-warning .warning-close-btn:hover {
   color: var(--text-primary);
 }
+
+/* ─── Video Player Panel ──────────────────────────────────────────── */
+
+.video-overlay {
+  flex-shrink: 0;
+}
+
+.video-overlay.hidden {
+  display: none;
+}
+
+.video-panel {
+  height: 300px;
+  min-height: 150px;
+  max-height: 70vh;
+  background: rgba(30, 30, 30, 0.95);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-top: 2px solid var(--accent-color);
+  display: flex;
+  flex-direction: column;
+}
+
+.video-resize-handle-top {
+  height: 6px;
+  cursor: ns-resize;
+  flex-shrink: 0;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.video-resize-handle-top:hover,
+.video-resize-handle-top.dragging {
+  background: var(--accent-color);
+}
+
+.video-panel-header {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  gap: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
+}
+
+.video-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #ccc;
+}
+
+.video-file-name {
+  font-size: 11px;
+  color: #888;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
+}
+
+.video-close-btn {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.video-close-btn:hover {
+  color: #fff;
+}
+
+.video-panel-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.video-container {
+  flex: 1;
+  position: relative;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.video-element {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  display: none;
+}
+
+.video-container.has-video .video-element {
+  display: block;
+}
+
+.video-container.has-video .video-drop-zone {
+  display: none;
+}
+
+.video-drop-zone {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.video-drop-zone.drag-over {
+  background: rgba(var(--accent-color-rgb, 0, 122, 204), 0.15);
+  border: 2px dashed var(--accent-color);
+}
+
+.video-drop-zone-content {
+  text-align: center;
+  color: #888;
+}
+
+.video-drop-zone-content p {
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.video-open-btn {
+  margin-top: 8px;
+  padding: 6px 16px;
+  background: var(--accent-color);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.video-open-btn:hover {
+  filter: brightness(1.15);
+}
+
+.video-sync-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
+}
+
+.video-sync-label {
+  font-size: 12px;
+  color: #888;
+  flex-shrink: 0;
+}
+
+.video-sync-input {
+  flex: 1;
+  max-width: 220px;
+  padding: 3px 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+}
+
+.video-sync-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.video-sync-btn {
+  padding: 3px 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  color: #ccc;
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.video-sync-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+.video-sync-status {
+  font-size: 11px;
+  color: #888;
+  flex-shrink: 0;
+}

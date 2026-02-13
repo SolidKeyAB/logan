@@ -2472,6 +2472,27 @@ function parseTimestampFast(text: string): { date: Date; str: string } | null {
   return null;
 }
 
+// Get timestamp from a specific line
+ipcMain.handle(IPC.GET_LINE_TIMESTAMP, async (_, lineNumber: number) => {
+  const handler = getFileHandler();
+  if (!handler) {
+    return { epochMs: null, timestampStr: null };
+  }
+  try {
+    const lines = handler.getLines(lineNumber, 1);
+    if (lines.length === 0) {
+      return { epochMs: null, timestampStr: null };
+    }
+    const parsed = parseTimestampFast(lines[0].text);
+    if (!parsed) {
+      return { epochMs: null, timestampStr: null };
+    }
+    return { epochMs: parsed.date.getTime(), timestampStr: parsed.str };
+  } catch {
+    return { epochMs: null, timestampStr: null };
+  }
+});
+
 ipcMain.handle('detect-time-gaps', async (_, options: TimeGapOptions) => {
   const handler = getFileHandler();
   if (!handler || !currentFilePath) {
