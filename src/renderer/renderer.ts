@@ -2950,6 +2950,11 @@ function applyHighlightsWithSearchJson(text: string, searchRanges: SearchRange[]
   return result;
 }
 
+// Yield to the browser event loop so UI stays responsive during heavy work
+function yieldToUI(): Promise<void> {
+  return new Promise(resolve => requestAnimationFrame(() => resolve()));
+}
+
 function escapeHtml(text: string): string {
   return sanitizeText(text)
     .replace(/&/g, '&amp;')
@@ -3239,6 +3244,7 @@ function renderMinimapMarkers(): void {
   if (totalLines === 0) return;
 
   const minimapHeight = minimapElement.clientHeight;
+  const fragment = document.createDocumentFragment();
 
   // Add saved notes range markers (drawn first, behind other markers)
   for (const range of state.savedRanges) {
@@ -3249,11 +3255,14 @@ function renderMinimapMarkers(): void {
     marker.style.top = `${top}px`;
     marker.style.height = `${height}px`;
     marker.title = `Saved: Lines ${range.startLine + 1}-${range.endLine + 1}`;
-    minimapElement.appendChild(marker);
+    fragment.appendChild(marker);
   }
 
   // Add bookmark markers with colors and tooltips
-  for (const bookmark of state.bookmarks) {
+  const maxBookmarkMarkers = 500;
+  const bookmarkStep = Math.max(1, Math.floor(state.bookmarks.length / maxBookmarkMarkers));
+  for (let i = 0; i < state.bookmarks.length; i += bookmarkStep) {
+    const bookmark = state.bookmarks[i];
     const marker = document.createElement('div');
     marker.className = 'minimap-bookmark';
     marker.style.top = `${(bookmark.lineNumber / totalLines) * minimapHeight}px`;
@@ -3261,7 +3270,7 @@ function renderMinimapMarkers(): void {
       marker.style.backgroundColor = bookmark.color;
     }
     marker.title = bookmark.label || `Bookmark: Line ${bookmark.lineNumber + 1}`;
-    minimapElement.appendChild(marker);
+    fragment.appendChild(marker);
   }
 
   // Add search result markers (limit to prevent performance issues)
@@ -3272,7 +3281,7 @@ function renderMinimapMarkers(): void {
     const marker = document.createElement('div');
     marker.className = 'minimap-search-marker';
     marker.style.top = `${(result.lineNumber / totalLines) * minimapHeight}px`;
-    minimapElement.appendChild(marker);
+    fragment.appendChild(marker);
   }
 
   // Add search config markers (colored by config)
@@ -3287,9 +3296,11 @@ function renderMinimapMarkers(): void {
       marker.className = 'minimap-sc-marker';
       marker.style.top = `${(r.lineNumber / totalLines) * minimapHeight}px`;
       marker.style.backgroundColor = config.color;
-      minimapElement.appendChild(marker);
+      fragment.appendChild(marker);
     }
   }
+
+  minimapElement.appendChild(fragment);
 }
 
 function handleLogClick(event: MouseEvent): void {
@@ -4375,7 +4386,7 @@ function closeSearchResultsPanel(): void {
 
 const SEARCH_RESULTS_LIST_CAP = 500;
 
-function renderSearchResultsList(): void {
+async function renderSearchResultsList(): Promise<void> {
   const list = elements.searchResultsList;
   const results = state.searchResults;
   const searchPattern = elements.searchInput.value;
@@ -4391,53 +4402,59 @@ function renderSearchResultsList(): void {
     ? `Showing ${SEARCH_RESULTS_LIST_CAP} of ${results.length}`
     : `${results.length} results`;
 
-  const fragment = document.createDocumentFragment();
+  list.innerHTML = '';
+  const CHUNK_SIZE = 200;
 
-  for (let i = 0; i < displayCount; i++) {
-    const r = results[i];
-    const item = document.createElement('div');
-    item.className = 'search-result-item';
-    if (i === state.currentSearchIndex) {
-      item.classList.add('current');
+  for (let chunkStart = 0; chunkStart < displayCount; chunkStart += CHUNK_SIZE) {
+    const chunkEnd = Math.min(chunkStart + CHUNK_SIZE, displayCount);
+    const fragment = document.createDocumentFragment();
+
+    for (let i = chunkStart; i < chunkEnd; i++) {
+      const r = results[i];
+      const item = document.createElement('div');
+      item.className = 'search-result-item';
+      if (i === state.currentSearchIndex) {
+        item.classList.add('current');
+      }
+      item.dataset.index = String(i);
+
+      const lineNum = document.createElement('span');
+      lineNum.className = 'search-result-line-num';
+      lineNum.textContent = `${r.lineNumber + 1}`;
+
+      const text = document.createElement('span');
+      text.className = 'search-result-text';
+      const lineText = r.lineText || '';
+      const truncated = lineText.length > 300 ? lineText.substring(0, 300) + '...' : lineText;
+      if (searchPattern && r.column >= 0 && r.length > 0) {
+        const before = escapeHtml(truncated.substring(0, r.column));
+        const match = escapeHtml(truncated.substring(r.column, r.column + r.length));
+        const after = escapeHtml(truncated.substring(r.column + r.length));
+        text.innerHTML = `${before}<mark>${match}</mark>${after}`;
+      } else {
+        text.textContent = truncated;
+      }
+
+      item.appendChild(lineNum);
+      item.appendChild(text);
+      item.addEventListener('click', () => {
+        goToSearchResult(i);
+        updateSearchResultsCurrent();
+        scrollSearchResultIntoView();
+      });
+      fragment.appendChild(item);
     }
-    item.dataset.index = String(i);
 
-    const lineNum = document.createElement('span');
-    lineNum.className = 'search-result-line-num';
-    lineNum.textContent = `${r.lineNumber + 1}`;
-
-    const text = document.createElement('span');
-    text.className = 'search-result-text';
-    const lineText = r.lineText || '';
-    const truncated = lineText.length > 300 ? lineText.substring(0, 300) + '...' : lineText;
-    if (searchPattern && r.column >= 0 && r.length > 0) {
-      const before = escapeHtml(truncated.substring(0, r.column));
-      const match = escapeHtml(truncated.substring(r.column, r.column + r.length));
-      const after = escapeHtml(truncated.substring(r.column + r.length));
-      text.innerHTML = `${before}<mark>${match}</mark>${after}`;
-    } else {
-      text.textContent = truncated;
-    }
-
-    item.appendChild(lineNum);
-    item.appendChild(text);
-    item.addEventListener('click', () => {
-      goToSearchResult(i);
-      updateSearchResultsCurrent();
-      scrollSearchResultIntoView();
-    });
-    fragment.appendChild(item);
+    list.appendChild(fragment);
+    if (chunkEnd < displayCount) await yieldToUI();
   }
 
   if (results.length > SEARCH_RESULTS_LIST_CAP) {
     const notice = document.createElement('div');
     notice.className = 'search-results-cap-notice';
     notice.textContent = `... and ${results.length - SEARCH_RESULTS_LIST_CAP} more results`;
-    fragment.appendChild(notice);
+    list.appendChild(notice);
   }
-
-  list.innerHTML = '';
-  list.appendChild(fragment);
 }
 
 function updateSearchResultsCurrent(): void {
@@ -4637,7 +4654,7 @@ async function deleteSearchConfig(id: string): Promise<void> {
   state.searchConfigResults.delete(id);
   await window.api.searchConfigDelete(id);
   renderSearchConfigsChips();
-  renderSearchConfigsResults();
+  await renderSearchConfigsResults();
   renderVisibleLines();
 }
 
@@ -4652,7 +4669,7 @@ async function toggleSearchConfigEnabled(id: string): Promise<void> {
     // Run batch just for this one
     await runSearchConfigsBatch();
   } else {
-    renderSearchConfigsResults();
+    await renderSearchConfigsResults();
     renderVisibleLines();
   }
 }
@@ -4661,7 +4678,7 @@ async function runSearchConfigsBatch(): Promise<void> {
   const enabledConfigs = state.searchConfigs.filter(c => c.enabled);
   if (enabledConfigs.length === 0) {
     state.searchConfigResults.clear();
-    renderSearchConfigsResults();
+    await renderSearchConfigsResults();
     renderVisibleLines();
     return;
   }
@@ -4688,8 +4705,11 @@ async function runSearchConfigsBatch(): Promise<void> {
   }
 
   renderSearchConfigsChips(); // Update counts
-  renderSearchConfigsResults();
+  await yieldToUI();
+  await renderSearchConfigsResults();
+  await yieldToUI();
   renderVisibleLines();
+  renderMinimapMarkers();
 }
 
 function renderSearchConfigsChips(): void {
@@ -4697,6 +4717,8 @@ function renderSearchConfigsChips(): void {
   // Keep the add button, remove existing chips
   const addBtn = elements.btnAddSearchConfig;
   container.innerHTML = '';
+
+  const fragment = document.createDocumentFragment();
 
   for (const config of state.searchConfigs) {
     const chip = document.createElement('div');
@@ -4747,9 +4769,10 @@ function renderSearchConfigsChips(): void {
       showSearchConfigContextMenu(e, config);
     });
 
-    container.appendChild(chip);
+    fragment.appendChild(chip);
   }
 
+  container.appendChild(fragment);
   container.appendChild(addBtn);
 
   // Update badge
@@ -4762,7 +4785,7 @@ function renderSearchConfigsChips(): void {
 
 const SC_RESULTS_LIST_CAP = 1000;
 
-function renderSearchConfigsResults(): void {
+async function renderSearchConfigsResults(): Promise<void> {
   const list = elements.searchConfigsResults;
   const enabledConfigs = state.searchConfigs.filter(c => c.enabled);
 
@@ -4794,52 +4817,58 @@ function renderSearchConfigsResults(): void {
     ? `Showing ${SC_RESULTS_LIST_CAP} of ${allResults.length}`
     : `${allResults.length} matches`;
 
-  const fragment = document.createDocumentFragment();
+  list.innerHTML = '';
+  const CHUNK_SIZE = 200;
 
-  for (let i = 0; i < displayCount; i++) {
-    const r = allResults[i];
-    const item = document.createElement('div');
-    item.className = 'sc-result-item';
+  for (let chunkStart = 0; chunkStart < displayCount; chunkStart += CHUNK_SIZE) {
+    const chunkEnd = Math.min(chunkStart + CHUNK_SIZE, displayCount);
+    const fragment = document.createDocumentFragment();
 
-    const dot = document.createElement('span');
-    dot.className = 'sc-result-dot';
-    dot.style.backgroundColor = r.color;
+    for (let i = chunkStart; i < chunkEnd; i++) {
+      const r = allResults[i];
+      const item = document.createElement('div');
+      item.className = 'sc-result-item';
 
-    const lineNum = document.createElement('span');
-    lineNum.className = 'sc-result-line-num';
-    lineNum.textContent = `${r.lineNumber + 1}`;
+      const dot = document.createElement('span');
+      dot.className = 'sc-result-dot';
+      dot.style.backgroundColor = r.color;
 
-    const text = document.createElement('span');
-    text.className = 'sc-result-text';
-    const lineText = r.lineText || '';
-    const truncated = lineText.length > 300 ? lineText.substring(0, 300) + '...' : lineText;
-    if (r.column >= 0 && r.length > 0) {
-      const before = escapeHtml(truncated.substring(0, r.column));
-      const match = escapeHtml(truncated.substring(r.column, r.column + r.length));
-      const after = escapeHtml(truncated.substring(r.column + r.length));
-      text.innerHTML = `${before}<mark style="background:${r.color};color:#000">${match}</mark>${after}`;
-    } else {
-      text.textContent = truncated;
+      const lineNum = document.createElement('span');
+      lineNum.className = 'sc-result-line-num';
+      lineNum.textContent = `${r.lineNumber + 1}`;
+
+      const text = document.createElement('span');
+      text.className = 'sc-result-text';
+      const lineText = r.lineText || '';
+      const truncated = lineText.length > 300 ? lineText.substring(0, 300) + '...' : lineText;
+      if (r.column >= 0 && r.length > 0) {
+        const before = escapeHtml(truncated.substring(0, r.column));
+        const match = escapeHtml(truncated.substring(r.column, r.column + r.length));
+        const after = escapeHtml(truncated.substring(r.column + r.length));
+        text.innerHTML = `${before}<mark style="background:${r.color};color:#000">${match}</mark>${after}`;
+      } else {
+        text.textContent = truncated;
+      }
+
+      item.appendChild(dot);
+      item.appendChild(lineNum);
+      item.appendChild(text);
+      item.addEventListener('click', () => {
+        goToLine(r.lineNumber);
+      });
+      fragment.appendChild(item);
     }
 
-    item.appendChild(dot);
-    item.appendChild(lineNum);
-    item.appendChild(text);
-    item.addEventListener('click', () => {
-      goToLine(r.lineNumber);
-    });
-    fragment.appendChild(item);
+    list.appendChild(fragment);
+    if (chunkEnd < displayCount) await yieldToUI();
   }
 
   if (allResults.length > SC_RESULTS_LIST_CAP) {
     const notice = document.createElement('div');
     notice.className = 'sc-results-cap-notice';
     notice.textContent = `Showing first ${SC_RESULTS_LIST_CAP} of ${allResults.length} matches`;
-    fragment.appendChild(notice);
+    list.appendChild(notice);
   }
-
-  list.innerHTML = '';
-  list.appendChild(fragment);
 }
 
 function showSearchConfigContextMenu(e: MouseEvent, config: SearchConfigDef): void {
