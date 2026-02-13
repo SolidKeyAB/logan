@@ -31,6 +31,10 @@ const IPC = {
   SEARCH_CONFIG_BATCH: 'search-config-batch',
   SEARCH_CONFIG_BATCH_PROGRESS: 'search-config-batch-progress',
   SEARCH_CONFIG_EXPORT: 'search-config-export',
+  SEARCH_CONFIG_EXPORT_ALL: 'search-config-export-all',
+  SEARCH_CONFIG_SESSION_LIST: 'search-config-session-list',
+  SEARCH_CONFIG_SESSION_SAVE: 'search-config-session-save',
+  SEARCH_CONFIG_SESSION_DELETE: 'search-config-session-delete',
   GET_LINE_TIMESTAMP: 'get-line-timestamp',
   SERIAL_LIST_PORTS: 'serial-list-ports',
   SERIAL_CONNECT: 'serial-connect',
@@ -362,6 +366,19 @@ const api = {
 
   searchConfigExport: (configId: string, lines: string[]): Promise<{ success: boolean; filePath?: string; error?: string }> =>
     ipcRenderer.invoke(IPC.SEARCH_CONFIG_EXPORT, configId, lines),
+
+  searchConfigExportAll: (content: string): Promise<{ success: boolean; filePath?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.SEARCH_CONFIG_EXPORT_ALL, content),
+
+  // Search config sessions
+  searchConfigSessionList: (): Promise<{ success: boolean; sessions?: any[] }> =>
+    ipcRenderer.invoke(IPC.SEARCH_CONFIG_SESSION_LIST),
+
+  searchConfigSessionSave: (session: any): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.SEARCH_CONFIG_SESSION_SAVE, session),
+
+  searchConfigSessionDelete: (sessionId: string, isGlobal: boolean): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.SEARCH_CONFIG_SESSION_DELETE, sessionId, isGlobal),
 
   // Video player
   getLineTimestamp: (lineNumber: number): Promise<{ epochMs: number | null; timestampStr: string | null }> =>

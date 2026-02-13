@@ -35,61 +35,19 @@ interface HiddenMatch {
   lineText: string;
 }
 
-interface PatternGroup {
-  pattern: string;
-  template: string;
-  count: number;
-  sampleLines: number[];
-  sampleText?: string;
-  category: 'noise' | 'error' | 'warning' | 'info' | 'debug' | 'unknown';
-}
-
-interface DuplicateGroup {
-  hash: string;
-  text: string;
-  count: number;
-  lineNumbers: number[];
-}
-
-interface ColumnStatValue {
-  value: string;
-  count: number;
-  percentage: number;
-}
-
-interface ColumnStats {
-  name: string;
-  type: string;
-  topValues: ColumnStatValue[];
-  uniqueCount: number;
-}
-
-// Insight types for actionable analysis
-interface NoiseCandidate {
-  pattern: string;
-  sampleText: string;
-  count: number;
-  percentage: number;
-  channel?: string;
-  suggestedFilter: string;
-}
-
-interface ErrorGroup {
-  pattern: string;
-  sampleText: string;
-  count: number;
-  level: 'error' | 'warning';
-  channel?: string;
-  firstLine: number;
-  lastLine: number;
-}
-
-interface Anomaly {
+interface CrashEntry {
   text: string;
   lineNumber: number;
   level?: string;
   channel?: string;
-  reason: string;
+  keyword: string;
+}
+
+interface FailingComponent {
+  name: string;
+  errorCount: number;
+  warningCount: number;
+  sampleLine: number;
 }
 
 interface FilterSuggestion {
@@ -106,20 +64,18 @@ interface FilterSuggestion {
 }
 
 interface AnalysisInsights {
-  noiseCandidates: NoiseCandidate[];
-  errorGroups: ErrorGroup[];
-  anomalies: Anomaly[];
+  crashes: CrashEntry[];
+  topFailingComponents: FailingComponent[];
   filterSuggestions: FilterSuggestion[];
 }
 
 interface AnalysisResult {
-  stats: FileStats;
-  patterns: PatternGroup[];
+  stats: { totalLines: number; analyzedLines: number };
   levelCounts: Record<string, number>;
-  duplicateGroups: DuplicateGroup[];
   timeRange?: { start: string; end: string };
-  columnStats?: ColumnStats[];
-  insights?: AnalysisInsights;
+  analyzerName: string;
+  analyzedAt: number;
+  insights: AnalysisInsights;
 }
 
 interface FilterConfig {
@@ -278,20 +234,17 @@ interface AppState {
   // Terminal
   terminalVisible: boolean;
   terminalInitialized: boolean;
-  // Notes drawer
-  notesVisible: boolean;
-  // Search results panel
-  searchResultsPanelVisible: boolean;
-  // Search configs panel
-  searchConfigsPanelVisible: boolean;
+  // Bottom panel (tabbed)
+  bottomPanelVisible: boolean;
+  activeBottomTab: string | null;
+  lastActiveBottomTab: string | null;
+  // Search configs
   searchConfigs: SearchConfigDef[];
   searchConfigResults: Map<string, SearchResult[]>;
   // Video player
-  videoPlayerVisible: boolean;
   videoSyncOffsetMs: number;
   videoFilePath: string | null;
   // Live panel (serial / logcat)
-  livePanelVisible: boolean;
   liveConnected: boolean;
   liveFollowMode: boolean;
   liveConnectionName: string;
@@ -329,15 +282,13 @@ const state: AppState = {
   isFolderSearching: false,
   terminalVisible: false,
   terminalInitialized: false,
-  notesVisible: false,
-  searchResultsPanelVisible: false,
-  searchConfigsPanelVisible: false,
+  bottomPanelVisible: false,
+  activeBottomTab: null,
+  lastActiveBottomTab: null,
   searchConfigs: [],
   searchConfigResults: new Map(),
-  videoPlayerVisible: false,
   videoSyncOffsetMs: 0,
   videoFilePath: null,
-  livePanelVisible: false,
   liveConnected: false,
   liveFollowMode: true,
   liveConnectionName: '',
@@ -376,10 +327,6 @@ interface UserSettings {
 
 const SIDEBAR_SECTIONS: { id: string; label: string; colorVar: string }[] = [
   { id: 'folders', label: 'Folders', colorVar: '--section-color-folders' },
-  { id: 'stats', label: 'File Stats', colorVar: '--section-color-stats' },
-  { id: 'analysis', label: 'Analysis', colorVar: '--section-color-analysis' },
-  { id: 'duplicates', label: 'Duplicates', colorVar: '--section-color-duplicates' },
-  { id: 'time-gaps', label: 'Time Gaps', colorVar: '--section-color-timegaps' },
   { id: 'bookmarks', label: 'Bookmarks', colorVar: '--section-color-bookmarks' },
   { id: 'highlights', label: 'Highlights', colorVar: '--section-color-highlights' },
 ];
@@ -708,7 +655,6 @@ const elements = {
   folderSearchResults: document.getElementById('folder-search-results') as HTMLDivElement,
   fileStats: document.getElementById('file-stats') as HTMLDivElement,
   analysisResults: document.getElementById('analysis-results') as HTMLDivElement,
-  duplicatesList: document.getElementById('duplicates-list') as HTMLDivElement,
   bookmarksList: document.getElementById('bookmarks-list') as HTMLDivElement,
   btnExportBookmarks: document.getElementById('btn-export-bookmarks') as HTMLButtonElement,
   btnSaveBookmarkSet: document.getElementById('btn-save-bookmark-set') as HTMLButtonElement,
@@ -821,14 +767,14 @@ const elements = {
   terminalContainer: document.getElementById('terminal-container') as HTMLDivElement,
   terminalResizeHandle: document.getElementById('terminal-resize-handle') as HTMLDivElement,
   btnTerminalToggle: document.getElementById('btn-terminal-toggle') as HTMLButtonElement,
-  // Notes drawer
-  notesOverlay: document.getElementById('notes-overlay') as HTMLDivElement,
-  notesDrawer: document.getElementById('notes-drawer') as HTMLDivElement,
+  // Notes content (in bottom panel)
   notesTextarea: document.getElementById('notes-textarea') as HTMLTextAreaElement,
   notesSaveStatus: document.getElementById('notes-save-status') as HTMLSpanElement,
-  notesResizeHandle: document.getElementById('notes-resize-handle') as HTMLDivElement,
   btnNotesToggle: document.getElementById('btn-notes-toggle') as HTMLButtonElement,
-  btnNotesClose: document.getElementById('btn-notes-close') as HTMLButtonElement,
+  // Bottom panel
+  bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
+  bottomPanelResizeHandle: document.getElementById('bottom-panel-resize-handle') as HTMLDivElement,
+  btnBottomPanelClose: document.getElementById('btn-bottom-panel-close') as HTMLButtonElement,
   // Panel resize
   panelContainer: document.getElementById('panel-container') as HTMLDivElement,
   panelTitle: document.getElementById('panel-title') as HTMLSpanElement,
@@ -884,16 +830,13 @@ const elements = {
   btnDdSaveConfig: document.getElementById('btn-dd-save-config') as HTMLButtonElement,
   btnDdClearConfig: document.getElementById('btn-dd-clear-config') as HTMLButtonElement,
   ddConfigStatus: document.getElementById('dd-config-status') as HTMLSpanElement,
-  // Search configs panel
-  searchConfigsOverlay: document.getElementById('search-configs-overlay') as HTMLDivElement,
-  searchConfigsPanel: document.getElementById('search-configs-panel') as HTMLDivElement,
-  searchConfigsResizeHandle: document.getElementById('search-configs-resize-handle') as HTMLDivElement,
-  searchConfigsSummary: document.getElementById('search-configs-summary') as HTMLSpanElement,
+  // Search configs content (in bottom panel)
   searchConfigsChips: document.getElementById('search-configs-chips') as HTMLDivElement,
   searchConfigsForm: document.getElementById('search-configs-form') as HTMLDivElement,
   searchConfigsResults: document.getElementById('search-configs-results') as HTMLDivElement,
-  btnSearchConfigsClose: document.getElementById('btn-search-configs-close') as HTMLButtonElement,
   btnAddSearchConfig: document.getElementById('btn-add-search-config') as HTMLButtonElement,
+  btnScExportAll: document.getElementById('btn-sc-export-all') as HTMLButtonElement,
+  scSessionsChips: document.getElementById('sc-sessions-chips') as HTMLDivElement,
   btnSearchConfigs: document.getElementById('btn-search-configs') as HTMLButtonElement,
   scPatternInput: document.getElementById('sc-pattern-input') as HTMLInputElement,
   scRegex: document.getElementById('sc-regex') as HTMLInputElement,
@@ -903,17 +846,10 @@ const elements = {
   scColorInput: document.getElementById('sc-color-input') as HTMLInputElement,
   btnScSave: document.getElementById('btn-sc-save') as HTMLButtonElement,
   btnScCancel: document.getElementById('btn-sc-cancel') as HTMLButtonElement,
-  // Search results panel
-  searchResultsOverlay: document.getElementById('search-results-overlay') as HTMLDivElement,
-  searchResultsPanel: document.getElementById('search-results-panel') as HTMLDivElement,
-  searchResultsResizeHandle: document.getElementById('search-results-resize-handle') as HTMLDivElement,
+  // Search results content (in bottom panel)
   searchResultsSummary: document.getElementById('search-results-summary') as HTMLSpanElement,
   searchResultsList: document.getElementById('search-results-list') as HTMLDivElement,
-  btnSearchResultsClose: document.getElementById('btn-search-results-close') as HTMLButtonElement,
-  // Video player panel
-  videoOverlay: document.getElementById('video-overlay') as HTMLDivElement,
-  videoPanel: document.getElementById('video-panel') as HTMLDivElement,
-  videoResizeHandle: document.getElementById('video-resize-handle') as HTMLDivElement,
+  // Video player content (in bottom panel)
   videoElement: document.getElementById('video-element') as HTMLVideoElement,
   videoContainer: document.getElementById('video-container') as HTMLDivElement,
   videoDropZone: document.getElementById('video-drop-zone') as HTMLDivElement,
@@ -921,13 +857,9 @@ const elements = {
   videoSyncInput: document.getElementById('video-sync-input') as HTMLInputElement,
   videoSyncStatus: document.getElementById('video-sync-status') as HTMLSpanElement,
   btnVideoPlayer: document.getElementById('btn-video-player') as HTMLButtonElement,
-  btnVideoClose: document.getElementById('btn-video-close') as HTMLButtonElement,
   btnVideoOpen: document.getElementById('btn-video-open') as HTMLButtonElement,
   btnVideoSyncFromLine: document.getElementById('btn-video-sync-from-line') as HTMLButtonElement,
-  // Live panel (serial / logcat)
-  liveOverlay: document.getElementById('live-overlay') as HTMLDivElement,
-  livePanel: document.getElementById('live-panel') as HTMLDivElement,
-  liveResizeHandle: document.getElementById('live-resize-handle') as HTMLDivElement,
+  // Live panel content (in bottom panel)
   liveStatusText: document.getElementById('live-status-text') as HTMLSpanElement,
   liveNameInput: document.getElementById('live-name-input') as HTMLInputElement,
   liveSourceSelect: document.getElementById('live-source-select') as HTMLSelectElement,
@@ -935,7 +867,6 @@ const elements = {
   liveBaudSelect: document.getElementById('live-baud-select') as HTMLSelectElement,
   btnLiveRefresh: document.getElementById('btn-live-refresh') as HTMLButtonElement,
   btnLiveConnect: document.getElementById('btn-live-connect') as HTMLButtonElement,
-  btnLiveClose: document.getElementById('btn-live-close') as HTMLButtonElement,
   btnLive: document.getElementById('btn-live') as HTMLButtonElement,
   btnLiveSave: document.getElementById('btn-live-save') as HTMLButtonElement,
   liveLineCount: document.getElementById('live-line-count') as HTMLSpanElement,
@@ -972,6 +903,10 @@ interface HighlightGroupData {
 }
 let highlightGroups: HighlightGroupData[] = [];
 let activeHighlightGroupId: string | null = null;
+
+// Search config sessions
+let searchConfigSessions: SearchConfigSessionDef[] = [];
+let activeSessionId: string | null = null;
 
 // Terminal - xterm.js instance
 // @ts-ignore - Terminal loaded via script tag
@@ -3403,7 +3338,7 @@ function handleLogClick(event: MouseEvent): void {
       renderVisibleLines();
 
       // Sync video player if visible and synced
-      if (state.videoPlayerVisible && state.videoFilePath && state.videoSyncOffsetMs) {
+      if (state.activeBottomTab === 'video' && state.videoFilePath && state.videoSyncOffsetMs) {
         syncVideoToLine(lineNumber);
       }
     }
@@ -4311,55 +4246,143 @@ async function terminalCdToFile(filePath: string): Promise<void> {
   }
 }
 
-// ─── Notes Drawer ───────────────────────────────────────────────────
+// ─── Bottom Panel (unified tabbed panel) ────────────────────────────
+
 let notesSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
-function showNotesDrawer(): void {
-  // Close other bottom panels (shared bottom slot)
-  if (state.searchResultsPanelVisible) {
-    closeSearchResultsPanel();
-  }
-  if (state.searchConfigsPanelVisible) {
-    closeSearchConfigsPanel();
-  }
-  if (state.videoPlayerVisible) {
-    closeVideoPlayer();
-  }
-  if (state.livePanelVisible) {
-    closeLivePanel();
-  }
-  elements.notesOverlay.classList.remove('hidden');
-  elements.btnNotesToggle.classList.add('active');
-  elements.notesTextarea.focus();
+function openBottomTab(tabId: string): void {
+  state.bottomPanelVisible = true;
+  state.activeBottomTab = tabId;
+  state.lastActiveBottomTab = tabId;
 
-  // Load notes content
-  window.api.loadNotes().then((result) => {
-    if (result.success && result.content) {
-      elements.notesTextarea.value = result.content;
-    } else {
-      elements.notesTextarea.value = '';
-    }
+  // Show the panel
+  elements.bottomPanel.classList.remove('hidden');
+
+  // Activate the correct tab button and content view
+  document.querySelectorAll('.bottom-tab-btn').forEach(btn => {
+    btn.classList.toggle('active', (btn as HTMLElement).dataset.bottomTab === tabId);
   });
+  document.querySelectorAll('.bottom-tab-view').forEach(view => {
+    view.classList.toggle('active', (view as HTMLElement).dataset.bottomTab === tabId);
+  });
+
+  // Update activity bar buttons (for bottom-tab buttons)
+  document.querySelectorAll('.activity-bar-btn[data-bottom-tab]').forEach(btn => {
+    btn.classList.toggle('active', (btn as HTMLElement).dataset.bottomTab === tabId);
+  });
+
+  // Also activate toolbar notes toggle button
+  elements.btnNotesToggle.classList.toggle('active', tabId === 'notes');
+
+  // Tab-specific init
+  if (tabId === 'notes') {
+    elements.notesTextarea.focus();
+    window.api.loadNotes().then((result) => {
+      if (result.success && result.content) {
+        elements.notesTextarea.value = result.content;
+      } else {
+        elements.notesTextarea.value = '';
+      }
+    });
+  }
+  if (tabId === 'live') {
+    refreshLiveDevices();
+  }
+
+  saveBottomPanelState();
 }
 
-function hideNotesDrawer(): void {
-  elements.notesOverlay.classList.add('hidden');
+function closeBottomPanel(): void {
+  state.bottomPanelVisible = false;
+  state.activeBottomTab = null;
+
+  elements.bottomPanel.classList.add('hidden');
+
+  // Deactivate all tab buttons
+  document.querySelectorAll('.bottom-tab-btn').forEach(btn => btn.classList.remove('active'));
+  document.querySelectorAll('.bottom-tab-view').forEach(view => view.classList.remove('active'));
+
+  // Deactivate activity bar bottom-tab buttons
+  document.querySelectorAll('.activity-bar-btn[data-bottom-tab]').forEach(btn => {
+    btn.classList.remove('active');
+  });
+
+  // Deactivate toolbar notes toggle
   elements.btnNotesToggle.classList.remove('active');
+
+  saveBottomPanelState();
 }
 
-function toggleNotesDrawer(): void {
-  state.notesVisible = !state.notesVisible;
-  if (state.notesVisible) {
-    showNotesDrawer();
+function toggleBottomTab(tabId: string): void {
+  if (state.activeBottomTab === tabId) {
+    closeBottomPanel();
   } else {
-    hideNotesDrawer();
+    openBottomTab(tabId);
   }
 }
 
-function closeNotesDrawer(): void {
-  if (!state.notesVisible) return;
-  state.notesVisible = false;
-  hideNotesDrawer();
+function setupBottomPanelResize(): void {
+  const handle = elements.bottomPanelResizeHandle;
+  const panel = elements.bottomPanel;
+  let startY = 0;
+  let startHeight = 0;
+  let isDragging = false;
+
+  handle.addEventListener('mousedown', (e: MouseEvent) => {
+    e.preventDefault();
+    isDragging = true;
+    startY = e.clientY;
+    startHeight = panel.offsetHeight;
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+
+  function onMouseMove(e: MouseEvent): void {
+    if (!isDragging) return;
+    const delta = startY - e.clientY;
+    const newHeight = Math.max(120, Math.min(window.innerHeight * 0.7, startHeight + delta));
+    panel.style.height = newHeight + 'px';
+  }
+
+  function onMouseUp(): void {
+    isDragging = false;
+    handle.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+    saveBottomPanelState();
+  }
+}
+
+function saveBottomPanelState(): void {
+  localStorage.setItem('logan-bottom-panel', JSON.stringify({
+    visible: state.bottomPanelVisible,
+    activeTab: state.activeBottomTab,
+    lastActiveTab: state.lastActiveBottomTab,
+    height: elements.bottomPanel.style.height || '30vh',
+  }));
+}
+
+function restoreBottomPanelState(): void {
+  try {
+    const saved = localStorage.getItem('logan-bottom-panel');
+    if (saved) {
+      const data = JSON.parse(saved);
+      if (data.height) {
+        elements.bottomPanel.style.height = data.height;
+      }
+      state.lastActiveBottomTab = data.lastActiveTab || null;
+      if (data.visible && data.activeTab) {
+        openBottomTab(data.activeTab);
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to restore bottom panel state:', e);
+  }
 }
 
 function saveNotesDebounced(): void {
@@ -4385,77 +4408,7 @@ function saveNotesDebounced(): void {
   }, 1000);
 }
 
-function setupNotesDrawerResize(): void {
-  const handle = elements.notesResizeHandle;
-  const drawer = elements.notesDrawer;
-  let startY = 0;
-  let startHeight = 0;
-  let isDragging = false;
-
-  handle.addEventListener('mousedown', (e: MouseEvent) => {
-    e.preventDefault();
-    isDragging = true;
-    startY = e.clientY;
-    startHeight = drawer.offsetHeight;
-    handle.classList.add('dragging');
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  });
-
-  function onMouseMove(e: MouseEvent): void {
-    if (!isDragging) return;
-    // Dragging up increases height (startY - e.clientY is positive when moving up)
-    const delta = startY - e.clientY;
-    const newHeight = Math.max(120, Math.min(window.innerHeight * 0.7, startHeight + delta));
-    drawer.style.height = newHeight + 'px';
-  }
-
-  function onMouseUp(): void {
-    isDragging = false;
-    handle.classList.remove('dragging');
-    document.removeEventListener('mousemove', onMouseMove);
-    document.removeEventListener('mouseup', onMouseUp);
-  }
-}
-
 // ─── Search Results Panel ────────────────────────────────────────────
-
-function showSearchResultsPanel(): void {
-  // Close other bottom panels (shared bottom slot)
-  if (state.notesVisible) {
-    closeNotesDrawer();
-  }
-  if (state.searchConfigsPanelVisible) {
-    closeSearchConfigsPanel();
-  }
-  if (state.videoPlayerVisible) {
-    closeVideoPlayer();
-  }
-  if (state.livePanelVisible) {
-    closeLivePanel();
-  }
-  state.searchResultsPanelVisible = true;
-  elements.searchResultsOverlay.classList.remove('hidden');
-}
-
-function hideSearchResultsPanel(): void {
-  elements.searchResultsOverlay.classList.add('hidden');
-}
-
-function toggleSearchResultsPanel(): void {
-  state.searchResultsPanelVisible = !state.searchResultsPanelVisible;
-  if (state.searchResultsPanelVisible) {
-    showSearchResultsPanel();
-  } else {
-    hideSearchResultsPanel();
-  }
-}
-
-function closeSearchResultsPanel(): void {
-  if (!state.searchResultsPanelVisible) return;
-  state.searchResultsPanelVisible = false;
-  hideSearchResultsPanel();
-}
 
 const SEARCH_RESULTS_LIST_CAP = 500;
 
@@ -4551,169 +4504,9 @@ function scrollSearchResultIntoView(): void {
   }
 }
 
-function setupSearchResultsResize(): void {
-  const handle = elements.searchResultsResizeHandle;
-  const panel = elements.searchResultsPanel;
-  let startY = 0;
-  let startHeight = 0;
-  let isDragging = false;
-
-  handle.addEventListener('mousedown', (e: MouseEvent) => {
-    e.preventDefault();
-    isDragging = true;
-    startY = e.clientY;
-    startHeight = panel.offsetHeight;
-    handle.classList.add('dragging');
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  });
-
-  function onMouseMove(e: MouseEvent): void {
-    if (!isDragging) return;
-    const delta = startY - e.clientY;
-    const newHeight = Math.max(120, Math.min(window.innerHeight * 0.6, startHeight + delta));
-    panel.style.height = newHeight + 'px';
-  }
-
-  function onMouseUp(): void {
-    isDragging = false;
-    handle.classList.remove('dragging');
-    document.removeEventListener('mousemove', onMouseMove);
-    document.removeEventListener('mouseup', onMouseUp);
-  }
-}
-
 // ─── Search Configs Panel ────────────────────────────────────────────
 
 let editingSearchConfigId: string | null = null;
-
-function showSearchConfigsPanel(): void {
-  // Close other bottom panels (shared bottom slot)
-  if (state.notesVisible) closeNotesDrawer();
-  if (state.searchResultsPanelVisible) closeSearchResultsPanel();
-  if (state.videoPlayerVisible) closeVideoPlayer();
-  if (state.livePanelVisible) closeLivePanel();
-  state.searchConfigsPanelVisible = true;
-  elements.searchConfigsOverlay.classList.remove('hidden');
-  elements.btnSearchConfigs.classList.add('active');
-}
-
-function hideSearchConfigsPanel(): void {
-  elements.searchConfigsOverlay.classList.add('hidden');
-  elements.btnSearchConfigs.classList.remove('active');
-}
-
-function toggleSearchConfigsPanel(): void {
-  state.searchConfigsPanelVisible = !state.searchConfigsPanelVisible;
-  if (state.searchConfigsPanelVisible) {
-    showSearchConfigsPanel();
-  } else {
-    hideSearchConfigsPanel();
-  }
-}
-
-function closeSearchConfigsPanel(): void {
-  if (!state.searchConfigsPanelVisible) return;
-  state.searchConfigsPanelVisible = false;
-  hideSearchConfigsPanel();
-}
-
-function setupSearchConfigsResize(): void {
-  const handle = elements.searchConfigsResizeHandle;
-  const panel = elements.searchConfigsPanel;
-  let startY = 0;
-  let startHeight = 0;
-  let isDragging = false;
-
-  handle.addEventListener('mousedown', (e: MouseEvent) => {
-    e.preventDefault();
-    isDragging = true;
-    startY = e.clientY;
-    startHeight = panel.offsetHeight;
-    handle.classList.add('dragging');
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  });
-
-  function onMouseMove(e: MouseEvent): void {
-    if (!isDragging) return;
-    const delta = startY - e.clientY;
-    const newHeight = Math.max(150, Math.min(window.innerHeight * 0.65, startHeight + delta));
-    panel.style.height = newHeight + 'px';
-  }
-
-  function onMouseUp(): void {
-    isDragging = false;
-    handle.classList.remove('dragging');
-    document.removeEventListener('mousemove', onMouseMove);
-    document.removeEventListener('mouseup', onMouseUp);
-  }
-}
-
-// ─── Video Player Panel ─────────────────────────────────────────────
-
-function showVideoPlayer(): void {
-  // Close other bottom panels (shared bottom slot)
-  if (state.notesVisible) closeNotesDrawer();
-  if (state.searchResultsPanelVisible) closeSearchResultsPanel();
-  if (state.searchConfigsPanelVisible) closeSearchConfigsPanel();
-  if (state.livePanelVisible) closeLivePanel();
-  state.videoPlayerVisible = true;
-  elements.videoOverlay.classList.remove('hidden');
-  elements.btnVideoPlayer.classList.add('active');
-}
-
-function hideVideoPlayer(): void {
-  elements.videoOverlay.classList.add('hidden');
-  elements.btnVideoPlayer.classList.remove('active');
-}
-
-function toggleVideoPlayer(): void {
-  state.videoPlayerVisible = !state.videoPlayerVisible;
-  if (state.videoPlayerVisible) {
-    showVideoPlayer();
-  } else {
-    hideVideoPlayer();
-  }
-}
-
-function closeVideoPlayer(): void {
-  if (!state.videoPlayerVisible) return;
-  state.videoPlayerVisible = false;
-  hideVideoPlayer();
-}
-
-function setupVideoResize(): void {
-  const handle = elements.videoResizeHandle;
-  const panel = elements.videoPanel;
-  let startY = 0;
-  let startHeight = 0;
-  let isDragging = false;
-
-  handle.addEventListener('mousedown', (e: MouseEvent) => {
-    e.preventDefault();
-    isDragging = true;
-    startY = e.clientY;
-    startHeight = panel.offsetHeight;
-    handle.classList.add('dragging');
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  });
-
-  function onMouseMove(e: MouseEvent): void {
-    if (!isDragging) return;
-    const delta = startY - e.clientY;
-    const newHeight = Math.max(150, Math.min(window.innerHeight * 0.7, startHeight + delta));
-    panel.style.height = newHeight + 'px';
-  }
-
-  function onMouseUp(): void {
-    isDragging = false;
-    handle.classList.remove('dragging');
-    document.removeEventListener('mousemove', onMouseMove);
-    document.removeEventListener('mouseup', onMouseUp);
-  }
-}
 
 // ─── Live Panel (Serial / Logcat) ────────────────────────────────────
 
@@ -4725,38 +4518,6 @@ let liveConnectedSince: number | null = null;
 
 // Minimap level buffer for canvas rendering
 const liveMinimapLevels: Array<string | undefined> = [];
-
-function showLivePanel(): void {
-  // Close other bottom panels (shared bottom slot)
-  if (state.notesVisible) closeNotesDrawer();
-  if (state.searchResultsPanelVisible) closeSearchResultsPanel();
-  if (state.searchConfigsPanelVisible) closeSearchConfigsPanel();
-  if (state.videoPlayerVisible) closeVideoPlayer();
-  state.livePanelVisible = true;
-  elements.liveOverlay.classList.remove('hidden');
-  elements.btnLive.classList.add('active');
-  refreshLiveDevices();
-}
-
-function hideLivePanel(): void {
-  elements.liveOverlay.classList.add('hidden');
-  elements.btnLive.classList.remove('active');
-}
-
-function toggleLivePanel(): void {
-  state.livePanelVisible = !state.livePanelVisible;
-  if (state.livePanelVisible) {
-    showLivePanel();
-  } else {
-    hideLivePanel();
-  }
-}
-
-function closeLivePanel(): void {
-  if (!state.livePanelVisible) return;
-  state.livePanelVisible = false;
-  hideLivePanel();
-}
 
 function updateLiveSourceControls(): void {
   const source = state.liveSource;
@@ -5005,38 +4766,6 @@ async function liveSaveSession(): Promise<void> {
     alert(`Session saved to:\n${result.filePath}`);
   } else if (result.error && result.error !== 'Cancelled') {
     alert(`Save failed: ${result.error}`);
-  }
-}
-
-function setupLiveResize(): void {
-  const handle = elements.liveResizeHandle;
-  const panel = elements.livePanel;
-  let startY = 0;
-  let startHeight = 0;
-  let isDragging = false;
-
-  handle.addEventListener('mousedown', (e: MouseEvent) => {
-    e.preventDefault();
-    isDragging = true;
-    startY = e.clientY;
-    startHeight = panel.offsetHeight;
-    handle.classList.add('dragging');
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-  });
-
-  function onMouseMove(e: MouseEvent): void {
-    if (!isDragging) return;
-    const delta = startY - e.clientY;
-    const newHeight = Math.max(120, Math.min(window.innerHeight * 0.5, startHeight + delta));
-    panel.style.height = newHeight + 'px';
-  }
-
-  function onMouseUp(): void {
-    isDragging = false;
-    handle.classList.remove('dragging');
-    document.removeEventListener('mousemove', onMouseMove);
-    document.removeEventListener('mouseup', onMouseUp);
   }
 }
 
@@ -5487,6 +5216,11 @@ function renderSearchConfigsChips(): void {
 
   container.appendChild(fragment);
   container.appendChild(addBtn);
+  container.appendChild(elements.btnScExportAll);
+
+  // Show/hide Export All button based on whether any results exist
+  const hasResults = state.searchConfigs.some(c => c.enabled && (state.searchConfigResults.get(c.id)?.length || 0) > 0);
+  elements.btnScExportAll.style.display = hasResults ? '' : 'none';
 
   // Update badge
   const badge = document.getElementById('badge-search-configs');
@@ -5504,7 +5238,6 @@ async function renderSearchConfigsResults(): Promise<void> {
 
   if (enabledConfigs.length === 0) {
     list.innerHTML = '<div class="sc-results-cap-notice">No active search configs</div>';
-    elements.searchConfigsSummary.textContent = '';
     return;
   }
 
@@ -5521,14 +5254,11 @@ async function renderSearchConfigsResults(): Promise<void> {
 
   if (allResults.length === 0) {
     list.innerHTML = '<div class="sc-results-cap-notice">No matches found</div>';
-    elements.searchConfigsSummary.textContent = '0 matches';
     return;
   }
 
   const displayCount = Math.min(allResults.length, SC_RESULTS_LIST_CAP);
-  elements.searchConfigsSummary.textContent = allResults.length > SC_RESULTS_LIST_CAP
-    ? `Showing ${SC_RESULTS_LIST_CAP} of ${allResults.length}`
-    : `${allResults.length} matches`;
+  // Summary text removed (was in overlay header, now tab handles it)
 
   list.innerHTML = '';
   const CHUNK_SIZE = 200;
@@ -5611,7 +5341,7 @@ function showSearchConfigContextMenu(e: MouseEvent, config: SearchConfigDef): vo
     const lines = results.map(r => `${r.lineNumber + 1}: ${r.lineText}`);
     const result = await window.api.searchConfigExport(config.id, lines);
     if (result.success && result.filePath) {
-      elements.searchConfigsSummary.textContent = `Exported to ${result.filePath.split('/').pop()}`;
+      // Export success notification (summary was in old overlay header)
     }
   });
 
@@ -5652,6 +5382,224 @@ async function loadSearchConfigs(): Promise<void> {
   if (state.searchConfigs.some(c => c.enabled)) {
     await runSearchConfigsBatch();
   }
+}
+
+// === Export All Search Config Results ===
+
+async function exportAllSearchConfigResults(): Promise<void> {
+  const enabledConfigs = state.searchConfigs.filter(c => c.enabled);
+  if (enabledConfigs.length === 0) return;
+
+  let totalMatches = 0;
+  for (const config of enabledConfigs) {
+    totalMatches += state.searchConfigResults.get(config.id)?.length || 0;
+  }
+  if (totalMatches === 0) return;
+
+  const filePath = state.filePath || 'unknown';
+  const now = new Date();
+  const dateStr = now.toISOString().replace('T', ' ').substring(0, 19);
+
+  const parts: string[] = [];
+  parts.push('LOGAN Multi-Search Export');
+  parts.push(`Source: ${filePath}`);
+  parts.push(`Exported: ${dateStr}`);
+  parts.push(`Configs: ${enabledConfigs.length} active (${totalMatches} total matches)`);
+  parts.push('================================================================');
+  parts.push('');
+
+  for (const config of enabledConfigs) {
+    const results = state.searchConfigResults.get(config.id) || [];
+    const flags: string[] = [];
+    if (config.isRegex) flags.push('regex');
+    if (config.matchCase) flags.push('case-sensitive');
+    else flags.push('case-insensitive');
+    if (config.wholeWord) flags.push('whole-word');
+
+    parts.push(`--- [Pattern: "${config.pattern}"] (${flags.join(', ')}, ${results.length} matches) ---`);
+    for (const r of results) {
+      parts.push(`${r.lineNumber + 1}: ${r.lineText}`);
+    }
+    parts.push('');
+  }
+
+  const content = parts.join('\n');
+  const result = await window.api.searchConfigExportAll(content);
+  if (result.success && result.filePath) {
+    // Could show notification, but keeping it simple
+  }
+}
+
+// === Search Config Sessions ===
+
+async function loadSearchConfigSessions(): Promise<void> {
+  const result = await window.api.searchConfigSessionList();
+  if (result.success && result.sessions) {
+    searchConfigSessions = result.sessions;
+  } else {
+    searchConfigSessions = [];
+  }
+  renderSearchConfigSessionsUI();
+}
+
+function renderSearchConfigSessionsUI(): void {
+  const container = elements.scSessionsChips;
+  container.innerHTML = '';
+
+  if (searchConfigSessions.length === 0 && state.searchConfigs.length === 0) {
+    container.style.display = 'none';
+    return;
+  }
+
+  container.style.display = '';
+
+  const fragment = document.createDocumentFragment();
+
+  // Save Session button
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'sc-session-save-btn';
+  saveBtn.innerHTML = '&#128190; Save Session';
+  saveBtn.title = 'Save current search configs as a reusable session';
+  saveBtn.addEventListener('click', saveCurrentAsSearchConfigSession);
+  fragment.appendChild(saveBtn);
+
+  for (const session of searchConfigSessions) {
+    const chip = document.createElement('span');
+    chip.className = `sc-session-chip${session.id === activeSessionId ? ' active' : ''}`;
+    chip.dataset.id = session.id;
+    chip.title = `${escapeHtml(session.name)} (${session.configs.length} configs)${session.isGlobal ? ' [Global]' : ' [Local]'}`;
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'sc-session-chip-name';
+    nameSpan.textContent = session.name;
+
+    const badge = document.createElement('span');
+    badge.className = 'sc-session-chip-badge';
+    badge.textContent = String(session.configs.length);
+
+    chip.appendChild(nameSpan);
+    chip.appendChild(badge);
+
+    chip.addEventListener('click', () => applySearchConfigSession(session.id));
+    chip.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showSearchConfigSessionContextMenu(e as MouseEvent, session);
+    });
+
+    fragment.appendChild(chip);
+  }
+
+  container.appendChild(fragment);
+}
+
+async function saveCurrentAsSearchConfigSession(): Promise<void> {
+  if (state.searchConfigs.length === 0) {
+    alert('No search configs to save. Add search configs first.');
+    return;
+  }
+
+  const name = await showTextInputModal('Save Search Session', 'Session Name', 'e.g., Error investigation, Auth flow...');
+  if (!name) return;
+
+  // Default: global if all configs are global, local otherwise
+  const allGlobal = state.searchConfigs.every(c => c.isGlobal);
+
+  const session: SearchConfigSessionDef = {
+    id: `scs-${Date.now()}`,
+    name,
+    configs: state.searchConfigs.map(c => {
+      const { ...def } = c;
+      return def;
+    }),
+    isGlobal: allGlobal,
+    createdAt: Date.now(),
+  };
+
+  const result = await window.api.searchConfigSessionSave(session);
+  if (result.success) {
+    searchConfigSessions.push(session);
+    activeSessionId = session.id;
+    renderSearchConfigSessionsUI();
+  }
+}
+
+async function applySearchConfigSession(sessionId: string): Promise<void> {
+  const session = searchConfigSessions.find(s => s.id === sessionId);
+  if (!session) return;
+
+  // Clear current search configs
+  for (const config of [...state.searchConfigs]) {
+    await window.api.searchConfigDelete(config.id);
+  }
+  state.searchConfigs = [];
+  state.searchConfigResults.clear();
+
+  // Load session's configs
+  for (const config of session.configs) {
+    const newConfig = { ...config, id: `sc-${Date.now()}-${Math.random().toString(36).substring(2, 7)}` };
+    await window.api.searchConfigSave(newConfig);
+    state.searchConfigs.push(newConfig);
+  }
+
+  activeSessionId = sessionId;
+  renderSearchConfigsChips();
+  renderSearchConfigSessionsUI();
+
+  // Run batch search
+  if (state.searchConfigs.some(c => c.enabled)) {
+    await runSearchConfigsBatch();
+  }
+}
+
+function showSearchConfigSessionContextMenu(e: MouseEvent, session: SearchConfigSessionDef): void {
+  document.querySelectorAll('.sc-context-menu').forEach(el => el.remove());
+
+  const menu = document.createElement('div');
+  menu.className = 'sc-context-menu';
+  menu.style.left = `${e.clientX}px`;
+  menu.style.top = `${e.clientY}px`;
+
+  const renameItem = document.createElement('button');
+  renameItem.className = 'sc-context-menu-item';
+  renameItem.textContent = 'Rename';
+  renameItem.addEventListener('click', async () => {
+    menu.remove();
+    const newName = await showTextInputModal('Rename Session', 'New Name', session.name);
+    if (!newName) return;
+    session.name = newName;
+    const result = await window.api.searchConfigSessionSave(session);
+    if (result.success) {
+      const idx = searchConfigSessions.findIndex(s => s.id === session.id);
+      if (idx >= 0) searchConfigSessions[idx] = session;
+      renderSearchConfigSessionsUI();
+    }
+  });
+
+  const deleteItem = document.createElement('button');
+  deleteItem.className = 'sc-context-menu-item danger';
+  deleteItem.textContent = 'Delete';
+  deleteItem.addEventListener('click', async () => {
+    menu.remove();
+    if (!confirm(`Delete session "${session.name}"?`)) return;
+    const result = await window.api.searchConfigSessionDelete(session.id, session.isGlobal);
+    if (result.success) {
+      searchConfigSessions = searchConfigSessions.filter(s => s.id !== session.id);
+      if (activeSessionId === session.id) activeSessionId = null;
+      renderSearchConfigSessionsUI();
+    }
+  });
+
+  menu.appendChild(renameItem);
+  menu.appendChild(deleteItem);
+  document.body.appendChild(menu);
+
+  const closeMenu = (ev: MouseEvent) => {
+    if (!menu.contains(ev.target as Node)) {
+      menu.remove();
+      document.removeEventListener('click', closeMenu);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', closeMenu), 0);
 }
 
 async function loadFile(filePath: string, createNewTab: boolean = true): Promise<void> {
@@ -5701,7 +5649,7 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       state.searchResults = [];
       state.currentSearchIndex = -1;
       state.hiddenSearchMatches = [];
-      if (state.searchResultsPanelVisible) {
+      if (state.activeBottomTab === 'search-results') {
         renderSearchResultsList();
       }
       state.currentNotesFile = null; // Reset notes file for new log file
@@ -5828,8 +5776,9 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       // Restore video player state for this file
       restoreVideoState();
 
-      // Load search configs for this file
+      // Load search configs and sessions for this file
       loadSearchConfigs();
+      loadSearchConfigSessions();
 
       // Build minimap with progress
       unsubscribe(); // Stop listening to indexing progress
@@ -5896,6 +5845,7 @@ async function refreshActiveTab(): Promise<void> {
 async function analyzeFile(): Promise<void> {
   if (!state.filePath) return;
 
+  openBottomTab('analysis');
   showProgress('Analyzing...');
   elements.btnAnalyze.disabled = true;
 
@@ -6113,8 +6063,8 @@ async function performSearch(): Promise<void> {
 
       // Always render search results list and auto-show panel if results exist
       renderSearchResultsList();
-      if (result.matches.length > 0 && !state.searchResultsPanelVisible) {
-        showSearchResultsPanel();
+      if (result.matches.length > 0 && state.activeBottomTab !== 'search-results') {
+        openBottomTab('search-results');
       }
 
       if (state.currentSearchIndex >= 0) {
@@ -7493,20 +7443,20 @@ function updateHighlightsUI(): void {
         const posText = total > 0 ? `${currentIdx + 1}/${total}` : '0/0';
         return `
       <div class="highlight-item" data-id="${h.id}" title="${h.isGlobal ? 'Global - applies to all files' : 'Local - applies to this file only'}">
-        <div class="highlight-preview">
+        <div class="highlight-row">
           <span class="highlight-color" data-id="${h.id}" style="background-color: ${h.backgroundColor}" title="Click to change color"></span>
           <input type="color" class="highlight-color-picker" data-id="${h.id}" value="${h.backgroundColor}" style="display:none">
           <span class="highlight-pattern">${escapeHtml(h.pattern)}</span>
           <span class="highlight-scope ${h.isGlobal ? 'global' : 'local'}">${h.isGlobal ? 'G' : 'L'}</span>
+          <div class="highlight-actions">
+            <button class="highlight-toggle-global" data-id="${h.id}" title="${h.isGlobal ? 'Make local (this file only)' : 'Make global (all files)'}">${h.isGlobal ? '🌐' : '📄'}</button>
+            <button class="highlight-delete" data-id="${h.id}" title="Delete">&times;</button>
+          </div>
         </div>
         <div class="highlight-nav">
           <button class="highlight-nav-btn highlight-prev" data-id="${h.id}" title="Previous match">◀</button>
           <span class="highlight-nav-pos" data-id="${h.id}">${posText}</span>
           <button class="highlight-nav-btn highlight-next" data-id="${h.id}" title="Next match">▶</button>
-        </div>
-        <div class="highlight-actions">
-          <button class="highlight-toggle-global" data-id="${h.id}" title="${h.isGlobal ? 'Make local (this file only)' : 'Make global (all files)'}">${h.isGlobal ? '🌐' : '📄'}</button>
-          <button class="highlight-delete" data-id="${h.id}" title="Delete">&times;</button>
         </div>
       </div>
     `;
@@ -7671,14 +7621,13 @@ function updateAnalysisUI(): void {
   if (!state.analysisResult) {
     elements.analysisResults.innerHTML =
       '<p class="placeholder">Run analysis to see results</p>';
-    elements.duplicatesList.innerHTML =
-      '<p class="placeholder">No duplicates found</p>';
     return;
   }
 
   const result = state.analysisResult;
+  const ins = result.insights;
 
-  // Level counts - clickable to filter
+  // 1. Level counts - clickable to filter
   let levelHtml = '<div class="level-counts">';
   for (const [level, count] of Object.entries(result.levelCounts)) {
     if (count > 0) {
@@ -7687,116 +7636,81 @@ function updateAnalysisUI(): void {
   }
   levelHtml += '</div>';
 
-  // Build column stats HTML
-  let columnStatsHtml = '';
-  if (result.columnStats && result.columnStats.length > 0) {
-    columnStatsHtml = result.columnStats.map(col => `
-      <div class="column-stat">
-        <div class="column-stat-header">
-          <span class="column-stat-name">${col.name}</span>
-          <span class="column-stat-count">${col.uniqueCount} unique</span>
-        </div>
-        <div class="column-stat-values">
-          ${col.topValues.slice(0, 5).map(v => `
-            <div class="column-value-row" title="${escapeHtml(v.value)}">
-              <span class="column-value-name">${escapeHtml(v.value.length > 30 ? v.value.substring(0, 30) + '...' : v.value)}</span>
-              <span class="column-value-bar" style="width: ${Math.max(v.percentage, 2)}%"></span>
-              <span class="column-value-count">${v.count.toLocaleString()} (${v.percentage}%)</span>
+  // 2. Crashes & Failures
+  let crashesHtml = '';
+  if (ins.crashes.length > 0) {
+    crashesHtml = `
+      <div class="insight-section crash-section">
+        <div class="insight-header">Crashes & Failures (${ins.crashes.length}${ins.crashes.length >= 50 ? '+' : ''})</div>
+        ${ins.crashes.map(c => `
+          <div class="crash-item" data-line="${c.lineNumber}" title="Line ${c.lineNumber}">
+            <div class="crash-line">
+              <span class="crash-keyword">${escapeHtml(c.keyword)}</span>
+              <span class="crash-line-num">line ${c.lineNumber}</span>
             </div>
-          `).join('')}
-        </div>
+            <div class="crash-text">${escapeHtml(c.text.length > 100 ? c.text.substring(0, 100) + '...' : c.text)}</div>
+          </div>
+        `).join('')}
       </div>
-    `).join('');
+    `;
+  } else {
+    crashesHtml = `
+      <div class="insight-section crash-section">
+        <div class="insight-header">Crashes & Failures</div>
+        <div class="no-crashes">No crashes detected</div>
+      </div>
+    `;
   }
 
-  // Build insights HTML
-  let insightsHtml = '';
-  if (result.insights) {
-    const ins = result.insights;
+  // 3. Top Failing Components
+  let componentsHtml = '';
+  if (ins.topFailingComponents.length > 0) {
+    const maxErrors = ins.topFailingComponents[0].errorCount;
+    componentsHtml = `
+      <div class="insight-section components-section">
+        <div class="insight-header">Top Failing Components</div>
+        ${ins.topFailingComponents.map(comp => `
+          <div class="component-item" data-line="${comp.sampleLine}" title="${comp.errorCount} errors, ${comp.warningCount} warnings">
+            <div class="component-header">
+              <span class="component-name">${escapeHtml(comp.name)}</span>
+              <span class="component-errors">${comp.errorCount} err${comp.warningCount > 0 ? ` / ${comp.warningCount} warn` : ''}</span>
+            </div>
+            <div class="component-bar" style="width: ${Math.max(Math.round(comp.errorCount / maxErrors * 100), 4)}%"></div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
 
-    // Filter Suggestions - most actionable, show first
-    if (ins.filterSuggestions.length > 0 || state.appliedFilterSuggestion) {
-      insightsHtml += `
-        <div class="insight-section filter-suggestions">
-          <div class="insight-header">💡 Suggested Filters</div>
-          ${state.appliedFilterSuggestion ? `
-            <div class="active-filter-indicator">
-              <span class="active-filter-label">Active: ${escapeHtml(state.appliedFilterSuggestion.title)}</span>
-              <button class="clear-filter-btn" id="clearSuggestedFilter">Clear</button>
-            </div>
-          ` : ''}
-          ${ins.filterSuggestions.map(s => `
-            <div class="filter-suggestion-item${state.appliedFilterSuggestion?.id === s.id ? ' applied' : ''}" data-filter-id="${s.id}" title="${escapeHtml(s.description)}">
-              <span class="filter-suggestion-title">${escapeHtml(s.title)}</span>
-              <button class="apply-filter-btn" data-filter-id="${s.id}"${state.appliedFilterSuggestion?.id === s.id ? ' disabled' : ''}>
-                ${state.appliedFilterSuggestion?.id === s.id ? 'Applied' : 'Apply'}
-              </button>
-            </div>
-          `).join('')}
-        </div>
-      `;
-    }
-
-    // Noise Detection
-    if (ins.noiseCandidates.length > 0) {
-      insightsHtml += `
-        <div class="insight-section noise-section">
-          <div class="insight-header">🔇 Noise (${ins.noiseCandidates.length})</div>
-          ${ins.noiseCandidates.slice(0, 5).map(n => `
-            <div class="noise-item" title="${escapeHtml(n.sampleText)}">
-              <div class="noise-info">
-                <span class="noise-count">${n.count.toLocaleString()}× (${n.percentage}%)</span>
-                ${n.channel ? `<span class="noise-channel">${escapeHtml(n.channel)}</span>` : ''}
-              </div>
-              <div class="noise-pattern">${escapeHtml(n.pattern.length > 50 ? n.pattern.substring(0, 50) + '...' : n.pattern)}</div>
-            </div>
-          `).join('')}
-        </div>
-      `;
-    }
-
-    // Error Groups
-    if (ins.errorGroups.length > 0) {
-      insightsHtml += `
-        <div class="insight-section error-section">
-          <div class="insight-header">⚠️ Errors/Warnings (${ins.errorGroups.length})</div>
-          ${ins.errorGroups.slice(0, 10).map(e => `
-            <div class="error-group-item" data-line="${e.firstLine}" title="${escapeHtml(e.sampleText)}">
-              <div class="error-group-header">
-                <span class="level-badge ${e.level}">${e.level}</span>
-                <span class="error-count">${e.count}×</span>
-              </div>
-              <div class="error-pattern">${escapeHtml(e.pattern.length > 60 ? e.pattern.substring(0, 60) + '...' : e.pattern)}</div>
-            </div>
-          `).join('')}
-        </div>
-      `;
-    }
-
-    // Anomalies
-    if (ins.anomalies.length > 0) {
-      insightsHtml += `
-        <div class="insight-section anomaly-section">
-          <div class="insight-header">🔍 Anomalies (${ins.anomalies.length})</div>
-          ${ins.anomalies.slice(0, 5).map(a => `
-            <div class="anomaly-item" data-line="${a.lineNumber}" title="${escapeHtml(a.reason)}">
-              <div class="anomaly-header">
-                <span class="anomaly-line">Line ${a.lineNumber}</span>
-                ${a.level ? `<span class="level-badge ${a.level}">${a.level}</span>` : ''}
-              </div>
-              <div class="anomaly-text">${escapeHtml(a.text.length > 80 ? a.text.substring(0, 80) + '...' : a.text)}</div>
-              <div class="anomaly-reason">${escapeHtml(a.reason)}</div>
-            </div>
-          `).join('')}
-        </div>
-      `;
-    }
+  // 4. Filter Suggestions
+  let suggestionsHtml = '';
+  if (ins.filterSuggestions.length > 0 || state.appliedFilterSuggestion) {
+    suggestionsHtml = `
+      <div class="insight-section filter-suggestions">
+        <div class="insight-header">Suggested Filters</div>
+        ${state.appliedFilterSuggestion ? `
+          <div class="active-filter-indicator">
+            <span class="active-filter-label">Active: ${escapeHtml(state.appliedFilterSuggestion.title)}</span>
+            <button class="clear-filter-btn" id="clearSuggestedFilter">Clear</button>
+          </div>
+        ` : ''}
+        ${ins.filterSuggestions.map(s => `
+          <div class="filter-suggestion-item${state.appliedFilterSuggestion?.id === s.id ? ' applied' : ''}" data-filter-id="${s.id}" title="${escapeHtml(s.description)}">
+            <span class="filter-suggestion-title">${escapeHtml(s.title)}</span>
+            <button class="apply-filter-btn" data-filter-id="${s.id}"${state.appliedFilterSuggestion?.id === s.id ? ' disabled' : ''}>
+              ${state.appliedFilterSuggestion?.id === s.id ? 'Applied' : 'Apply'}
+            </button>
+          </div>
+        `).join('')}
+      </div>
+    `;
   }
 
   elements.analysisResults.innerHTML = `
     ${levelHtml}
-    ${columnStatsHtml}
-    ${insightsHtml}
+    ${crashesHtml}
+    ${componentsHtml}
+    ${suggestionsHtml}
     ${
       result.timeRange
         ? `
@@ -7817,7 +7731,6 @@ function updateAnalysisUI(): void {
       const level = (badge as HTMLElement).dataset.level;
       if (!level) return;
 
-      // If clicking the same level that's already filtered, clear the filter
       if (state.isFiltered && state.activeLevelFilter === level) {
         await clearFilter();
         state.activeLevelFilter = null;
@@ -7825,21 +7738,20 @@ function updateAnalysisUI(): void {
         return;
       }
 
-      // Apply filter for this level only
       await applyQuickLevelFilter(level);
     });
   });
 
-  // Click handlers for error groups - navigate to first occurrence
-  elements.analysisResults.querySelectorAll('.error-group-item').forEach((item) => {
+  // Click handlers for crash items - navigate to line
+  elements.analysisResults.querySelectorAll('.crash-item').forEach((item) => {
     item.addEventListener('click', () => {
       const line = parseInt((item as HTMLElement).dataset.line || '0', 10);
       if (line > 0) goToLine(line);
     });
   });
 
-  // Click handlers for anomalies - navigate to line
-  elements.analysisResults.querySelectorAll('.anomaly-item').forEach((item) => {
+  // Click handlers for component items - navigate to first error line
+  elements.analysisResults.querySelectorAll('.component-item').forEach((item) => {
     item.addEventListener('click', () => {
       const line = parseInt((item as HTMLElement).dataset.line || '0', 10);
       if (line > 0) goToLine(line);
@@ -7851,15 +7763,13 @@ function updateAnalysisUI(): void {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const filterId = (btn as HTMLElement).dataset.filterId;
-      if (!filterId || !result.insights) return;
+      if (!filterId) return;
 
-      const suggestion = result.insights.filterSuggestions.find(s => s.id === filterId);
+      const suggestion = ins.filterSuggestions.find(s => s.id === filterId);
       if (!suggestion) return;
 
-      // Track which filter suggestion was applied
       state.appliedFilterSuggestion = { id: suggestion.id, title: suggestion.title };
 
-      // Apply the suggested filter
       const filterConfig: FilterConfig = {
         excludePatterns: suggestion.filter.excludePatterns || [],
         includePatterns: suggestion.filter.includePatterns || [],
@@ -7867,8 +7777,6 @@ function updateAnalysisUI(): void {
       };
 
       await applyFilter(filterConfig);
-
-      // Refresh the UI to show applied state
       updateAnalysisUI();
     });
   });
@@ -7880,34 +7788,6 @@ function updateAnalysisUI(): void {
       state.appliedFilterSuggestion = null;
       await clearFilter();
       updateAnalysisUI();
-    });
-  }
-
-  // Duplicates
-  if (result.duplicateGroups.length === 0) {
-    elements.duplicatesList.innerHTML =
-      '<p class="placeholder">No duplicates found</p>';
-  } else {
-    elements.duplicatesList.innerHTML = result.duplicateGroups
-      .slice(0, 20)
-      .map(
-        (d) => `
-        <div class="duplicate-item" data-line="${d.lineNumbers[0]}">
-          <span class="count">${d.count.toLocaleString()} times</span>
-          <div class="template">${escapeHtml(d.text.substring(0, 100))}${
-          d.text.length > 100 ? '...' : ''
-        }</div>
-        </div>
-      `
-      )
-      .join('');
-
-    // Click to navigate
-    elements.duplicatesList.querySelectorAll('.duplicate-item').forEach((item) => {
-      item.addEventListener('click', () => {
-        const line = parseInt((item as HTMLElement).dataset.line || '0', 10);
-        goToLine(line);
-      });
     });
   }
 }
@@ -8270,15 +8150,24 @@ function formatBytes(bytes: number): string {
 
 // Sidebar toggle
 // Panel system
-const PANEL_IDS = ['folders', 'stats', 'analysis', 'time-gaps', 'bookmarks', 'highlights', 'history'];
+const PANEL_IDS = ['folders', 'bookmarks', 'highlights', 'stats', 'history'];
 const PANEL_NAMES: Record<string, string> = {
   'folders': 'Folders',
-  'stats': 'File Stats',
-  'analysis': 'Analysis',
-  'time-gaps': 'Time Gaps',
   'bookmarks': 'Bookmarks',
   'highlights': 'Highlights',
+  'stats': 'Stats',
   'history': 'History',
+};
+
+const BOTTOM_TAB_IDS = ['analysis', 'time-gaps', 'search-results', 'search-configs', 'video', 'live', 'notes'];
+const BOTTOM_TAB_NAMES: Record<string, string> = {
+  'analysis': 'Analysis',
+  'time-gaps': 'Time Gaps',
+  'search-results': 'Search Results',
+  'search-configs': 'Search Configs',
+  'video': 'Video',
+  'live': 'Live',
+  'notes': 'Notes',
 };
 
 let activePanel: string | null = null;
@@ -8678,16 +8567,19 @@ function setupActivityBar(): void {
     e.preventDefault();
   });
 
-  // Keyboard shortcuts: Ctrl+1..7 toggle panels, Ctrl+B toggle visibility, Escape close
+  // Keyboard shortcuts: Ctrl+1..5 sidebar panels, Ctrl+6..7 bottom tabs, Escape close
   document.addEventListener('keydown', (e) => {
-    // Ctrl+1..7 — toggle panels
+    // Ctrl+1..5 — toggle sidebar panels
     if (e.ctrlKey && !e.shiftKey && !e.altKey) {
       const num = parseInt(e.key, 10);
-      if (num >= 1 && num <= 7) {
+      if (num >= 1 && num <= 5) {
         e.preventDefault();
         togglePanel(PANEL_IDS[num - 1]);
         return;
       }
+      // Ctrl+6..7 — toggle bottom tabs (analysis, time-gaps)
+      if (num === 6) { e.preventDefault(); toggleBottomTab('analysis'); return; }
+      if (num === 7) { e.preventDefault(); toggleBottomTab('time-gaps'); return; }
     }
 
     // Ctrl+\ — toggle panel visibility
@@ -8808,7 +8700,7 @@ function setupKeyboardShortcuts(): void {
       return;
     }
 
-    // Escape: Cancel range selection, close split/diff, close modals, or close terminal
+    // Escape: Cancel range selection, close split/diff, close bottom panel, terminal, or modals
     if (e.key === 'Escape') {
       if (viewMode !== 'single') {
         deactivateSplitView();
@@ -8817,16 +8709,8 @@ function setupKeyboardShortcuts(): void {
       if (rangeSelectStartLine !== null) {
         rangeSelectStartLine = null;
         elements.statusCursor.textContent = 'Range cancelled';
-      } else if (state.livePanelVisible) {
-        closeLivePanel();
-      } else if (state.videoPlayerVisible) {
-        closeVideoPlayer();
-      } else if (state.searchConfigsPanelVisible) {
-        closeSearchConfigsPanel();
-      } else if (state.searchResultsPanelVisible) {
-        closeSearchResultsPanel();
-      } else if (state.notesVisible) {
-        closeNotesDrawer();
+      } else if (state.bottomPanelVisible) {
+        closeBottomPanel();
       } else if (state.terminalVisible) {
         closeTerminal();
       } else {
@@ -8842,34 +8726,34 @@ function setupKeyboardShortcuts(): void {
       toggleTerminal();
     }
 
-    // Ctrl/Cmd + Shift + N: Toggle notes drawer
+    // Ctrl/Cmd + Shift + N: Toggle notes tab
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'N') {
       e.preventDefault();
-      toggleNotesDrawer();
+      toggleBottomTab('notes');
     }
 
-    // Ctrl/Cmd + Shift + R: Toggle search results panel
+    // Ctrl/Cmd + Shift + R: Toggle search results tab
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'R') {
       e.preventDefault();
-      toggleSearchResultsPanel();
+      toggleBottomTab('search-results');
     }
 
-    // Ctrl/Cmd + 8: Toggle search configs panel
+    // Ctrl/Cmd + 8: Toggle search configs tab
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === '8') {
       e.preventDefault();
-      toggleSearchConfigsPanel();
+      toggleBottomTab('search-configs');
     }
 
-    // Ctrl/Cmd + 9: Toggle video player
+    // Ctrl/Cmd + 9: Toggle video tab
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key === '9') {
       e.preventDefault();
-      toggleVideoPlayer();
+      toggleBottomTab('video');
     }
 
-    // Ctrl/Cmd + Shift + P: Toggle live panel
+    // Ctrl/Cmd + Shift + P: Toggle live tab
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'P') {
       e.preventDefault();
-      toggleLivePanel();
+      toggleBottomTab('live');
     }
 
     // Ctrl/Cmd + PageDown: Next split file
@@ -9245,43 +9129,50 @@ function init(): void {
     }
   });
 
-  // Notes drawer events
-  elements.btnNotesToggle.addEventListener('click', toggleNotesDrawer);
-  elements.btnNotesClose.addEventListener('click', closeNotesDrawer);
+  // Bottom panel (tabbed) events
+  elements.btnBottomPanelClose.addEventListener('click', closeBottomPanel);
+  elements.btnNotesToggle.addEventListener('click', () => toggleBottomTab('notes'));
   elements.notesTextarea.addEventListener('input', saveNotesDebounced);
-  setupNotesDrawerResize();
 
-  // Search results panel events
-  elements.btnSearchResultsClose.addEventListener('click', closeSearchResultsPanel);
-  setupSearchResultsResize();
+  // Bottom panel tab bar click delegation
+  document.querySelectorAll('.bottom-tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tabId = (btn as HTMLElement).dataset.bottomTab;
+      if (tabId) toggleBottomTab(tabId);
+    });
+  });
 
-  // Search configs panel events
-  elements.btnSearchConfigsClose.addEventListener('click', closeSearchConfigsPanel);
-  elements.btnSearchConfigs.addEventListener('click', toggleSearchConfigsPanel);
+  // Activity bar bottom-tab buttons
+  document.querySelectorAll('.activity-bar-btn[data-bottom-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tabId = (btn as HTMLElement).dataset.bottomTab;
+      if (tabId) toggleBottomTab(tabId);
+    });
+  });
+
+  setupBottomPanelResize();
+  restoreBottomPanelState();
+
+  // Search configs panel events (inside bottom panel)
   elements.btnAddSearchConfig.addEventListener('click', () => showSearchConfigForm());
+  elements.btnScExportAll.addEventListener('click', exportAllSearchConfigResults);
   elements.btnScSave.addEventListener('click', addSearchConfig);
   elements.btnScCancel.addEventListener('click', hideSearchConfigForm);
   elements.scPatternInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); addSearchConfig(); }
     if (e.key === 'Escape') { e.preventDefault(); hideSearchConfigForm(); }
   });
-  setupSearchConfigsResize();
 
-  // Video player panel events
-  elements.btnVideoPlayer.addEventListener('click', toggleVideoPlayer);
-  elements.btnVideoClose.addEventListener('click', closeVideoPlayer);
+  // Video player events (inside bottom panel)
   elements.btnVideoOpen.addEventListener('click', openVideoFile);
   elements.btnVideoSyncFromLine.addEventListener('click', setVideoSyncFromCurrentLine);
   elements.videoSyncInput.addEventListener('change', setVideoSyncFromInput);
   elements.videoSyncInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); setVideoSyncFromInput(); }
   });
-  setupVideoResize();
   setupVideoDragDrop();
 
-  // Live panel events
-  elements.btnLive.addEventListener('click', toggleLivePanel);
-  elements.btnLiveClose.addEventListener('click', closeLivePanel);
+  // Live panel events (inside bottom panel)
   elements.btnLiveRefresh.addEventListener('click', () => refreshSerialPorts());
   elements.btnLiveRefreshDevices.addEventListener('click', () => refreshLogcatDevices());
   elements.btnLiveConnect.addEventListener('click', () => {
@@ -9303,7 +9194,6 @@ function init(): void {
     updateLiveSourceControls();
     refreshLiveDevices();
   });
-  setupLiveResize();
 
   // Panel resize is handled in setupActivityBar
   document.addEventListener('mousemove', (e) => {
@@ -9437,6 +9327,7 @@ function init(): void {
 
   // Analysis
   elements.btnAnalyze.addEventListener('click', analyzeFile);
+  document.getElementById('btn-run-analysis')?.addEventListener('click', analyzeFile);
 
   // Split
   elements.btnSplit.addEventListener('click', showSplitModal);
@@ -9992,7 +9883,7 @@ function restoreTabState(tab: TabState): void {
   updateStatusBar();
   updateBookmarksUI();
   updateSearchUI();
-  if (state.searchResultsPanelVisible) {
+  if (state.activeBottomTab === 'search-results') {
     renderSearchResultsList();
   }
 }
@@ -10077,8 +9968,9 @@ async function switchToTab(tabId: string): Promise<void> {
       }
       updateHighlightsUI();
 
-      // Reload search configs for the new file
+      // Reload search configs and sessions for the new file
       loadSearchConfigs();
+      loadSearchConfigSessions();
 
       createLogViewer();
 
@@ -10174,7 +10066,7 @@ function closeTab(tabId: string): void {
       }
       elements.welcomeMessage.classList.remove('hidden');
       elements.tabBar.classList.add('hidden');
-      closeSearchResultsPanel();
+      closeBottomPanel();
       updateStatusBar();
       updateFileStatsUI();
       updateBookmarksUI();

@@ -182,6 +182,15 @@ export interface LogcatStatus {
   tempFilePath: string | null;
 }
 
+// Search config session (saved group of search configs)
+export interface SearchConfigSession {
+  id: string;           // `scs-${Date.now()}`
+  name: string;
+  configs: SearchConfig[];
+  isGlobal: boolean;
+  createdAt: number;
+}
+
 // IPC Channels
 export const IPC = {
   OPEN_FILE_DIALOG: 'open-file-dialog',
@@ -214,6 +223,10 @@ export const IPC = {
   SEARCH_CONFIG_BATCH: 'search-config-batch',
   SEARCH_CONFIG_BATCH_PROGRESS: 'search-config-batch-progress',
   SEARCH_CONFIG_EXPORT: 'search-config-export',
+  SEARCH_CONFIG_EXPORT_ALL: 'search-config-export-all',
+  SEARCH_CONFIG_SESSION_LIST: 'search-config-session-list',
+  SEARCH_CONFIG_SESSION_SAVE: 'search-config-session-save',
+  SEARCH_CONFIG_SESSION_DELETE: 'search-config-session-delete',
   GET_LINE_TIMESTAMP: 'get-line-timestamp',
   // Serial port
   SERIAL_LIST_PORTS: 'serial-list-ports',

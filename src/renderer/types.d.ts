@@ -181,6 +181,14 @@ interface SearchConfigDef {
   createdAt: number;
 }
 
+interface SearchConfigSessionDef {
+  id: string;
+  name: string;
+  configs: SearchConfigDef[];
+  isGlobal: boolean;
+  createdAt: number;
+}
+
 interface Api {
   // File operations
   openFileDialog: () => Promise<string | null>;
@@ -302,6 +310,10 @@ interface Api {
   searchConfigBatch: (configs: Array<{ id: string; pattern: string; isRegex: boolean; matchCase: boolean; wholeWord: boolean }>) => Promise<{ success: boolean; results?: Record<string, SearchResult[]>; error?: string }>;
   onSearchConfigBatchProgress: (callback: (data: { percent: number; configId: string }) => void) => () => void;
   searchConfigExport: (configId: string, lines: string[]) => Promise<{ success: boolean; filePath?: string; error?: string }>;
+  searchConfigExportAll: (content: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
+  searchConfigSessionList: () => Promise<{ success: boolean; sessions?: SearchConfigSessionDef[] }>;
+  searchConfigSessionSave: (session: SearchConfigSessionDef) => Promise<{ success: boolean }>;
+  searchConfigSessionDelete: (sessionId: string, isGlobal: boolean) => Promise<{ success: boolean }>;
 
   // Local file status & activity history
   loadActivityHistory: () => Promise<{ success: boolean; history?: ActivityEntry[]; error?: string }>;

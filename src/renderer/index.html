@@ -96,39 +96,40 @@
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
             <span class="activity-badge" id="badge-folders"></span>
           </button>
-          <button class="activity-bar-btn" data-panel="stats" title="File Stats (Ctrl+2)">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="18" y="3" width="4" height="18"></rect><rect x="10" y="8" width="4" height="13"></rect><rect x="2" y="13" width="4" height="8"></rect></svg>
-            <span class="activity-badge" id="badge-stats"></span>
-          </button>
-          <button class="activity-bar-btn" data-panel="analysis" title="Analysis (Ctrl+3)">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-            <span class="activity-badge" id="badge-analysis"></span>
-          </button>
-          <button class="activity-bar-btn" data-panel="time-gaps" title="Time Gaps (Ctrl+4)">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-            <span class="activity-badge" id="badge-time-gaps"></span>
-          </button>
-          <button class="activity-bar-btn" data-panel="bookmarks" title="Bookmarks (Ctrl+5)">
+          <button class="activity-bar-btn" data-panel="bookmarks" title="Bookmarks (Ctrl+2)">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"></path></svg>
             <span class="activity-badge" id="badge-bookmarks"></span>
           </button>
-          <button class="activity-bar-btn" data-panel="highlights" title="Highlights (Ctrl+6)">
+          <button class="activity-bar-btn" data-panel="highlights" title="Highlights (Ctrl+3)">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
             <span class="activity-badge" id="badge-highlights"></span>
           </button>
-          <button class="activity-bar-btn" data-panel="history" title="History (Ctrl+7)">
+          <button class="activity-bar-btn" data-panel="stats" title="Stats (Ctrl+4)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="18" y="3" width="4" height="18"></rect><rect x="10" y="8" width="4" height="13"></rect><rect x="2" y="13" width="4" height="8"></rect></svg>
+            <span class="activity-badge" id="badge-stats"></span>
+          </button>
+          <button class="activity-bar-btn" data-panel="history" title="History (Ctrl+5)">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 8 14"></polyline><path d="M2.05 12A10 10 0 0 1 4.63 5.36"></path></svg>
             <span class="activity-badge" id="badge-history"></span>
           </button>
-          <button class="activity-bar-btn" id="btn-search-configs" title="Search Configs (Ctrl+8)">
+          <div class="activity-bar-separator"></div>
+          <button class="activity-bar-btn" data-bottom-tab="analysis" title="Analysis (Ctrl+6)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <span class="activity-badge" id="badge-analysis"></span>
+          </button>
+          <button class="activity-bar-btn" data-bottom-tab="time-gaps" title="Time Gaps (Ctrl+7)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+            <span class="activity-badge" id="badge-time-gaps"></span>
+          </button>
+          <button class="activity-bar-btn" id="btn-search-configs" data-bottom-tab="search-configs" title="Search Configs (Ctrl+8)">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="8" y1="11" x2="14" y2="11"></line><line x1="11" y1="8" x2="11" y2="14"></line></svg>
             <span class="activity-badge" id="badge-search-configs"></span>
           </button>
-          <button class="activity-bar-btn" id="btn-video-player" title="Video Player (Ctrl+9)">
+          <button class="activity-bar-btn" id="btn-video-player" data-bottom-tab="video" title="Video Player (Ctrl+9)">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><polygon points="10 8 16 12 10 16 10 8"></polygon></svg>
             <span class="activity-badge" id="badge-video-player"></span>
           </button>
-          <button class="activity-bar-btn" id="btn-live" title="Live (Ctrl+Shift+P)">
+          <button class="activity-bar-btn" id="btn-live" data-bottom-tab="live" title="Live (Ctrl+Shift+P)">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3" fill="currentColor"></circle><path d="M16.24 7.76a6 6 0 0 1 0 8.49"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path><path d="M7.76 16.24a6 6 0 0 1 0-8.49"></path><path d="M4.93 19.07a10 10 0 0 1 0-14.14"></path></svg>
             <span class="activity-badge" id="badge-live"></span>
           </button>
@@ -169,63 +170,6 @@
             </div>
           </div>
 
-          <!-- Stats Panel -->
-          <div class="panel-view" id="panel-stats" data-panel="stats">
-            <div id="file-stats" class="stats-content">
-              <p class="placeholder">No file loaded</p>
-            </div>
-          </div>
-
-          <!-- Analysis Panel (includes duplicates) -->
-          <div class="panel-view" id="panel-analysis" data-panel="analysis">
-            <div id="analysis-results" class="analysis-content">
-              <p class="placeholder">Run analysis to see results</p>
-            </div>
-            <div class="panel-sub-section">
-              <div class="panel-sub-header">Duplicates</div>
-              <div id="duplicates-list" class="duplicates-content">
-                <p class="placeholder">No duplicates found</p>
-              </div>
-            </div>
-          </div>
-
-          <!-- Time Gaps Panel -->
-          <div class="panel-view" id="panel-time-gaps" data-panel="time-gaps">
-            <div class="time-gap-controls">
-              <label class="time-gap-label">
-                Threshold:
-                <input type="number" id="time-gap-threshold" class="time-gap-input" value="30" min="1"> sec
-              </label>
-              <button id="btn-detect-gaps" class="secondary-btn small">Detect</button>
-              <button id="btn-cancel-gaps" class="secondary-btn small danger hidden">Cancel</button>
-              <button id="btn-clear-gaps" class="secondary-btn small">Clear</button>
-            </div>
-            <div id="time-gap-nav" class="nav-controls hidden">
-              <button id="btn-prev-gap" class="nav-btn" title="Previous gap">&#9664;</button>
-              <span id="gap-nav-position" class="nav-position">0/0</span>
-              <button id="btn-next-gap" class="nav-btn" title="Next gap">&#9654;</button>
-            </div>
-            <div class="time-gap-range">
-              <div class="range-row">
-                <label class="range-label">Lines:</label>
-                <input type="number" id="time-gap-start-line" class="range-input" placeholder="Start" min="1">
-                <span class="range-separator">-</span>
-                <input type="number" id="time-gap-end-line" class="range-input" placeholder="End" min="1">
-              </div>
-              <div class="range-row">
-                <label class="range-label">Between:</label>
-                <input type="text" id="time-gap-start-pattern" class="range-pattern-input" placeholder="Start pattern (e.g. 10:00:00)">
-              </div>
-              <div class="range-row">
-                <label class="range-label">and:</label>
-                <input type="text" id="time-gap-end-pattern" class="range-pattern-input" placeholder="End pattern (e.g. 11:00:00)">
-              </div>
-            </div>
-            <div id="time-gaps-list" class="time-gaps-content">
-              <p class="placeholder">Click Detect to find time gaps</p>
-            </div>
-          </div>
-
           <!-- Bookmarks Panel -->
           <div class="panel-view" id="panel-bookmarks" data-panel="bookmarks">
             <div class="section-header-inline">
@@ -254,6 +198,13 @@
               <p class="placeholder">No highlight rules</p>
             </div>
             <button id="btn-add-highlight" class="add-btn">+ Add Highlight Rule</button>
+          </div>
+
+          <!-- Stats Panel -->
+          <div class="panel-view" id="panel-stats" data-panel="stats">
+            <div id="file-stats" class="stats-content">
+              <p class="placeholder">No file loaded</p>
+            </div>
           </div>
 
           <!-- History Panel -->
@@ -343,151 +294,178 @@
       </main>
     </div>
 
-    <!-- Notes Drawer (slide-up from bottom) -->
-    <div id="notes-overlay" class="notes-overlay hidden">
-      <div id="notes-drawer" class="notes-drawer">
-        <div id="notes-resize-handle" class="notes-resize-handle-top"></div>
-        <div class="notes-drawer-header">
-          <span class="notes-title">Notes</span>
-          <span id="notes-save-status" class="notes-save-status"></span>
-          <button id="btn-notes-close" class="notes-close-btn" title="Close (Esc)">&times;</button>
+    <!-- Bottom Panel (tabbed) -->
+    <div id="bottom-panel" class="bottom-panel hidden">
+      <div id="bottom-panel-resize-handle" class="bottom-panel-resize-handle"></div>
+      <div class="bottom-panel-header">
+        <div class="bottom-panel-tabs">
+          <button class="bottom-tab-btn" data-bottom-tab="analysis">Analysis</button>
+          <button class="bottom-tab-btn" data-bottom-tab="time-gaps">Time Gaps</button>
+          <button class="bottom-tab-btn" data-bottom-tab="search-results">Search Results</button>
+          <button class="bottom-tab-btn" data-bottom-tab="search-configs">Search Configs</button>
+          <button class="bottom-tab-btn" data-bottom-tab="video">Video</button>
+          <button class="bottom-tab-btn" data-bottom-tab="live">Live</button>
+          <button class="bottom-tab-btn" data-bottom-tab="notes">Notes</button>
         </div>
-        <textarea id="notes-textarea" class="notes-textarea"
-                  placeholder="Type your notes here... (auto-saved)"></textarea>
+        <button id="btn-bottom-panel-close" class="bottom-panel-close-btn" title="Close panel">&times;</button>
       </div>
-    </div>
-
-    <!-- Search Results Panel (slide-up from bottom) -->
-    <div id="search-results-overlay" class="search-results-overlay hidden">
-      <div id="search-results-panel" class="search-results-panel">
-        <div id="search-results-resize-handle" class="search-results-resize-handle-top"></div>
-        <div class="search-results-header">
-          <span class="search-results-title">Search Results</span>
-          <span id="search-results-summary" class="search-results-summary"></span>
-          <button id="btn-search-results-close" class="search-results-close-btn" title="Close (Esc)">&times;</button>
-        </div>
-        <div id="search-results-list" class="search-results-list"></div>
-      </div>
-    </div>
-
-    <!-- Search Configs Panel (slide-up from bottom) -->
-    <div id="search-configs-overlay" class="search-configs-overlay hidden">
-      <div id="search-configs-panel" class="search-configs-panel">
-        <div id="search-configs-resize-handle" class="search-configs-resize-handle-top"></div>
-        <div class="search-configs-header">
-          <span class="search-configs-title">Search Configs</span>
-          <span id="search-configs-summary" class="search-configs-summary"></span>
-          <button id="btn-search-configs-close" class="search-configs-close-btn" title="Close (Esc)">&times;</button>
-        </div>
-        <div id="search-configs-chips" class="search-configs-chips">
-          <button id="btn-add-search-config" class="search-config-add-btn" title="Add search config">+ Add</button>
-        </div>
-        <div id="search-configs-form" class="search-configs-form hidden">
-          <input type="text" id="sc-pattern-input" class="sc-pattern-input" placeholder="Search pattern...">
-          <div class="sc-form-toggles">
-            <label class="sc-toggle-label"><input type="checkbox" id="sc-regex"> Regex</label>
-            <label class="sc-toggle-label"><input type="checkbox" id="sc-match-case"> Case</label>
-            <label class="sc-toggle-label"><input type="checkbox" id="sc-whole-word"> Word</label>
-            <label class="sc-toggle-label" title="Global configs apply to all files"><input type="checkbox" id="sc-global"> Global</label>
+      <div class="bottom-panel-body">
+        <!-- Analysis tab -->
+        <div class="bottom-tab-view" data-bottom-tab="analysis">
+          <div class="bottom-tab-sub-header">
+            <button id="btn-run-analysis" class="secondary-btn small">Run Analysis</button>
           </div>
-          <input type="color" id="sc-color-input" class="sc-color-input" value="#ffff00">
-          <button id="btn-sc-save" class="sc-form-btn primary">Save</button>
-          <button id="btn-sc-cancel" class="sc-form-btn">Cancel</button>
+          <div id="analysis-results" class="analysis-content">
+            <p class="placeholder">Run analysis to see results</p>
+          </div>
         </div>
-        <div id="search-configs-results" class="search-configs-results"></div>
-      </div>
-    </div>
-
-    <!-- Video Player Panel (slide-up from bottom) -->
-    <div id="video-overlay" class="video-overlay hidden">
-      <div id="video-panel" class="video-panel">
-        <div id="video-resize-handle" class="video-resize-handle-top"></div>
-        <div class="video-panel-header">
-          <span class="video-panel-title">Video Player</span>
-          <span id="video-file-name" class="video-file-name"></span>
-          <button id="btn-video-close" class="video-close-btn" title="Close (Esc)">&times;</button>
-        </div>
-        <div class="video-panel-body">
-          <div id="video-container" class="video-container">
-            <video id="video-element" class="video-element" controls></video>
-            <div id="video-drop-zone" class="video-drop-zone">
-              <div class="video-drop-zone-content">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><polygon points="10 8 16 12 10 16 10 8"></polygon></svg>
-                <p>Drag & drop a video file here</p>
-                <button id="btn-video-open" class="video-open-btn">Open Video</button>
-              </div>
+        <!-- Time Gaps tab -->
+        <div class="bottom-tab-view" data-bottom-tab="time-gaps">
+          <div class="time-gap-controls">
+            <label class="time-gap-label">
+              Threshold:
+              <input type="number" id="time-gap-threshold" class="time-gap-input" value="30" min="1"> sec
+            </label>
+            <button id="btn-detect-gaps" class="secondary-btn small">Detect</button>
+            <button id="btn-cancel-gaps" class="secondary-btn small danger hidden">Cancel</button>
+            <button id="btn-clear-gaps" class="secondary-btn small">Clear</button>
+          </div>
+          <div id="time-gap-nav" class="nav-controls hidden">
+            <button id="btn-prev-gap" class="nav-btn" title="Previous gap">&#9664;</button>
+            <span id="gap-nav-position" class="nav-position">0/0</span>
+            <button id="btn-next-gap" class="nav-btn" title="Next gap">&#9654;</button>
+          </div>
+          <div class="time-gap-range">
+            <div class="range-row">
+              <label class="range-label">Lines:</label>
+              <input type="number" id="time-gap-start-line" class="range-input" placeholder="Start" min="1">
+              <span class="range-separator">-</span>
+              <input type="number" id="time-gap-end-line" class="range-input" placeholder="End" min="1">
+            </div>
+            <div class="range-row">
+              <label class="range-label">Between:</label>
+              <input type="text" id="time-gap-start-pattern" class="range-pattern-input" placeholder="Start pattern (e.g. 10:00:00)">
+            </div>
+            <div class="range-row">
+              <label class="range-label">and:</label>
+              <input type="text" id="time-gap-end-pattern" class="range-pattern-input" placeholder="End pattern (e.g. 11:00:00)">
             </div>
           </div>
-          <div class="video-sync-bar">
-            <label class="video-sync-label">Sync:</label>
-            <input type="text" id="video-sync-input" class="video-sync-input" placeholder="Log timestamp at video start" title="Enter the log timestamp that corresponds to video start (0:00)">
-            <button id="btn-video-sync-from-line" class="video-sync-btn" title="Sync selected line to current video time">Set from line</button>
-            <span id="video-sync-status" class="video-sync-status"></span>
+          <div id="time-gaps-list" class="time-gaps-content">
+            <p class="placeholder">Click Detect to find time gaps</p>
           </div>
         </div>
-      </div>
-    </div>
-
-    <!-- Live Panel (slide-up from bottom) -->
-    <div id="live-overlay" class="live-overlay hidden">
-      <div id="live-panel" class="live-panel">
-        <div id="live-resize-handle" class="live-resize-handle-top"></div>
-        <div class="live-panel-header">
-          <span class="live-panel-title">Live</span>
-          <span id="live-status-text" class="live-status-text"></span>
-          <button id="btn-live-close" class="live-close-btn" title="Close (Esc)">&times;</button>
+        <!-- Search Results tab -->
+        <div class="bottom-tab-view" data-bottom-tab="search-results">
+          <div class="bottom-tab-sub-header">
+            <span id="search-results-summary" class="search-results-summary"></span>
+          </div>
+          <div id="search-results-list" class="search-results-list"></div>
         </div>
-        <div class="live-panel-body">
-          <div class="live-controls">
-            <input type="text" id="live-name-input" class="live-name-input" placeholder="Connection name (optional)">
-            <label class="live-label">Source:</label>
-            <select id="live-source-select" class="live-select">
-              <option value="serial">Serial Port</option>
-              <option value="logcat">Android Logcat</option>
-            </select>
-            <!-- Serial controls -->
-            <span id="live-serial-controls" class="live-source-controls">
-              <label class="live-label">Port:</label>
-              <select id="live-port-select" class="live-select">
-                <option value="">Select port...</option>
-              </select>
-              <button id="btn-live-refresh" class="live-ctrl-btn" title="Refresh ports">&#8635;</button>
-              <label class="live-label">Baud:</label>
-              <select id="live-baud-select" class="live-select">
-                <option value="9600">9600</option>
-                <option value="19200">19200</option>
-                <option value="38400">38400</option>
-                <option value="57600">57600</option>
-                <option value="115200" selected>115200</option>
-                <option value="230400">230400</option>
-                <option value="460800">460800</option>
-                <option value="921600">921600</option>
-              </select>
-            </span>
-            <!-- Logcat controls -->
-            <span id="live-logcat-controls" class="live-source-controls" style="display:none">
-              <label class="live-label">Device:</label>
-              <select id="live-device-select" class="live-select">
-                <option value="">Select device...</option>
-              </select>
-              <button id="btn-live-refresh-devices" class="live-ctrl-btn" title="Refresh devices">&#8635;</button>
-              <label class="live-label">Filter:</label>
-              <input type="text" id="live-filter-input" class="live-name-input" placeholder="*:E" style="width:80px">
-            </span>
-            <button id="btn-live-connect" class="live-connect-btn">Connect</button>
+        <!-- Search Configs tab -->
+        <div class="bottom-tab-view" data-bottom-tab="search-configs">
+          <div id="sc-sessions-chips" class="sc-sessions-chips"></div>
+          <div id="search-configs-chips" class="search-configs-chips">
+            <button id="btn-add-search-config" class="search-config-add-btn" title="Add search config">+ Add</button>
+            <button id="btn-sc-export-all" class="search-config-add-btn" title="Export all results" style="display:none">Export All</button>
           </div>
-          <div class="live-info-bar">
-            <span id="live-line-count" class="live-info-item">Lines: 0</span>
-            <span id="live-duration" class="live-info-item"></span>
-            <label class="live-follow-label">
-              <input type="checkbox" id="live-follow" checked> Follow
-            </label>
-            <div class="live-info-spacer"></div>
-            <button id="btn-live-save" class="live-ctrl-btn" disabled>Save Session</button>
+          <div id="search-configs-form" class="search-configs-form hidden">
+            <input type="text" id="sc-pattern-input" class="sc-pattern-input" placeholder="Search pattern...">
+            <div class="sc-form-toggles">
+              <label class="sc-toggle-label"><input type="checkbox" id="sc-regex"> Regex</label>
+              <label class="sc-toggle-label"><input type="checkbox" id="sc-match-case"> Case</label>
+              <label class="sc-toggle-label"><input type="checkbox" id="sc-whole-word"> Word</label>
+              <label class="sc-toggle-label" title="Global configs apply to all files"><input type="checkbox" id="sc-global"> Global</label>
+            </div>
+            <input type="color" id="sc-color-input" class="sc-color-input" value="#ffff00">
+            <button id="btn-sc-save" class="sc-form-btn primary">Save</button>
+            <button id="btn-sc-cancel" class="sc-form-btn">Cancel</button>
           </div>
-          <div id="live-minimap" class="live-minimap">
-            <canvas id="live-minimap-canvas" class="live-minimap-canvas"></canvas>
+          <div id="search-configs-results" class="search-configs-results"></div>
+        </div>
+        <!-- Video tab -->
+        <div class="bottom-tab-view" data-bottom-tab="video">
+          <div class="video-panel-body">
+            <div id="video-container" class="video-container">
+              <video id="video-element" class="video-element" controls></video>
+              <div id="video-drop-zone" class="video-drop-zone">
+                <div class="video-drop-zone-content">
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><polygon points="10 8 16 12 10 16 10 8"></polygon></svg>
+                  <p>Drag & drop a video file here</p>
+                  <button id="btn-video-open" class="video-open-btn">Open Video</button>
+                </div>
+              </div>
+            </div>
+            <div class="video-sync-bar">
+              <label class="video-sync-label">Sync:</label>
+              <input type="text" id="video-sync-input" class="video-sync-input" placeholder="Log timestamp at video start" title="Enter the log timestamp that corresponds to video start (0:00)">
+              <button id="btn-video-sync-from-line" class="video-sync-btn" title="Sync selected line to current video time">Set from line</button>
+              <span id="video-file-name" class="video-file-name"></span>
+              <span id="video-sync-status" class="video-sync-status"></span>
+            </div>
           </div>
+        </div>
+        <!-- Live tab -->
+        <div class="bottom-tab-view" data-bottom-tab="live">
+          <div class="live-panel-body">
+            <div class="live-controls">
+              <input type="text" id="live-name-input" class="live-name-input" placeholder="Connection name (optional)">
+              <label class="live-label">Source:</label>
+              <select id="live-source-select" class="live-select">
+                <option value="serial">Serial Port</option>
+                <option value="logcat">Android Logcat</option>
+              </select>
+              <span id="live-serial-controls" class="live-source-controls">
+                <label class="live-label">Port:</label>
+                <select id="live-port-select" class="live-select">
+                  <option value="">Select port...</option>
+                </select>
+                <button id="btn-live-refresh" class="live-ctrl-btn" title="Refresh ports">&#8635;</button>
+                <label class="live-label">Baud:</label>
+                <select id="live-baud-select" class="live-select">
+                  <option value="9600">9600</option>
+                  <option value="19200">19200</option>
+                  <option value="38400">38400</option>
+                  <option value="57600">57600</option>
+                  <option value="115200" selected>115200</option>
+                  <option value="230400">230400</option>
+                  <option value="460800">460800</option>
+                  <option value="921600">921600</option>
+                </select>
+              </span>
+              <span id="live-logcat-controls" class="live-source-controls" style="display:none">
+                <label class="live-label">Device:</label>
+                <select id="live-device-select" class="live-select">
+                  <option value="">Select device...</option>
+                </select>
+                <button id="btn-live-refresh-devices" class="live-ctrl-btn" title="Refresh devices">&#8635;</button>
+                <label class="live-label">Filter:</label>
+                <input type="text" id="live-filter-input" class="live-name-input" placeholder="*:E" style="width:80px">
+              </span>
+              <button id="btn-live-connect" class="live-connect-btn">Connect</button>
+            </div>
+            <div class="live-info-bar">
+              <span id="live-line-count" class="live-info-item">Lines: 0</span>
+              <span id="live-duration" class="live-info-item"></span>
+              <span id="live-status-text" class="live-status-text"></span>
+              <label class="live-follow-label">
+                <input type="checkbox" id="live-follow" checked> Follow
+              </label>
+              <div class="live-info-spacer"></div>
+              <button id="btn-live-save" class="live-ctrl-btn" disabled>Save Session</button>
+            </div>
+            <div id="live-minimap" class="live-minimap">
+              <canvas id="live-minimap-canvas" class="live-minimap-canvas"></canvas>
+            </div>
+          </div>
+        </div>
+        <!-- Notes tab -->
+        <div class="bottom-tab-view" data-bottom-tab="notes">
+          <div class="notes-tab-header">
+            <span id="notes-save-status" class="notes-save-status"></span>
+          </div>
+          <textarea id="notes-textarea" class="notes-textarea"
+                    placeholder="Type your notes here... (auto-saved)"></textarea>
         </div>
       </div>
     </div>
@@ -734,19 +712,20 @@
             <h4>Terminal & Notes</h4>
             <div class="shortcut-list">
               <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>`</kbd><span>Toggle terminal panel</span></div>
-              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd><span>Toggle notes drawer</span></div>
-              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd><span>Toggle search results panel</span></div>
-              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>8</kbd><span>Toggle search configs panel</span></div>
-              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>9</kbd><span>Toggle video player</span></div>
-              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd><span>Toggle live panel</span></div>
-              <div class="shortcut-item"><kbd>Esc</kbd><span>Close terminal/notes/search results/search configs/video/live (when focused)</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd><span>Toggle notes tab</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd><span>Toggle search results tab</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd><span>Toggle live tab</span></div>
+              <div class="shortcut-item"><kbd>Esc</kbd><span>Close bottom panel / terminal</span></div>
             </div>
           </div>
           <div class="help-section">
             <h4>Panels</h4>
             <div class="shortcut-list">
-              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>1</kbd>...<kbd>7</kbd><span>Toggle panel (Folders/Stats/Analysis/Gaps/Bookmarks/Highlights/History)</span></div>
-              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>\</kbd><span>Toggle panel visibility</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>1</kbd>...<kbd>5</kbd><span>Toggle sidebar (Folders/Bookmarks/Highlights/Stats/History)</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>6</kbd>...<kbd>7</kbd><span>Toggle bottom panel (Analysis/Time Gaps)</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>8</kbd><span>Toggle search configs</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>9</kbd><span>Toggle video player</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>\</kbd><span>Toggle sidebar visibility</span></div>
               <div class="shortcut-item"><kbd>Esc</kbd><span>Close panel (when focused)</span></div>
             </div>
           </div>

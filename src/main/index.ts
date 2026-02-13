@@ -5,7 +5,7 @@ import * as os from 'os';
 import { spawn } from 'child_process';
 import * as pty from 'node-pty';
 import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
-import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, ActivityEntry, LocalFileData } from '../shared/types';
+import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData } from '../shared/types';
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
@@ -2139,6 +2139,98 @@ ipcMain.handle(IPC.SEARCH_CONFIG_EXPORT, async (_, configId: string, lines: stri
   } catch (error) {
     return { success: false, error: String(error) };
   }
+});
+
+ipcMain.handle(IPC.SEARCH_CONFIG_EXPORT_ALL, async (_, content: string) => {
+  if (!currentFilePath) return { success: false, error: 'No file open' };
+
+  try {
+    const baseName = path.basename(currentFilePath, path.extname(currentFilePath));
+    const date = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+    const exportName = `${baseName}_multi-search_${date}.txt`;
+    const exportPath = path.join(path.dirname(currentFilePath), exportName);
+    fs.writeFileSync(exportPath, content, 'utf-8');
+    return { success: true, filePath: exportPath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// === Search Config Sessions ===
+
+const getSearchConfigSessionsPath = () => path.join(getConfigDir(), 'search-config-sessions.json');
+
+function loadGlobalSearchConfigSessions(): SearchConfigSession[] {
+  try {
+    const filePath = getSearchConfigSessionsPath();
+    if (fs.existsSync(filePath)) {
+      return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    }
+  } catch { /* ignore */ }
+  return [];
+}
+
+function saveGlobalSearchConfigSessions(sessions: SearchConfigSession[]): void {
+  ensureConfigDir();
+  fs.writeFileSync(getSearchConfigSessionsPath(), JSON.stringify(sessions, null, 2), 'utf-8');
+}
+
+function loadLocalSearchConfigSessions(filePath: string): SearchConfigSession[] {
+  try {
+    const data = loadLocalFileData(filePath);
+    return (data as any).searchConfigSessions || [];
+  } catch { /* ignore */ }
+  return [];
+}
+
+function saveLocalSearchConfigSessions(filePath: string, sessions: SearchConfigSession[]): void {
+  const data = loadLocalFileData(filePath);
+  (data as any).searchConfigSessions = sessions;
+  saveLocalFileData(filePath, data);
+}
+
+ipcMain.handle(IPC.SEARCH_CONFIG_SESSION_LIST, async () => {
+  const globalSessions = loadGlobalSearchConfigSessions().map(s => ({ ...s, isGlobal: true }));
+  const localSessions = currentFilePath
+    ? loadLocalSearchConfigSessions(currentFilePath).map(s => ({ ...s, isGlobal: false }))
+    : [];
+  return { success: true, sessions: [...globalSessions, ...localSessions] };
+});
+
+ipcMain.handle(IPC.SEARCH_CONFIG_SESSION_SAVE, async (_, session: SearchConfigSession) => {
+  if (session.isGlobal) {
+    const sessions = loadGlobalSearchConfigSessions();
+    const existingIdx = sessions.findIndex(s => s.id === session.id);
+    if (existingIdx >= 0) {
+      sessions[existingIdx] = session;
+    } else {
+      sessions.push(session);
+    }
+    saveGlobalSearchConfigSessions(sessions);
+  } else {
+    if (!currentFilePath) return { success: false, error: 'No file open' };
+    const sessions = loadLocalSearchConfigSessions(currentFilePath);
+    const existingIdx = sessions.findIndex(s => s.id === session.id);
+    if (existingIdx >= 0) {
+      sessions[existingIdx] = session;
+    } else {
+      sessions.push(session);
+    }
+    saveLocalSearchConfigSessions(currentFilePath, sessions);
+  }
+  return { success: true };
+});
+
+ipcMain.handle(IPC.SEARCH_CONFIG_SESSION_DELETE, async (_, sessionId: string, isGlobal: boolean) => {
+  if (isGlobal) {
+    const sessions = loadGlobalSearchConfigSessions().filter(s => s.id !== sessionId);
+    saveGlobalSearchConfigSessions(sessions);
+  } else {
+    if (!currentFilePath) return { success: false, error: 'No file open' };
+    const sessions = loadLocalSearchConfigSessions(currentFilePath).filter(s => s.id !== sessionId);
+    saveLocalSearchConfigSessions(currentFilePath, sessions);
+  }
+  return { success: true };
 });
 
 // === Utility ===
