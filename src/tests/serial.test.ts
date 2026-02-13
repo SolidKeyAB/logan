@@ -3,6 +3,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { FileHandler } from '../main/fileHandler';
+import { wallClockPrefix } from '../main/serialHandler';
+import { parseAdbDevices } from '../main/logcatHandler';
 
 // ─── FileHandler.indexNewLines() Tests ──────────────────────────────
 
@@ -338,6 +340,259 @@ describe('Serial line buffering simulation', () => {
       expect(allLines[1].level).toBe('info');
       expect(allLines[2].level).toBe('warning');
       expect(allLines[3].level).toBe('debug');
+    } finally {
+      handler.close();
+    }
+  });
+});
+
+// ─── Wall Clock Timestamp Tests ──────────────────────────────────────
+
+describe('wallClockPrefix', () => {
+  it('should return a string in [HH:MM:SS.mmm] format', () => {
+    const prefix = wallClockPrefix();
+    expect(prefix).toMatch(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\]$/);
+  });
+
+  it('should return consistent length', () => {
+    for (let i = 0; i < 10; i++) {
+      expect(wallClockPrefix().length).toBe(14); // [HH:MM:SS.mmm] = 14 chars
+    }
+  });
+
+  it('should contain valid time components', () => {
+    const prefix = wallClockPrefix();
+    const match = prefix.match(/^\[(\d{2}):(\d{2}):(\d{2})\.(\d{3})\]$/);
+    expect(match).not.toBeNull();
+    const hours = parseInt(match![1], 10);
+    const minutes = parseInt(match![2], 10);
+    const seconds = parseInt(match![3], 10);
+    const millis = parseInt(match![4], 10);
+    expect(hours).toBeGreaterThanOrEqual(0);
+    expect(hours).toBeLessThan(24);
+    expect(minutes).toBeGreaterThanOrEqual(0);
+    expect(minutes).toBeLessThan(60);
+    expect(seconds).toBeGreaterThanOrEqual(0);
+    expect(seconds).toBeLessThan(60);
+    expect(millis).toBeGreaterThanOrEqual(0);
+    expect(millis).toBeLessThan(1000);
+  });
+});
+
+// ─── Wall Clock Timestamp in Line Buffering ──────────────────────────
+
+describe('Wall clock timestamp prepending in serial data', () => {
+  let tempDir: string;
+  let tempFile: string;
+  let fd: number;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'logan-ts-test-'));
+    tempFile = path.join(tempDir, 'timestamped.log');
+    fs.writeFileSync(tempFile, '');
+    fd = fs.openSync(tempFile, 'a');
+  });
+
+  afterEach(() => {
+    try { fs.closeSync(fd); } catch {}
+    try { fs.rmSync(tempDir, { recursive: true }); } catch {}
+  });
+
+  // Simulate serial handleData with timestamp prepending
+  function simulateTimestampedHandleData(chunk: string, lineBuffer: { value: string }): string[] {
+    lineBuffer.value += chunk;
+    const lines: string[] = [];
+    let i = 0;
+    let lineStart = 0;
+
+    while (i < lineBuffer.value.length) {
+      const ch = lineBuffer.value[i];
+      if (ch === '\n') {
+        lines.push(lineBuffer.value.substring(lineStart, i));
+        lineStart = i + 1;
+      } else if (ch === '\r') {
+        lines.push(lineBuffer.value.substring(lineStart, i));
+        if (i + 1 < lineBuffer.value.length && lineBuffer.value[i + 1] === '\n') {
+          i++;
+        }
+        lineStart = i + 1;
+      }
+      i++;
+    }
+    lineBuffer.value = lineBuffer.value.substring(lineStart);
+    return lines;
+  }
+
+  it('should prepend wall clock timestamps to each line', () => {
+    const buf = { value: '' };
+    const lines = simulateTimestampedHandleData('hello\nworld\n', buf);
+    expect(lines).toHaveLength(2);
+
+    // Simulate what SerialHandler.handleData now does
+    const ts = wallClockPrefix();
+    const data = lines.map(l => ts + ' ' + l + '\n').join('');
+    fs.writeSync(fd, data);
+    fs.closeSync(fd);
+    fd = -1 as any;
+
+    const content = fs.readFileSync(tempFile, 'utf-8');
+    const fileLines = content.split('\n').filter(l => l.length > 0);
+    expect(fileLines).toHaveLength(2);
+    for (const line of fileLines) {
+      expect(line).toMatch(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\] /);
+    }
+    expect(fileLines[0]).toContain('hello');
+    expect(fileLines[1]).toContain('world');
+  });
+
+  it('should produce timestamps that time-gap detection can parse', async () => {
+    const buf = { value: '' };
+    const handler = new FileHandler();
+
+    try {
+      const ts = wallClockPrefix();
+      const lines = ['log message 1', 'log message 2'];
+      const data = lines.map(l => ts + ' ' + l + '\n').join('');
+      fs.writeSync(fd, data);
+
+      await handler.open(tempFile);
+      expect(handler.getTotalLines()).toBe(2);
+
+      const allLines = handler.getLines(0, 2);
+      // Verify each line starts with the timestamp prefix
+      for (const line of allLines) {
+        expect(line.text).toMatch(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\]/);
+      }
+    } finally {
+      handler.close();
+    }
+  });
+});
+
+// ─── Logcat adb devices parsing ──────────────────────────────────────
+
+describe('parseAdbDevices', () => {
+  it('should parse standard adb devices output', () => {
+    const output = `List of devices attached
+abc123\tdevice usb:1-1 product:oriole model:Pixel_6 device:oriole transport_id:1
+def456\tdevice usb:1-2 product:raven model:Pixel_6_Pro device:raven transport_id:2
+
+`;
+    const devices = parseAdbDevices(output);
+    expect(devices).toHaveLength(2);
+    expect(devices[0]).toEqual({ id: 'abc123', state: 'device', model: 'Pixel 6' });
+    expect(devices[1]).toEqual({ id: 'def456', state: 'device', model: 'Pixel 6 Pro' });
+  });
+
+  it('should handle devices with no model info', () => {
+    const output = `List of devices attached
+emulator-5554\tdevice
+
+`;
+    const devices = parseAdbDevices(output);
+    expect(devices).toHaveLength(1);
+    expect(devices[0]).toEqual({ id: 'emulator-5554', state: 'device', model: undefined });
+  });
+
+  it('should include unauthorized devices', () => {
+    const output = `List of devices attached
+abc123\tunauthorized usb:1-1 transport_id:1
+
+`;
+    const devices = parseAdbDevices(output);
+    expect(devices).toHaveLength(1);
+    expect(devices[0].state).toBe('unauthorized');
+  });
+
+  it('should handle empty device list', () => {
+    const output = `List of devices attached
+
+`;
+    const devices = parseAdbDevices(output);
+    expect(devices).toHaveLength(0);
+  });
+
+  it('should handle no adb output', () => {
+    const devices = parseAdbDevices('');
+    expect(devices).toHaveLength(0);
+  });
+
+  it('should skip daemon messages', () => {
+    const output = `* daemon not running; starting now at tcp:5037
+* daemon started successfully
+List of devices attached
+abc123\tdevice model:Pixel_7 transport_id:1
+
+`;
+    const devices = parseAdbDevices(output);
+    expect(devices).toHaveLength(1);
+    expect(devices[0].id).toBe('abc123');
+  });
+});
+
+// ─── Logcat line buffering with timestamps ───────────────────────────
+
+describe('Logcat line buffering with timestamps', () => {
+  let tempDir: string;
+  let tempFile: string;
+  let fd: number;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'logan-logcat-test-'));
+    tempFile = path.join(tempDir, 'logcat.log');
+    fs.writeFileSync(tempFile, '');
+    fd = fs.openSync(tempFile, 'a');
+  });
+
+  afterEach(() => {
+    try { fs.closeSync(fd); } catch {}
+    try { fs.rmSync(tempDir, { recursive: true }); } catch {}
+  });
+
+  it('should write logcat lines with wall clock timestamps to temp file', () => {
+    // Simulate adb logcat output arriving in chunks
+    const logcatLines = [
+      '01-01 12:00:00.000  1234  5678 E ActivityManager: ANR in com.example.app',
+      '01-01 12:00:00.001  1234  5678 W System.err: at com.example.App.main(App.java:42)',
+    ];
+
+    const ts = wallClockPrefix();
+    const data = logcatLines.map(l => ts + ' ' + l + '\n').join('');
+    fs.writeSync(fd, data);
+    fs.closeSync(fd);
+    fd = -1 as any;
+
+    const content = fs.readFileSync(tempFile, 'utf-8');
+    const fileLines = content.split('\n').filter(l => l.length > 0);
+    expect(fileLines).toHaveLength(2);
+
+    // Each line should have wall clock prefix followed by the logcat output
+    for (const line of fileLines) {
+      expect(line).toMatch(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\] /);
+    }
+    expect(fileLines[0]).toContain('ANR in com.example.app');
+    expect(fileLines[1]).toContain('System.err');
+  });
+
+  it('should integrate with FileHandler for timestamped logcat data', async () => {
+    const handler = new FileHandler();
+
+    try {
+      const ts = wallClockPrefix();
+      const lines = [
+        ts + ' 01-01 12:00:00.000  1234 E TAG: Error message\n',
+        ts + ' 01-01 12:00:00.001  1234 I TAG: Info message\n',
+      ];
+      fs.writeSync(fd, lines.join(''));
+
+      await handler.open(tempFile);
+      expect(handler.getTotalLines()).toBe(2);
+
+      // Append more lines
+      fs.writeSync(fd, ts + ' 01-01 12:00:00.002  1234 W TAG: Warning\n');
+      const newCount = handler.indexNewLines();
+      expect(newCount).toBe(1);
+      expect(handler.getTotalLines()).toBe(3);
     } finally {
       handler.close();
     }

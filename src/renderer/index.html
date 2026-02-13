@@ -128,9 +128,9 @@
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><polygon points="10 8 16 12 10 16 10 8"></polygon></svg>
             <span class="activity-badge" id="badge-video-player"></span>
           </button>
-          <button class="activity-bar-btn" id="btn-serial" title="Serial Port (Ctrl+Shift+P)">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2v6M18 2v6M6 16v6M18 16v6"></path><rect x="2" y="8" width="8" height="8" rx="1"></rect><rect x="14" y="8" width="8" height="8" rx="1"></rect><line x1="10" y1="12" x2="14" y2="12"></line></svg>
-            <span class="activity-badge" id="badge-serial"></span>
+          <button class="activity-bar-btn" id="btn-live" title="Live (Ctrl+Shift+P)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3" fill="currentColor"></circle><path d="M16.24 7.76a6 6 0 0 1 0 8.49"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path><path d="M7.76 16.24a6 6 0 0 1 0-8.49"></path><path d="M4.93 19.07a10 10 0 0 1 0-14.14"></path></svg>
+            <span class="activity-badge" id="badge-live"></span>
           </button>
         </div>
         <div class="activity-bar-bottom">
@@ -428,47 +428,65 @@
       </div>
     </div>
 
-    <!-- Serial Port Panel (slide-up from bottom) -->
-    <div id="serial-overlay" class="serial-overlay hidden">
-      <div id="serial-panel" class="serial-panel">
-        <div id="serial-resize-handle" class="serial-resize-handle-top"></div>
-        <div class="serial-panel-header">
-          <span class="serial-panel-title">Serial Port</span>
-          <span id="serial-status-text" class="serial-status-text"></span>
-          <button id="btn-serial-close" class="serial-close-btn" title="Close (Esc)">&times;</button>
+    <!-- Live Panel (slide-up from bottom) -->
+    <div id="live-overlay" class="live-overlay hidden">
+      <div id="live-panel" class="live-panel">
+        <div id="live-resize-handle" class="live-resize-handle-top"></div>
+        <div class="live-panel-header">
+          <span class="live-panel-title">Live</span>
+          <span id="live-status-text" class="live-status-text"></span>
+          <button id="btn-live-close" class="live-close-btn" title="Close (Esc)">&times;</button>
         </div>
-        <div class="serial-panel-body">
-          <div class="serial-controls">
-            <input type="text" id="serial-name-input" class="serial-name-input" placeholder="Connection name (optional)">
-            <label class="serial-label">Port:</label>
-            <select id="serial-port-select" class="serial-select">
-              <option value="">Select port...</option>
+        <div class="live-panel-body">
+          <div class="live-controls">
+            <input type="text" id="live-name-input" class="live-name-input" placeholder="Connection name (optional)">
+            <label class="live-label">Source:</label>
+            <select id="live-source-select" class="live-select">
+              <option value="serial">Serial Port</option>
+              <option value="logcat">Android Logcat</option>
             </select>
-            <button id="btn-serial-refresh" class="serial-ctrl-btn" title="Refresh ports">&#8635;</button>
-            <label class="serial-label">Baud:</label>
-            <select id="serial-baud-select" class="serial-select">
-              <option value="9600">9600</option>
-              <option value="19200">19200</option>
-              <option value="38400">38400</option>
-              <option value="57600">57600</option>
-              <option value="115200" selected>115200</option>
-              <option value="230400">230400</option>
-              <option value="460800">460800</option>
-              <option value="921600">921600</option>
-            </select>
-            <button id="btn-serial-connect" class="serial-connect-btn">Connect</button>
+            <!-- Serial controls -->
+            <span id="live-serial-controls" class="live-source-controls">
+              <label class="live-label">Port:</label>
+              <select id="live-port-select" class="live-select">
+                <option value="">Select port...</option>
+              </select>
+              <button id="btn-live-refresh" class="live-ctrl-btn" title="Refresh ports">&#8635;</button>
+              <label class="live-label">Baud:</label>
+              <select id="live-baud-select" class="live-select">
+                <option value="9600">9600</option>
+                <option value="19200">19200</option>
+                <option value="38400">38400</option>
+                <option value="57600">57600</option>
+                <option value="115200" selected>115200</option>
+                <option value="230400">230400</option>
+                <option value="460800">460800</option>
+                <option value="921600">921600</option>
+              </select>
+            </span>
+            <!-- Logcat controls -->
+            <span id="live-logcat-controls" class="live-source-controls" style="display:none">
+              <label class="live-label">Device:</label>
+              <select id="live-device-select" class="live-select">
+                <option value="">Select device...</option>
+              </select>
+              <button id="btn-live-refresh-devices" class="live-ctrl-btn" title="Refresh devices">&#8635;</button>
+              <label class="live-label">Filter:</label>
+              <input type="text" id="live-filter-input" class="live-name-input" placeholder="*:E" style="width:80px">
+            </span>
+            <button id="btn-live-connect" class="live-connect-btn">Connect</button>
           </div>
-          <div class="serial-info-bar">
-            <span id="serial-line-count" class="serial-info-item">Lines: 0</span>
-            <span id="serial-duration" class="serial-info-item"></span>
-            <label class="serial-follow-label">
-              <input type="checkbox" id="serial-follow" checked> Follow
+          <div class="live-info-bar">
+            <span id="live-line-count" class="live-info-item">Lines: 0</span>
+            <span id="live-duration" class="live-info-item"></span>
+            <label class="live-follow-label">
+              <input type="checkbox" id="live-follow" checked> Follow
             </label>
-            <div class="serial-info-spacer"></div>
-            <button id="btn-serial-save" class="serial-ctrl-btn" disabled>Save Session</button>
+            <div class="live-info-spacer"></div>
+            <button id="btn-live-save" class="live-ctrl-btn" disabled>Save Session</button>
           </div>
-          <div id="serial-minimap" class="serial-minimap">
-            <canvas id="serial-minimap-canvas" class="serial-minimap-canvas"></canvas>
+          <div id="live-minimap" class="live-minimap">
+            <canvas id="live-minimap-canvas" class="live-minimap-canvas"></canvas>
           </div>
         </div>
       </div>
@@ -720,8 +738,8 @@
               <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd><span>Toggle search results panel</span></div>
               <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>8</kbd><span>Toggle search configs panel</span></div>
               <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>9</kbd><span>Toggle video player</span></div>
-              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd><span>Toggle serial port panel</span></div>
-              <div class="shortcut-item"><kbd>Esc</kbd><span>Close terminal/notes/search results/search configs/video/serial (when focused)</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd><span>Toggle live panel</span></div>
+              <div class="shortcut-item"><kbd>Esc</kbd><span>Close terminal/notes/search results/search configs/video/live (when focused)</span></div>
             </div>
           </div>
           <div class="help-section">

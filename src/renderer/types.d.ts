@@ -328,6 +328,16 @@ interface Api {
   onSerialError: (callback: (message: string) => void) => () => void;
   onSerialDisconnected: (callback: () => void) => () => void;
 
+  // Logcat
+  logcatListDevices: () => Promise<{ success: boolean; devices?: Array<{ id: string; state: string; model?: string }>; error?: string }>;
+  logcatConnect: (config: { device?: string; filter?: string }) => Promise<{ success: boolean; info?: FileInfo; tempFilePath?: string; error?: string }>;
+  logcatDisconnect: () => Promise<{ success: boolean; error?: string }>;
+  logcatStatus: () => Promise<{ connected: boolean; deviceId: string | null; filter: string | null; linesReceived: number; connectedSince: number | null; tempFilePath: string | null }>;
+  logcatSaveSession: () => Promise<{ success: boolean; filePath?: string; error?: string }>;
+  onLogcatLinesAdded: (callback: (data: { totalLines: number; newLines: number }) => void) => () => void;
+  onLogcatError: (callback: (message: string) => void) => () => void;
+  onLogcatDisconnected: (callback: () => void) => () => void;
+
   // Window controls
   windowMinimize: () => Promise<void>;
   windowMaximize: () => Promise<void>;

@@ -290,11 +290,12 @@ interface AppState {
   videoPlayerVisible: boolean;
   videoSyncOffsetMs: number;
   videoFilePath: string | null;
-  // Serial port
-  serialPanelVisible: boolean;
-  serialConnected: boolean;
-  serialFollowMode: boolean;
-  serialConnectionName: string;
+  // Live panel (serial / logcat)
+  livePanelVisible: boolean;
+  liveConnected: boolean;
+  liveFollowMode: boolean;
+  liveConnectionName: string;
+  liveSource: 'serial' | 'logcat';
 }
 
 const state: AppState = {
@@ -336,10 +337,11 @@ const state: AppState = {
   videoPlayerVisible: false,
   videoSyncOffsetMs: 0,
   videoFilePath: null,
-  serialPanelVisible: false,
-  serialConnected: false,
-  serialFollowMode: true,
-  serialConnectionName: '',
+  livePanelVisible: false,
+  liveConnected: false,
+  liveFollowMode: true,
+  liveConnectionName: '',
+  liveSource: 'serial' as 'serial' | 'logcat',
 };
 
 // Constants
@@ -922,23 +924,30 @@ const elements = {
   btnVideoClose: document.getElementById('btn-video-close') as HTMLButtonElement,
   btnVideoOpen: document.getElementById('btn-video-open') as HTMLButtonElement,
   btnVideoSyncFromLine: document.getElementById('btn-video-sync-from-line') as HTMLButtonElement,
-  // Serial port panel
-  serialOverlay: document.getElementById('serial-overlay') as HTMLDivElement,
-  serialPanel: document.getElementById('serial-panel') as HTMLDivElement,
-  serialResizeHandle: document.getElementById('serial-resize-handle') as HTMLDivElement,
-  serialStatusText: document.getElementById('serial-status-text') as HTMLSpanElement,
-  serialNameInput: document.getElementById('serial-name-input') as HTMLInputElement,
-  serialPortSelect: document.getElementById('serial-port-select') as HTMLSelectElement,
-  serialBaudSelect: document.getElementById('serial-baud-select') as HTMLSelectElement,
-  btnSerialRefresh: document.getElementById('btn-serial-refresh') as HTMLButtonElement,
-  btnSerialConnect: document.getElementById('btn-serial-connect') as HTMLButtonElement,
-  btnSerialClose: document.getElementById('btn-serial-close') as HTMLButtonElement,
-  btnSerial: document.getElementById('btn-serial') as HTMLButtonElement,
-  btnSerialSave: document.getElementById('btn-serial-save') as HTMLButtonElement,
-  serialLineCount: document.getElementById('serial-line-count') as HTMLSpanElement,
-  serialDuration: document.getElementById('serial-duration') as HTMLSpanElement,
-  serialFollow: document.getElementById('serial-follow') as HTMLInputElement,
-  serialMinimapCanvas: document.getElementById('serial-minimap-canvas') as HTMLCanvasElement,
+  // Live panel (serial / logcat)
+  liveOverlay: document.getElementById('live-overlay') as HTMLDivElement,
+  livePanel: document.getElementById('live-panel') as HTMLDivElement,
+  liveResizeHandle: document.getElementById('live-resize-handle') as HTMLDivElement,
+  liveStatusText: document.getElementById('live-status-text') as HTMLSpanElement,
+  liveNameInput: document.getElementById('live-name-input') as HTMLInputElement,
+  liveSourceSelect: document.getElementById('live-source-select') as HTMLSelectElement,
+  livePortSelect: document.getElementById('live-port-select') as HTMLSelectElement,
+  liveBaudSelect: document.getElementById('live-baud-select') as HTMLSelectElement,
+  btnLiveRefresh: document.getElementById('btn-live-refresh') as HTMLButtonElement,
+  btnLiveConnect: document.getElementById('btn-live-connect') as HTMLButtonElement,
+  btnLiveClose: document.getElementById('btn-live-close') as HTMLButtonElement,
+  btnLive: document.getElementById('btn-live') as HTMLButtonElement,
+  btnLiveSave: document.getElementById('btn-live-save') as HTMLButtonElement,
+  liveLineCount: document.getElementById('live-line-count') as HTMLSpanElement,
+  liveDuration: document.getElementById('live-duration') as HTMLSpanElement,
+  liveFollow: document.getElementById('live-follow') as HTMLInputElement,
+  liveMinimapCanvas: document.getElementById('live-minimap-canvas') as HTMLCanvasElement,
+  // Logcat-specific controls
+  liveSerialControls: document.getElementById('live-serial-controls') as HTMLSpanElement,
+  liveLogcatControls: document.getElementById('live-logcat-controls') as HTMLSpanElement,
+  liveDeviceSelect: document.getElementById('live-device-select') as HTMLSelectElement,
+  btnLiveRefreshDevices: document.getElementById('btn-live-refresh-devices') as HTMLButtonElement,
+  liveFilterInput: document.getElementById('live-filter-input') as HTMLInputElement,
 };
 
 // Virtual Log Viewer
@@ -4316,8 +4325,8 @@ function showNotesDrawer(): void {
   if (state.videoPlayerVisible) {
     closeVideoPlayer();
   }
-  if (state.serialPanelVisible) {
-    closeSerialPanel();
+  if (state.livePanelVisible) {
+    closeLivePanel();
   }
   elements.notesOverlay.classList.remove('hidden');
   elements.btnNotesToggle.classList.add('active');
@@ -4422,8 +4431,8 @@ function showSearchResultsPanel(): void {
   if (state.videoPlayerVisible) {
     closeVideoPlayer();
   }
-  if (state.serialPanelVisible) {
-    closeSerialPanel();
+  if (state.livePanelVisible) {
+    closeLivePanel();
   }
   state.searchResultsPanelVisible = true;
   elements.searchResultsOverlay.classList.remove('hidden');
@@ -4583,7 +4592,7 @@ function showSearchConfigsPanel(): void {
   if (state.notesVisible) closeNotesDrawer();
   if (state.searchResultsPanelVisible) closeSearchResultsPanel();
   if (state.videoPlayerVisible) closeVideoPlayer();
-  if (state.serialPanelVisible) closeSerialPanel();
+  if (state.livePanelVisible) closeLivePanel();
   state.searchConfigsPanelVisible = true;
   elements.searchConfigsOverlay.classList.remove('hidden');
   elements.btnSearchConfigs.classList.add('active');
@@ -4648,7 +4657,7 @@ function showVideoPlayer(): void {
   if (state.notesVisible) closeNotesDrawer();
   if (state.searchResultsPanelVisible) closeSearchResultsPanel();
   if (state.searchConfigsPanelVisible) closeSearchConfigsPanel();
-  if (state.serialPanelVisible) closeSerialPanel();
+  if (state.livePanelVisible) closeLivePanel();
   state.videoPlayerVisible = true;
   elements.videoOverlay.classList.remove('hidden');
   elements.btnVideoPlayer.classList.add('active');
@@ -4706,52 +4715,66 @@ function setupVideoResize(): void {
   }
 }
 
-// ─── Serial Port Panel ───────────────────────────────────────────────
+// ─── Live Panel (Serial / Logcat) ────────────────────────────────────
 
-let serialLinesAddedUnsub: (() => void) | null = null;
-let serialErrorUnsub: (() => void) | null = null;
-let serialDisconnectedUnsub: (() => void) | null = null;
-let serialDurationTimer: ReturnType<typeof setInterval> | null = null;
-let serialConnectedSince: number | null = null;
+let liveLinesAddedUnsub: (() => void) | null = null;
+let liveErrorUnsub: (() => void) | null = null;
+let liveDisconnectedUnsub: (() => void) | null = null;
+let liveDurationTimer: ReturnType<typeof setInterval> | null = null;
+let liveConnectedSince: number | null = null;
 
 // Minimap level buffer for canvas rendering
-const serialMinimapLevels: Array<string | undefined> = [];
+const liveMinimapLevels: Array<string | undefined> = [];
 
-function showSerialPanel(): void {
+function showLivePanel(): void {
   // Close other bottom panels (shared bottom slot)
   if (state.notesVisible) closeNotesDrawer();
   if (state.searchResultsPanelVisible) closeSearchResultsPanel();
   if (state.searchConfigsPanelVisible) closeSearchConfigsPanel();
   if (state.videoPlayerVisible) closeVideoPlayer();
-  state.serialPanelVisible = true;
-  elements.serialOverlay.classList.remove('hidden');
-  elements.btnSerial.classList.add('active');
-  refreshSerialPorts();
+  state.livePanelVisible = true;
+  elements.liveOverlay.classList.remove('hidden');
+  elements.btnLive.classList.add('active');
+  refreshLiveDevices();
 }
 
-function hideSerialPanel(): void {
-  elements.serialOverlay.classList.add('hidden');
-  elements.btnSerial.classList.remove('active');
+function hideLivePanel(): void {
+  elements.liveOverlay.classList.add('hidden');
+  elements.btnLive.classList.remove('active');
 }
 
-function toggleSerialPanel(): void {
-  state.serialPanelVisible = !state.serialPanelVisible;
-  if (state.serialPanelVisible) {
-    showSerialPanel();
+function toggleLivePanel(): void {
+  state.livePanelVisible = !state.livePanelVisible;
+  if (state.livePanelVisible) {
+    showLivePanel();
   } else {
-    hideSerialPanel();
+    hideLivePanel();
   }
 }
 
-function closeSerialPanel(): void {
-  if (!state.serialPanelVisible) return;
-  state.serialPanelVisible = false;
-  hideSerialPanel();
+function closeLivePanel(): void {
+  if (!state.livePanelVisible) return;
+  state.livePanelVisible = false;
+  hideLivePanel();
+}
+
+function updateLiveSourceControls(): void {
+  const source = state.liveSource;
+  elements.liveSerialControls.style.display = source === 'serial' ? '' : 'none';
+  elements.liveLogcatControls.style.display = source === 'logcat' ? '' : 'none';
+}
+
+async function refreshLiveDevices(): Promise<void> {
+  if (state.liveSource === 'serial') {
+    await refreshSerialPorts();
+  } else {
+    await refreshLogcatDevices();
+  }
 }
 
 async function refreshSerialPorts(): Promise<void> {
   const result = await window.api.serialListPorts();
-  const select = elements.serialPortSelect;
+  const select = elements.livePortSelect;
   const currentValue = select.value;
   select.innerHTML = '<option value="">Select port...</option>';
   if (result.success && result.ports) {
@@ -4763,146 +4786,221 @@ async function refreshSerialPorts(): Promise<void> {
         : port.path;
       select.appendChild(opt);
     }
-    // Restore previous selection if still available
     if (currentValue) {
       select.value = currentValue;
     }
   }
 }
 
-async function serialConnect(): Promise<void> {
-  const portPath = elements.serialPortSelect.value;
+async function refreshLogcatDevices(): Promise<void> {
+  const result = await window.api.logcatListDevices();
+  const select = elements.liveDeviceSelect;
+  const currentValue = select.value;
+  select.innerHTML = '<option value="">Select device...</option>';
+  if (result.success && result.devices) {
+    for (const device of result.devices) {
+      if (device.state !== 'device') continue; // Only show connected devices
+      const opt = document.createElement('option');
+      opt.value = device.id;
+      opt.textContent = device.model
+        ? `${device.model} (${device.id})`
+        : device.id;
+      select.appendChild(opt);
+    }
+    if (currentValue) {
+      select.value = currentValue;
+    }
+  }
+}
+
+async function liveConnect(): Promise<void> {
+  if (state.liveSource === 'serial') {
+    await liveConnectSerial();
+  } else {
+    await liveConnectLogcat();
+  }
+}
+
+async function liveConnectSerial(): Promise<void> {
+  const portPath = elements.livePortSelect.value;
   if (!portPath) {
     alert('Select a serial port first.');
     return;
   }
-  const baudRate = parseInt(elements.serialBaudSelect.value, 10);
+  const baudRate = parseInt(elements.liveBaudSelect.value, 10);
 
-  state.serialConnectionName = elements.serialNameInput.value.trim();
+  state.liveConnectionName = elements.liveNameInput.value.trim();
 
-  elements.btnSerialConnect.textContent = 'Connecting...';
-  elements.btnSerialConnect.disabled = true;
+  elements.btnLiveConnect.textContent = 'Connecting...';
+  elements.btnLiveConnect.disabled = true;
 
   const result = await window.api.serialConnect({ path: portPath, baudRate });
 
   if (!result.success) {
     alert(`Failed to connect: ${result.error}`);
-    elements.btnSerialConnect.textContent = 'Connect';
-    elements.btnSerialConnect.disabled = false;
+    elements.btnLiveConnect.textContent = 'Connect';
+    elements.btnLiveConnect.disabled = false;
     return;
   }
 
-  state.serialConnected = true;
-  elements.btnSerialConnect.textContent = 'Disconnect';
-  elements.btnSerialConnect.classList.add('disconnect');
-  elements.btnSerialConnect.disabled = false;
-  elements.btnSerialSave.disabled = false;
-  elements.serialPortSelect.disabled = true;
-  elements.serialBaudSelect.disabled = true;
-  elements.serialNameInput.disabled = true;
+  liveOnConnected(result, state.liveConnectionName || portPath, `@ ${baudRate}`);
 
-  // Display connection name or port path
-  const displayName = state.serialConnectionName || portPath;
-  elements.serialStatusText.textContent = `Connected to ${displayName} @ ${baudRate}`;
-  elements.serialStatusText.classList.add('connected');
+  // Disable serial controls
+  elements.livePortSelect.disabled = true;
+  elements.liveBaudSelect.disabled = true;
+
+  // Subscribe to serial events
+  liveLinesAddedUnsub = window.api.onSerialLinesAdded(onLiveLinesAdded);
+  liveErrorUnsub = window.api.onSerialError(onLiveError);
+  liveDisconnectedUnsub = window.api.onSerialDisconnected(onLiveDisconnected);
+}
+
+async function liveConnectLogcat(): Promise<void> {
+  const device = elements.liveDeviceSelect.value || undefined;
+  const filter = elements.liveFilterInput.value.trim() || undefined;
+
+  state.liveConnectionName = elements.liveNameInput.value.trim();
+
+  elements.btnLiveConnect.textContent = 'Connecting...';
+  elements.btnLiveConnect.disabled = true;
+
+  const result = await window.api.logcatConnect({ device, filter });
+
+  if (!result.success) {
+    alert(`Failed to connect: ${result.error}`);
+    elements.btnLiveConnect.textContent = 'Connect';
+    elements.btnLiveConnect.disabled = false;
+    return;
+  }
+
+  const displayName = state.liveConnectionName || device || 'logcat';
+  liveOnConnected(result, displayName, filter ? `filter: ${filter}` : '');
+
+  // Disable logcat controls
+  elements.liveDeviceSelect.disabled = true;
+  elements.liveFilterInput.disabled = true;
+
+  // Subscribe to logcat events
+  liveLinesAddedUnsub = window.api.onLogcatLinesAdded(onLiveLinesAdded);
+  liveErrorUnsub = window.api.onLogcatError(onLiveError);
+  liveDisconnectedUnsub = window.api.onLogcatDisconnected(onLiveDisconnected);
+}
+
+function liveOnConnected(result: { success: boolean; info?: any; tempFilePath?: string }, displayName: string, detail: string): void {
+  state.liveConnected = true;
+  elements.btnLiveConnect.textContent = 'Disconnect';
+  elements.btnLiveConnect.classList.add('disconnect');
+  elements.btnLiveConnect.disabled = false;
+  elements.btnLiveSave.disabled = false;
+  elements.liveNameInput.disabled = true;
+  elements.liveSourceSelect.disabled = true;
+
+  elements.liveStatusText.textContent = `Connected to ${displayName} ${detail}`.trim();
+  elements.liveStatusText.classList.add('connected');
 
   // Open the temp file in the viewer
   if (result.tempFilePath) {
-    const openResult = await window.api.openFile(result.tempFilePath);
-    if (openResult.success && openResult.info) {
-      const tab = createTab(result.tempFilePath);
-      state.tabs.push(tab);
-      state.activeTabId = tab.id;
-      state.filePath = result.tempFilePath;
-      state.totalLines = openResult.info.totalLines;
-      createLogViewer();
-      renderTabBar();
-    }
+    window.api.openFile(result.tempFilePath).then((openResult) => {
+      if (openResult.success && openResult.info) {
+        const tab = createTab(result.tempFilePath!);
+        state.tabs.push(tab);
+        state.activeTabId = tab.id;
+        state.filePath = result.tempFilePath!;
+        state.totalLines = openResult.info.totalLines;
+        createLogViewer();
+        renderTabBar();
+      }
+    });
   }
-
-  // Subscribe to serial events
-  serialLinesAddedUnsub = window.api.onSerialLinesAdded((data) => {
-    state.totalLines = data.totalLines;
-    elements.serialLineCount.textContent = `Lines: ${data.totalLines.toLocaleString()}`;
-
-    // Append levels for minimap (approximate — mark new lines as undefined since we don't know levels yet)
-    for (let i = 0; i < data.newLines; i++) {
-      serialMinimapLevels.push(undefined);
-    }
-
-    // Invalidate cache for the last screen of lines so they get re-fetched
-    invalidateLineCache();
-
-    if (state.serialFollowMode && logViewerElement) {
-      // Follow mode: scroll to bottom
-      goToLine(Math.max(0, data.totalLines - 1));
-    } else if (logViewerElement) {
-      // Not following — update scroll height but don't move viewport
-      renderVisibleLines();
-    }
-
-    // Render minimap periodically (throttled by requestAnimationFrame)
-    requestSerialMinimapRender();
-  });
-
-  serialErrorUnsub = window.api.onSerialError((message) => {
-    elements.serialStatusText.textContent = `Error: ${message}`;
-    elements.serialStatusText.classList.remove('connected');
-  });
-
-  serialDisconnectedUnsub = window.api.onSerialDisconnected(() => {
-    serialCleanupUI();
-  });
 
   // Start duration timer
-  serialConnectedSince = Date.now();
-  serialDurationTimer = setInterval(updateSerialDuration, 1000);
-  updateSerialDuration();
+  liveConnectedSince = Date.now();
+  liveDurationTimer = setInterval(updateLiveDuration, 1000);
+  updateLiveDuration();
 }
 
-function serialDisconnect(): void {
-  window.api.serialDisconnect();
-  serialCleanupUI();
+function onLiveLinesAdded(data: { totalLines: number; newLines: number }): void {
+  state.totalLines = data.totalLines;
+  elements.liveLineCount.textContent = `Lines: ${data.totalLines.toLocaleString()}`;
+
+  for (let i = 0; i < data.newLines; i++) {
+    liveMinimapLevels.push(undefined);
+  }
+
+  invalidateLineCache();
+
+  if (state.liveFollowMode && logViewerElement) {
+    goToLine(Math.max(0, data.totalLines - 1));
+  } else if (logViewerElement) {
+    renderVisibleLines();
+  }
+
+  requestLiveMinimapRender();
 }
 
-function serialCleanupUI(): void {
-  state.serialConnected = false;
-  elements.btnSerialConnect.textContent = 'Connect';
-  elements.btnSerialConnect.classList.remove('disconnect');
-  elements.btnSerialConnect.disabled = false;
-  elements.serialPortSelect.disabled = false;
-  elements.serialBaudSelect.disabled = false;
-  elements.serialNameInput.disabled = false;
-  elements.serialStatusText.textContent = 'Disconnected';
-  elements.serialStatusText.classList.remove('connected');
-
-  if (serialLinesAddedUnsub) { serialLinesAddedUnsub(); serialLinesAddedUnsub = null; }
-  if (serialErrorUnsub) { serialErrorUnsub(); serialErrorUnsub = null; }
-  if (serialDisconnectedUnsub) { serialDisconnectedUnsub(); serialDisconnectedUnsub = null; }
-  if (serialDurationTimer) { clearInterval(serialDurationTimer); serialDurationTimer = null; }
-  serialConnectedSince = null;
+function onLiveError(message: string): void {
+  elements.liveStatusText.textContent = `Error: ${message}`;
+  elements.liveStatusText.classList.remove('connected');
 }
 
-function updateSerialDuration(): void {
-  if (!serialConnectedSince) {
-    elements.serialDuration.textContent = '';
+function onLiveDisconnected(): void {
+  liveCleanupUI();
+}
+
+function liveDisconnect(): void {
+  if (state.liveSource === 'serial') {
+    window.api.serialDisconnect();
+  } else {
+    window.api.logcatDisconnect();
+  }
+  liveCleanupUI();
+}
+
+function liveCleanupUI(): void {
+  state.liveConnected = false;
+  elements.btnLiveConnect.textContent = 'Connect';
+  elements.btnLiveConnect.classList.remove('disconnect');
+  elements.btnLiveConnect.disabled = false;
+  elements.liveNameInput.disabled = false;
+  elements.liveSourceSelect.disabled = false;
+  elements.liveStatusText.textContent = 'Disconnected';
+  elements.liveStatusText.classList.remove('connected');
+
+  // Re-enable source-specific controls
+  elements.livePortSelect.disabled = false;
+  elements.liveBaudSelect.disabled = false;
+  elements.liveDeviceSelect.disabled = false;
+  elements.liveFilterInput.disabled = false;
+
+  if (liveLinesAddedUnsub) { liveLinesAddedUnsub(); liveLinesAddedUnsub = null; }
+  if (liveErrorUnsub) { liveErrorUnsub(); liveErrorUnsub = null; }
+  if (liveDisconnectedUnsub) { liveDisconnectedUnsub(); liveDisconnectedUnsub = null; }
+  if (liveDurationTimer) { clearInterval(liveDurationTimer); liveDurationTimer = null; }
+  liveConnectedSince = null;
+}
+
+function updateLiveDuration(): void {
+  if (!liveConnectedSince) {
+    elements.liveDuration.textContent = '';
     return;
   }
-  const elapsed = Date.now() - serialConnectedSince;
+  const elapsed = Date.now() - liveConnectedSince;
   const secs = Math.floor(elapsed / 1000);
   const mins = Math.floor(secs / 60);
   const hrs = Math.floor(mins / 60);
   if (hrs > 0) {
-    elements.serialDuration.textContent = `${hrs}h ${mins % 60}m ${secs % 60}s`;
+    elements.liveDuration.textContent = `${hrs}h ${mins % 60}m ${secs % 60}s`;
   } else if (mins > 0) {
-    elements.serialDuration.textContent = `${mins}m ${secs % 60}s`;
+    elements.liveDuration.textContent = `${mins}m ${secs % 60}s`;
   } else {
-    elements.serialDuration.textContent = `${secs}s`;
+    elements.liveDuration.textContent = `${secs}s`;
   }
 }
 
-async function serialSaveSession(): Promise<void> {
-  const result = await window.api.serialSaveSession();
+async function liveSaveSession(): Promise<void> {
+  const result = state.liveSource === 'serial'
+    ? await window.api.serialSaveSession()
+    : await window.api.logcatSaveSession();
   if (result.success) {
     alert(`Session saved to:\n${result.filePath}`);
   } else if (result.error && result.error !== 'Cancelled') {
@@ -4910,9 +5008,9 @@ async function serialSaveSession(): Promise<void> {
   }
 }
 
-function setupSerialResize(): void {
-  const handle = elements.serialResizeHandle;
-  const panel = elements.serialPanel;
+function setupLiveResize(): void {
+  const handle = elements.liveResizeHandle;
+  const panel = elements.livePanel;
   let startY = 0;
   let startHeight = 0;
   let isDragging = false;
@@ -4948,20 +5046,20 @@ function invalidateLineCache(): void {
   cachedLines.clear();
 }
 
-// Serial minimap rendering (canvas-based for performance)
-let serialMinimapRafPending = false;
+// Live minimap rendering (canvas-based for performance)
+let liveMinimapRafPending = false;
 
-function requestSerialMinimapRender(): void {
-  if (serialMinimapRafPending) return;
-  serialMinimapRafPending = true;
+function requestLiveMinimapRender(): void {
+  if (liveMinimapRafPending) return;
+  liveMinimapRafPending = true;
   requestAnimationFrame(() => {
-    serialMinimapRafPending = false;
-    renderSerialMinimap();
+    liveMinimapRafPending = false;
+    renderLiveMinimap();
   });
 }
 
-function renderSerialMinimap(): void {
-  const canvas = elements.serialMinimapCanvas;
+function renderLiveMinimap(): void {
+  const canvas = elements.liveMinimapCanvas;
   if (!canvas) return;
 
   const rect = canvas.parentElement?.getBoundingClientRect();
@@ -4980,7 +5078,7 @@ function renderSerialMinimap(): void {
   if (!ctx) return;
   ctx.scale(dpr, dpr);
 
-  const totalLines = serialMinimapLevels.length;
+  const totalLines = liveMinimapLevels.length;
   if (totalLines === 0) {
     ctx.clearRect(0, 0, w, h);
     return;
@@ -5002,7 +5100,7 @@ function renderSerialMinimap(): void {
     let hasInfo = false;
 
     for (let i = lineIdx; i < endIdx; i++) {
-      const level = serialMinimapLevels[i];
+      const level = liveMinimapLevels[i];
       if (level === 'error') hasError = true;
       else if (level === 'warning') hasWarning = true;
       else if (level === 'info') hasInfo = true;
@@ -8719,8 +8817,8 @@ function setupKeyboardShortcuts(): void {
       if (rangeSelectStartLine !== null) {
         rangeSelectStartLine = null;
         elements.statusCursor.textContent = 'Range cancelled';
-      } else if (state.serialPanelVisible) {
-        closeSerialPanel();
+      } else if (state.livePanelVisible) {
+        closeLivePanel();
       } else if (state.videoPlayerVisible) {
         closeVideoPlayer();
       } else if (state.searchConfigsPanelVisible) {
@@ -8768,10 +8866,10 @@ function setupKeyboardShortcuts(): void {
       toggleVideoPlayer();
     }
 
-    // Ctrl/Cmd + Shift + P: Toggle serial port panel
+    // Ctrl/Cmd + Shift + P: Toggle live panel
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'P') {
       e.preventDefault();
-      toggleSerialPanel();
+      toggleLivePanel();
     }
 
     // Ctrl/Cmd + PageDown: Next split file
@@ -9181,25 +9279,31 @@ function init(): void {
   setupVideoResize();
   setupVideoDragDrop();
 
-  // Serial port panel events
-  elements.btnSerial.addEventListener('click', toggleSerialPanel);
-  elements.btnSerialClose.addEventListener('click', closeSerialPanel);
-  elements.btnSerialRefresh.addEventListener('click', refreshSerialPorts);
-  elements.btnSerialConnect.addEventListener('click', () => {
-    if (state.serialConnected) {
-      serialDisconnect();
+  // Live panel events
+  elements.btnLive.addEventListener('click', toggleLivePanel);
+  elements.btnLiveClose.addEventListener('click', closeLivePanel);
+  elements.btnLiveRefresh.addEventListener('click', () => refreshSerialPorts());
+  elements.btnLiveRefreshDevices.addEventListener('click', () => refreshLogcatDevices());
+  elements.btnLiveConnect.addEventListener('click', () => {
+    if (state.liveConnected) {
+      liveDisconnect();
     } else {
-      serialConnect();
+      liveConnect();
     }
   });
-  elements.btnSerialSave.addEventListener('click', serialSaveSession);
-  elements.serialFollow.addEventListener('change', () => {
-    state.serialFollowMode = elements.serialFollow.checked;
-    if (state.serialFollowMode && state.serialConnected && state.totalLines > 0) {
+  elements.btnLiveSave.addEventListener('click', liveSaveSession);
+  elements.liveFollow.addEventListener('change', () => {
+    state.liveFollowMode = elements.liveFollow.checked;
+    if (state.liveFollowMode && state.liveConnected && state.totalLines > 0) {
       goToLine(state.totalLines - 1);
     }
   });
-  setupSerialResize();
+  elements.liveSourceSelect.addEventListener('change', () => {
+    state.liveSource = elements.liveSourceSelect.value as 'serial' | 'logcat';
+    updateLiveSourceControls();
+    refreshLiveDevices();
+  });
+  setupLiveResize();
 
   // Panel resize is handled in setupActivityBar
   document.addEventListener('mousemove', (e) => {

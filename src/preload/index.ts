@@ -40,6 +40,14 @@ const IPC = {
   SERIAL_LINES_ADDED: 'serial-lines-added',
   SERIAL_ERROR: 'serial-error',
   SERIAL_DISCONNECTED: 'serial-disconnected',
+  LOGCAT_LIST_DEVICES: 'logcat-list-devices',
+  LOGCAT_CONNECT: 'logcat-connect',
+  LOGCAT_DISCONNECT: 'logcat-disconnect',
+  LOGCAT_STATUS: 'logcat-status',
+  LOGCAT_SAVE_SESSION: 'logcat-save-session',
+  LOGCAT_LINES_ADDED: 'logcat-lines-added',
+  LOGCAT_ERROR: 'logcat-error',
+  LOGCAT_DISCONNECTED: 'logcat-disconnected',
 } as const;
 
 // API exposed to renderer
@@ -398,6 +406,40 @@ const api = {
     const handler = () => callback();
     ipcRenderer.on(IPC.SERIAL_DISCONNECTED, handler);
     return () => ipcRenderer.removeListener(IPC.SERIAL_DISCONNECTED, handler);
+  },
+
+  // Logcat
+  logcatListDevices: (): Promise<{ success: boolean; devices?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.LOGCAT_LIST_DEVICES),
+
+  logcatConnect: (config: { device?: string; filter?: string }): Promise<{ success: boolean; info?: any; tempFilePath?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.LOGCAT_CONNECT, config),
+
+  logcatDisconnect: (): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.LOGCAT_DISCONNECT),
+
+  logcatStatus: (): Promise<{ connected: boolean; deviceId: string | null; filter: string | null; linesReceived: number; connectedSince: number | null; tempFilePath: string | null }> =>
+    ipcRenderer.invoke(IPC.LOGCAT_STATUS),
+
+  logcatSaveSession: (): Promise<{ success: boolean; filePath?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.LOGCAT_SAVE_SESSION),
+
+  onLogcatLinesAdded: (callback: (data: { totalLines: number; newLines: number }) => void): (() => void) => {
+    const handler = (_: any, data: { totalLines: number; newLines: number }) => callback(data);
+    ipcRenderer.on(IPC.LOGCAT_LINES_ADDED, handler);
+    return () => ipcRenderer.removeListener(IPC.LOGCAT_LINES_ADDED, handler);
+  },
+
+  onLogcatError: (callback: (message: string) => void): (() => void) => {
+    const handler = (_: any, message: string) => callback(message);
+    ipcRenderer.on(IPC.LOGCAT_ERROR, handler);
+    return () => ipcRenderer.removeListener(IPC.LOGCAT_ERROR, handler);
+  },
+
+  onLogcatDisconnected: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on(IPC.LOGCAT_DISCONNECTED, handler);
+    return () => ipcRenderer.removeListener(IPC.LOGCAT_DISCONNECTED, handler);
   },
 
   // Window controls

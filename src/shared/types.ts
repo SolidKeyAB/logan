@@ -161,6 +161,27 @@ export interface SerialStatus {
   tempFilePath: string | null;
 }
 
+// Logcat types
+export interface LogcatConfig {
+  device?: string;
+  filter?: string;
+}
+
+export interface LogcatDeviceInfo {
+  id: string;
+  state: string;
+  model?: string;
+}
+
+export interface LogcatStatus {
+  connected: boolean;
+  deviceId: string | null;
+  filter: string | null;
+  linesReceived: number;
+  connectedSince: number | null;
+  tempFilePath: string | null;
+}
+
 // IPC Channels
 export const IPC = {
   OPEN_FILE_DIALOG: 'open-file-dialog',
@@ -203,4 +224,13 @@ export const IPC = {
   SERIAL_LINES_ADDED: 'serial-lines-added',
   SERIAL_ERROR: 'serial-error',
   SERIAL_DISCONNECTED: 'serial-disconnected',
+  // Logcat
+  LOGCAT_LIST_DEVICES: 'logcat-list-devices',
+  LOGCAT_CONNECT: 'logcat-connect',
+  LOGCAT_DISCONNECT: 'logcat-disconnect',
+  LOGCAT_STATUS: 'logcat-status',
+  LOGCAT_SAVE_SESSION: 'logcat-save-session',
+  LOGCAT_LINES_ADDED: 'logcat-lines-added',
+  LOGCAT_ERROR: 'logcat-error',
+  LOGCAT_DISCONNECTED: 'logcat-disconnected',
 } as const;

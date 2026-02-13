@@ -11,6 +11,7 @@ import { analyzerRegistry, AnalyzerOptions } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
 import { startApiServer, stopApiServer, ApiContext } from './api-server';
 import { SerialHandler } from './serialHandler';
+import { LogcatHandler } from './logcatHandler';
 
 let mainWindow: BrowserWindow | null = null;
 let searchSignal: { cancelled: boolean } = { cancelled: false };
@@ -19,6 +20,9 @@ let currentFilePath: string | null = null;
 
 // Serial port handler
 const serialHandler = new SerialHandler();
+
+// Logcat handler
+const logcatHandler = new LogcatHandler();
 
 // Filter state - maps file path to array of visible line indices
 const filterState = new Map<string, number[] | null>();
@@ -693,6 +697,7 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   serialHandler.cleanupTempFile();
+  logcatHandler.cleanupTempFile();
   stopApiServer();
 });
 
@@ -796,6 +801,102 @@ ipcMain.handle(IPC.SERIAL_SAVE_SESSION, async () => {
 
   const result = await dialog.showSaveDialog(mainWindow!, {
     title: 'Save Serial Session',
+    defaultPath: path.basename(tempPath),
+    filters: [
+      { name: 'Log Files', extensions: ['log', 'txt'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+
+  if (result.canceled || !result.filePath) {
+    return { success: false, error: 'Cancelled' };
+  }
+
+  try {
+    fs.copyFileSync(tempPath, result.filePath);
+    return { success: true, filePath: result.filePath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// === Logcat ===
+
+ipcMain.handle(IPC.LOGCAT_LIST_DEVICES, async () => {
+  try {
+    const devices = await logcatHandler.listDevices();
+    return { success: true, devices };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.LOGCAT_CONNECT, async (_, config: { device?: string; filter?: string }) => {
+  try {
+    const tempFilePath = await logcatHandler.connect(config);
+
+    // Open temp file with FileHandler
+    const fileHandler = new FileHandler();
+    const info = await fileHandler.open(tempFilePath, () => {});
+    addToCache(tempFilePath, fileHandler);
+    currentFilePath = tempFilePath;
+
+    // Forward events to renderer
+    const onLinesAdded = (count: number) => {
+      const handler = fileHandlerCache.get(tempFilePath);
+      if (handler) {
+        const newLines = handler.indexNewLines();
+        if (newLines > 0) {
+          mainWindow?.webContents.send(IPC.LOGCAT_LINES_ADDED, {
+            totalLines: handler.getTotalLines(),
+            newLines,
+          });
+        }
+      }
+    };
+
+    const onError = (message: string) => {
+      mainWindow?.webContents.send(IPC.LOGCAT_ERROR, message);
+    };
+
+    const onDisconnected = () => {
+      mainWindow?.webContents.send(IPC.LOGCAT_DISCONNECTED);
+      logcatHandler.removeListener('lines-added', onLinesAdded);
+      logcatHandler.removeListener('error', onError);
+      logcatHandler.removeListener('disconnected', onDisconnected);
+    };
+
+    logcatHandler.on('lines-added', onLinesAdded);
+    logcatHandler.on('error', onError);
+    logcatHandler.on('disconnected', onDisconnected);
+
+    return { success: true, info, tempFilePath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.LOGCAT_DISCONNECT, async () => {
+  try {
+    logcatHandler.disconnect();
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.LOGCAT_STATUS, async () => {
+  return logcatHandler.getStatus();
+});
+
+ipcMain.handle(IPC.LOGCAT_SAVE_SESSION, async () => {
+  const tempPath = logcatHandler.getTempFilePath();
+  if (!tempPath || !fs.existsSync(tempPath)) {
+    return { success: false, error: 'No logcat session data' };
+  }
+
+  const result = await dialog.showSaveDialog(mainWindow!, {
+    title: 'Save Logcat Session',
     defaultPath: path.basename(tempPath),
     filters: [
       { name: 'Log Files', extensions: ['log', 'txt'] },

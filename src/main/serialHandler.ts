@@ -4,6 +4,16 @@ import * as path from 'path';
 import * as os from 'os';
 import { SerialPortConfig, SerialPortInfo, SerialStatus } from '../shared/types';
 
+/** Wall clock timestamp prefix: [HH:MM:SS.mmm]  */
+export function wallClockPrefix(): string {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  const ss = String(now.getSeconds()).padStart(2, '0');
+  const ms = String(now.getMilliseconds()).padStart(3, '0');
+  return `[${hh}:${mm}:${ss}.${ms}]`;
+}
+
 // Dynamic import for serialport (native addon)
 let SerialPortModule: any = null;
 
@@ -124,8 +134,9 @@ export class SerialHandler extends EventEmitter {
     this.lineBuffer = this.lineBuffer.substring(lineStart);
 
     if (lines.length > 0) {
-      // Write complete lines to temp file
-      const data = lines.map(l => l + '\n').join('');
+      // Write complete lines to temp file with wall clock timestamp
+      const ts = wallClockPrefix();
+      const data = lines.map(l => ts + ' ' + l + '\n').join('');
       fs.writeSync(this.fd, data);
       this.linesReceived += lines.length;
       this.emit('lines-added', lines.length);
@@ -137,7 +148,7 @@ export class SerialHandler extends EventEmitter {
 
     // Flush any remaining partial line
     if (this.lineBuffer.length > 0 && this.fd) {
-      fs.writeSync(this.fd, this.lineBuffer + '\n');
+      fs.writeSync(this.fd, wallClockPrefix() + ' ' + this.lineBuffer + '\n');
       this.linesReceived++;
       this.lineBuffer = '';
       this.emit('lines-added', 1);
