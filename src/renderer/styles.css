@@ -280,9 +280,7 @@ body.platform-darwin .titlebar {
 }
 
 .search-options-popup {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
+  position: fixed;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 4px;

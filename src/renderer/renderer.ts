@@ -8889,6 +8889,11 @@ function init(): void {
   elements.btnSearchOptions.addEventListener('click', (e) => {
     e.stopPropagation();
     elements.searchOptionsPopup.classList.toggle('hidden');
+    if (!elements.searchOptionsPopup.classList.contains('hidden')) {
+      const rect = elements.btnSearchOptions.getBoundingClientRect();
+      elements.searchOptionsPopup.style.top = (rect.bottom + 4) + 'px';
+      elements.searchOptionsPopup.style.left = rect.left + 'px';
+    }
   });
 
   // Close search options popup on outside click
