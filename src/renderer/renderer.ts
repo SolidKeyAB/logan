@@ -656,7 +656,6 @@ const elements = {
   btnNextResult: document.getElementById('btn-next-result') as HTMLButtonElement,
   btnFilter: document.getElementById('btn-filter') as HTMLButtonElement,
   btnAnalyze: document.getElementById('btn-analyze') as HTMLButtonElement,
-  btnToggleSidebar: document.getElementById('btn-toggle-sidebar') as HTMLButtonElement,
   searchInput: document.getElementById('search-input') as HTMLInputElement,
   searchRegex: document.getElementById('search-regex') as HTMLInputElement,
   searchWildcard: document.getElementById('search-wildcard') as HTMLInputElement,
@@ -768,7 +767,6 @@ const elements = {
   helpModal: document.getElementById('help-modal') as HTMLDivElement,
   btnCloseHelp: document.getElementById('btn-close-help') as HTMLButtonElement,
   // Settings
-  btnSettings: document.getElementById('btn-settings') as HTMLButtonElement,
   settingsModal: document.getElementById('settings-modal') as HTMLDivElement,
   scrollSpeedSlider: document.getElementById('scroll-speed') as HTMLInputElement,
   scrollSpeedValue: document.getElementById('scroll-speed-value') as HTMLSpanElement,
@@ -1868,18 +1866,24 @@ function createLogViewer(): void {
     let deltaX = e.deltaX;
 
     if (e.deltaMode === 0) {
-      // Pixel-based scrolling (trackpad) - apply user's scroll speed setting
+      // Pixel-based scrolling (trackpad) - apply user's scroll speed setting for vertical only
       const speedFactor = userSettings.scrollSpeed / 100;
       deltaY = deltaY * speedFactor;
-      deltaX = deltaX * speedFactor;
+      // Horizontal scroll uses raw pixel values for natural trackpad feel
     } else if (e.deltaMode === 1) {
       // Line-based scrolling (mouse wheel) - convert to pixels
       deltaY = deltaY * getLineHeight();
-      deltaX = deltaX * getLineHeight();
+      deltaX = deltaX * getLineHeight() * 3; // 3x multiplier for faster horizontal nav
     } else if (e.deltaMode === 2) {
       // Page-based scrolling - convert to pixels
       deltaY = deltaY * logViewerElement!.clientHeight;
       deltaX = deltaX * logViewerElement!.clientWidth;
+    }
+
+    // Shift+Scroll: convert vertical scroll to horizontal for easy line navigation
+    if (e.shiftKey && deltaY !== 0 && deltaX === 0) {
+      deltaX = deltaY;
+      deltaY = 0;
     }
 
     // Apply normalized vertical scroll
@@ -4246,22 +4250,9 @@ function showNotesDrawer(): void {
   if (state.searchConfigsPanelVisible) {
     closeSearchConfigsPanel();
   }
-  const overlay = elements.notesOverlay;
-  overlay.classList.remove('hidden');
-  // Force reflow so the transition triggers from initial state
-  void overlay.offsetHeight;
-  overlay.classList.add('visible');
+  elements.notesOverlay.classList.remove('hidden');
   elements.btnNotesToggle.classList.add('active');
-
-  // Focus textarea after slide animation completes
-  const drawer = overlay.querySelector('.notes-drawer') as HTMLElement;
-  if (drawer) {
-    const onShown = () => {
-      drawer.removeEventListener('transitionend', onShown);
-      elements.notesTextarea.focus();
-    };
-    drawer.addEventListener('transitionend', onShown);
-  }
+  elements.notesTextarea.focus();
 
   // Load notes content
   window.api.loadNotes().then((result) => {
@@ -4274,20 +4265,8 @@ function showNotesDrawer(): void {
 }
 
 function hideNotesDrawer(): void {
-  const overlay = elements.notesOverlay;
-  overlay.classList.remove('visible');
+  elements.notesOverlay.classList.add('hidden');
   elements.btnNotesToggle.classList.remove('active');
-  // Fallback if transitionend doesn't fire (e.g., display:none, no transition)
-  const fallback = setTimeout(() => hide(), 350);
-  const hide = () => {
-    clearTimeout(fallback);
-    overlay.removeEventListener('transitionend', onEnd);
-    if (!overlay.classList.contains('visible')) {
-      overlay.classList.add('hidden');
-    }
-  };
-  const onEnd = () => hide();
-  overlay.addEventListener('transitionend', onEnd);
 }
 
 function toggleNotesDrawer(): void {
@@ -4372,25 +4351,11 @@ function showSearchResultsPanel(): void {
     closeSearchConfigsPanel();
   }
   state.searchResultsPanelVisible = true;
-  const overlay = elements.searchResultsOverlay;
-  overlay.classList.remove('hidden');
-  void overlay.offsetHeight;
-  overlay.classList.add('visible');
+  elements.searchResultsOverlay.classList.remove('hidden');
 }
 
 function hideSearchResultsPanel(): void {
-  const overlay = elements.searchResultsOverlay;
-  overlay.classList.remove('visible');
-  const fallback = setTimeout(() => hide(), 350);
-  const hide = () => {
-    clearTimeout(fallback);
-    overlay.removeEventListener('transitionend', onEnd);
-    if (!overlay.classList.contains('visible')) {
-      overlay.classList.add('hidden');
-    }
-  };
-  const onEnd = () => hide();
-  overlay.addEventListener('transitionend', onEnd);
+  elements.searchResultsOverlay.classList.add('hidden');
 }
 
 function toggleSearchResultsPanel(): void {
@@ -4537,27 +4502,13 @@ function showSearchConfigsPanel(): void {
   if (state.notesVisible) closeNotesDrawer();
   if (state.searchResultsPanelVisible) closeSearchResultsPanel();
   state.searchConfigsPanelVisible = true;
-  const overlay = elements.searchConfigsOverlay;
-  overlay.classList.remove('hidden');
-  void overlay.offsetHeight;
-  overlay.classList.add('visible');
+  elements.searchConfigsOverlay.classList.remove('hidden');
   elements.btnSearchConfigs.classList.add('active');
 }
 
 function hideSearchConfigsPanel(): void {
-  const overlay = elements.searchConfigsOverlay;
-  overlay.classList.remove('visible');
+  elements.searchConfigsOverlay.classList.add('hidden');
   elements.btnSearchConfigs.classList.remove('active');
-  const fallback = setTimeout(() => hide(), 350);
-  const hide = () => {
-    clearTimeout(fallback);
-    overlay.removeEventListener('transitionend', onEnd);
-    if (!overlay.classList.contains('visible')) {
-      overlay.classList.add('hidden');
-    }
-  };
-  const onEnd = () => hide();
-  overlay.addEventListener('transitionend', onEnd);
 }
 
 function toggleSearchConfigsPanel(): void {
@@ -5087,8 +5038,10 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       elements.btnColumns.disabled = false;
       state.columnConfig = null; // Reset column config for new file
 
-      // Show warning for files with long lines
-      if (result.hasLongLines) {
+      // Show warning for files with long lines (only for JSON-like files where reformatting helps)
+      const lowerPath = filePath.toLowerCase();
+      const isJsonLike = lowerPath.endsWith('.json') || lowerPath.endsWith('.jsonl') || lowerPath.endsWith('.ndjson');
+      if (result.hasLongLines && isJsonLike) {
         elements.longLinesWarning.classList.remove('hidden');
       } else {
         elements.longLinesWarning.classList.add('hidden');
@@ -7927,8 +7880,33 @@ function setupActivityBar(): void {
   elements.btnPinPanel.addEventListener('click', togglePinPanel);
 
   // Settings button in activity bar
-  document.getElementById('btn-activity-settings')?.addEventListener('click', () => {
-    document.getElementById('settings-modal')?.classList.remove('hidden');
+  document.getElementById('btn-activity-settings')?.addEventListener('click', async () => {
+    // Load current settings into UI
+    elements.scrollSpeedSlider.value = userSettings.scrollSpeed.toString();
+    elements.scrollSpeedValue.textContent = `${userSettings.scrollSpeed}%`;
+    elements.defaultFontSizeSlider.value = userSettings.defaultFontSize.toString();
+    elements.defaultFontSizeValue.textContent = `${userSettings.defaultFontSize}px`;
+    elements.defaultGapThresholdSlider.value = userSettings.defaultGapThreshold.toString();
+    elements.defaultGapThresholdValue.textContent = `${userSettings.defaultGapThreshold}s`;
+    elements.autoAnalyzeCheckbox.checked = userSettings.autoAnalyze;
+    elements.themeSelect.value = userSettings.theme;
+    populateSidebarSectionToggles();
+    // Load Datadog config
+    const result = await window.api.datadogLoadConfig();
+    if (result.success && result.config) {
+      elements.ddSiteSelect.value = result.config.site || 'US1';
+      elements.ddApiKey.value = result.config.hasApiKey ? '••••••••' : '';
+      elements.ddAppKey.value = result.config.hasAppKey ? '••••••••' : '';
+      elements.ddConfigStatus.textContent = 'Configured';
+      elements.ddConfigStatus.style.color = 'var(--debug-color)';
+    } else {
+      elements.ddSiteSelect.value = 'US1';
+      elements.ddApiKey.value = '';
+      elements.ddAppKey.value = '';
+      elements.ddConfigStatus.textContent = 'Not configured';
+      elements.ddConfigStatus.style.color = 'var(--text-muted)';
+    }
+    elements.settingsModal.classList.remove('hidden');
   });
 
   // History panel controls
@@ -8500,11 +8478,6 @@ function init(): void {
   // Notes drawer events
   elements.btnNotesToggle.addEventListener('click', toggleNotesDrawer);
   elements.btnNotesClose.addEventListener('click', closeNotesDrawer);
-  elements.notesOverlay.addEventListener('click', (e) => {
-    if (e.target === elements.notesOverlay) {
-      closeNotesDrawer();
-    }
-  });
   elements.notesTextarea.addEventListener('input', saveNotesDebounced);
   setupNotesDrawerResize();
 
@@ -8782,24 +8755,6 @@ function init(): void {
     }
   });
 
-  // Datadog settings - load config when settings open
-  const origSettingsClick = elements.btnSettings.onclick;
-  elements.btnSettings.addEventListener('click', async () => {
-    const result = await window.api.datadogLoadConfig();
-    if (result.success && result.config) {
-      elements.ddSiteSelect.value = result.config.site || 'US1';
-      elements.ddApiKey.value = result.config.hasApiKey ? '••••••••' : '';
-      elements.ddAppKey.value = result.config.hasAppKey ? '••••••••' : '';
-      elements.ddConfigStatus.textContent = 'Configured';
-      elements.ddConfigStatus.style.color = 'var(--debug-color)';
-    } else {
-      elements.ddSiteSelect.value = 'US1';
-      elements.ddApiKey.value = '';
-      elements.ddAppKey.value = '';
-      elements.ddConfigStatus.textContent = 'Not configured';
-      elements.ddConfigStatus.style.color = 'var(--text-muted)';
-    }
-  });
 
   elements.btnDdSaveConfig.addEventListener('click', async () => {
     const apiKey = elements.ddApiKey.value.trim();
@@ -8840,9 +8795,6 @@ function init(): void {
   });
   elements.splitValue.addEventListener('input', updateSplitPreview);
 
-  // Sidebar
-  elements.btnToggleSidebar.addEventListener('click', togglePanelVisibility);
-
   // Highlights
   elements.btnAddHighlight.addEventListener('click', showHighlightModal);
   elements.btnSaveHighlight.addEventListener('click', saveHighlight);
@@ -8868,20 +8820,6 @@ function init(): void {
     elements.helpModal.classList.add('hidden');
   });
 
-  // Settings modal
-  elements.btnSettings.addEventListener('click', () => {
-    // Load current settings into UI
-    elements.scrollSpeedSlider.value = userSettings.scrollSpeed.toString();
-    elements.scrollSpeedValue.textContent = `${userSettings.scrollSpeed}%`;
-    elements.defaultFontSizeSlider.value = userSettings.defaultFontSize.toString();
-    elements.defaultFontSizeValue.textContent = `${userSettings.defaultFontSize}px`;
-    elements.defaultGapThresholdSlider.value = userSettings.defaultGapThreshold.toString();
-    elements.defaultGapThresholdValue.textContent = `${userSettings.defaultGapThreshold}s`;
-    elements.autoAnalyzeCheckbox.checked = userSettings.autoAnalyze;
-    elements.themeSelect.value = userSettings.theme;
-    populateSidebarSectionToggles();
-    elements.settingsModal.classList.remove('hidden');
-  });
 
   elements.scrollSpeedSlider.addEventListener('input', () => {
     const value = parseInt(elements.scrollSpeedSlider.value, 10);

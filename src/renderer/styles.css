@@ -3229,21 +3229,7 @@ kbd {
 
 /* Notes Drawer (slide-up from bottom) */
 .notes-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 50;
-  background: rgba(0, 0, 0, 0.3);
-  opacity: 0;
-  transition: opacity 0.2s ease;
-  pointer-events: none;
-}
-
-.notes-overlay.visible {
-  opacity: 1;
-  pointer-events: auto;
+  flex-shrink: 0;
 }
 
 .notes-overlay.hidden {
@@ -3251,10 +3237,6 @@ kbd {
 }
 
 .notes-drawer {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
   height: 35vh;
   min-height: 120px;
   max-height: 70vh;
@@ -3264,12 +3246,6 @@ kbd {
   border-top: 2px solid var(--accent-color);
   display: flex;
   flex-direction: column;
-  transform: translateY(100%);
-  transition: transform 0.25s ease-out;
-}
-
-.notes-overlay.visible .notes-drawer {
-  transform: translateY(0);
 }
 
 .notes-resize-handle-top {
@@ -3345,20 +3321,7 @@ kbd {
 
 /* Search Results Panel (slide-up from bottom) */
 .search-results-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 45;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-.search-results-overlay.visible {
-  opacity: 1;
-  pointer-events: none; /* Keep overlay transparent to clicks/scroll */
+  flex-shrink: 0;
 }
 
 .search-results-overlay.hidden {
@@ -3366,10 +3329,6 @@ kbd {
 }
 
 .search-results-panel {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
   height: 30vh;
   min-height: 120px;
   max-height: 60vh;
@@ -3379,13 +3338,6 @@ kbd {
   border-top: 2px solid var(--accent-color);
   display: flex;
   flex-direction: column;
-  transform: translateY(100%);
-  transition: transform 0.25s ease-out;
-  pointer-events: auto; /* Panel itself receives events */
-}
-
-.search-results-overlay.visible .search-results-panel {
-  transform: translateY(0);
 }
 
 .search-results-resize-handle-top {
@@ -3497,20 +3449,7 @@ kbd {
 /* ─── Search Configs Panel ─────────────────────────────────────── */
 
 .search-configs-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 46;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-.search-configs-overlay.visible {
-  opacity: 1;
-  pointer-events: none;
+  flex-shrink: 0;
 }
 
 .search-configs-overlay.hidden {
@@ -3518,10 +3457,6 @@ kbd {
 }
 
 .search-configs-panel {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
   height: 35vh;
   min-height: 150px;
   max-height: 65vh;
@@ -3531,13 +3466,6 @@ kbd {
   border-top: 2px solid var(--accent-color);
   display: flex;
   flex-direction: column;
-  transform: translateY(100%);
-  transition: transform 0.25s ease-out;
-  pointer-events: auto;
-}
-
-.search-configs-overlay.visible .search-configs-panel {
-  transform: translateY(0);
 }
 
 .search-configs-resize-handle-top {
