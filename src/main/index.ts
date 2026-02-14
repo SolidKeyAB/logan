@@ -12,6 +12,8 @@ import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogL
 import { startApiServer, stopApiServer, ApiContext } from './api-server';
 import { SerialHandler } from './serialHandler';
 import { LogcatHandler } from './logcatHandler';
+import { SshHandler } from './sshHandler';
+import { SshProfile } from '../shared/types';
 
 let mainWindow: BrowserWindow | null = null;
 let searchSignal: { cancelled: boolean } = { cancelled: false };
@@ -23,6 +25,9 @@ const serialHandler = new SerialHandler();
 
 // Logcat handler
 const logcatHandler = new LogcatHandler();
+
+// SSH handler
+const sshHandler = new SshHandler();
 
 // Filter state - maps file path to array of visible line indices
 const filterState = new Map<string, number[] | null>();
@@ -698,6 +703,7 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   serialHandler.cleanupTempFile();
   logcatHandler.cleanupTempFile();
+  sshHandler.cleanupTempFile();
   stopApiServer();
 });
 
@@ -911,6 +917,175 @@ ipcMain.handle(IPC.LOGCAT_SAVE_SESSION, async () => {
   try {
     fs.copyFileSync(tempPath, result.filePath);
     return { success: true, filePath: result.filePath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// === SSH ===
+
+const getSshProfilesPath = () => path.join(getConfigDir(), 'ssh-profiles.json');
+
+function loadSshProfiles(): SshProfile[] {
+  try {
+    const p = getSshProfilesPath();
+    if (fs.existsSync(p)) {
+      return JSON.parse(fs.readFileSync(p, 'utf-8'));
+    }
+  } catch { /* */ }
+  return [];
+}
+
+function saveSshProfiles(profiles: SshProfile[]): void {
+  try {
+    ensureConfigDir();
+    fs.writeFileSync(getSshProfilesPath(), JSON.stringify(profiles, null, 2), 'utf-8');
+  } catch (error) {
+    console.error('Failed to save SSH profiles:', error);
+  }
+}
+
+ipcMain.handle(IPC.SSH_PARSE_CONFIG, async () => {
+  try {
+    const hosts = sshHandler.parseSSHConfig();
+    return { success: true, hosts };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.SSH_LIST_PROFILES, async () => {
+  try {
+    return { success: true, profiles: loadSshProfiles() };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.SSH_SAVE_PROFILE, async (_, profile: SshProfile) => {
+  try {
+    const profiles = loadSshProfiles();
+    const idx = profiles.findIndex(p => p.id === profile.id);
+    if (idx >= 0) {
+      profiles[idx] = profile;
+    } else {
+      profiles.push(profile);
+    }
+    saveSshProfiles(profiles);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.SSH_DELETE_PROFILE, async (_, id: string) => {
+  try {
+    const profiles = loadSshProfiles().filter(p => p.id !== id);
+    saveSshProfiles(profiles);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.SSH_CONNECT, async (_, config: { host: string; port: number; username: string; identityFile?: string; remotePath: string; passphrase?: string }) => {
+  try {
+    const tempFilePath = await sshHandler.connect(config);
+
+    // Open temp file with FileHandler
+    const fileHandler = new FileHandler();
+    const info = await fileHandler.open(tempFilePath, () => {});
+    addToCache(tempFilePath, fileHandler);
+    currentFilePath = tempFilePath;
+
+    // Forward events to renderer
+    const onLinesAdded = (count: number) => {
+      const handler = fileHandlerCache.get(tempFilePath);
+      if (handler) {
+        const newLines = handler.indexNewLines();
+        if (newLines > 0) {
+          mainWindow?.webContents.send(IPC.SSH_LINES_ADDED, {
+            totalLines: handler.getTotalLines(),
+            newLines,
+          });
+        }
+      }
+    };
+
+    const onError = (message: string) => {
+      mainWindow?.webContents.send(IPC.SSH_ERROR, message);
+    };
+
+    const onDisconnected = () => {
+      mainWindow?.webContents.send(IPC.SSH_DISCONNECTED);
+      sshHandler.removeListener('lines-added', onLinesAdded);
+      sshHandler.removeListener('error', onError);
+      sshHandler.removeListener('disconnected', onDisconnected);
+    };
+
+    sshHandler.on('lines-added', onLinesAdded);
+    sshHandler.on('error', onError);
+    sshHandler.on('disconnected', onDisconnected);
+
+    return { success: true, info, tempFilePath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.SSH_DISCONNECT, async () => {
+  try {
+    sshHandler.disconnect();
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.SSH_STATUS, async () => {
+  return sshHandler.getStatus();
+});
+
+ipcMain.handle(IPC.SSH_SAVE_SESSION, async () => {
+  const tempPath = sshHandler.getTempFilePath();
+  if (!tempPath || !fs.existsSync(tempPath)) {
+    return { success: false, error: 'No SSH session data' };
+  }
+
+  const result = await dialog.showSaveDialog(mainWindow!, {
+    title: 'Save SSH Session',
+    defaultPath: path.basename(tempPath),
+    filters: [
+      { name: 'Log Files', extensions: ['log', 'txt'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+
+  if (result.canceled || !result.filePath) {
+    return { success: false, error: 'Cancelled' };
+  }
+
+  try {
+    fs.copyFileSync(tempPath, result.filePath);
+    return { success: true, filePath: result.filePath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.SSH_LIST_REMOTE_DIR, async (_, remotePath: string) => {
+  try {
+    const files = await sshHandler.listRemoteDir(remotePath);
+    return { success: true, files };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.SSH_DOWNLOAD_FILE, async (_, remotePath: string) => {
+  try {
+    const localPath = await sshHandler.downloadRemoteFile(remotePath);
+    return { success: true, localPath };
   } catch (error) {
     return { success: false, error: String(error) };
   }

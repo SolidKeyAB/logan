@@ -52,6 +52,19 @@ const IPC = {
   LOGCAT_LINES_ADDED: 'logcat-lines-added',
   LOGCAT_ERROR: 'logcat-error',
   LOGCAT_DISCONNECTED: 'logcat-disconnected',
+  SSH_PARSE_CONFIG: 'ssh-parse-config',
+  SSH_LIST_PROFILES: 'ssh-list-profiles',
+  SSH_SAVE_PROFILE: 'ssh-save-profile',
+  SSH_DELETE_PROFILE: 'ssh-delete-profile',
+  SSH_CONNECT: 'ssh-connect',
+  SSH_DISCONNECT: 'ssh-disconnect',
+  SSH_STATUS: 'ssh-status',
+  SSH_SAVE_SESSION: 'ssh-save-session',
+  SSH_LIST_REMOTE_DIR: 'ssh-list-remote-dir',
+  SSH_DOWNLOAD_FILE: 'ssh-download-file',
+  SSH_LINES_ADDED: 'ssh-lines-added',
+  SSH_ERROR: 'ssh-error',
+  SSH_DISCONNECTED: 'ssh-disconnected',
 } as const;
 
 // API exposed to renderer
@@ -457,6 +470,55 @@ const api = {
     const handler = () => callback();
     ipcRenderer.on(IPC.LOGCAT_DISCONNECTED, handler);
     return () => ipcRenderer.removeListener(IPC.LOGCAT_DISCONNECTED, handler);
+  },
+
+  // SSH
+  sshParseConfig: (): Promise<{ success: boolean; hosts?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.SSH_PARSE_CONFIG),
+
+  sshListProfiles: (): Promise<{ success: boolean; profiles?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.SSH_LIST_PROFILES),
+
+  sshSaveProfile: (profile: any): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.SSH_SAVE_PROFILE, profile),
+
+  sshDeleteProfile: (id: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.SSH_DELETE_PROFILE, id),
+
+  sshConnect: (config: { host: string; port: number; username: string; identityFile?: string; remotePath: string; passphrase?: string }): Promise<{ success: boolean; info?: any; tempFilePath?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.SSH_CONNECT, config),
+
+  sshDisconnect: (): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.SSH_DISCONNECT),
+
+  sshStatus: (): Promise<any> =>
+    ipcRenderer.invoke(IPC.SSH_STATUS),
+
+  sshSaveSession: (): Promise<{ success: boolean; filePath?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.SSH_SAVE_SESSION),
+
+  sshListRemoteDir: (remotePath: string): Promise<{ success: boolean; files?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.SSH_LIST_REMOTE_DIR, remotePath),
+
+  sshDownloadFile: (remotePath: string): Promise<{ success: boolean; localPath?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.SSH_DOWNLOAD_FILE, remotePath),
+
+  onSshLinesAdded: (callback: (data: { totalLines: number; newLines: number }) => void): (() => void) => {
+    const handler = (_: any, data: { totalLines: number; newLines: number }) => callback(data);
+    ipcRenderer.on(IPC.SSH_LINES_ADDED, handler);
+    return () => ipcRenderer.removeListener(IPC.SSH_LINES_ADDED, handler);
+  },
+
+  onSshError: (callback: (message: string) => void): (() => void) => {
+    const handler = (_: any, message: string) => callback(message);
+    ipcRenderer.on(IPC.SSH_ERROR, handler);
+    return () => ipcRenderer.removeListener(IPC.SSH_ERROR, handler);
+  },
+
+  onSshDisconnected: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on(IPC.SSH_DISCONNECTED, handler);
+    return () => ipcRenderer.removeListener(IPC.SSH_DISCONNECTED, handler);
   },
 
   // Window controls

@@ -5127,3 +5127,88 @@ kbd {
   height: 100%;
   display: block;
 }
+
+/* SSH Badge on remote folders */
+.ssh-badge {
+  display: inline-block;
+  background: #2ea043;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-right: 4px;
+  letter-spacing: 0.5px;
+}
+
+.folder-group.remote .folder-name {
+  font-style: italic;
+}
+
+/* SSH Profile Manager */
+.ssh-profile-list {
+  max-height: 200px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
+.ssh-profile-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.ssh-profile-item:last-child {
+  border-bottom: none;
+}
+
+.ssh-profile-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ssh-profile-item-name {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.ssh-profile-item-detail {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.ssh-profile-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.ssh-profile-edit-btn,
+.ssh-profile-delete-btn {
+  background: none;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.ssh-profile-edit-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.ssh-profile-delete-btn:hover {
+  background: #c0392b;
+  color: #fff;
+  border-color: #c0392b;
+}
+
+.ssh-profile-form {
+  border-top: 1px solid var(--border-color);
+  padding-top: 12px;
+}

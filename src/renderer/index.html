@@ -158,6 +158,7 @@
             <div class="section-header-inline">
               <button id="btn-refresh-folders" class="section-btn" title="Refresh folders">&#8635;</button>
               <button id="btn-add-folder" class="section-btn" title="Open folder">+</button>
+              <button id="btn-open-ssh-folder" class="section-btn" title="Browse SSH remote files">SSH</button>
             </div>
             <div class="folder-search-container">
               <input type="text" id="folder-search-input" class="folder-search-input" placeholder="Search in folders..." disabled>
@@ -414,6 +415,7 @@
               <select id="live-source-select" class="live-select">
                 <option value="serial">Serial Port</option>
                 <option value="logcat">Android Logcat</option>
+                <option value="ssh">SSH Remote</option>
               </select>
               <span id="live-serial-controls" class="live-source-controls">
                 <label class="live-label">Port:</label>
@@ -441,6 +443,16 @@
                 <button id="btn-live-refresh-devices" class="live-ctrl-btn" title="Refresh devices">&#8635;</button>
                 <label class="live-label">Filter:</label>
                 <input type="text" id="live-filter-input" class="live-name-input" placeholder="*:E" style="width:80px">
+              </span>
+              <span id="live-ssh-controls" class="live-source-controls" style="display:none">
+                <label class="live-label">Host:</label>
+                <select id="live-ssh-host-select" class="live-select">
+                  <option value="">Select host...</option>
+                </select>
+                <button id="btn-live-ssh-refresh" class="live-ctrl-btn" title="Refresh hosts from SSH config">&#8635;</button>
+                <label class="live-label">Path:</label>
+                <input type="text" id="live-ssh-path-input" class="live-name-input" placeholder="/var/log/syslog" style="width:200px">
+                <button id="btn-live-ssh-manage" class="live-ctrl-btn" title="Manage SSH profiles">&#9881;</button>
               </span>
               <button id="btn-live-connect" class="live-connect-btn">Connect</button>
             </div>
@@ -973,6 +985,68 @@
       </div>
     </div>
   </div>
+
+    <!-- SSH Profile Manager Modal -->
+    <div id="ssh-profile-modal" class="modal hidden">
+      <div class="modal-content" style="width: 500px;">
+        <div class="modal-header">
+          <h3 id="ssh-profile-modal-title">Manage SSH Profiles</h3>
+          <button class="modal-close" data-modal="ssh-profile-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div id="ssh-profile-list" class="ssh-profile-list"></div>
+          <div class="ssh-profile-form">
+            <div class="filter-group">
+              <label for="ssh-profile-name">Name</label>
+              <input type="text" id="ssh-profile-name" class="modal-input" placeholder="My Server">
+            </div>
+            <div class="filter-group">
+              <label for="ssh-profile-host">Host</label>
+              <input type="text" id="ssh-profile-host" class="modal-input" placeholder="hostname or SSH config alias">
+            </div>
+            <div style="display: flex; gap: 8px;">
+              <div class="filter-group" style="flex: 1;">
+                <label for="ssh-profile-port">Port</label>
+                <input type="number" id="ssh-profile-port" class="modal-input" value="22" min="1" max="65535">
+              </div>
+              <div class="filter-group" style="flex: 2;">
+                <label for="ssh-profile-username">Username</label>
+                <input type="text" id="ssh-profile-username" class="modal-input" placeholder="root">
+              </div>
+            </div>
+            <div class="filter-group">
+              <label for="ssh-profile-identity">Identity File (optional)</label>
+              <input type="text" id="ssh-profile-identity" class="modal-input" placeholder="~/.ssh/id_ed25519">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-ssh-import-config" class="secondary-btn">Import from SSH Config</button>
+          <button id="btn-ssh-profile-save" class="primary-btn">Save Profile</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SSH Passphrase Modal -->
+    <div id="ssh-passphrase-modal" class="modal hidden">
+      <div class="modal-content" style="width: 380px;">
+        <div class="modal-header">
+          <h3>SSH Key Passphrase</h3>
+          <button class="modal-close" data-modal="ssh-passphrase-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="hint">The SSH key requires a passphrase to unlock.</p>
+          <div class="filter-group">
+            <label for="ssh-passphrase-input">Passphrase</label>
+            <input type="password" id="ssh-passphrase-input" class="modal-input" placeholder="Enter passphrase...">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-ssh-passphrase-cancel" class="secondary-btn">Cancel</button>
+          <button id="btn-ssh-passphrase-ok" class="primary-btn">Connect</button>
+        </div>
+      </div>
+    </div>
 
   <script src="renderer.js"></script>
 </body>

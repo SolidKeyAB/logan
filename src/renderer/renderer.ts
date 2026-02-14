@@ -146,6 +146,8 @@ interface FolderState {
   name: string;
   files: LocalFolderFile[];
   collapsed: boolean;
+  isRemote?: boolean;
+  sshHost?: string;
 }
 
 // Column visibility state
@@ -248,7 +250,8 @@ interface AppState {
   liveConnected: boolean;
   liveFollowMode: boolean;
   liveConnectionName: string;
-  liveSource: 'serial' | 'logcat';
+  liveSource: 'serial' | 'logcat' | 'ssh';
+  sshProfiles: SshProfile[];
 }
 
 const state: AppState = {
@@ -292,7 +295,8 @@ const state: AppState = {
   liveConnected: false,
   liveFollowMode: true,
   liveConnectionName: '',
-  liveSource: 'serial' as 'serial' | 'logcat',
+  liveSource: 'serial' as 'serial' | 'logcat' | 'ssh',
+  sshProfiles: [],
 };
 
 // Constants
@@ -879,6 +883,13 @@ const elements = {
   liveDeviceSelect: document.getElementById('live-device-select') as HTMLSelectElement,
   btnLiveRefreshDevices: document.getElementById('btn-live-refresh-devices') as HTMLButtonElement,
   liveFilterInput: document.getElementById('live-filter-input') as HTMLInputElement,
+  // SSH controls
+  liveSshControls: document.getElementById('live-ssh-controls') as HTMLSpanElement,
+  liveSshHostSelect: document.getElementById('live-ssh-host-select') as HTMLSelectElement,
+  liveSshPathInput: document.getElementById('live-ssh-path-input') as HTMLInputElement,
+  btnLiveSshRefresh: document.getElementById('btn-live-ssh-refresh') as HTMLButtonElement,
+  btnLiveSshManage: document.getElementById('btn-live-ssh-manage') as HTMLButtonElement,
+  btnOpenSshFolder: document.getElementById('btn-open-ssh-folder') as HTMLButtonElement,
 };
 
 // Virtual Log Viewer
@@ -3864,21 +3875,21 @@ function renderFolderTree(): void {
   elements.foldersList.innerHTML = state.folders
     .map(
       (folder) => `
-      <div class="folder-group ${folder.collapsed ? 'collapsed' : ''}" data-path="${folder.path}">
+      <div class="folder-group ${folder.collapsed ? 'collapsed' : ''}${folder.isRemote ? ' remote' : ''}" data-path="${folder.path}" ${folder.isRemote ? 'data-remote="true"' : ''}>
         <div class="folder-header">
           <span class="folder-toggle">&#9660;</span>
-          <span class="folder-name" title="${folder.path}">${folder.name}</span>
+          <span class="folder-name" title="${folder.path}">${folder.isRemote ? '<span class="ssh-badge">SSH</span> ' : ''}${escapeHtml(folder.name)}</span>
           <button class="folder-close" title="Remove folder">&times;</button>
         </div>
         <div class="folder-files">
           ${
             folder.files.length === 0
-              ? '<div class="placeholder" style="padding: 4px 0; font-size: 11px;">No log files</div>'
+              ? '<div class="placeholder" style="padding: 4px 0; font-size: 11px;">No files</div>'
               : folder.files
                   .map(
                     (file) => `
-              <div class="folder-file ${file.path === state.filePath ? 'active' : ''}" data-path="${file.path}">
-                <span class="folder-file-name" title="${file.name}">${file.name}</span>
+              <div class="folder-file ${file.path === state.filePath ? 'active' : ''}" data-path="${escapeHtml(file.path)}" ${folder.isRemote ? 'data-remote="true"' : ''}>
+                <span class="folder-file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
                 ${file.size ? `<span class="folder-file-size">${formatFileSize(file.size)}</span>` : ''}
               </div>
             `
@@ -3917,8 +3928,19 @@ function renderFolderTree(): void {
   elements.foldersList.querySelectorAll('.folder-file').forEach((fileEl) => {
     fileEl.addEventListener('click', async () => {
       const filePath = (fileEl as HTMLElement).dataset.path;
+      const isRemote = (fileEl as HTMLElement).dataset.remote === 'true';
       if (filePath) {
-        await loadFile(filePath);
+        if (isRemote) {
+          // Download remote file first, then open
+          const result = await window.api.sshDownloadFile(filePath);
+          if (result.success && result.localPath) {
+            await loadFile(result.localPath);
+          } else {
+            alert(`Failed to download: ${result.error}`);
+          }
+        } else {
+          await loadFile(filePath);
+        }
         renderFolderTree(); // Update active state
       }
     });
@@ -4523,13 +4545,16 @@ function updateLiveSourceControls(): void {
   const source = state.liveSource;
   elements.liveSerialControls.style.display = source === 'serial' ? '' : 'none';
   elements.liveLogcatControls.style.display = source === 'logcat' ? '' : 'none';
+  elements.liveSshControls.style.display = source === 'ssh' ? '' : 'none';
 }
 
 async function refreshLiveDevices(): Promise<void> {
   if (state.liveSource === 'serial') {
     await refreshSerialPorts();
-  } else {
+  } else if (state.liveSource === 'logcat') {
     await refreshLogcatDevices();
+  } else if (state.liveSource === 'ssh') {
+    await refreshSshHosts();
   }
 }
 
@@ -4577,8 +4602,10 @@ async function refreshLogcatDevices(): Promise<void> {
 async function liveConnect(): Promise<void> {
   if (state.liveSource === 'serial') {
     await liveConnectSerial();
-  } else {
+  } else if (state.liveSource === 'logcat') {
     await liveConnectLogcat();
+  } else if (state.liveSource === 'ssh') {
+    await liveConnectSsh();
   }
 }
 
@@ -4647,6 +4674,331 @@ async function liveConnectLogcat(): Promise<void> {
   liveDisconnectedUnsub = window.api.onLogcatDisconnected(onLiveDisconnected);
 }
 
+async function refreshSshHosts(): Promise<void> {
+  const select = elements.liveSshHostSelect;
+  const currentValue = select.value;
+  select.innerHTML = '<option value="">Select host...</option>';
+
+  // Merge SSH config hosts + saved profiles
+  const [configResult, profilesResult] = await Promise.all([
+    window.api.sshParseConfig(),
+    window.api.sshListProfiles(),
+  ]);
+
+  const seen = new Set<string>();
+
+  // Add saved profiles first
+  if (profilesResult.success && profilesResult.profiles) {
+    state.sshProfiles = profilesResult.profiles;
+    for (const profile of profilesResult.profiles) {
+      const opt = document.createElement('option');
+      opt.value = JSON.stringify({ host: profile.host, port: profile.port, username: profile.username, identityFile: profile.identityFile });
+      opt.textContent = `${profile.name} (${profile.username}@${profile.host})`;
+      select.appendChild(opt);
+      seen.add(profile.host);
+    }
+  }
+
+  // Add SSH config hosts that aren't already saved as profiles
+  if (configResult.success && configResult.hosts) {
+    for (const host of configResult.hosts) {
+      const hostName = host.hostName || host.host;
+      if (seen.has(hostName) || seen.has(host.host)) continue;
+      const opt = document.createElement('option');
+      opt.value = JSON.stringify({ host: host.hostName || host.host, port: host.port || 22, username: host.user || '', identityFile: host.identityFile });
+      const user = host.user || 'user';
+      opt.textContent = `${host.host} (${user}@${host.hostName || host.host})`;
+      select.appendChild(opt);
+    }
+  }
+
+  if (currentValue) {
+    select.value = currentValue;
+  }
+}
+
+async function liveConnectSsh(passphrase?: string): Promise<void> {
+  const hostValue = elements.liveSshHostSelect.value;
+  if (!hostValue) {
+    alert('Select an SSH host first.');
+    return;
+  }
+  const remotePath = elements.liveSshPathInput.value.trim();
+  if (!remotePath) {
+    alert('Enter a remote file path to tail.');
+    return;
+  }
+
+  let hostConfig: { host: string; port: number; username: string; identityFile?: string };
+  try {
+    hostConfig = JSON.parse(hostValue);
+  } catch {
+    alert('Invalid host selection.');
+    return;
+  }
+
+  if (!hostConfig.username) {
+    alert('Username is required. Configure it in SSH profiles or ~/.ssh/config.');
+    return;
+  }
+
+  state.liveConnectionName = elements.liveNameInput.value.trim();
+
+  elements.btnLiveConnect.textContent = 'Connecting...';
+  elements.btnLiveConnect.disabled = true;
+
+  const result = await window.api.sshConnect({
+    host: hostConfig.host,
+    port: hostConfig.port,
+    username: hostConfig.username,
+    identityFile: hostConfig.identityFile,
+    remotePath,
+    passphrase,
+  });
+
+  if (!result.success) {
+    if (result.error === 'Error: PASSPHRASE_NEEDED') {
+      elements.btnLiveConnect.textContent = 'Connect';
+      elements.btnLiveConnect.disabled = false;
+      showSshPassphrasePrompt();
+      return;
+    }
+    alert(`Failed to connect: ${result.error}`);
+    elements.btnLiveConnect.textContent = 'Connect';
+    elements.btnLiveConnect.disabled = false;
+    return;
+  }
+
+  const displayName = state.liveConnectionName || `${hostConfig.username}@${hostConfig.host}`;
+  liveOnConnected(result, displayName, remotePath);
+
+  // Disable SSH controls
+  elements.liveSshHostSelect.disabled = true;
+  elements.liveSshPathInput.disabled = true;
+
+  // Subscribe to SSH events
+  liveLinesAddedUnsub = window.api.onSshLinesAdded(onLiveLinesAdded);
+  liveErrorUnsub = window.api.onSshError(onLiveError);
+  liveDisconnectedUnsub = window.api.onSshDisconnected(onLiveDisconnected);
+}
+
+function showSshPassphrasePrompt(): void {
+  const modal = document.getElementById('ssh-passphrase-modal')!;
+  const input = document.getElementById('ssh-passphrase-input') as HTMLInputElement;
+  const btnOk = document.getElementById('btn-ssh-passphrase-ok') as HTMLButtonElement;
+  const btnCancel = document.getElementById('btn-ssh-passphrase-cancel') as HTMLButtonElement;
+
+  input.value = '';
+  modal.classList.remove('hidden');
+  input.focus();
+
+  const cleanup = () => {
+    modal.classList.add('hidden');
+    btnOk.removeEventListener('click', onOk);
+    btnCancel.removeEventListener('click', onCancel);
+    input.removeEventListener('keydown', onKeydown);
+  };
+
+  const onOk = () => {
+    const passphrase = input.value;
+    cleanup();
+    if (passphrase) {
+      liveConnectSsh(passphrase);
+    }
+  };
+
+  const onCancel = () => cleanup();
+
+  const onKeydown = (e: KeyboardEvent) => {
+    if (e.key === 'Enter') { e.preventDefault(); onOk(); }
+    if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+  };
+
+  btnOk.addEventListener('click', onOk);
+  btnCancel.addEventListener('click', onCancel);
+  input.addEventListener('keydown', onKeydown);
+}
+
+function showSshProfileManager(): void {
+  const modal = document.getElementById('ssh-profile-modal')!;
+  const listEl = document.getElementById('ssh-profile-list') as HTMLDivElement;
+  const nameInput = document.getElementById('ssh-profile-name') as HTMLInputElement;
+  const hostInput = document.getElementById('ssh-profile-host') as HTMLInputElement;
+  const portInput = document.getElementById('ssh-profile-port') as HTMLInputElement;
+  const usernameInput = document.getElementById('ssh-profile-username') as HTMLInputElement;
+  const identityInput = document.getElementById('ssh-profile-identity') as HTMLInputElement;
+  const btnSave = document.getElementById('btn-ssh-profile-save') as HTMLButtonElement;
+  const btnImport = document.getElementById('btn-ssh-import-config') as HTMLButtonElement;
+
+  let editingId: string | null = null;
+
+  function clearForm(): void {
+    nameInput.value = '';
+    hostInput.value = '';
+    portInput.value = '22';
+    usernameInput.value = '';
+    identityInput.value = '';
+    editingId = null;
+    btnSave.textContent = 'Save Profile';
+  }
+
+  async function renderProfiles(): Promise<void> {
+    const result = await window.api.sshListProfiles();
+    const profiles = result.success && result.profiles ? result.profiles : [];
+    state.sshProfiles = profiles;
+
+    if (profiles.length === 0) {
+      listEl.innerHTML = '<p class="placeholder">No saved profiles</p>';
+      return;
+    }
+
+    listEl.innerHTML = profiles.map(p => `
+      <div class="ssh-profile-item" data-id="${escapeHtml(p.id)}">
+        <div class="ssh-profile-info">
+          <span class="ssh-profile-item-name">${escapeHtml(p.name)}</span>
+          <span class="ssh-profile-item-detail">${escapeHtml(p.username)}@${escapeHtml(p.host)}:${p.port}</span>
+        </div>
+        <div class="ssh-profile-actions">
+          <button class="ssh-profile-edit-btn" title="Edit">&#9998;</button>
+          <button class="ssh-profile-delete-btn" title="Delete">&times;</button>
+        </div>
+      </div>
+    `).join('');
+
+    listEl.querySelectorAll('.ssh-profile-edit-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = (btn.closest('.ssh-profile-item') as HTMLElement).dataset.id;
+        const profile = profiles.find(p => p.id === id);
+        if (profile) {
+          nameInput.value = profile.name;
+          hostInput.value = profile.host;
+          portInput.value = String(profile.port);
+          usernameInput.value = profile.username;
+          identityInput.value = profile.identityFile || '';
+          editingId = profile.id;
+          btnSave.textContent = 'Update Profile';
+        }
+      });
+    });
+
+    listEl.querySelectorAll('.ssh-profile-delete-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = (btn.closest('.ssh-profile-item') as HTMLElement).dataset.id;
+        if (id) {
+          await window.api.sshDeleteProfile(id);
+          renderProfiles();
+        }
+      });
+    });
+  }
+
+  clearForm();
+  renderProfiles();
+  modal.classList.remove('hidden');
+
+  // Remove old listeners to prevent stacking
+  const newBtnSave = btnSave.cloneNode(true) as HTMLButtonElement;
+  btnSave.parentNode?.replaceChild(newBtnSave, btnSave);
+  const newBtnImport = btnImport.cloneNode(true) as HTMLButtonElement;
+  btnImport.parentNode?.replaceChild(newBtnImport, btnImport);
+
+  newBtnSave.addEventListener('click', async () => {
+    const name = nameInput.value.trim();
+    const host = hostInput.value.trim();
+    const port = parseInt(portInput.value, 10) || 22;
+    const username = usernameInput.value.trim();
+    const identityFile = identityInput.value.trim() || undefined;
+
+    if (!name || !host || !username) {
+      alert('Name, Host, and Username are required.');
+      return;
+    }
+
+    const profile: SshProfile = {
+      id: editingId || `ssh-${Date.now()}`,
+      name, host, port, username, identityFile,
+      createdAt: editingId ? (state.sshProfiles.find(p => p.id === editingId)?.createdAt || Date.now()) : Date.now(),
+    };
+
+    await window.api.sshSaveProfile(profile);
+    clearForm();
+    renderProfiles();
+    refreshSshHosts();
+  });
+
+  newBtnImport.addEventListener('click', async () => {
+    const result = await window.api.sshParseConfig();
+    if (!result.success || !result.hosts || result.hosts.length === 0) {
+      alert('No hosts found in ~/.ssh/config');
+      return;
+    }
+
+    for (const host of result.hosts) {
+      const existing = state.sshProfiles.find(p => p.host === (host.hostName || host.host));
+      if (existing) continue;
+
+      const profile: SshProfile = {
+        id: `ssh-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        name: host.host,
+        host: host.hostName || host.host,
+        port: host.port || 22,
+        username: host.user || '',
+        identityFile: host.identityFile,
+        createdAt: Date.now(),
+      };
+      await window.api.sshSaveProfile(profile);
+    }
+
+    renderProfiles();
+    refreshSshHosts();
+  });
+}
+
+// === SSH Folder Browsing ===
+
+async function openSshFolder(): Promise<void> {
+  // First, refresh hosts so we have an up-to-date list
+  await refreshSshHosts();
+
+  // Check if SSH is connected (for SFTP browsing)
+  const status = await window.api.sshStatus();
+  if (!status.connected) {
+    alert('Connect to an SSH host first via the Live panel, then use this button to browse its files.');
+    return;
+  }
+
+  // Prompt for remote path
+  const remotePath = prompt('Enter remote directory path:', '/var/log');
+  if (!remotePath) return;
+
+  try {
+    const result = await window.api.sshListRemoteDir(remotePath);
+    if (!result.success) {
+      alert(`Failed to list remote directory: ${result.error}`);
+      return;
+    }
+
+    const files = result.files || [];
+    const folderName = `${status.host}:${remotePath}`;
+
+    // Check if already open
+    if (state.folders.some(f => f.path === folderName)) return;
+
+    state.folders.push({
+      path: folderName,
+      name: folderName,
+      files: files.map(f => ({ name: f.name, path: f.path, size: f.size })),
+      collapsed: false,
+      isRemote: true,
+      sshHost: status.host || undefined,
+    });
+
+    renderFolderTree();
+  } catch (error) {
+    alert(`Error: ${error}`);
+  }
+}
+
 function liveOnConnected(result: { success: boolean; info?: any; tempFilePath?: string }, displayName: string, detail: string): void {
   state.liveConnected = true;
   elements.btnLiveConnect.textContent = 'Disconnect';
@@ -4711,8 +5063,10 @@ function onLiveDisconnected(): void {
 function liveDisconnect(): void {
   if (state.liveSource === 'serial') {
     window.api.serialDisconnect();
-  } else {
+  } else if (state.liveSource === 'logcat') {
     window.api.logcatDisconnect();
+  } else if (state.liveSource === 'ssh') {
+    window.api.sshDisconnect();
   }
   liveCleanupUI();
 }
@@ -4732,6 +5086,8 @@ function liveCleanupUI(): void {
   elements.liveBaudSelect.disabled = false;
   elements.liveDeviceSelect.disabled = false;
   elements.liveFilterInput.disabled = false;
+  elements.liveSshHostSelect.disabled = false;
+  elements.liveSshPathInput.disabled = false;
 
   if (liveLinesAddedUnsub) { liveLinesAddedUnsub(); liveLinesAddedUnsub = null; }
   if (liveErrorUnsub) { liveErrorUnsub(); liveErrorUnsub = null; }
@@ -4759,9 +5115,14 @@ function updateLiveDuration(): void {
 }
 
 async function liveSaveSession(): Promise<void> {
-  const result = state.liveSource === 'serial'
-    ? await window.api.serialSaveSession()
-    : await window.api.logcatSaveSession();
+  let result;
+  if (state.liveSource === 'serial') {
+    result = await window.api.serialSaveSession();
+  } else if (state.liveSource === 'logcat') {
+    result = await window.api.logcatSaveSession();
+  } else {
+    result = await window.api.sshSaveSession();
+  }
   if (result.success) {
     alert(`Session saved to:\n${result.filePath}`);
   } else if (result.error && result.error !== 'Cancelled') {
@@ -9203,10 +9564,15 @@ function init(): void {
     }
   });
   elements.liveSourceSelect.addEventListener('change', () => {
-    state.liveSource = elements.liveSourceSelect.value as 'serial' | 'logcat';
+    state.liveSource = elements.liveSourceSelect.value as 'serial' | 'logcat' | 'ssh';
     updateLiveSourceControls();
     refreshLiveDevices();
   });
+
+  // SSH-specific events
+  elements.btnLiveSshRefresh.addEventListener('click', () => refreshSshHosts());
+  elements.btnLiveSshManage.addEventListener('click', () => showSshProfileManager());
+  elements.btnOpenSshFolder.addEventListener('click', () => openSshFolder());
 
   // Panel resize is handled in setupActivityBar
   document.addEventListener('mousemove', (e) => {

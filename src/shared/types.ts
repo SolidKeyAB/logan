@@ -182,6 +182,27 @@ export interface LogcatStatus {
   tempFilePath: string | null;
 }
 
+// SSH types
+export interface SshProfile {
+  id: string;           // `ssh-${Date.now()}`
+  name: string;         // user-friendly label
+  host: string;         // hostname or SSH config alias
+  port: number;         // default 22
+  username: string;
+  identityFile?: string; // path to key (from SSH config)
+  createdAt: number;
+}
+
+export interface SshStatus {
+  connected: boolean;
+  host: string | null;
+  username: string | null;
+  remotePath: string | null;
+  linesReceived: number;
+  connectedSince: number | null;
+  tempFilePath: string | null;
+}
+
 // Search config session (saved group of search configs)
 export interface SearchConfigSession {
   id: string;           // `scs-${Date.now()}`
@@ -246,4 +267,18 @@ export const IPC = {
   LOGCAT_LINES_ADDED: 'logcat-lines-added',
   LOGCAT_ERROR: 'logcat-error',
   LOGCAT_DISCONNECTED: 'logcat-disconnected',
+  // SSH
+  SSH_PARSE_CONFIG: 'ssh-parse-config',
+  SSH_LIST_PROFILES: 'ssh-list-profiles',
+  SSH_SAVE_PROFILE: 'ssh-save-profile',
+  SSH_DELETE_PROFILE: 'ssh-delete-profile',
+  SSH_CONNECT: 'ssh-connect',
+  SSH_DISCONNECT: 'ssh-disconnect',
+  SSH_STATUS: 'ssh-status',
+  SSH_SAVE_SESSION: 'ssh-save-session',
+  SSH_LIST_REMOTE_DIR: 'ssh-list-remote-dir',
+  SSH_DOWNLOAD_FILE: 'ssh-download-file',
+  SSH_LINES_ADDED: 'ssh-lines-added',
+  SSH_ERROR: 'ssh-error',
+  SSH_DISCONNECTED: 'ssh-disconnected',
 } as const;

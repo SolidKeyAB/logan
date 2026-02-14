@@ -181,6 +181,34 @@ interface SearchConfigDef {
   createdAt: number;
 }
 
+interface SshProfile {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  identityFile?: string;
+  createdAt: number;
+}
+
+interface SshHostEntry {
+  host: string;
+  hostName?: string;
+  user?: string;
+  port?: number;
+  identityFile?: string;
+}
+
+interface SshStatus {
+  connected: boolean;
+  host: string | null;
+  username: string | null;
+  remotePath: string | null;
+  linesReceived: number;
+  connectedSince: number | null;
+  tempFilePath: string | null;
+}
+
 interface SearchConfigSessionDef {
   id: string;
   name: string;
@@ -349,6 +377,21 @@ interface Api {
   onLogcatLinesAdded: (callback: (data: { totalLines: number; newLines: number }) => void) => () => void;
   onLogcatError: (callback: (message: string) => void) => () => void;
   onLogcatDisconnected: (callback: () => void) => () => void;
+
+  // SSH
+  sshParseConfig: () => Promise<{ success: boolean; hosts?: SshHostEntry[]; error?: string }>;
+  sshListProfiles: () => Promise<{ success: boolean; profiles?: SshProfile[]; error?: string }>;
+  sshSaveProfile: (profile: SshProfile) => Promise<{ success: boolean; error?: string }>;
+  sshDeleteProfile: (id: string) => Promise<{ success: boolean; error?: string }>;
+  sshConnect: (config: { host: string; port: number; username: string; identityFile?: string; remotePath: string; passphrase?: string }) => Promise<{ success: boolean; info?: FileInfo; tempFilePath?: string; error?: string }>;
+  sshDisconnect: () => Promise<{ success: boolean; error?: string }>;
+  sshStatus: () => Promise<SshStatus>;
+  sshSaveSession: () => Promise<{ success: boolean; filePath?: string; error?: string }>;
+  sshListRemoteDir: (remotePath: string) => Promise<{ success: boolean; files?: FolderFile[]; error?: string }>;
+  sshDownloadFile: (remotePath: string) => Promise<{ success: boolean; localPath?: string; error?: string }>;
+  onSshLinesAdded: (callback: (data: { totalLines: number; newLines: number }) => void) => () => void;
+  onSshError: (callback: (message: string) => void) => () => void;
+  onSshDisconnected: (callback: () => void) => () => void;
 
   // Window controls
   windowMinimize: () => Promise<void>;
