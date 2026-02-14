@@ -418,10 +418,7 @@ describe('Logan Benchmark', () => {
         const memBefore = getMemoryMB();
         const start = performance.now();
 
-        const result = await analyzer.analyze(filePath, {
-          maxPatterns: 100,
-          maxDuplicates: 50,
-        });
+        const result = await analyzer.analyze(filePath, {});
 
         const elapsed = performance.now() - start;
         const memAfter = getMemoryMB();
@@ -430,12 +427,11 @@ describe('Logan Benchmark', () => {
           operation: 'Analyze',
           fileSize: size.label,
           duration: formatDuration(elapsed),
-          throughput: `${result.stats.uniquePatterns} patterns`,
+          throughput: `${result.stats.analyzedLines} lines`,
           memDelta: `+${(memAfter - memBefore).toFixed(1)} MB`,
         });
 
         expect(result.stats.totalLines).toBe(size.lines);
-        expect(result.patterns.length).toBeGreaterThan(0);
       }, TIMEOUT);
     }
   });

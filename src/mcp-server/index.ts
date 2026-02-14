@@ -172,7 +172,7 @@ server.tool(
 // === Tool: logan_analyze ===
 server.tool(
   'logan_analyze',
-  'Run analysis on the currently open log file — detects patterns, duplicates, error rates, and statistics',
+  'Run analysis on the currently open log file — detects crashes, counts error/warning levels, identifies top failing components, and suggests filters',
   {
     analyzerName: z.string().optional().describe('Specific analyzer name (omit for default)'),
     redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
