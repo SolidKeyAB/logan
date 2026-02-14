@@ -37,34 +37,21 @@ const IPC = {
   SEARCH_CONFIG_SESSION_DELETE: 'search-config-session-delete',
   GET_LINE_TIMESTAMP: 'get-line-timestamp',
   SERIAL_LIST_PORTS: 'serial-list-ports',
-  SERIAL_CONNECT: 'serial-connect',
-  SERIAL_DISCONNECT: 'serial-disconnect',
-  SERIAL_STATUS: 'serial-status',
-  SERIAL_SAVE_SESSION: 'serial-save-session',
-  SERIAL_LINES_ADDED: 'serial-lines-added',
-  SERIAL_ERROR: 'serial-error',
-  SERIAL_DISCONNECTED: 'serial-disconnected',
   LOGCAT_LIST_DEVICES: 'logcat-list-devices',
-  LOGCAT_CONNECT: 'logcat-connect',
-  LOGCAT_DISCONNECT: 'logcat-disconnect',
-  LOGCAT_STATUS: 'logcat-status',
-  LOGCAT_SAVE_SESSION: 'logcat-save-session',
-  LOGCAT_LINES_ADDED: 'logcat-lines-added',
-  LOGCAT_ERROR: 'logcat-error',
-  LOGCAT_DISCONNECTED: 'logcat-disconnected',
   SSH_PARSE_CONFIG: 'ssh-parse-config',
   SSH_LIST_PROFILES: 'ssh-list-profiles',
   SSH_SAVE_PROFILE: 'ssh-save-profile',
   SSH_DELETE_PROFILE: 'ssh-delete-profile',
-  SSH_CONNECT: 'ssh-connect',
-  SSH_DISCONNECT: 'ssh-disconnect',
-  SSH_STATUS: 'ssh-status',
-  SSH_SAVE_SESSION: 'ssh-save-session',
   SSH_LIST_REMOTE_DIR: 'ssh-list-remote-dir',
   SSH_DOWNLOAD_FILE: 'ssh-download-file',
-  SSH_LINES_ADDED: 'ssh-lines-added',
-  SSH_ERROR: 'ssh-error',
-  SSH_DISCONNECTED: 'ssh-disconnected',
+  LIVE_CONNECT: 'live-connect',
+  LIVE_DISCONNECT: 'live-disconnect',
+  LIVE_RESTART: 'live-restart',
+  LIVE_REMOVE: 'live-remove',
+  LIVE_SAVE_SESSION: 'live-save-session',
+  LIVE_LINES_ADDED: 'live-lines-added',
+  LIVE_ERROR: 'live-error',
+  LIVE_DISCONNECTED: 'live-disconnected',
 } as const;
 
 // API exposed to renderer
@@ -404,75 +391,14 @@ const api = {
     return () => ipcRenderer.removeListener('navigate-to-line', handler);
   },
 
-  // Serial port
+  // Device discovery
   serialListPorts: (): Promise<{ success: boolean; ports?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.SERIAL_LIST_PORTS),
 
-  serialConnect: (config: { path: string; baudRate: number }): Promise<{ success: boolean; info?: any; tempFilePath?: string; error?: string }> =>
-    ipcRenderer.invoke(IPC.SERIAL_CONNECT, config),
-
-  serialDisconnect: (): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke(IPC.SERIAL_DISCONNECT),
-
-  serialStatus: (): Promise<{ connected: boolean; portPath: string | null; baudRate: number; linesReceived: number; connectedSince: number | null; tempFilePath: string | null }> =>
-    ipcRenderer.invoke(IPC.SERIAL_STATUS),
-
-  serialSaveSession: (): Promise<{ success: boolean; filePath?: string; error?: string }> =>
-    ipcRenderer.invoke(IPC.SERIAL_SAVE_SESSION),
-
-  onSerialLinesAdded: (callback: (data: { totalLines: number; newLines: number }) => void): (() => void) => {
-    const handler = (_: any, data: { totalLines: number; newLines: number }) => callback(data);
-    ipcRenderer.on(IPC.SERIAL_LINES_ADDED, handler);
-    return () => ipcRenderer.removeListener(IPC.SERIAL_LINES_ADDED, handler);
-  },
-
-  onSerialError: (callback: (message: string) => void): (() => void) => {
-    const handler = (_: any, message: string) => callback(message);
-    ipcRenderer.on(IPC.SERIAL_ERROR, handler);
-    return () => ipcRenderer.removeListener(IPC.SERIAL_ERROR, handler);
-  },
-
-  onSerialDisconnected: (callback: () => void): (() => void) => {
-    const handler = () => callback();
-    ipcRenderer.on(IPC.SERIAL_DISCONNECTED, handler);
-    return () => ipcRenderer.removeListener(IPC.SERIAL_DISCONNECTED, handler);
-  },
-
-  // Logcat
   logcatListDevices: (): Promise<{ success: boolean; devices?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.LOGCAT_LIST_DEVICES),
 
-  logcatConnect: (config: { device?: string; filter?: string }): Promise<{ success: boolean; info?: any; tempFilePath?: string; error?: string }> =>
-    ipcRenderer.invoke(IPC.LOGCAT_CONNECT, config),
-
-  logcatDisconnect: (): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke(IPC.LOGCAT_DISCONNECT),
-
-  logcatStatus: (): Promise<{ connected: boolean; deviceId: string | null; filter: string | null; linesReceived: number; connectedSince: number | null; tempFilePath: string | null }> =>
-    ipcRenderer.invoke(IPC.LOGCAT_STATUS),
-
-  logcatSaveSession: (): Promise<{ success: boolean; filePath?: string; error?: string }> =>
-    ipcRenderer.invoke(IPC.LOGCAT_SAVE_SESSION),
-
-  onLogcatLinesAdded: (callback: (data: { totalLines: number; newLines: number }) => void): (() => void) => {
-    const handler = (_: any, data: { totalLines: number; newLines: number }) => callback(data);
-    ipcRenderer.on(IPC.LOGCAT_LINES_ADDED, handler);
-    return () => ipcRenderer.removeListener(IPC.LOGCAT_LINES_ADDED, handler);
-  },
-
-  onLogcatError: (callback: (message: string) => void): (() => void) => {
-    const handler = (_: any, message: string) => callback(message);
-    ipcRenderer.on(IPC.LOGCAT_ERROR, handler);
-    return () => ipcRenderer.removeListener(IPC.LOGCAT_ERROR, handler);
-  },
-
-  onLogcatDisconnected: (callback: () => void): (() => void) => {
-    const handler = () => callback();
-    ipcRenderer.on(IPC.LOGCAT_DISCONNECTED, handler);
-    return () => ipcRenderer.removeListener(IPC.LOGCAT_DISCONNECTED, handler);
-  },
-
-  // SSH
+  // SSH profiles & SFTP
   sshParseConfig: (): Promise<{ success: boolean; hosts?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.SSH_PARSE_CONFIG),
 
@@ -485,40 +411,44 @@ const api = {
   sshDeleteProfile: (id: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.SSH_DELETE_PROFILE, id),
 
-  sshConnect: (config: { host: string; port: number; username: string; identityFile?: string; remotePath: string; passphrase?: string }): Promise<{ success: boolean; info?: any; tempFilePath?: string; error?: string }> =>
-    ipcRenderer.invoke(IPC.SSH_CONNECT, config),
-
-  sshDisconnect: (): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke(IPC.SSH_DISCONNECT),
-
-  sshStatus: (): Promise<any> =>
-    ipcRenderer.invoke(IPC.SSH_STATUS),
-
-  sshSaveSession: (): Promise<{ success: boolean; filePath?: string; error?: string }> =>
-    ipcRenderer.invoke(IPC.SSH_SAVE_SESSION),
-
   sshListRemoteDir: (remotePath: string): Promise<{ success: boolean; files?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.SSH_LIST_REMOTE_DIR, remotePath),
 
   sshDownloadFile: (remotePath: string): Promise<{ success: boolean; localPath?: string; error?: string }> =>
     ipcRenderer.invoke(IPC.SSH_DOWNLOAD_FILE, remotePath),
 
-  onSshLinesAdded: (callback: (data: { totalLines: number; newLines: number }) => void): (() => void) => {
-    const handler = (_: any, data: { totalLines: number; newLines: number }) => callback(data);
-    ipcRenderer.on(IPC.SSH_LINES_ADDED, handler);
-    return () => ipcRenderer.removeListener(IPC.SSH_LINES_ADDED, handler);
+  // Unified live connection management
+  liveConnect: (source: string, config: any, displayName: string, detail: string): Promise<{ success: boolean; connectionId?: string; tempFilePath?: string; info?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.LIVE_CONNECT, source, config, displayName, detail),
+
+  liveDisconnect: (connectionId: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.LIVE_DISCONNECT, connectionId),
+
+  liveRestart: (connectionId: string): Promise<{ success: boolean; tempFilePath?: string; info?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.LIVE_RESTART, connectionId),
+
+  liveRemove: (connectionId: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.LIVE_REMOVE, connectionId),
+
+  liveSaveSession: (connectionId: string): Promise<{ success: boolean; filePath?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.LIVE_SAVE_SESSION, connectionId),
+
+  onLiveLinesAdded: (callback: (data: { connectionId: string; totalLines: number; newLines: number }) => void): (() => void) => {
+    const handler = (_: any, data: { connectionId: string; totalLines: number; newLines: number }) => callback(data);
+    ipcRenderer.on(IPC.LIVE_LINES_ADDED, handler);
+    return () => ipcRenderer.removeListener(IPC.LIVE_LINES_ADDED, handler);
   },
 
-  onSshError: (callback: (message: string) => void): (() => void) => {
-    const handler = (_: any, message: string) => callback(message);
-    ipcRenderer.on(IPC.SSH_ERROR, handler);
-    return () => ipcRenderer.removeListener(IPC.SSH_ERROR, handler);
+  onLiveError: (callback: (data: { connectionId: string; message: string }) => void): (() => void) => {
+    const handler = (_: any, data: { connectionId: string; message: string }) => callback(data);
+    ipcRenderer.on(IPC.LIVE_ERROR, handler);
+    return () => ipcRenderer.removeListener(IPC.LIVE_ERROR, handler);
   },
 
-  onSshDisconnected: (callback: () => void): (() => void) => {
-    const handler = () => callback();
-    ipcRenderer.on(IPC.SSH_DISCONNECTED, handler);
-    return () => ipcRenderer.removeListener(IPC.SSH_DISCONNECTED, handler);
+  onLiveDisconnected: (callback: (data: { connectionId: string }) => void): (() => void) => {
+    const handler = (_: any, data: { connectionId: string }) => callback(data);
+    ipcRenderer.on(IPC.LIVE_DISCONNECTED, handler);
+    return () => ipcRenderer.removeListener(IPC.LIVE_DISCONNECTED, handler);
   },
 
   // Window controls

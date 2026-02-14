@@ -212,6 +212,18 @@ export interface SearchConfigSession {
   createdAt: number;
 }
 
+// Live connection info returned to renderer
+export interface LiveConnectionInfo {
+  id: string;
+  source: 'serial' | 'logcat' | 'ssh';
+  displayName: string;
+  detail: string;
+  connected: boolean;
+  linesReceived: number;
+  connectedSince: number | null;
+  tempFilePath: string;
+}
+
 // IPC Channels
 export const IPC = {
   OPEN_FILE_DIALOG: 'open-file-dialog',
@@ -249,36 +261,23 @@ export const IPC = {
   SEARCH_CONFIG_SESSION_SAVE: 'search-config-session-save',
   SEARCH_CONFIG_SESSION_DELETE: 'search-config-session-delete',
   GET_LINE_TIMESTAMP: 'get-line-timestamp',
-  // Serial port
+  // Device discovery (kept per-source)
   SERIAL_LIST_PORTS: 'serial-list-ports',
-  SERIAL_CONNECT: 'serial-connect',
-  SERIAL_DISCONNECT: 'serial-disconnect',
-  SERIAL_STATUS: 'serial-status',
-  SERIAL_SAVE_SESSION: 'serial-save-session',
-  SERIAL_LINES_ADDED: 'serial-lines-added',
-  SERIAL_ERROR: 'serial-error',
-  SERIAL_DISCONNECTED: 'serial-disconnected',
-  // Logcat
   LOGCAT_LIST_DEVICES: 'logcat-list-devices',
-  LOGCAT_CONNECT: 'logcat-connect',
-  LOGCAT_DISCONNECT: 'logcat-disconnect',
-  LOGCAT_STATUS: 'logcat-status',
-  LOGCAT_SAVE_SESSION: 'logcat-save-session',
-  LOGCAT_LINES_ADDED: 'logcat-lines-added',
-  LOGCAT_ERROR: 'logcat-error',
-  LOGCAT_DISCONNECTED: 'logcat-disconnected',
-  // SSH
+  // SSH profile/SFTP management
   SSH_PARSE_CONFIG: 'ssh-parse-config',
   SSH_LIST_PROFILES: 'ssh-list-profiles',
   SSH_SAVE_PROFILE: 'ssh-save-profile',
   SSH_DELETE_PROFILE: 'ssh-delete-profile',
-  SSH_CONNECT: 'ssh-connect',
-  SSH_DISCONNECT: 'ssh-disconnect',
-  SSH_STATUS: 'ssh-status',
-  SSH_SAVE_SESSION: 'ssh-save-session',
   SSH_LIST_REMOTE_DIR: 'ssh-list-remote-dir',
   SSH_DOWNLOAD_FILE: 'ssh-download-file',
-  SSH_LINES_ADDED: 'ssh-lines-added',
-  SSH_ERROR: 'ssh-error',
-  SSH_DISCONNECTED: 'ssh-disconnected',
+  // Unified live connection management
+  LIVE_CONNECT: 'live-connect',
+  LIVE_DISCONNECT: 'live-disconnect',
+  LIVE_RESTART: 'live-restart',
+  LIVE_REMOVE: 'live-remove',
+  LIVE_SAVE_SESSION: 'live-save-session',
+  LIVE_LINES_ADDED: 'live-lines-added',
+  LIVE_ERROR: 'live-error',
+  LIVE_DISCONNECTED: 'live-disconnected',
 } as const;

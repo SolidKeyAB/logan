@@ -197,6 +197,23 @@ interface TabState {
   appliedFilterSuggestion: { id: string; title: string } | null;
 }
 
+// Per-connection state for Live panel
+interface LiveConnectionState {
+  id: string;
+  source: 'serial' | 'logcat' | 'ssh';
+  displayName: string;
+  detail: string;
+  tempFilePath: string;
+  tabId: string | null;
+  linesReceived: number;
+  connectedSince: number | null;
+  connected: boolean;
+  followMode: boolean;
+  minimapLevels: Array<string | undefined>;
+  lastLine: string;
+  config: any;
+}
+
 // Application State - maintains current file state for backward compatibility
 interface AppState {
   // Current file state (active tab)
@@ -246,10 +263,9 @@ interface AppState {
   // Video player
   videoSyncOffsetMs: number;
   videoFilePath: string | null;
-  // Live panel (serial / logcat)
-  liveConnected: boolean;
-  liveFollowMode: boolean;
-  liveConnectionName: string;
+  // Live panel (multi-connection)
+  liveConnections: Map<string, LiveConnectionState>;
+  activeConnectionId: string | null;
   liveSource: 'serial' | 'logcat' | 'ssh';
   sshProfiles: SshProfile[];
 }
@@ -292,9 +308,8 @@ const state: AppState = {
   searchConfigResults: new Map(),
   videoSyncOffsetMs: 0,
   videoFilePath: null,
-  liveConnected: false,
-  liveFollowMode: true,
-  liveConnectionName: '',
+  liveConnections: new Map<string, LiveConnectionState>(),
+  activeConnectionId: null,
   liveSource: 'serial' as 'serial' | 'logcat' | 'ssh',
   sshProfiles: [],
 };
@@ -864,7 +879,6 @@ const elements = {
   btnVideoOpen: document.getElementById('btn-video-open') as HTMLButtonElement,
   btnVideoSyncFromLine: document.getElementById('btn-video-sync-from-line') as HTMLButtonElement,
   // Live panel content (in bottom panel)
-  liveStatusText: document.getElementById('live-status-text') as HTMLSpanElement,
   liveNameInput: document.getElementById('live-name-input') as HTMLInputElement,
   liveSourceSelect: document.getElementById('live-source-select') as HTMLSelectElement,
   livePortSelect: document.getElementById('live-port-select') as HTMLSelectElement,
@@ -872,11 +886,7 @@ const elements = {
   btnLiveRefresh: document.getElementById('btn-live-refresh') as HTMLButtonElement,
   btnLiveConnect: document.getElementById('btn-live-connect') as HTMLButtonElement,
   btnLive: document.getElementById('btn-live') as HTMLButtonElement,
-  btnLiveSave: document.getElementById('btn-live-save') as HTMLButtonElement,
-  liveLineCount: document.getElementById('live-line-count') as HTMLSpanElement,
-  liveDuration: document.getElementById('live-duration') as HTMLSpanElement,
-  liveFollow: document.getElementById('live-follow') as HTMLInputElement,
-  liveMinimapCanvas: document.getElementById('live-minimap-canvas') as HTMLCanvasElement,
+  liveCardsRow: document.getElementById('live-cards-row') as HTMLDivElement,
   // Logcat-specific controls
   liveSerialControls: document.getElementById('live-serial-controls') as HTMLSpanElement,
   liveLogcatControls: document.getElementById('live-logcat-controls') as HTMLSpanElement,
@@ -4532,14 +4542,8 @@ let editingSearchConfigId: string | null = null;
 
 // ─── Live Panel (Serial / Logcat) ────────────────────────────────────
 
-let liveLinesAddedUnsub: (() => void) | null = null;
-let liveErrorUnsub: (() => void) | null = null;
-let liveDisconnectedUnsub: (() => void) | null = null;
+// Single duration timer for all live connections
 let liveDurationTimer: ReturnType<typeof setInterval> | null = null;
-let liveConnectedSince: number | null = null;
-
-// Minimap level buffer for canvas rendering
-const liveMinimapLevels: Array<string | undefined> = [];
 
 function updateLiveSourceControls(): void {
   const source = state.liveSource;
@@ -4600,78 +4604,51 @@ async function refreshLogcatDevices(): Promise<void> {
 }
 
 async function liveConnect(): Promise<void> {
-  if (state.liveSource === 'serial') {
-    await liveConnectSerial();
-  } else if (state.liveSource === 'logcat') {
-    await liveConnectLogcat();
-  } else if (state.liveSource === 'ssh') {
+  if (state.liveConnections.size >= 4) {
+    alert('Maximum 4 concurrent connections.');
+    return;
+  }
+
+  const source = state.liveSource;
+  const connectionName = elements.liveNameInput.value.trim();
+  let config: any;
+  let displayName: string;
+  let detail: string;
+
+  if (source === 'serial') {
+    const portPath = elements.livePortSelect.value;
+    if (!portPath) { alert('Select a serial port first.'); return; }
+    const baudRate = parseInt(elements.liveBaudSelect.value, 10);
+    config = { path: portPath, baudRate };
+    displayName = connectionName || portPath;
+    detail = `@ ${baudRate}`;
+  } else if (source === 'logcat') {
+    const device = elements.liveDeviceSelect.value || undefined;
+    const filter = elements.liveFilterInput.value.trim() || undefined;
+    config = { device, filter };
+    displayName = connectionName || device || 'logcat';
+    detail = filter ? `filter: ${filter}` : '';
+  } else {
+    // SSH - special handling for passphrase
     await liveConnectSsh();
-  }
-}
-
-async function liveConnectSerial(): Promise<void> {
-  const portPath = elements.livePortSelect.value;
-  if (!portPath) {
-    alert('Select a serial port first.');
     return;
   }
-  const baudRate = parseInt(elements.liveBaudSelect.value, 10);
-
-  state.liveConnectionName = elements.liveNameInput.value.trim();
 
   elements.btnLiveConnect.textContent = 'Connecting...';
   elements.btnLiveConnect.disabled = true;
 
-  const result = await window.api.serialConnect({ path: portPath, baudRate });
+  const result = await window.api.liveConnect(source, config, displayName, detail);
+
+  elements.btnLiveConnect.textContent = 'Connect';
+  elements.btnLiveConnect.disabled = false;
 
   if (!result.success) {
     alert(`Failed to connect: ${result.error}`);
-    elements.btnLiveConnect.textContent = 'Connect';
-    elements.btnLiveConnect.disabled = false;
     return;
   }
 
-  liveOnConnected(result, state.liveConnectionName || portPath, `@ ${baudRate}`);
-
-  // Disable serial controls
-  elements.livePortSelect.disabled = true;
-  elements.liveBaudSelect.disabled = true;
-
-  // Subscribe to serial events
-  liveLinesAddedUnsub = window.api.onSerialLinesAdded(onLiveLinesAdded);
-  liveErrorUnsub = window.api.onSerialError(onLiveError);
-  liveDisconnectedUnsub = window.api.onSerialDisconnected(onLiveDisconnected);
-}
-
-async function liveConnectLogcat(): Promise<void> {
-  const device = elements.liveDeviceSelect.value || undefined;
-  const filter = elements.liveFilterInput.value.trim() || undefined;
-
-  state.liveConnectionName = elements.liveNameInput.value.trim();
-
-  elements.btnLiveConnect.textContent = 'Connecting...';
-  elements.btnLiveConnect.disabled = true;
-
-  const result = await window.api.logcatConnect({ device, filter });
-
-  if (!result.success) {
-    alert(`Failed to connect: ${result.error}`);
-    elements.btnLiveConnect.textContent = 'Connect';
-    elements.btnLiveConnect.disabled = false;
-    return;
-  }
-
-  const displayName = state.liveConnectionName || device || 'logcat';
-  liveOnConnected(result, displayName, filter ? `filter: ${filter}` : '');
-
-  // Disable logcat controls
-  elements.liveDeviceSelect.disabled = true;
-  elements.liveFilterInput.disabled = true;
-
-  // Subscribe to logcat events
-  liveLinesAddedUnsub = window.api.onLogcatLinesAdded(onLiveLinesAdded);
-  liveErrorUnsub = window.api.onLogcatError(onLiveError);
-  liveDisconnectedUnsub = window.api.onLogcatDisconnected(onLiveDisconnected);
+  liveOnConnected(result.connectionId!, source, result.tempFilePath!, displayName, detail, config);
+  elements.liveNameInput.value = '';
 }
 
 async function refreshSshHosts(): Promise<void> {
@@ -4742,44 +4719,41 @@ async function liveConnectSsh(passphrase?: string): Promise<void> {
     return;
   }
 
-  state.liveConnectionName = elements.liveNameInput.value.trim();
+  if (state.liveConnections.size >= 4) {
+    alert('Maximum 4 concurrent connections.');
+    return;
+  }
 
-  elements.btnLiveConnect.textContent = 'Connecting...';
-  elements.btnLiveConnect.disabled = true;
-
-  const result = await window.api.sshConnect({
+  const connectionName = elements.liveNameInput.value.trim();
+  const config = {
     host: hostConfig.host,
     port: hostConfig.port,
     username: hostConfig.username,
     identityFile: hostConfig.identityFile,
     remotePath,
     passphrase,
-  });
+  };
+
+  elements.btnLiveConnect.textContent = 'Connecting...';
+  elements.btnLiveConnect.disabled = true;
+
+  const displayName = connectionName || `${hostConfig.username}@${hostConfig.host}`;
+  const result = await window.api.liveConnect('ssh', config, displayName, remotePath);
+
+  elements.btnLiveConnect.textContent = 'Connect';
+  elements.btnLiveConnect.disabled = false;
 
   if (!result.success) {
     if (result.error === 'Error: PASSPHRASE_NEEDED') {
-      elements.btnLiveConnect.textContent = 'Connect';
-      elements.btnLiveConnect.disabled = false;
       showSshPassphrasePrompt();
       return;
     }
     alert(`Failed to connect: ${result.error}`);
-    elements.btnLiveConnect.textContent = 'Connect';
-    elements.btnLiveConnect.disabled = false;
     return;
   }
 
-  const displayName = state.liveConnectionName || `${hostConfig.username}@${hostConfig.host}`;
-  liveOnConnected(result, displayName, remotePath);
-
-  // Disable SSH controls
-  elements.liveSshHostSelect.disabled = true;
-  elements.liveSshPathInput.disabled = true;
-
-  // Subscribe to SSH events
-  liveLinesAddedUnsub = window.api.onSshLinesAdded(onLiveLinesAdded);
-  liveErrorUnsub = window.api.onSshError(onLiveError);
-  liveDisconnectedUnsub = window.api.onSshDisconnected(onLiveDisconnected);
+  liveOnConnected(result.connectionId!, 'ssh', result.tempFilePath!, displayName, remotePath, config);
+  elements.liveNameInput.value = '';
 }
 
 function showSshPassphrasePrompt(): void {
@@ -4960,9 +4934,15 @@ async function openSshFolder(): Promise<void> {
   // First, refresh hosts so we have an up-to-date list
   await refreshSshHosts();
 
-  // Check if SSH is connected (for SFTP browsing)
-  const status = await window.api.sshStatus();
-  if (!status.connected) {
+  // Find an active SSH connection for SFTP browsing
+  let sshConn: LiveConnectionState | undefined;
+  for (const conn of state.liveConnections.values()) {
+    if (conn.source === 'ssh' && conn.connected) {
+      sshConn = conn;
+      break;
+    }
+  }
+  if (!sshConn) {
     alert('Connect to an SSH host first via the Live panel, then use this button to browse its files.');
     return;
   }
@@ -4979,7 +4959,8 @@ async function openSshFolder(): Promise<void> {
     }
 
     const files = result.files || [];
-    const folderName = `${status.host}:${remotePath}`;
+    const hostLabel = sshConn.displayName;
+    const folderName = `${hostLabel}:${remotePath}`;
 
     // Check if already open
     if (state.folders.some(f => f.path === folderName)) return;
@@ -4990,7 +4971,7 @@ async function openSshFolder(): Promise<void> {
       files: files.map(f => ({ name: f.name, path: f.path, size: f.size })),
       collapsed: false,
       isRemote: true,
-      sshHost: status.host || undefined,
+      sshHost: hostLabel || undefined,
     });
 
     renderFolderTree();
@@ -4999,130 +4980,209 @@ async function openSshFolder(): Promise<void> {
   }
 }
 
-function liveOnConnected(result: { success: boolean; info?: any; tempFilePath?: string }, displayName: string, detail: string): void {
-  state.liveConnected = true;
-  elements.btnLiveConnect.textContent = 'Disconnect';
-  elements.btnLiveConnect.classList.add('disconnect');
-  elements.btnLiveConnect.disabled = false;
-  elements.btnLiveSave.disabled = false;
-  elements.liveNameInput.disabled = true;
-  elements.liveSourceSelect.disabled = true;
-
-  elements.liveStatusText.textContent = `Connected to ${displayName} ${detail}`.trim();
-  elements.liveStatusText.classList.add('connected');
+function liveOnConnected(connectionId: string, source: 'serial' | 'logcat' | 'ssh', tempFilePath: string, displayName: string, detail: string, config: any): void {
+  const conn: LiveConnectionState = {
+    id: connectionId,
+    source,
+    displayName,
+    detail,
+    tempFilePath,
+    tabId: null,
+    linesReceived: 0,
+    connectedSince: Date.now(),
+    connected: true,
+    followMode: true,
+    minimapLevels: [],
+    lastLine: '',
+    config,
+  };
+  state.liveConnections.set(connectionId, conn);
+  state.activeConnectionId = connectionId;
 
   // Open the temp file in the viewer
-  if (result.tempFilePath) {
-    window.api.openFile(result.tempFilePath).then((openResult) => {
-      if (openResult.success && openResult.info) {
-        const tab = createTab(result.tempFilePath!);
-        state.tabs.push(tab);
-        state.activeTabId = tab.id;
-        state.filePath = result.tempFilePath!;
-        state.totalLines = openResult.info.totalLines;
-        createLogViewer();
-        renderTabBar();
+  window.api.openFile(tempFilePath).then((openResult) => {
+    if (openResult.success && openResult.info) {
+      const tab = createTab(tempFilePath);
+      state.tabs.push(tab);
+      state.activeTabId = tab.id;
+      conn.tabId = tab.id;
+      state.filePath = tempFilePath;
+      state.totalLines = openResult.info.totalLines;
+      createLogViewer();
+      renderTabBar();
+    }
+  });
+
+  // Start global duration timer if not already running
+  if (!liveDurationTimer) {
+    liveDurationTimer = setInterval(updateAllCardDurations, 1000);
+  }
+
+  renderConnectionCards();
+}
+
+function renderConnectionCards(): void {
+  const container = elements.liveCardsRow;
+  if (!container) return;
+
+  container.innerHTML = '';
+
+  for (const conn of state.liveConnections.values()) {
+    const card = document.createElement('div');
+    card.className = 'live-card';
+    card.dataset.connectionId = conn.id;
+    card.dataset.active = (conn.id === state.activeConnectionId) ? 'true' : 'false';
+
+    const statusClass = conn.connected ? 'connected' : 'disconnected';
+    const statusDot = conn.connected ? '\u25CF' : '\u25CB';
+
+    const duration = conn.connectedSince ? formatDurationMs(Date.now() - conn.connectedSince) : '';
+
+    card.innerHTML = `
+      <div class="live-card-header">
+        <span class="live-card-name">${escapeHtml(conn.displayName)}</span>
+        <span class="live-card-detail">${escapeHtml(conn.detail)}</span>
+        <div class="live-card-actions">
+          ${conn.connected
+            ? `<button class="live-card-btn stop" title="Stop" data-action="stop">\u25A0</button>`
+            : `<button class="live-card-btn restart" title="Restart" data-action="restart">\u21BB</button>`
+          }
+          <button class="live-card-btn save" title="Save" data-action="save">\u{1F4BE}</button>
+          <button class="live-card-btn remove" title="Remove" data-action="remove">\u00D7</button>
+        </div>
+      </div>
+      <div class="live-card-stats">
+        <span class="live-card-lines">${conn.linesReceived.toLocaleString()} lines</span>
+        <span class="live-card-duration">${duration}</span>
+        <span class="live-card-status ${statusClass}">${statusDot}</span>
+      </div>
+      <div class="live-card-preview">${escapeHtml(conn.lastLine)}</div>
+      <canvas class="live-card-minimap" width="200" height="24"></canvas>
+    `;
+
+    // Card click → switch to connection's tab
+    card.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('.live-card-btn')) return; // let button handler handle it
+      state.activeConnectionId = conn.id;
+      if (conn.tabId) {
+        switchToTab(conn.tabId);
       }
+      renderConnectionCards();
     });
+
+    // Button actions
+    card.querySelectorAll('.live-card-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const action = (btn as HTMLElement).dataset.action;
+        if (action === 'stop') liveStopConnection(conn.id);
+        else if (action === 'restart') liveRestartConnection(conn.id);
+        else if (action === 'save') liveSaveConnection(conn.id);
+        else if (action === 'remove') liveRemoveConnection(conn.id);
+      });
+    });
+
+    container.appendChild(card);
   }
 
-  // Start duration timer
-  liveConnectedSince = Date.now();
-  liveDurationTimer = setInterval(updateLiveDuration, 1000);
-  updateLiveDuration();
+  // Render all card minimaps
+  requestCardMinimapRender();
 }
 
-function onLiveLinesAdded(data: { totalLines: number; newLines: number }): void {
-  state.totalLines = data.totalLines;
-  elements.liveLineCount.textContent = `Lines: ${data.totalLines.toLocaleString()}`;
+function updateConnectionCard(connectionId: string): void {
+  const conn = state.liveConnections.get(connectionId);
+  if (!conn) return;
 
-  for (let i = 0; i < data.newLines; i++) {
-    liveMinimapLevels.push(undefined);
+  const container = elements.liveCardsRow;
+  const card = container?.querySelector(`[data-connection-id="${connectionId}"]`) as HTMLElement;
+  if (!card) { renderConnectionCards(); return; }
+
+  const linesEl = card.querySelector('.live-card-lines');
+  if (linesEl) linesEl.textContent = `${conn.linesReceived.toLocaleString()} lines`;
+
+  const previewEl = card.querySelector('.live-card-preview');
+  if (previewEl) previewEl.textContent = conn.lastLine;
+}
+
+function updateAllCardDurations(): void {
+  let anyConnected = false;
+  for (const conn of state.liveConnections.values()) {
+    if (conn.connectedSince) {
+      anyConnected = true;
+      const card = elements.liveCardsRow?.querySelector(`[data-connection-id="${conn.id}"]`);
+      const durEl = card?.querySelector('.live-card-duration');
+      if (durEl) durEl.textContent = formatDurationMs(Date.now() - conn.connectedSince);
+    }
   }
-
-  invalidateLineCache();
-
-  if (state.liveFollowMode && logViewerElement) {
-    goToLine(Math.max(0, data.totalLines - 1));
-  } else if (logViewerElement) {
-    renderVisibleLines();
+  if (!anyConnected && liveDurationTimer) {
+    clearInterval(liveDurationTimer);
+    liveDurationTimer = null;
   }
-
-  requestLiveMinimapRender();
 }
 
-function onLiveError(message: string): void {
-  elements.liveStatusText.textContent = `Error: ${message}`;
-  elements.liveStatusText.classList.remove('connected');
-}
-
-function onLiveDisconnected(): void {
-  liveCleanupUI();
-}
-
-function liveDisconnect(): void {
-  if (state.liveSource === 'serial') {
-    window.api.serialDisconnect();
-  } else if (state.liveSource === 'logcat') {
-    window.api.logcatDisconnect();
-  } else if (state.liveSource === 'ssh') {
-    window.api.sshDisconnect();
-  }
-  liveCleanupUI();
-}
-
-function liveCleanupUI(): void {
-  state.liveConnected = false;
-  elements.btnLiveConnect.textContent = 'Connect';
-  elements.btnLiveConnect.classList.remove('disconnect');
-  elements.btnLiveConnect.disabled = false;
-  elements.liveNameInput.disabled = false;
-  elements.liveSourceSelect.disabled = false;
-  elements.liveStatusText.textContent = 'Disconnected';
-  elements.liveStatusText.classList.remove('connected');
-
-  // Re-enable source-specific controls
-  elements.livePortSelect.disabled = false;
-  elements.liveBaudSelect.disabled = false;
-  elements.liveDeviceSelect.disabled = false;
-  elements.liveFilterInput.disabled = false;
-  elements.liveSshHostSelect.disabled = false;
-  elements.liveSshPathInput.disabled = false;
-
-  if (liveLinesAddedUnsub) { liveLinesAddedUnsub(); liveLinesAddedUnsub = null; }
-  if (liveErrorUnsub) { liveErrorUnsub(); liveErrorUnsub = null; }
-  if (liveDisconnectedUnsub) { liveDisconnectedUnsub(); liveDisconnectedUnsub = null; }
-  if (liveDurationTimer) { clearInterval(liveDurationTimer); liveDurationTimer = null; }
-  liveConnectedSince = null;
-}
-
-function updateLiveDuration(): void {
-  if (!liveConnectedSince) {
-    elements.liveDuration.textContent = '';
-    return;
-  }
-  const elapsed = Date.now() - liveConnectedSince;
-  const secs = Math.floor(elapsed / 1000);
+function formatDurationMs(ms: number): string {
+  const secs = Math.floor(ms / 1000);
   const mins = Math.floor(secs / 60);
   const hrs = Math.floor(mins / 60);
-  if (hrs > 0) {
-    elements.liveDuration.textContent = `${hrs}h ${mins % 60}m ${secs % 60}s`;
-  } else if (mins > 0) {
-    elements.liveDuration.textContent = `${mins}m ${secs % 60}s`;
-  } else {
-    elements.liveDuration.textContent = `${secs}s`;
-  }
+  if (hrs > 0) return `${hrs}h ${mins % 60}m ${secs % 60}s`;
+  if (mins > 0) return `${mins}m ${secs % 60}s`;
+  return `${secs}s`;
 }
 
-async function liveSaveSession(): Promise<void> {
-  let result;
-  if (state.liveSource === 'serial') {
-    result = await window.api.serialSaveSession();
-  } else if (state.liveSource === 'logcat') {
-    result = await window.api.logcatSaveSession();
-  } else {
-    result = await window.api.sshSaveSession();
+async function liveStopConnection(connectionId: string): Promise<void> {
+  const conn = state.liveConnections.get(connectionId);
+  if (!conn || !conn.connected) return;
+  await window.api.liveDisconnect(connectionId);
+  conn.connected = false;
+  conn.connectedSince = null;
+  renderConnectionCards();
+}
+
+async function liveRestartConnection(connectionId: string): Promise<void> {
+  const conn = state.liveConnections.get(connectionId);
+  if (!conn) return;
+
+  const result = await window.api.liveRestart(connectionId);
+  if (!result.success) {
+    alert(`Restart failed: ${result.error}`);
+    return;
   }
+
+  conn.tempFilePath = result.tempFilePath!;
+  conn.connected = true;
+  conn.connectedSince = Date.now();
+  conn.linesReceived = 0;
+  conn.minimapLevels = [];
+  conn.lastLine = '';
+
+  // Open new temp file in viewer
+  const openResult = await window.api.openFile(conn.tempFilePath);
+  if (openResult.success && openResult.info) {
+    // Close old tab if it exists
+    if (conn.tabId) {
+      const oldTabIdx = state.tabs.findIndex(t => t.id === conn.tabId);
+      if (oldTabIdx >= 0) state.tabs.splice(oldTabIdx, 1);
+    }
+    const tab = createTab(conn.tempFilePath);
+    state.tabs.push(tab);
+    state.activeTabId = tab.id;
+    conn.tabId = tab.id;
+    state.filePath = conn.tempFilePath;
+    state.totalLines = openResult.info.totalLines;
+    createLogViewer();
+    renderTabBar();
+  }
+
+  if (!liveDurationTimer) {
+    liveDurationTimer = setInterval(updateAllCardDurations, 1000);
+  }
+
+  renderConnectionCards();
+}
+
+async function liveSaveConnection(connectionId: string): Promise<void> {
+  const result = await window.api.liveSaveSession(connectionId);
   if (result.success) {
     alert(`Session saved to:\n${result.filePath}`);
   } else if (result.error && result.error !== 'Cancelled') {
@@ -5130,32 +5190,70 @@ async function liveSaveSession(): Promise<void> {
   }
 }
 
+async function liveRemoveConnection(connectionId: string): Promise<void> {
+  const conn = state.liveConnections.get(connectionId);
+  if (!conn) return;
+
+  await window.api.liveRemove(connectionId);
+
+  // Close tab if it exists
+  if (conn.tabId) {
+    const tabIdx = state.tabs.findIndex(t => t.id === conn.tabId);
+    if (tabIdx >= 0) {
+      state.tabs.splice(tabIdx, 1);
+      if (state.activeTabId === conn.tabId) {
+        // Switch to another tab
+        if (state.tabs.length > 0) {
+          switchToTab(state.tabs[state.tabs.length - 1].id);
+        } else {
+          state.activeTabId = null;
+          state.filePath = null;
+        }
+      }
+      renderTabBar();
+    }
+  }
+
+  state.liveConnections.delete(connectionId);
+  if (state.activeConnectionId === connectionId) {
+    // Pick next active connection
+    const first = state.liveConnections.keys().next().value;
+    state.activeConnectionId = first || null;
+  }
+
+  renderConnectionCards();
+}
+
 // Line cache invalidation for live streaming
 function invalidateLineCache(): void {
-  // Clear the line cache to force re-fetch of current visible lines
   cachedLines.clear();
 }
 
-// Live minimap rendering (canvas-based for performance)
-let liveMinimapRafPending = false;
+// Card minimap rendering — single RAF for all cards
+let cardMinimapRafPending = false;
 
-function requestLiveMinimapRender(): void {
-  if (liveMinimapRafPending) return;
-  liveMinimapRafPending = true;
+function requestCardMinimapRender(): void {
+  if (cardMinimapRafPending) return;
+  cardMinimapRafPending = true;
   requestAnimationFrame(() => {
-    liveMinimapRafPending = false;
-    renderLiveMinimap();
+    cardMinimapRafPending = false;
+    for (const conn of state.liveConnections.values()) {
+      renderCardMinimap(conn.id);
+    }
   });
 }
 
-function renderLiveMinimap(): void {
-  const canvas = elements.liveMinimapCanvas;
+function renderCardMinimap(connectionId: string): void {
+  const conn = state.liveConnections.get(connectionId);
+  if (!conn) return;
+
+  const card = elements.liveCardsRow?.querySelector(`[data-connection-id="${connectionId}"]`);
+  const canvas = card?.querySelector('.live-card-minimap') as HTMLCanvasElement;
   if (!canvas) return;
 
-  const rect = canvas.parentElement?.getBoundingClientRect();
-  if (!rect || rect.width === 0 || rect.height === 0) return;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
 
-  // Set canvas size to match container (retina-aware)
   const dpr = window.devicePixelRatio || 1;
   const w = rect.width;
   const h = rect.height;
@@ -5168,55 +5266,81 @@ function renderLiveMinimap(): void {
   if (!ctx) return;
   ctx.scale(dpr, dpr);
 
-  const totalLines = liveMinimapLevels.length;
+  const levels = conn.minimapLevels;
+  const totalLines = levels.length;
   if (totalLines === 0) {
     ctx.clearRect(0, 0, w, h);
     return;
   }
 
-  // Draw log flow as colored line density
-  const rowHeight = Math.max(1, h / Math.max(totalLines, 1));
-  const sampleRate = Math.max(1, Math.floor(totalLines / h));
-
+  const sampleRate = Math.max(1, Math.floor(totalLines / w));
   ctx.clearRect(0, 0, w, h);
 
-  for (let y = 0; y < h; y++) {
-    const lineIdx = Math.floor((y / h) * totalLines);
+  for (let x = 0; x < w; x++) {
+    const lineIdx = Math.floor((x / w) * totalLines);
     const endIdx = Math.min(lineIdx + sampleRate, totalLines);
 
-    // Count levels in this sample
     let hasError = false;
     let hasWarning = false;
-    let hasInfo = false;
 
     for (let i = lineIdx; i < endIdx; i++) {
-      const level = liveMinimapLevels[i];
+      const level = levels[i];
       if (level === 'error') hasError = true;
       else if (level === 'warning') hasWarning = true;
-      else if (level === 'info') hasInfo = true;
     }
 
-    // Pick color based on priority
-    if (hasError) {
-      ctx.fillStyle = '#e74c3c';
-    } else if (hasWarning) {
-      ctx.fillStyle = '#f39c12';
-    } else if (hasInfo) {
-      ctx.fillStyle = '#3498db';
-    } else {
-      ctx.fillStyle = 'rgba(150, 150, 150, 0.3)';
+    if (hasError) ctx.fillStyle = '#e74c3c';
+    else if (hasWarning) ctx.fillStyle = '#f39c12';
+    else ctx.fillStyle = 'rgba(150, 150, 150, 0.4)';
+
+    ctx.fillRect(x, 0, 1, h);
+  }
+}
+
+// Unified live event listeners — registered once in init()
+function setupLiveEventListeners(): void {
+  window.api.onLiveLinesAdded(({ connectionId, totalLines, newLines }) => {
+    const conn = state.liveConnections.get(connectionId);
+    if (!conn) return;
+    conn.linesReceived = totalLines;
+    for (let i = 0; i < newLines; i++) conn.minimapLevels.push(undefined);
+    updateConnectionCard(connectionId);
+    requestCardMinimapRender();
+
+    // If this connection's tab is active, update the main viewer
+    if (conn.tabId === state.activeTabId) {
+      state.totalLines = totalLines;
+      invalidateLineCache();
+      if (conn.followMode) goToLine(Math.max(0, totalLines - 1));
+      else renderVisibleLines();
     }
 
-    ctx.fillRect(0, y, w, Math.max(1, rowHeight));
-  }
+    // Fetch last line for preview (debounced via RAF coalescing in updateConnectionCard)
+    window.api.getLinesForFile(conn.tempFilePath, Math.max(0, totalLines - 1), 1).then(res => {
+      if (res.success && res.lines && res.lines.length > 0) {
+        const text = res.lines[0].text || '';
+        conn.lastLine = text.length > 80 ? text.slice(0, 80) + '\u2026' : text;
+        const card = elements.liveCardsRow?.querySelector(`[data-connection-id="${connectionId}"]`);
+        const previewEl = card?.querySelector('.live-card-preview');
+        if (previewEl) previewEl.textContent = conn.lastLine;
+      }
+    });
+  });
 
-  // Draw viewport indicator
-  if (logViewerElement && state.totalLines > 0) {
-    const viewStart = state.visibleStartLine / state.totalLines;
-    const viewEnd = state.visibleEndLine / state.totalLines;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-    ctx.fillRect(0, viewStart * h, w, Math.max(2, (viewEnd - viewStart) * h));
-  }
+  window.api.onLiveError(({ connectionId, message }) => {
+    const conn = state.liveConnections.get(connectionId);
+    if (!conn) return;
+    conn.lastLine = `Error: ${message}`;
+    updateConnectionCard(connectionId);
+  });
+
+  window.api.onLiveDisconnected(({ connectionId }) => {
+    const conn = state.liveConnections.get(connectionId);
+    if (!conn) return;
+    conn.connected = false;
+    conn.connectedSince = null;
+    renderConnectionCards();
+  });
 }
 
 function openVideoFile(): void {
@@ -9549,20 +9673,7 @@ function init(): void {
   // Live panel events (inside bottom panel)
   elements.btnLiveRefresh.addEventListener('click', () => refreshSerialPorts());
   elements.btnLiveRefreshDevices.addEventListener('click', () => refreshLogcatDevices());
-  elements.btnLiveConnect.addEventListener('click', () => {
-    if (state.liveConnected) {
-      liveDisconnect();
-    } else {
-      liveConnect();
-    }
-  });
-  elements.btnLiveSave.addEventListener('click', liveSaveSession);
-  elements.liveFollow.addEventListener('change', () => {
-    state.liveFollowMode = elements.liveFollow.checked;
-    if (state.liveFollowMode && state.liveConnected && state.totalLines > 0) {
-      goToLine(state.totalLines - 1);
-    }
-  });
+  elements.btnLiveConnect.addEventListener('click', () => liveConnect());
   elements.liveSourceSelect.addEventListener('change', () => {
     state.liveSource = elements.liveSourceSelect.value as 'serial' | 'logcat' | 'ssh';
     updateLiveSourceControls();
@@ -9573,6 +9684,9 @@ function init(): void {
   elements.btnLiveSshRefresh.addEventListener('click', () => refreshSshHosts());
   elements.btnLiveSshManage.addEventListener('click', () => showSshProfileManager());
   elements.btnOpenSshFolder.addEventListener('click', () => openSshFolder());
+
+  // Unified live connection event listeners (register once)
+  setupLiveEventListeners();
 
   // Panel resize is handled in setupActivityBar
   document.addEventListener('mousemove', (e) => {

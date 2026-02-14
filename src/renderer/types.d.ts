@@ -358,40 +358,27 @@ interface Api {
   // MCP navigation
   onNavigateToLine: (callback: (lineNumber: number) => void) => () => void;
 
-  // Serial port
+  // Device discovery
   serialListPorts: () => Promise<{ success: boolean; ports?: Array<{ path: string; manufacturer?: string; vendorId?: string; productId?: string }>; error?: string }>;
-  serialConnect: (config: { path: string; baudRate: number }) => Promise<{ success: boolean; info?: FileInfo; tempFilePath?: string; error?: string }>;
-  serialDisconnect: () => Promise<{ success: boolean; error?: string }>;
-  serialStatus: () => Promise<{ connected: boolean; portPath: string | null; baudRate: number; linesReceived: number; connectedSince: number | null; tempFilePath: string | null }>;
-  serialSaveSession: () => Promise<{ success: boolean; filePath?: string; error?: string }>;
-  onSerialLinesAdded: (callback: (data: { totalLines: number; newLines: number }) => void) => () => void;
-  onSerialError: (callback: (message: string) => void) => () => void;
-  onSerialDisconnected: (callback: () => void) => () => void;
-
-  // Logcat
   logcatListDevices: () => Promise<{ success: boolean; devices?: Array<{ id: string; state: string; model?: string }>; error?: string }>;
-  logcatConnect: (config: { device?: string; filter?: string }) => Promise<{ success: boolean; info?: FileInfo; tempFilePath?: string; error?: string }>;
-  logcatDisconnect: () => Promise<{ success: boolean; error?: string }>;
-  logcatStatus: () => Promise<{ connected: boolean; deviceId: string | null; filter: string | null; linesReceived: number; connectedSince: number | null; tempFilePath: string | null }>;
-  logcatSaveSession: () => Promise<{ success: boolean; filePath?: string; error?: string }>;
-  onLogcatLinesAdded: (callback: (data: { totalLines: number; newLines: number }) => void) => () => void;
-  onLogcatError: (callback: (message: string) => void) => () => void;
-  onLogcatDisconnected: (callback: () => void) => () => void;
 
-  // SSH
+  // SSH profiles & SFTP
   sshParseConfig: () => Promise<{ success: boolean; hosts?: SshHostEntry[]; error?: string }>;
   sshListProfiles: () => Promise<{ success: boolean; profiles?: SshProfile[]; error?: string }>;
   sshSaveProfile: (profile: SshProfile) => Promise<{ success: boolean; error?: string }>;
   sshDeleteProfile: (id: string) => Promise<{ success: boolean; error?: string }>;
-  sshConnect: (config: { host: string; port: number; username: string; identityFile?: string; remotePath: string; passphrase?: string }) => Promise<{ success: boolean; info?: FileInfo; tempFilePath?: string; error?: string }>;
-  sshDisconnect: () => Promise<{ success: boolean; error?: string }>;
-  sshStatus: () => Promise<SshStatus>;
-  sshSaveSession: () => Promise<{ success: boolean; filePath?: string; error?: string }>;
   sshListRemoteDir: (remotePath: string) => Promise<{ success: boolean; files?: FolderFile[]; error?: string }>;
   sshDownloadFile: (remotePath: string) => Promise<{ success: boolean; localPath?: string; error?: string }>;
-  onSshLinesAdded: (callback: (data: { totalLines: number; newLines: number }) => void) => () => void;
-  onSshError: (callback: (message: string) => void) => () => void;
-  onSshDisconnected: (callback: () => void) => () => void;
+
+  // Unified live connection management
+  liveConnect: (source: string, config: any, displayName: string, detail: string) => Promise<{ success: boolean; connectionId?: string; tempFilePath?: string; info?: FileInfo; error?: string }>;
+  liveDisconnect: (connectionId: string) => Promise<{ success: boolean; error?: string }>;
+  liveRestart: (connectionId: string) => Promise<{ success: boolean; tempFilePath?: string; info?: FileInfo; error?: string }>;
+  liveRemove: (connectionId: string) => Promise<{ success: boolean; error?: string }>;
+  liveSaveSession: (connectionId: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
+  onLiveLinesAdded: (callback: (data: { connectionId: string; totalLines: number; newLines: number }) => void) => () => void;
+  onLiveError: (callback: (data: { connectionId: string; message: string }) => void) => () => void;
+  onLiveDisconnected: (callback: (data: { connectionId: string }) => void) => () => void;
 
   // Window controls
   windowMinimize: () => Promise<void>;

@@ -5,7 +5,7 @@ import * as os from 'os';
 import { spawn } from 'child_process';
 import * as pty from 'node-pty';
 import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
-import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData } from '../shared/types';
+import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, LiveConnectionInfo } from '../shared/types';
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
@@ -20,14 +20,25 @@ let searchSignal: { cancelled: boolean } = { cancelled: false };
 let diffSignal: { cancelled: boolean } = { cancelled: false };
 let currentFilePath: string | null = null;
 
-// Serial port handler
-const serialHandler = new SerialHandler();
+// Live connection registry (replaces per-source singletons)
+interface LiveConnection {
+  id: string;
+  source: 'serial' | 'logcat' | 'ssh';
+  handler: SerialHandler | LogcatHandler | SshHandler;
+  tempFilePath: string;
+  displayName: string;
+  detail: string;
+  config: any;
+  connectedSince: number;
+  connected: boolean;
+  listeners: Array<{ event: string; fn: (...args: any[]) => void }>;
+}
 
-// Logcat handler
-const logcatHandler = new LogcatHandler();
+const liveConnections = new Map<string, LiveConnection>();
+const MAX_LIVE_CONNECTIONS = 4;
 
-// SSH handler
-const sshHandler = new SshHandler();
+// Keep one SshHandler for SFTP/profile operations (not for live connections)
+const sshUtilHandler = new SshHandler();
 
 // Filter state - maps file path to array of visible line indices
 const filterState = new Map<string, number[] | null>();
@@ -701,9 +712,13 @@ app.on('window-all-closed', () => {
 });
 
 app.on('will-quit', () => {
-  serialHandler.cleanupTempFile();
-  logcatHandler.cleanupTempFile();
-  sshHandler.cleanupTempFile();
+  for (const conn of liveConnections.values()) {
+    try {
+      if (conn.connected) conn.handler.disconnect();
+      conn.handler.cleanupTempFile();
+    } catch { /* ignore cleanup errors */ }
+  }
+  liveConnections.clear();
   stopApiServer();
 });
 
@@ -729,192 +744,219 @@ ipcMain.handle('get-platform', () => {
   return process.platform;
 });
 
-// === Serial Port ===
+// === Device Discovery (per-source) ===
 
 ipcMain.handle(IPC.SERIAL_LIST_PORTS, async () => {
   try {
-    const ports = await serialHandler.listPorts();
+    const tmpHandler = new SerialHandler();
+    const ports = await tmpHandler.listPorts();
     return { success: true, ports };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 });
 
-ipcMain.handle(IPC.SERIAL_CONNECT, async (_, config: { path: string; baudRate: number }) => {
-  try {
-    const tempFilePath = await serialHandler.connect(config);
-
-    // Open temp file with FileHandler
-    const fileHandler = new FileHandler();
-    const info = await fileHandler.open(tempFilePath, () => {});
-    addToCache(tempFilePath, fileHandler);
-    currentFilePath = tempFilePath;
-
-    // Forward events to renderer
-    const onLinesAdded = (count: number) => {
-      // Incrementally index new bytes in the file handler
-      const handler = fileHandlerCache.get(tempFilePath);
-      if (handler) {
-        const newLines = handler.indexNewLines();
-        if (newLines > 0) {
-          mainWindow?.webContents.send(IPC.SERIAL_LINES_ADDED, {
-            totalLines: handler.getTotalLines(),
-            newLines,
-          });
-        }
-      }
-    };
-
-    const onError = (message: string) => {
-      mainWindow?.webContents.send(IPC.SERIAL_ERROR, message);
-    };
-
-    const onDisconnected = () => {
-      mainWindow?.webContents.send(IPC.SERIAL_DISCONNECTED);
-      serialHandler.removeListener('lines-added', onLinesAdded);
-      serialHandler.removeListener('error', onError);
-      serialHandler.removeListener('disconnected', onDisconnected);
-    };
-
-    serialHandler.on('lines-added', onLinesAdded);
-    serialHandler.on('error', onError);
-    serialHandler.on('disconnected', onDisconnected);
-
-    return { success: true, info, tempFilePath };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-});
-
-ipcMain.handle(IPC.SERIAL_DISCONNECT, async () => {
-  try {
-    serialHandler.disconnect();
-    return { success: true };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-});
-
-ipcMain.handle(IPC.SERIAL_STATUS, async () => {
-  return serialHandler.getStatus();
-});
-
-ipcMain.handle(IPC.SERIAL_SAVE_SESSION, async () => {
-  const tempPath = serialHandler.getTempFilePath();
-  if (!tempPath || !fs.existsSync(tempPath)) {
-    return { success: false, error: 'No serial session data' };
-  }
-
-  const result = await dialog.showSaveDialog(mainWindow!, {
-    title: 'Save Serial Session',
-    defaultPath: path.basename(tempPath),
-    filters: [
-      { name: 'Log Files', extensions: ['log', 'txt'] },
-      { name: 'All Files', extensions: ['*'] },
-    ],
-  });
-
-  if (result.canceled || !result.filePath) {
-    return { success: false, error: 'Cancelled' };
-  }
-
-  try {
-    fs.copyFileSync(tempPath, result.filePath);
-    return { success: true, filePath: result.filePath };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-});
-
-// === Logcat ===
-
 ipcMain.handle(IPC.LOGCAT_LIST_DEVICES, async () => {
   try {
-    const devices = await logcatHandler.listDevices();
+    const tmpHandler = new LogcatHandler();
+    const devices = await tmpHandler.listDevices();
     return { success: true, devices };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 });
 
-ipcMain.handle(IPC.LOGCAT_CONNECT, async (_, config: { device?: string; filter?: string }) => {
+// === Unified Live Connection Management ===
+
+function wireConnectionEvents(conn: LiveConnection): void {
+  const { handler, id } = conn;
+
+  const onLinesAdded = (_count: number) => {
+    const fh = fileHandlerCache.get(conn.tempFilePath);
+    if (fh) {
+      const newLines = fh.indexNewLines();
+      if (newLines > 0) {
+        mainWindow?.webContents.send(IPC.LIVE_LINES_ADDED, {
+          connectionId: id,
+          totalLines: fh.getTotalLines(),
+          newLines,
+        });
+      }
+    }
+  };
+
+  const onError = (message: string) => {
+    mainWindow?.webContents.send(IPC.LIVE_ERROR, { connectionId: id, message });
+  };
+
+  const onDisconnected = () => {
+    conn.connected = false;
+    mainWindow?.webContents.send(IPC.LIVE_DISCONNECTED, { connectionId: id });
+    removeConnectionListeners(conn);
+  };
+
+  conn.listeners = [
+    { event: 'lines-added', fn: onLinesAdded },
+    { event: 'error', fn: onError },
+    { event: 'disconnected', fn: onDisconnected },
+  ];
+
+  for (const l of conn.listeners) {
+    handler.on(l.event, l.fn);
+  }
+}
+
+function removeConnectionListeners(conn: LiveConnection): void {
+  for (const l of conn.listeners) {
+    conn.handler.removeListener(l.event, l.fn);
+  }
+  conn.listeners = [];
+}
+
+ipcMain.handle(IPC.LIVE_CONNECT, async (_, source: 'serial' | 'logcat' | 'ssh', config: any, displayName: string, detail: string) => {
   try {
-    const tempFilePath = await logcatHandler.connect(config);
+    if (liveConnections.size >= MAX_LIVE_CONNECTIONS) {
+      return { success: false, error: `Maximum ${MAX_LIVE_CONNECTIONS} concurrent connections reached` };
+    }
+
+    const connectionId = 'lc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+
+    let handler: SerialHandler | LogcatHandler | SshHandler;
+    if (source === 'serial') {
+      handler = new SerialHandler();
+    } else if (source === 'logcat') {
+      handler = new LogcatHandler();
+    } else {
+      handler = new SshHandler();
+    }
+
+    const tempFilePath = await handler.connect(config);
 
     // Open temp file with FileHandler
     const fileHandler = new FileHandler();
     const info = await fileHandler.open(tempFilePath, () => {});
     addToCache(tempFilePath, fileHandler);
-    currentFilePath = tempFilePath;
 
-    // Forward events to renderer
-    const onLinesAdded = (count: number) => {
-      const handler = fileHandlerCache.get(tempFilePath);
-      if (handler) {
-        const newLines = handler.indexNewLines();
-        if (newLines > 0) {
-          mainWindow?.webContents.send(IPC.LOGCAT_LINES_ADDED, {
-            totalLines: handler.getTotalLines(),
-            newLines,
-          });
-        }
-      }
+    const conn: LiveConnection = {
+      id: connectionId,
+      source,
+      handler,
+      tempFilePath,
+      displayName,
+      detail,
+      config,
+      connectedSince: Date.now(),
+      connected: true,
+      listeners: [],
     };
 
-    const onError = (message: string) => {
-      mainWindow?.webContents.send(IPC.LOGCAT_ERROR, message);
-    };
+    wireConnectionEvents(conn);
+    liveConnections.set(connectionId, conn);
 
-    const onDisconnected = () => {
-      mainWindow?.webContents.send(IPC.LOGCAT_DISCONNECTED);
-      logcatHandler.removeListener('lines-added', onLinesAdded);
-      logcatHandler.removeListener('error', onError);
-      logcatHandler.removeListener('disconnected', onDisconnected);
-    };
-
-    logcatHandler.on('lines-added', onLinesAdded);
-    logcatHandler.on('error', onError);
-    logcatHandler.on('disconnected', onDisconnected);
-
-    return { success: true, info, tempFilePath };
+    return { success: true, connectionId, tempFilePath, info };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 });
 
-ipcMain.handle(IPC.LOGCAT_DISCONNECT, async () => {
+ipcMain.handle(IPC.LIVE_DISCONNECT, async (_, connectionId: string) => {
   try {
-    logcatHandler.disconnect();
+    const conn = liveConnections.get(connectionId);
+    if (!conn) return { success: false, error: 'Connection not found' };
+    if (conn.connected) {
+      conn.handler.disconnect();
+      conn.connected = false;
+    }
+    removeConnectionListeners(conn);
     return { success: true };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 });
 
-ipcMain.handle(IPC.LOGCAT_STATUS, async () => {
-  return logcatHandler.getStatus();
+ipcMain.handle(IPC.LIVE_RESTART, async (_, connectionId: string) => {
+  try {
+    const conn = liveConnections.get(connectionId);
+    if (!conn) return { success: false, error: 'Connection not found' };
+
+    // Disconnect old handler if still connected
+    if (conn.connected) {
+      conn.handler.disconnect();
+    }
+    removeConnectionListeners(conn);
+
+    // Create fresh handler
+    let handler: SerialHandler | LogcatHandler | SshHandler;
+    if (conn.source === 'serial') {
+      handler = new SerialHandler();
+    } else if (conn.source === 'logcat') {
+      handler = new LogcatHandler();
+    } else {
+      handler = new SshHandler();
+    }
+
+    const tempFilePath = await handler.connect(conn.config);
+
+    // Open new temp file with FileHandler
+    const fileHandler = new FileHandler();
+    const info = await fileHandler.open(tempFilePath, () => {});
+    addToCache(tempFilePath, fileHandler);
+
+    // Update connection
+    conn.handler = handler;
+    conn.tempFilePath = tempFilePath;
+    conn.connectedSince = Date.now();
+    conn.connected = true;
+
+    wireConnectionEvents(conn);
+
+    return { success: true, tempFilePath, info };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
 });
 
-ipcMain.handle(IPC.LOGCAT_SAVE_SESSION, async () => {
-  const tempPath = logcatHandler.getTempFilePath();
-  if (!tempPath || !fs.existsSync(tempPath)) {
-    return { success: false, error: 'No logcat session data' };
-  }
-
-  const result = await dialog.showSaveDialog(mainWindow!, {
-    title: 'Save Logcat Session',
-    defaultPath: path.basename(tempPath),
-    filters: [
-      { name: 'Log Files', extensions: ['log', 'txt'] },
-      { name: 'All Files', extensions: ['*'] },
-    ],
-  });
-
-  if (result.canceled || !result.filePath) {
-    return { success: false, error: 'Cancelled' };
-  }
-
+ipcMain.handle(IPC.LIVE_REMOVE, async (_, connectionId: string) => {
   try {
+    const conn = liveConnections.get(connectionId);
+    if (!conn) return { success: false, error: 'Connection not found' };
+
+    if (conn.connected) {
+      conn.handler.disconnect();
+    }
+    removeConnectionListeners(conn);
+    conn.handler.cleanupTempFile();
+    liveConnections.delete(connectionId);
+
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.LIVE_SAVE_SESSION, async (_, connectionId: string) => {
+  try {
+    const conn = liveConnections.get(connectionId);
+    if (!conn) return { success: false, error: 'Connection not found' };
+
+    const tempPath = conn.tempFilePath;
+    if (!tempPath || !fs.existsSync(tempPath)) {
+      return { success: false, error: 'No session data' };
+    }
+
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      title: `Save ${conn.displayName} Session`,
+      defaultPath: path.basename(tempPath),
+      filters: [
+        { name: 'Log Files', extensions: ['log', 'txt'] },
+        { name: 'All Files', extensions: ['*'] },
+      ],
+    });
+
+    if (result.canceled || !result.filePath) {
+      return { success: false, error: 'Cancelled' };
+    }
+
     fs.copyFileSync(tempPath, result.filePath);
     return { success: true, filePath: result.filePath };
   } catch (error) {
@@ -922,7 +964,7 @@ ipcMain.handle(IPC.LOGCAT_SAVE_SESSION, async () => {
   }
 });
 
-// === SSH ===
+// === SSH Profiles & SFTP ===
 
 const getSshProfilesPath = () => path.join(getConfigDir(), 'ssh-profiles.json');
 
@@ -947,7 +989,7 @@ function saveSshProfiles(profiles: SshProfile[]): void {
 
 ipcMain.handle(IPC.SSH_PARSE_CONFIG, async () => {
   try {
-    const hosts = sshHandler.parseSSHConfig();
+    const hosts = sshUtilHandler.parseSSHConfig();
     return { success: true, hosts };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -988,94 +1030,20 @@ ipcMain.handle(IPC.SSH_DELETE_PROFILE, async (_, id: string) => {
   }
 });
 
-ipcMain.handle(IPC.SSH_CONNECT, async (_, config: { host: string; port: number; username: string; identityFile?: string; remotePath: string; passphrase?: string }) => {
-  try {
-    const tempFilePath = await sshHandler.connect(config);
-
-    // Open temp file with FileHandler
-    const fileHandler = new FileHandler();
-    const info = await fileHandler.open(tempFilePath, () => {});
-    addToCache(tempFilePath, fileHandler);
-    currentFilePath = tempFilePath;
-
-    // Forward events to renderer
-    const onLinesAdded = (count: number) => {
-      const handler = fileHandlerCache.get(tempFilePath);
-      if (handler) {
-        const newLines = handler.indexNewLines();
-        if (newLines > 0) {
-          mainWindow?.webContents.send(IPC.SSH_LINES_ADDED, {
-            totalLines: handler.getTotalLines(),
-            newLines,
-          });
-        }
-      }
-    };
-
-    const onError = (message: string) => {
-      mainWindow?.webContents.send(IPC.SSH_ERROR, message);
-    };
-
-    const onDisconnected = () => {
-      mainWindow?.webContents.send(IPC.SSH_DISCONNECTED);
-      sshHandler.removeListener('lines-added', onLinesAdded);
-      sshHandler.removeListener('error', onError);
-      sshHandler.removeListener('disconnected', onDisconnected);
-    };
-
-    sshHandler.on('lines-added', onLinesAdded);
-    sshHandler.on('error', onError);
-    sshHandler.on('disconnected', onDisconnected);
-
-    return { success: true, info, tempFilePath };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-});
-
-ipcMain.handle(IPC.SSH_DISCONNECT, async () => {
-  try {
-    sshHandler.disconnect();
-    return { success: true };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-});
-
-ipcMain.handle(IPC.SSH_STATUS, async () => {
-  return sshHandler.getStatus();
-});
-
-ipcMain.handle(IPC.SSH_SAVE_SESSION, async () => {
-  const tempPath = sshHandler.getTempFilePath();
-  if (!tempPath || !fs.existsSync(tempPath)) {
-    return { success: false, error: 'No SSH session data' };
-  }
-
-  const result = await dialog.showSaveDialog(mainWindow!, {
-    title: 'Save SSH Session',
-    defaultPath: path.basename(tempPath),
-    filters: [
-      { name: 'Log Files', extensions: ['log', 'txt'] },
-      { name: 'All Files', extensions: ['*'] },
-    ],
-  });
-
-  if (result.canceled || !result.filePath) {
-    return { success: false, error: 'Cancelled' };
-  }
-
-  try {
-    fs.copyFileSync(tempPath, result.filePath);
-    return { success: true, filePath: result.filePath };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-});
-
 ipcMain.handle(IPC.SSH_LIST_REMOTE_DIR, async (_, remotePath: string) => {
   try {
-    const files = await sshHandler.listRemoteDir(remotePath);
+    // Find an active SSH connection to use for SFTP
+    let sshConn: LiveConnection | undefined;
+    for (const conn of liveConnections.values()) {
+      if (conn.source === 'ssh' && conn.connected) {
+        sshConn = conn;
+        break;
+      }
+    }
+    if (!sshConn) {
+      return { success: false, error: 'No active SSH connection for SFTP' };
+    }
+    const files = await (sshConn.handler as SshHandler).listRemoteDir(remotePath);
     return { success: true, files };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -1084,7 +1052,17 @@ ipcMain.handle(IPC.SSH_LIST_REMOTE_DIR, async (_, remotePath: string) => {
 
 ipcMain.handle(IPC.SSH_DOWNLOAD_FILE, async (_, remotePath: string) => {
   try {
-    const localPath = await sshHandler.downloadRemoteFile(remotePath);
+    let sshConn: LiveConnection | undefined;
+    for (const conn of liveConnections.values()) {
+      if (conn.source === 'ssh' && conn.connected) {
+        sshConn = conn;
+        break;
+      }
+    }
+    if (!sshConn) {
+      return { success: false, error: 'No active SSH connection for download' };
+    }
+    const localPath = await (sshConn.handler as SshHandler).downloadRemoteFile(remotePath);
     return { success: true, localPath };
   } catch (error) {
     return { success: false, error: String(error) };

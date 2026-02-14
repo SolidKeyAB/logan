@@ -5085,47 +5085,100 @@ kbd {
   color: #fff;
 }
 
-.live-info-bar {
+.live-cards-row {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  gap: 6px;
   flex-shrink: 0;
+  overflow-x: auto;
+  padding: 4px 0;
+  flex: 1;
+  min-height: 0;
+  align-items: flex-start;
 }
 
-.live-info-item {
-  font-size: 12px;
-  color: #888;
+.live-card {
+  flex: 1;
+  min-width: 160px;
+  max-width: 320px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 4px;
+  padding: 6px 8px;
+  cursor: pointer;
+  transition: border-color 0.15s;
 }
-
-.live-follow-label {
-  font-size: 12px;
-  color: #aaa;
+.live-card[data-active="true"] {
+  border-color: var(--accent-color);
+}
+.live-card-header {
   display: flex;
   align-items: center;
   gap: 4px;
-  cursor: pointer;
+  font-size: 11px;
 }
-
-.live-follow-label input[type="checkbox"] {
-  cursor: pointer;
-}
-
-.live-info-spacer {
+.live-card-name {
+  font-weight: 600;
+  color: #ddd;
   flex: 1;
-}
-
-.live-minimap {
-  flex: 1;
-  min-height: 30px;
   overflow: hidden;
-  border-radius: 3px;
-  background: rgba(0, 0, 0, 0.3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-
-.live-minimap-canvas {
+.live-card-detail {
+  color: #888;
+  font-size: 10px;
+}
+.live-card-actions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+.live-card-btn {
+  background: none;
+  border: none;
+  color: #888;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 3px;
+  border-radius: 2px;
+}
+.live-card-btn:hover {
+  color: #fff;
+  background: rgba(255,255,255,0.1);
+}
+.live-card-btn.remove:hover {
+  color: #e74c3c;
+}
+.live-card-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  color: #888;
+  margin-top: 2px;
+}
+.live-card-status.connected {
+  color: #2ecc71;
+}
+.live-card-status.disconnected {
+  color: #888;
+}
+.live-card-preview {
+  font-size: 9px;
+  color: #999;
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 3px;
+  max-height: 14px;
+}
+.live-card-minimap {
   width: 100%;
-  height: 100%;
-  display: block;
+  height: 24px;
+  margin-top: 4px;
+  border-radius: 2px;
+  background: rgba(0,0,0,0.3);
 }
 
 /* SSH Badge on remote folders */
