@@ -268,6 +268,9 @@ interface AppState {
   activeConnectionId: string | null;
   liveSource: 'serial' | 'logcat' | 'ssh';
   sshProfiles: SshProfile[];
+  // Baselines
+  baselineList: BaselineRecord[];
+  comparisonReport: ComparisonReport | null;
 }
 
 const state: AppState = {
@@ -312,6 +315,8 @@ const state: AppState = {
   activeConnectionId: null,
   liveSource: 'serial' as 'serial' | 'logcat' | 'ssh',
   sshProfiles: [],
+  baselineList: [],
+  comparisonReport: null,
 };
 
 // Constants
@@ -674,6 +679,9 @@ const elements = {
   folderSearchResults: document.getElementById('folder-search-results') as HTMLDivElement,
   fileStats: document.getElementById('file-stats') as HTMLDivElement,
   analysisResults: document.getElementById('analysis-results') as HTMLDivElement,
+  baselineSection: document.getElementById('baseline-section') as HTMLDivElement,
+  baselineControls: document.getElementById('baseline-controls') as HTMLDivElement,
+  baselineComparisonResults: document.getElementById('baseline-comparison-results') as HTMLDivElement,
   bookmarksList: document.getElementById('bookmarks-list') as HTMLDivElement,
   btnExportBookmarks: document.getElementById('btn-export-bookmarks') as HTMLButtonElement,
   btnSaveBookmarkSet: document.getElementById('btn-save-bookmark-set') as HTMLButtonElement,
@@ -6346,6 +6354,8 @@ async function analyzeFile(): Promise<void> {
 
     if (result.success && result.result) {
       state.analysisResult = result.result;
+      state.comparisonReport = null;
+      await loadBaselineList();
       updateAnalysisUI();
     } else {
       elements.analysisResults.innerHTML = `<p class="placeholder" style="color: var(--error-color);">Analysis failed: ${result.error}</p>`;
@@ -8275,6 +8285,184 @@ function updateAnalysisUI(): void {
       updateAnalysisUI();
     });
   }
+
+  // Show baseline section when analysis is available
+  updateBaselineUI();
+}
+
+async function loadBaselineList(): Promise<void> {
+  try {
+    const result = await window.api.baselineList();
+    if (result.success && result.baselines) {
+      state.baselineList = result.baselines;
+    }
+  } catch { /* ignore */ }
+}
+
+function updateBaselineUI(): void {
+  if (!state.analysisResult) {
+    elements.baselineSection.style.display = 'none';
+    return;
+  }
+  elements.baselineSection.style.display = '';
+
+  // Controls: save button + compare dropdown
+  let controlsHtml = `<button class="secondary-btn small" id="btn-baseline-save">Save as Baseline</button>`;
+  controlsHtml += `<div id="baseline-save-form-container"></div>`;
+
+  if (state.baselineList.length > 0) {
+    controlsHtml += `<div class="baseline-compare-row" style="margin-top: 6px;">`;
+    controlsHtml += `<select class="baseline-dropdown" id="baseline-select">`;
+    for (const bl of state.baselineList) {
+      const date = new Date(bl.createdAt).toLocaleDateString();
+      controlsHtml += `<option value="${bl.id}">${escapeHtml(bl.name)} (${date})</option>`;
+    }
+    controlsHtml += `</select>`;
+    controlsHtml += `<button class="secondary-btn small" id="btn-baseline-compare">Compare</button>`;
+    controlsHtml += `</div>`;
+
+    // List with delete buttons
+    controlsHtml += `<div id="baseline-list-items" style="margin-top: 4px;">`;
+    for (const bl of state.baselineList) {
+      const date = new Date(bl.createdAt).toLocaleDateString();
+      const tagsHtml = bl.tags.map((t: string) => `<span class="baseline-tag">${escapeHtml(t)}</span>`).join('');
+      controlsHtml += `<div class="baseline-item" data-id="${bl.id}">`;
+      controlsHtml += `<span>${escapeHtml(bl.name)} <span style="color: var(--text-secondary); font-size: 10px;">${date}</span> ${tagsHtml}</span>`;
+      controlsHtml += `<button class="baseline-delete-btn" data-id="${bl.id}" title="Delete baseline">&times;</button>`;
+      controlsHtml += `</div>`;
+    }
+    controlsHtml += `</div>`;
+  }
+
+  elements.baselineControls.innerHTML = controlsHtml;
+
+  // Save button handler
+  const btnSave = document.getElementById('btn-baseline-save');
+  if (btnSave) {
+    btnSave.addEventListener('click', () => {
+      const container = document.getElementById('baseline-save-form-container');
+      if (!container) return;
+      container.innerHTML = `
+        <div class="baseline-save-form">
+          <input type="text" id="baseline-name-input" placeholder="Baseline name (e.g. production-healthy)" />
+          <input type="text" id="baseline-tags-input" placeholder="Tags (comma-separated, e.g. production, v2.1)" />
+          <textarea id="baseline-desc-input" placeholder="Description (optional)" rows="2"></textarea>
+          <div class="baseline-form-actions">
+            <button class="secondary-btn small" id="btn-baseline-confirm-save">Save</button>
+            <button class="secondary-btn small" id="btn-baseline-cancel-save">Cancel</button>
+          </div>
+        </div>
+      `;
+      (document.getElementById('baseline-name-input') as HTMLInputElement)?.focus();
+
+      document.getElementById('btn-baseline-cancel-save')?.addEventListener('click', () => {
+        container.innerHTML = '';
+      });
+
+      document.getElementById('btn-baseline-confirm-save')?.addEventListener('click', async () => {
+        const name = (document.getElementById('baseline-name-input') as HTMLInputElement)?.value.trim();
+        if (!name) return;
+        const desc = (document.getElementById('baseline-desc-input') as HTMLTextAreaElement)?.value.trim() || '';
+        const tagsStr = (document.getElementById('baseline-tags-input') as HTMLInputElement)?.value.trim() || '';
+        const tags = tagsStr ? tagsStr.split(',').map(t => t.trim()).filter(Boolean) : [];
+
+        const result = await window.api.baselineSave(name, desc, tags);
+        if (result.success) {
+          container.innerHTML = '';
+          await loadBaselineList();
+          updateBaselineUI();
+          showToast(`Baseline "${name}" saved`);
+        } else {
+          showToast(result.error || 'Failed to save baseline');
+        }
+      });
+    });
+  }
+
+  // Compare button handler
+  const btnCompare = document.getElementById('btn-baseline-compare');
+  if (btnCompare) {
+    btnCompare.addEventListener('click', async () => {
+      const select = document.getElementById('baseline-select') as HTMLSelectElement;
+      if (!select) return;
+      const baselineId = select.value;
+      if (!baselineId) return;
+
+      (btnCompare as HTMLButtonElement).disabled = true;
+      (btnCompare as HTMLButtonElement).textContent = 'Comparing...';
+
+      const result = await window.api.baselineCompare(baselineId);
+
+      (btnCompare as HTMLButtonElement).disabled = false;
+      (btnCompare as HTMLButtonElement).textContent = 'Compare';
+
+      if (result.success && result.report) {
+        state.comparisonReport = result.report;
+        renderComparisonReport(result.report);
+      } else {
+        elements.baselineComparisonResults.innerHTML = `<div style="color: var(--error-color); font-size: 11px;">${escapeHtml(result.error || 'Comparison failed')}</div>`;
+      }
+    });
+  }
+
+  // Delete button handlers
+  elements.baselineControls.querySelectorAll('.baseline-delete-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = (btn as HTMLElement).dataset.id;
+      if (!id) return;
+      const result = await window.api.baselineDelete(id);
+      if (result.success) {
+        await loadBaselineList();
+        state.comparisonReport = null;
+        elements.baselineComparisonResults.innerHTML = '';
+        updateBaselineUI();
+      }
+    });
+  });
+
+  // Re-render comparison if still present
+  if (state.comparisonReport) {
+    renderComparisonReport(state.comparisonReport);
+  }
+}
+
+function renderComparisonReport(report: ComparisonReport): void {
+  if (report.findings.length === 0) {
+    elements.baselineComparisonResults.innerHTML = `
+      <div class="section-divider">Comparison Results</div>
+      <div style="font-size: 11px; color: var(--text-secondary);">No anomalies detected — log matches baseline "${escapeHtml(report.baselineName)}".</div>
+    `;
+    return;
+  }
+
+  let html = `<div class="section-divider">Comparison Results</div>`;
+  html += `<div class="comparison-summary">`;
+  if (report.summary.critical > 0) html += `<span style="color: #e74c3c;">${report.summary.critical} critical</span>`;
+  if (report.summary.warning > 0) html += `<span style="color: #f1c40f;">${report.summary.warning} warning</span>`;
+  if (report.summary.info > 0) html += `<span style="color: #3498db;">${report.summary.info} info</span>`;
+  html += `</div>`;
+
+  for (const f of report.findings) {
+    html += `<div class="comparison-finding ${f.severity}">`;
+    html += `<div class="finding-title">${escapeHtml(f.title)}</div>`;
+    html += `<div class="finding-detail">${escapeHtml(f.detail)}</div>`;
+    html += `</div>`;
+  }
+
+  elements.baselineComparisonResults.innerHTML = html;
+}
+
+function showToast(message: string): void {
+  // Simple toast via status bar — reuse existing status mechanism
+  const statusFile = document.getElementById('status-file');
+  if (statusFile) {
+    const prev = statusFile.textContent;
+    statusFile.textContent = message;
+    setTimeout(() => {
+      if (statusFile.textContent === message) statusFile.textContent = prev || '';
+    }, 3000);
+  }
 }
 
 function updateStatusBar(): void {
@@ -9533,6 +9721,9 @@ function init(): void {
   // Load user settings from localStorage
   loadSettings();
   applySettings();
+
+  // Load baselines list
+  loadBaselineList();
 
   // Toolbar scroll indicators
   const toolbar = document.querySelector('.toolbar') as HTMLElement;

@@ -5,6 +5,8 @@ import * as os from 'os';
 import { BrowserWindow } from 'electron';
 import { SearchOptions, Bookmark, Highlight } from '../shared/types';
 import { FileHandler } from './fileHandler';
+import { BaselineStore, buildFingerprint } from './baselineStore';
+import { AnalysisResult } from './analyzers/types';
 
 const API_PORT = 19532;
 const PORT_FILE = path.join(os.homedir(), '.logan', 'mcp-port');
@@ -27,6 +29,8 @@ export interface ApiContext {
   addHighlight(highlight: Highlight): any;
   detectTimeGaps(options: any): Promise<any>;
   navigateToLine(lineNumber: number): void;
+  getBaselineStore(): BaselineStore;
+  getAnalysisResult(): AnalysisResult | null;
 }
 
 let server: http.Server | null = null;
@@ -118,6 +122,12 @@ export function startApiServer(ctx: ApiContext): void {
         if (url === '/api/highlights') {
           const hls = Array.from(ctx.getHighlights().values());
           sendJson(res, { success: true, highlights: hls });
+          return;
+        }
+
+        if (url === '/api/baselines') {
+          const baselines = ctx.getBaselineStore().list();
+          sendJson(res, { success: true, baselines });
           return;
         }
 
@@ -225,6 +235,44 @@ export function startApiServer(ctx: ApiContext): void {
           const lineNumber = body.lineNumber ?? 0;
           ctx.navigateToLine(lineNumber);
           sendJson(res, { success: true });
+          return;
+        }
+
+        if (url === '/api/baseline-save') {
+          const filePath = ctx.getCurrentFilePath();
+          const handler = ctx.getFileHandler();
+          const analysisResult = ctx.getAnalysisResult();
+          if (!filePath || !handler) return sendError(res, 'No file open');
+          if (!analysisResult) return sendError(res, 'Run analysis first');
+          const fp = buildFingerprint(filePath, analysisResult, handler);
+          const id = ctx.getBaselineStore().save(
+            body.name || 'Unnamed baseline',
+            body.description || '',
+            body.tags || [],
+            fp
+          );
+          sendJson(res, { success: true, id });
+          return;
+        }
+
+        if (url === '/api/baseline-compare') {
+          const filePath = ctx.getCurrentFilePath();
+          const handler = ctx.getFileHandler();
+          const analysisResult = ctx.getAnalysisResult();
+          if (!filePath || !handler) return sendError(res, 'No file open');
+          if (!analysisResult) return sendError(res, 'Run analysis first');
+          if (!body.baselineId) return sendError(res, 'baselineId required');
+          const fp = buildFingerprint(filePath, analysisResult, handler);
+          const report = ctx.getBaselineStore().compare(fp, body.baselineId);
+          if (!report) return sendError(res, 'Baseline not found');
+          sendJson(res, { success: true, report });
+          return;
+        }
+
+        if (url === '/api/baseline-delete') {
+          if (!body.baselineId) return sendError(res, 'baselineId required');
+          const ok = ctx.getBaselineStore().delete(body.baselineId);
+          sendJson(res, { success: ok, error: ok ? undefined : 'Baseline not found' });
           return;
         }
 

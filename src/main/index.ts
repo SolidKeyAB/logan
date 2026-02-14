@@ -7,9 +7,10 @@ import * as pty from 'node-pty';
 import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
 import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, LiveConnectionInfo } from '../shared/types';
 import * as Diff from 'diff';
-import { analyzerRegistry, AnalyzerOptions } from './analyzers';
+import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
 import { startApiServer, stopApiServer, ApiContext } from './api-server';
+import { BaselineStore, buildFingerprint } from './baselineStore';
 import { SerialHandler } from './serialHandler';
 import { LogcatHandler } from './logcatHandler';
 import { SshHandler } from './sshHandler';
@@ -39,6 +40,12 @@ const MAX_LIVE_CONNECTIONS = 4;
 
 // Keep one SshHandler for SFTP/profile operations (not for live connections)
 const sshUtilHandler = new SshHandler();
+
+// Baseline store (SQLite)
+const baselineStore = new BaselineStore();
+
+// Cache last analysis result per file for baseline fingerprinting
+const analysisResultCache = new Map<string, AnalysisResult>();
 
 // Filter state - maps file path to array of visible line indices
 const filterState = new Map<string, number[] | null>();
@@ -579,6 +586,7 @@ app.whenReady().then(() => {
       try {
         const result = await analyzer.analyze(currentFilePath, {}, () => {}, analyzeSignal);
         logActivity(currentFilePath, 'analysis_run', { analyzerName: analyzer.name });
+        analysisResultCache.set(currentFilePath, result);
         return { success: true, result };
       } catch (error) {
         return { success: false, error: String(error) };
@@ -694,6 +702,11 @@ app.whenReady().then(() => {
     },
     navigateToLine: (lineNumber: number) => {
       mainWindow?.webContents.send('navigate-to-line', lineNumber);
+    },
+    getBaselineStore: () => baselineStore,
+    getAnalysisResult: () => {
+      if (!currentFilePath) return null;
+      return analysisResultCache.get(currentFilePath) || null;
     },
   };
   startApiServer(apiContext);
@@ -2714,6 +2727,7 @@ ipcMain.handle('analyze-file', async (_, analyzerName?: string, options?: Analyz
     );
 
     logActivity(currentFilePath, 'analysis_run', { analyzerName: analyzer.name });
+    analysisResultCache.set(currentFilePath, result);
 
     return { success: true, result };
   } catch (error) {
@@ -2725,6 +2739,75 @@ ipcMain.handle('analyze-file', async (_, analyzerName?: string, options?: Analyz
 ipcMain.handle('cancel-analysis', async () => {
   analyzeSignal.cancelled = true;
   return { success: true };
+});
+
+// === Baselines ===
+
+ipcMain.handle(IPC.BASELINE_LIST, async () => {
+  try {
+    return { success: true, baselines: baselineStore.list() };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.BASELINE_SAVE, async (_, name: string, description: string, tags: string[]) => {
+  if (!currentFilePath) return { success: false, error: 'No file open' };
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file handler' };
+  const analysisResult = analysisResultCache.get(currentFilePath);
+  if (!analysisResult) return { success: false, error: 'Run analysis first' };
+  try {
+    const fingerprint = buildFingerprint(currentFilePath, analysisResult, handler);
+    const id = baselineStore.save(name, description, tags, fingerprint);
+    return { success: true, id };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.BASELINE_GET, async (_, id: string) => {
+  try {
+    const baseline = baselineStore.get(id);
+    if (!baseline) return { success: false, error: 'Baseline not found' };
+    return { success: true, baseline };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.BASELINE_UPDATE, async (_, id: string, fields: { name?: string; description?: string; tags?: string[] }) => {
+  try {
+    const ok = baselineStore.update(id, fields);
+    return { success: ok, error: ok ? undefined : 'Baseline not found' };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.BASELINE_DELETE, async (_, id: string) => {
+  try {
+    const ok = baselineStore.delete(id);
+    return { success: ok, error: ok ? undefined : 'Baseline not found' };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.BASELINE_COMPARE, async (_, baselineId: string) => {
+  if (!currentFilePath) return { success: false, error: 'No file open' };
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file handler' };
+  const analysisResult = analysisResultCache.get(currentFilePath);
+  if (!analysisResult) return { success: false, error: 'Run analysis first' };
+  try {
+    const currentFp = buildFingerprint(currentFilePath, analysisResult, handler);
+    const report = baselineStore.compare(currentFp, baselineId);
+    if (!report) return { success: false, error: 'Baseline not found' };
+    return { success: true, report };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
 });
 
 // === Filter ===

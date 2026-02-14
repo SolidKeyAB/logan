@@ -31,6 +31,7 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.2",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/diff": "^7.0.2",
     "@types/node": "^20.10.0",
     "@types/ssh2": "^1.15.5",
@@ -41,6 +42,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
+    "better-sqlite3": "^12.6.2",
     "diff": "^8.0.3",
     "marked": "^17.0.1",
     "node-pty": "^1.1.0",

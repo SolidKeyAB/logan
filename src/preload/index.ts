@@ -52,6 +52,12 @@ const IPC = {
   LIVE_LINES_ADDED: 'live-lines-added',
   LIVE_ERROR: 'live-error',
   LIVE_DISCONNECTED: 'live-disconnected',
+  BASELINE_LIST: 'baseline-list',
+  BASELINE_SAVE: 'baseline-save',
+  BASELINE_GET: 'baseline-get',
+  BASELINE_UPDATE: 'baseline-update',
+  BASELINE_DELETE: 'baseline-delete',
+  BASELINE_COMPARE: 'baseline-compare',
 } as const;
 
 // API exposed to renderer
@@ -450,6 +456,25 @@ const api = {
     ipcRenderer.on(IPC.LIVE_DISCONNECTED, handler);
     return () => ipcRenderer.removeListener(IPC.LIVE_DISCONNECTED, handler);
   },
+
+  // Baselines
+  baselineList: (): Promise<{ success: boolean; baselines?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.BASELINE_LIST),
+
+  baselineSave: (name: string, description: string, tags: string[]): Promise<{ success: boolean; id?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.BASELINE_SAVE, name, description, tags),
+
+  baselineGet: (id: string): Promise<{ success: boolean; baseline?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.BASELINE_GET, id),
+
+  baselineUpdate: (id: string, fields: { name?: string; description?: string; tags?: string[] }): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.BASELINE_UPDATE, id, fields),
+
+  baselineDelete: (id: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.BASELINE_DELETE, id),
+
+  baselineCompare: (baselineId: string): Promise<{ success: boolean; report?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.BASELINE_COMPARE, baselineId),
 
   // Window controls
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),

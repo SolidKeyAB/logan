@@ -280,4 +280,11 @@ export const IPC = {
   LIVE_LINES_ADDED: 'live-lines-added',
   LIVE_ERROR: 'live-error',
   LIVE_DISCONNECTED: 'live-disconnected',
+  // Baseline store
+  BASELINE_LIST: 'baseline-list',
+  BASELINE_SAVE: 'baseline-save',
+  BASELINE_GET: 'baseline-get',
+  BASELINE_UPDATE: 'baseline-update',
+  BASELINE_DELETE: 'baseline-delete',
+  BASELINE_COMPARE: 'baseline-compare',
 } as const;

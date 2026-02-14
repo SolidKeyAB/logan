@@ -217,6 +217,34 @@ interface SearchConfigSessionDef {
   createdAt: number;
 }
 
+interface BaselineRecord {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
+  sourceFile: string;
+  totalLines: number;
+}
+
+interface ComparisonFinding {
+  severity: 'critical' | 'warning' | 'info';
+  category: 'level-shift' | 'new-crash' | 'new-component' | 'missing-component' | 'error-rate' | 'time-pattern' | 'general';
+  title: string;
+  detail: string;
+  baselineValue?: string;
+  currentValue?: string;
+}
+
+interface ComparisonReport {
+  baselineId: string;
+  baselineName: string;
+  comparedAt: number;
+  findings: ComparisonFinding[];
+  summary: { critical: number; warning: number; info: number };
+}
+
 interface Api {
   // File operations
   openFileDialog: () => Promise<string | null>;
@@ -379,6 +407,14 @@ interface Api {
   onLiveLinesAdded: (callback: (data: { connectionId: string; totalLines: number; newLines: number }) => void) => () => void;
   onLiveError: (callback: (data: { connectionId: string; message: string }) => void) => () => void;
   onLiveDisconnected: (callback: (data: { connectionId: string }) => void) => () => void;
+
+  // Baselines
+  baselineList: () => Promise<{ success: boolean; baselines?: BaselineRecord[]; error?: string }>;
+  baselineSave: (name: string, description: string, tags: string[]) => Promise<{ success: boolean; id?: string; error?: string }>;
+  baselineGet: (id: string) => Promise<{ success: boolean; baseline?: any; error?: string }>;
+  baselineUpdate: (id: string, fields: { name?: string; description?: string; tags?: string[] }) => Promise<{ success: boolean; error?: string }>;
+  baselineDelete: (id: string) => Promise<{ success: boolean; error?: string }>;
+  baselineCompare: (baselineId: string) => Promise<{ success: boolean; report?: ComparisonReport; error?: string }>;
 
   // Window controls
   windowMinimize: () => Promise<void>;

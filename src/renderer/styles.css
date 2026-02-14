@@ -5265,3 +5265,26 @@ kbd {
   border-top: 1px solid var(--border-color);
   padding-top: 12px;
 }
+
+/* === Baseline Section === */
+.baseline-section { margin-top: 12px; }
+.section-divider { font-size: 10px; text-transform: uppercase; color: var(--text-secondary); border-top: 1px solid rgba(255,255,255,0.08); padding-top: 8px; margin-bottom: 8px; letter-spacing: 0.5px; }
+.baseline-save-form { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.baseline-save-form input, .baseline-save-form textarea { background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 3px; padding: 4px 6px; font-size: 11px; font-family: inherit; }
+.baseline-save-form textarea { resize: vertical; min-height: 32px; }
+.baseline-save-form .baseline-form-actions { display: flex; gap: 4px; }
+.baseline-dropdown { width: 100%; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 3px; padding: 4px 6px; font-size: 11px; margin-bottom: 4px; }
+.baseline-compare-row { display: flex; gap: 4px; align-items: center; margin-bottom: 6px; }
+.baseline-compare-row select { flex: 1; }
+.comparison-finding { padding: 4px 6px; margin: 2px 0; border-radius: 3px; font-size: 11px; cursor: default; }
+.comparison-finding.critical { background: rgba(231,76,60,0.15); border-left: 3px solid #e74c3c; }
+.comparison-finding.warning { background: rgba(241,196,15,0.15); border-left: 3px solid #f1c40f; }
+.comparison-finding.info { background: rgba(52,152,219,0.15); border-left: 3px solid #3498db; }
+.comparison-finding .finding-title { font-weight: 500; }
+.comparison-finding .finding-detail { color: var(--text-secondary); font-size: 10px; margin-top: 1px; }
+.comparison-summary { display: flex; gap: 12px; font-size: 11px; margin: 6px 0; }
+.baseline-tag { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 8px; background: rgba(255,255,255,0.08); color: var(--text-secondary); margin-right: 3px; }
+.baseline-item { display: flex; align-items: center; justify-content: space-between; padding: 3px 0; font-size: 11px; }
+.baseline-item .baseline-delete-btn { opacity: 0; background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 12px; padding: 0 4px; }
+.baseline-item:hover .baseline-delete-btn { opacity: 1; }
+.baseline-item .baseline-delete-btn:hover { color: #e74c3c; }

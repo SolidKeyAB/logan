@@ -332,6 +332,76 @@ server.tool(
   }
 );
 
+// === Tool: logan_baseline_save ===
+server.tool(
+  'logan_baseline_save',
+  'Save current analysis as a named baseline for future comparison',
+  {
+    name: z.string().describe('Name for the baseline (e.g. "production-healthy")'),
+    description: z.string().default('').describe('Optional description'),
+    tags: z.array(z.string()).default([]).describe('Optional tags (e.g. ["production", "v2.1"])'),
+  },
+  async ({ name, description, tags }) => {
+    try {
+      const result = await apiCall('POST', '/api/baseline-save', { name, description, tags });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_baseline_list ===
+server.tool(
+  'logan_baseline_list',
+  'List all saved baselines',
+  {},
+  async () => {
+    try {
+      const result = await apiCall('GET', '/api/baselines');
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_baseline_compare ===
+server.tool(
+  'logan_baseline_compare',
+  'Compare current log against a saved baseline, returns findings with severity',
+  {
+    baselineId: z.string().describe('ID of the baseline to compare against'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+  },
+  async ({ baselineId, redact }) => {
+    try {
+      const result = await apiCall('POST', '/api/baseline-compare', { baselineId });
+      const output = redact ? maybeRedact(result, true) : result;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_baseline_delete ===
+server.tool(
+  'logan_baseline_delete',
+  'Delete a saved baseline',
+  {
+    baselineId: z.string().describe('ID of the baseline to delete'),
+  },
+  async ({ baselineId }) => {
+    try {
+      const result = await apiCall('POST', '/api/baseline-delete', { baselineId });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // --- Start server ---
 
 async function main(): Promise<void> {
