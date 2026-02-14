@@ -31,6 +31,9 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: Rebuild native modules for Node.js (tests run on Node, not Electron)
+        run: npm rebuild better-sqlite3
+
       - name: Run tests
         run: npm test
 
