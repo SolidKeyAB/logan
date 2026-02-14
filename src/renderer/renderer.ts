@@ -9049,6 +9049,19 @@ function init(): void {
   loadSettings();
   applySettings();
 
+  // Toolbar scroll indicators
+  const toolbar = document.querySelector('.toolbar') as HTMLElement;
+  if (toolbar) {
+    const updateToolbarScroll = () => {
+      const { scrollLeft, scrollWidth, clientWidth } = toolbar;
+      toolbar.classList.toggle('scroll-left', scrollLeft > 4);
+      toolbar.classList.toggle('scroll-right', scrollLeft + clientWidth < scrollWidth - 4);
+    };
+    toolbar.addEventListener('scroll', updateToolbarScroll, { passive: true });
+    window.addEventListener('resize', updateToolbarScroll);
+    updateToolbarScroll();
+  }
+
   // Check search engine on startup
   checkSearchEngine();
 

@@ -171,16 +171,25 @@ body.platform-darwin .titlebar {
   flex-shrink: 0;
   overflow-x: auto;
   overflow-y: hidden;
+  position: relative;
 }
 
-/* Hide scrollbar but keep scrollable */
 .toolbar::-webkit-scrollbar {
-  height: 2px;
+  height: 0;
 }
 
-.toolbar::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 1px;
+/* Scroll shadow indicators — show when toolbar is scrollable */
+.toolbar.scroll-right {
+  box-shadow: inset -20px 0 12px -12px rgba(0, 0, 0, 0.5);
+}
+
+.toolbar.scroll-left {
+  box-shadow: inset 20px 0 12px -12px rgba(0, 0, 0, 0.5);
+}
+
+.toolbar.scroll-left.scroll-right {
+  box-shadow: inset 20px 0 12px -12px rgba(0, 0, 0, 0.5),
+              inset -20px 0 12px -12px rgba(0, 0, 0, 0.5);
 }
 
 .toolbar-left, .toolbar-right {
@@ -3187,22 +3196,23 @@ kbd {
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
-  color: var(--text-secondary);
+  color: var(--text-muted-bright, #999);
   font-size: 12px;
   padding: 6px 12px;
   cursor: pointer;
   white-space: nowrap;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color 0.15s, border-color 0.15s, background-color 0.15s;
   flex-shrink: 0;
 }
 
 .bottom-tab-btn:hover {
   color: var(--text-primary);
+  background-color: rgba(255, 255, 255, 0.05);
 }
 
 .bottom-tab-btn.active {
-  color: var(--text-primary);
-  border-bottom-color: var(--accent-color);
+  color: #ffffff;
+  border-bottom-color: var(--accent-hover);
 }
 
 .bottom-panel-close-btn {
