@@ -31,6 +31,10 @@ export interface ApiContext {
   navigateToLine(lineNumber: number): void;
   getBaselineStore(): BaselineStore;
   getAnalysisResult(): AnalysisResult | null;
+  getLinesRaw(startLine: number, count: number): any;
+  investigateCrashes(options: { contextLines?: number; maxCrashes?: number; autoBookmark?: boolean; autoHighlight?: boolean }): Promise<any>;
+  investigateComponent(options: { component: string; maxSamplesPerLevel?: number; includeErrorContext?: boolean; contextLines?: number }): Promise<any>;
+  investigateTimerange(options: { startTime: string; endTime: string; maxSamples?: number }): Promise<any>;
 }
 
 let server: http.Server | null = null;
@@ -273,6 +277,40 @@ export function startApiServer(ctx: ApiContext): void {
           if (!body.baselineId) return sendError(res, 'baselineId required');
           const ok = ctx.getBaselineStore().delete(body.baselineId);
           sendJson(res, { success: ok, error: ok ? undefined : 'Baseline not found' });
+          return;
+        }
+
+        if (url === '/api/investigate-crashes') {
+          const result = await ctx.investigateCrashes({
+            contextLines: body.contextLines,
+            maxCrashes: body.maxCrashes,
+            autoBookmark: body.autoBookmark,
+            autoHighlight: body.autoHighlight,
+          });
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/investigate-component') {
+          if (!body.component) return sendError(res, 'component required');
+          const result = await ctx.investigateComponent({
+            component: body.component,
+            maxSamplesPerLevel: body.maxSamplesPerLevel,
+            includeErrorContext: body.includeErrorContext,
+            contextLines: body.contextLines,
+          });
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/investigate-timerange') {
+          if (!body.startTime || !body.endTime) return sendError(res, 'startTime and endTime required');
+          const result = await ctx.investigateTimerange({
+            startTime: body.startTime,
+            endTime: body.endTime,
+            maxSamples: body.maxSamples,
+          });
+          sendJson(res, result);
           return;
         }
 

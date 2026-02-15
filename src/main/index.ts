@@ -708,6 +708,421 @@ app.whenReady().then(() => {
       if (!currentFilePath) return null;
       return analysisResultCache.get(currentFilePath) || null;
     },
+    getLinesRaw: (startLine: number, count: number) => {
+      const handler = getFileHandler();
+      if (!handler) return { success: false, error: 'No file open' };
+      const lines = handler.getLines(startLine, count);
+      return { success: true, lines };
+    },
+    investigateCrashes: async (options) => {
+      const handler = getFileHandler();
+      if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
+      const contextLines = options.contextLines ?? 10;
+      const maxCrashes = options.maxCrashes ?? 20;
+
+      // Get or run analysis
+      let analysisResult = analysisResultCache.get(currentFilePath);
+      if (!analysisResult) {
+        const analyzer = analyzerRegistry.getDefault();
+        if (!analyzer) return { success: false, error: 'No analyzer available' };
+        analyzeSignal = { cancelled: false };
+        analysisResult = await analyzer.analyze(currentFilePath, {}, () => {}, analyzeSignal);
+        analysisResultCache.set(currentFilePath, analysisResult);
+      }
+
+      const crashes = analysisResult.insights.crashes.slice(0, maxCrashes);
+      const totalLines = handler.getTotalLines();
+
+      // Group by keyword
+      const crashesByKeyword: Record<string, number> = {};
+      for (const c of analysisResult.insights.crashes) {
+        crashesByKeyword[c.keyword] = (crashesByKeyword[c.keyword] || 0) + 1;
+      }
+
+      // Collect context for each crash
+      const crashDetails = crashes.map(c => {
+        const startIdx = Math.max(0, c.lineNumber - contextLines);
+        const endIdx = Math.min(totalLines - 1, c.lineNumber + contextLines);
+        const rawLines = handler.getLines(startIdx, endIdx - startIdx + 1);
+
+        const contextBefore: { lineNumber: number; text: string; level?: string }[] = [];
+        const contextAfter: { lineNumber: number; text: string; level?: string }[] = [];
+        let crashLine = '';
+
+        for (const line of rawLines) {
+          if (line.lineNumber < c.lineNumber) {
+            contextBefore.push({ lineNumber: line.lineNumber, text: line.text, level: line.level });
+          } else if (line.lineNumber === c.lineNumber) {
+            crashLine = line.text;
+          } else {
+            contextAfter.push({ lineNumber: line.lineNumber, text: line.text, level: line.level });
+          }
+        }
+
+        return {
+          lineNumber: c.lineNumber,
+          keyword: c.keyword,
+          level: c.level || 'error',
+          component: c.channel || null,
+          crashLine,
+          contextBefore,
+          contextAfter,
+        };
+      });
+
+      // Optionally bookmark crash sites
+      let bookmarksAdded = 0;
+      if (options.autoBookmark) {
+        for (const c of crashDetails) {
+          const id = `crash-${c.lineNumber}-${Date.now()}`;
+          const bm: Bookmark = {
+            id,
+            lineNumber: c.lineNumber,
+            label: `Crash: ${c.keyword}`,
+            color: '#ff4444',
+          };
+          bookmarks.set(bm.id, bm);
+          bookmarksAdded++;
+        }
+        saveBookmarksForCurrentFile();
+      }
+
+      // Optionally highlight crash keywords
+      const highlightsAdded: string[] = [];
+      if (options.autoHighlight) {
+        const uniqueKeywords = [...new Set(crashes.map(c => c.keyword))];
+        for (const kw of uniqueKeywords) {
+          const existing = Array.from(highlights.values()).find(h => h.pattern === kw);
+          if (!existing) {
+            const hl: Highlight = {
+              id: `hl-crash-${kw}-${Date.now()}`,
+              pattern: kw,
+              isRegex: false,
+              matchCase: false,
+              backgroundColor: '#ff4444',
+              highlightAll: true,
+              isGlobal: false,
+              includeWhitespace: false,
+            };
+            highlights.set(hl.id, hl);
+            highlightsAdded.push(kw);
+          }
+        }
+        if (highlightsAdded.length > 0) {
+          for (const hl of highlights.values()) {
+            saveHighlight(hl);
+          }
+        }
+      }
+
+      return {
+        success: true,
+        totalCrashesFound: analysisResult.insights.crashes.length,
+        crashesByKeyword,
+        crashes: crashDetails,
+        bookmarksAdded,
+        highlightsAdded,
+      };
+    },
+    investigateComponent: async (options) => {
+      const handler = getFileHandler();
+      if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
+      const component = options.component;
+      const maxSamplesPerLevel = options.maxSamplesPerLevel ?? 5;
+      const includeErrorContext = options.includeErrorContext ?? true;
+      const contextLines = options.contextLines ?? 5;
+
+      // Get or run analysis
+      let analysisResult = analysisResultCache.get(currentFilePath);
+      if (!analysisResult) {
+        const analyzer = analyzerRegistry.getDefault();
+        if (!analyzer) return { success: false, error: 'No analyzer available' };
+        analyzeSignal = { cancelled: false };
+        analysisResult = await analyzer.analyze(currentFilePath, {}, () => {}, analyzeSignal);
+        analysisResultCache.set(currentFilePath, analysisResult);
+      }
+
+      // Search for component mentions
+      const searchOpts: SearchOptions = {
+        pattern: component,
+        isRegex: false,
+        isWildcard: false,
+        matchCase: false,
+        wholeWord: false,
+      };
+      searchSignal = { cancelled: false };
+      const matches = await handler.search(searchOpts, () => {}, searchSignal);
+
+      if (matches.length === 0) {
+        return { success: true, component, found: false, totalMentions: 0 };
+      }
+
+      // Categorize by level
+      const levelBuckets: Record<string, { lineNumber: number; text: string }[]> = {};
+      const totalLines = handler.getTotalLines();
+      for (const m of matches) {
+        // Get the line to determine its level
+        const [lineData] = handler.getLines(m.lineNumber, 1);
+        const level = lineData?.level || 'other';
+        if (!levelBuckets[level]) levelBuckets[level] = [];
+        levelBuckets[level].push({ lineNumber: m.lineNumber, text: m.lineText });
+      }
+
+      // Pick evenly-spaced samples per level
+      const samplesByLevel: Record<string, { lineNumber: number; text: string }[]> = {};
+      const levelBreakdown: Record<string, number> = {};
+      for (const [level, items] of Object.entries(levelBuckets)) {
+        levelBreakdown[level] = items.length;
+        if (items.length <= maxSamplesPerLevel) {
+          samplesByLevel[level] = items;
+        } else {
+          const step = items.length / maxSamplesPerLevel;
+          samplesByLevel[level] = [];
+          for (let i = 0; i < maxSamplesPerLevel; i++) {
+            samplesByLevel[level].push(items[Math.floor(i * step)]);
+          }
+        }
+      }
+
+      // Get error context sites
+      const errorSites: any[] = [];
+      if (includeErrorContext && levelBuckets['error']) {
+        const errorLines = levelBuckets['error'];
+        const maxErrorSites = Math.min(10, errorLines.length);
+        const step = errorLines.length > maxErrorSites ? errorLines.length / maxErrorSites : 1;
+        for (let i = 0; i < maxErrorSites; i++) {
+          const errLine = errorLines[Math.floor(i * step)];
+          const startIdx = Math.max(0, errLine.lineNumber - contextLines);
+          const endIdx = Math.min(totalLines - 1, errLine.lineNumber + contextLines);
+          const rawLines = handler.getLines(startIdx, endIdx - startIdx + 1);
+          const contextBefore: { lineNumber: number; text: string }[] = [];
+          const contextAfter: { lineNumber: number; text: string }[] = [];
+          for (const line of rawLines) {
+            if (line.lineNumber < errLine.lineNumber) {
+              contextBefore.push({ lineNumber: line.lineNumber, text: line.text });
+            } else if (line.lineNumber > errLine.lineNumber) {
+              contextAfter.push({ lineNumber: line.lineNumber, text: line.text });
+            }
+          }
+          errorSites.push({
+            lineNumber: errLine.lineNumber,
+            errorLine: errLine.text,
+            contextBefore,
+            contextAfter,
+          });
+        }
+      }
+
+      // Time range of component mentions
+      let timeRange: { firstSeen: string; lastSeen: string } | null = null;
+      const firstMatch = matches[0];
+      const lastMatch = matches[matches.length - 1];
+      const [firstLine] = handler.getLines(firstMatch.lineNumber, 1);
+      const [lastLine] = handler.getLines(lastMatch.lineNumber, 1);
+      if (firstLine && lastLine) {
+        const firstTs = parseTimestampFast(firstLine.text);
+        const lastTs = parseTimestampFast(lastLine.text);
+        if (firstTs && lastTs) {
+          timeRange = { firstSeen: firstTs.str, lastSeen: lastTs.str };
+        }
+      }
+
+      // Check if this is a top failer
+      const isTopFailer = analysisResult.insights.topFailingComponents.some(
+        fc => fc.name.toLowerCase() === component.toLowerCase()
+      );
+
+      return {
+        success: true,
+        component,
+        found: true,
+        totalMentions: matches.length,
+        levelBreakdown,
+        timeRange,
+        isTopFailer,
+        samplesByLevel,
+        errorSites,
+      };
+    },
+    investigateTimerange: async (options) => {
+      const handler = getFileHandler();
+      if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
+      const totalLines = handler.getTotalLines();
+      const maxSamples = options.maxSamples ?? 20;
+
+      // Parse requested start/end times
+      const requestedStart = new Date(options.startTime);
+      const requestedEnd = new Date(options.endTime);
+      if (isNaN(requestedStart.getTime()) || isNaN(requestedEnd.getTime())) {
+        return { success: false, error: 'Invalid startTime or endTime format' };
+      }
+
+      // Binary search to find the start line of the time window
+      const h = handler; // capture for nested function
+      function findTimeBoundary(targetTime: Date, findFirst: boolean): number {
+        let lo = 0, hi = totalLines - 1;
+        let result = findFirst ? totalLines : -1;
+        while (lo <= hi) {
+          const mid = Math.floor((lo + hi) / 2);
+          const [line] = h.getLines(mid, 1);
+          if (!line) { lo = mid + 1; continue; }
+          const parsed = parseTimestampFast(line.text);
+          if (!parsed) {
+            // No timestamp — scan forward a bit
+            lo = mid + 1;
+            continue;
+          }
+          if (findFirst) {
+            if (parsed.date >= targetTime) {
+              result = mid;
+              hi = mid - 1;
+            } else {
+              lo = mid + 1;
+            }
+          } else {
+            if (parsed.date <= targetTime) {
+              result = mid;
+              lo = mid + 1;
+            } else {
+              hi = mid - 1;
+            }
+          }
+        }
+        return result;
+      }
+
+      const startLine = findTimeBoundary(requestedStart, true);
+      const endLine = findTimeBoundary(requestedEnd, false);
+
+      if (startLine >= totalLines || endLine < 0 || startLine > endLine) {
+        return {
+          success: true,
+          timeRange: {
+            requestedStart: options.startTime,
+            requestedEnd: options.endTime,
+            actualStart: null,
+            actualEnd: null,
+          },
+          lineRange: { startLine: 0, endLine: 0, lineCount: 0 },
+          levelCounts: {},
+          crashes: [],
+          activeComponents: [],
+          timeGaps: [],
+          samples: { errors: [], warnings: [], firstLines: [], lastLines: [] },
+        };
+      }
+
+      const lineCount = endLine - startLine + 1;
+
+      // Scan the range
+      const levelCounts: Record<string, number> = {};
+      const crashes: { lineNumber: number; keyword: string; text: string }[] = [];
+      const componentMentions: Record<string, { lineCount: number; errorCount: number }> = {};
+      const CRASH_KEYWORDS = ['fatal', 'panic', 'crash', 'exception', 'segfault', 'abort', 'oom', 'killed', 'core dump'];
+      const timeGaps: { lineNumber: number; gapSeconds: number; prevTimestamp: string; currTimestamp: string }[] = [];
+      let prevTimestamp: Date | null = null;
+      let prevTimestampStr = '';
+      let actualStart: string | null = null;
+      let actualEnd: string | null = null;
+
+      // Collect samples
+      const errorSamples: { lineNumber: number; text: string }[] = [];
+      const warningSamples: { lineNumber: number; text: string }[] = [];
+      const firstLines: { lineNumber: number; text: string }[] = [];
+      const lastLines: { lineNumber: number; text: string }[] = [];
+
+      const batchSize = 5000;
+      for (let start = startLine; start <= endLine; start += batchSize) {
+        const count = Math.min(batchSize, endLine - start + 1);
+        const lines = handler.getLines(start, count);
+        for (const line of lines) {
+          // Level counting
+          const level = line.level || 'other';
+          levelCounts[level] = (levelCounts[level] || 0) + 1;
+
+          // Crash keyword detection
+          const textLower = line.text.toLowerCase();
+          for (const kw of CRASH_KEYWORDS) {
+            if (textLower.includes(kw)) {
+              crashes.push({ lineNumber: line.lineNumber, keyword: kw, text: line.text });
+              break;
+            }
+          }
+
+          // Timestamp tracking
+          const parsed = parseTimestampFast(line.text);
+          if (parsed) {
+            if (!actualStart) actualStart = parsed.str;
+            actualEnd = parsed.str;
+            if (prevTimestamp) {
+              const diffSec = Math.abs((parsed.date.getTime() - prevTimestamp.getTime()) / 1000);
+              if (diffSec >= 30) {
+                timeGaps.push({
+                  lineNumber: line.lineNumber,
+                  gapSeconds: diffSec,
+                  prevTimestamp: prevTimestampStr,
+                  currTimestamp: parsed.str,
+                });
+              }
+            }
+            prevTimestamp = parsed.date;
+            prevTimestampStr = parsed.str;
+          }
+
+          // Collect first/last lines
+          if (line.lineNumber - startLine < 5) {
+            firstLines.push({ lineNumber: line.lineNumber, text: line.text });
+          }
+          if (endLine - line.lineNumber < 5) {
+            lastLines.push({ lineNumber: line.lineNumber, text: line.text });
+          }
+
+          // Collect error/warning samples (up to maxSamples each)
+          if (level === 'error' && errorSamples.length < maxSamples) {
+            errorSamples.push({ lineNumber: line.lineNumber, text: line.text });
+          }
+          if (level === 'warning' && warningSamples.length < maxSamples) {
+            warningSamples.push({ lineNumber: line.lineNumber, text: line.text });
+          }
+        }
+      }
+
+      // Sort time gaps by duration descending, keep top 10
+      timeGaps.sort((a, b) => b.gapSeconds - a.gapSeconds);
+      const topTimeGaps = timeGaps.slice(0, 10);
+
+      // Pick evenly-spaced error/warning samples
+      function pickEvenlySpaced(arr: { lineNumber: number; text: string }[], max: number) {
+        if (arr.length <= max) return arr;
+        const step = arr.length / max;
+        const result: typeof arr = [];
+        for (let i = 0; i < max; i++) {
+          result.push(arr[Math.floor(i * step)]);
+        }
+        return result;
+      }
+
+      return {
+        success: true,
+        timeRange: {
+          requestedStart: options.startTime,
+          requestedEnd: options.endTime,
+          actualStart,
+          actualEnd,
+        },
+        lineRange: { startLine, endLine, lineCount },
+        levelCounts,
+        crashes: crashes.slice(0, 50),
+        activeComponents: [], // Would need component parsing which is analyzer-specific
+        timeGaps: topTimeGaps,
+        samples: {
+          errors: pickEvenlySpaced(errorSamples, maxSamples),
+          warnings: pickEvenlySpaced(warningSamples, maxSamples),
+          firstLines,
+          lastLines,
+        },
+      };
+    },
   };
   startApiServer(apiContext);
 });

@@ -1,6 +1,6 @@
 {
   "name": "logan",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "Fast log file viewer and analyzer for large files with pattern detection, search, and bookmarks",
   "main": "dist/main/index.js",
   "scripts": {
@@ -62,6 +62,12 @@
     "files": [
       "dist/**/*",
       "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**",
+      "node_modules/node-pty/**",
+      "node_modules/serialport/**",
+      "node_modules/@serialport/**"
     ],
     "mac": {
       "category": "public.app-category.developer-tools",

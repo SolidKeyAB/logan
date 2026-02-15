@@ -402,6 +402,276 @@ server.tool(
   }
 );
 
+// === Tool: logan_triage ===
+server.tool(
+  'logan_triage',
+  'Quick triage: "What\'s wrong with this log?" — returns severity, summary, crashes, failing components, time gaps, and filter suggestions in a single call',
+  {
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+    timeGapThreshold: z.number().min(1).default(60).describe('Minimum time gap in seconds to report'),
+  },
+  async ({ redact, timeGapThreshold }) => {
+    try {
+      // 1. Status
+      const status = await apiCall('GET', '/api/status');
+      if (!status.success || !status.status.filePath) {
+        return { content: [{ type: 'text', text: 'Error: No file open in LOGAN. Use logan_open_file first.' }], isError: true };
+      }
+
+      // 2. Analysis
+      const analysis = await apiCall('POST', '/api/analyze', {});
+
+      // 3. Time gaps
+      const gaps = await apiCall('POST', '/api/time-gaps', { thresholdSeconds: timeGapThreshold });
+
+      // 4. Bookmarks
+      const bms = await apiCall('GET', '/api/bookmarks');
+
+      // Build triage result
+      const fileInfo = status.status;
+      const result = analysis.success ? analysis.result : null;
+
+      const levelCounts = result?.levelCounts || {};
+      const totalAnalyzed = result?.stats?.analyzedLines || fileInfo.totalLines;
+      const errorCount = levelCounts['error'] || 0;
+      const warningCount = levelCounts['warning'] || 0;
+      const errorPercent = totalAnalyzed > 0 ? (errorCount / totalAnalyzed) * 100 : 0;
+      const warningPercent = totalAnalyzed > 0 ? (warningCount / totalAnalyzed) * 100 : 0;
+
+      const crashes = result?.insights?.crashes || [];
+      const topFailingComponents = result?.insights?.topFailingComponents || [];
+      const filterSuggestions = result?.insights?.filterSuggestions || [];
+      const timeGaps = (gaps.success ? gaps.gaps : []).slice(0, 5);
+
+      // Group crashes by keyword
+      const crashesByKeyword: Record<string, { keyword: string; count: number; firstLineNumber: number; sampleText: string }> = {};
+      for (const c of crashes) {
+        if (!crashesByKeyword[c.keyword]) {
+          crashesByKeyword[c.keyword] = { keyword: c.keyword, count: 0, firstLineNumber: c.lineNumber, sampleText: c.text };
+        }
+        crashesByKeyword[c.keyword].count++;
+      }
+
+      // Determine severity
+      let severity: 'healthy' | 'warning' | 'critical' = 'healthy';
+      if (crashes.length > 0 || errorPercent > 20) {
+        severity = 'critical';
+      } else if (errorPercent > 5 || timeGaps.some((g: any) => g.gapSeconds > 300) || topFailingComponents.length > 3) {
+        severity = 'warning';
+      }
+
+      // Build summary string
+      const parts = [`${fileInfo.totalLines.toLocaleString()} lines`];
+      if (errorCount > 0) parts.push(`${errorCount.toLocaleString()} errors (${errorPercent.toFixed(1)}%)`);
+      if (crashes.length > 0) parts.push(`${crashes.length} crashes`);
+      if (timeGaps.length > 0) parts.push(`${timeGaps.length} time gaps`);
+      const summary = parts.join(', ');
+
+      const triage = {
+        file: {
+          path: fileInfo.filePath,
+          totalLines: fileInfo.totalLines,
+          fileSize: fileInfo.fileSize,
+          timeRange: result?.timeRange || null,
+        },
+        severity,
+        summary,
+        levelDistribution: {
+          ...levelCounts,
+          errorPercent: Math.round(errorPercent * 100) / 100,
+          warningPercent: Math.round(warningPercent * 100) / 100,
+        },
+        crashes: Object.values(crashesByKeyword),
+        topFailingComponents: topFailingComponents.slice(0, 10),
+        timeGaps,
+        filterSuggestions: filterSuggestions.slice(0, 5),
+        existingBookmarks: bms.success ? (bms.bookmarks?.length || 0) : 0,
+      };
+
+      const output = redact ? maybeRedact(triage, true) : triage;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_investigate_crashes ===
+server.tool(
+  'logan_investigate_crashes',
+  'Deep-dive on crashes: returns every crash site with surrounding context lines so the AI can reason about root causes',
+  {
+    contextLines: z.number().int().min(1).max(50).default(10).describe('Number of context lines before and after each crash'),
+    maxCrashes: z.number().int().min(1).max(100).default(20).describe('Maximum number of crash sites to return'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+    autoBookmark: z.boolean().default(false).describe('Automatically bookmark crash sites in LOGAN'),
+    autoHighlight: z.boolean().default(false).describe('Automatically highlight crash keywords in LOGAN'),
+  },
+  async ({ contextLines, maxCrashes, redact, autoBookmark, autoHighlight }) => {
+    try {
+      const result = await apiCall('POST', '/api/investigate-crashes', {
+        contextLines, maxCrashes, autoBookmark, autoHighlight,
+      });
+      const output = redact ? maybeRedact(result, true) : result;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_investigate_component ===
+server.tool(
+  'logan_investigate_component',
+  'Focus on one component\'s health: shows error/warning/info breakdown, sample lines per level, and error sites with context',
+  {
+    component: z.string().describe('Component/channel name to investigate'),
+    maxSamplesPerLevel: z.number().int().min(1).max(20).default(5).describe('Max sample lines per log level'),
+    includeErrorContext: z.boolean().default(true).describe('Include context lines around error sites'),
+    contextLines: z.number().int().min(1).max(20).default(5).describe('Context lines around error sites'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+  },
+  async ({ component, maxSamplesPerLevel, includeErrorContext, contextLines, redact }) => {
+    try {
+      const result = await apiCall('POST', '/api/investigate-component', {
+        component, maxSamplesPerLevel, includeErrorContext, contextLines,
+      });
+      const output = redact ? maybeRedact(result, true) : result;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_compare_baseline ===
+server.tool(
+  'logan_compare_baseline',
+  'Enriched baseline comparison: compares current log against a saved baseline and returns findings with actual evidence lines from the log',
+  {
+    baselineId: z.string().describe('ID of the baseline to compare against'),
+    maxEvidencePerFinding: z.number().int().min(1).max(10).default(3).describe('Max evidence lines per finding'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+  },
+  async ({ baselineId, maxEvidencePerFinding, redact }) => {
+    try {
+      // 1. Ensure analysis exists
+      await apiCall('POST', '/api/analyze', {});
+
+      // 2. Get comparison findings
+      const compareResult = await apiCall('POST', '/api/baseline-compare', { baselineId });
+      if (!compareResult.success) {
+        return { content: [{ type: 'text', text: `Error: ${compareResult.error}` }], isError: true };
+      }
+
+      const report = compareResult.report;
+      const enrichedFindings: any[] = [];
+
+      // 3. For each finding, search for evidence
+      for (const finding of report.findings) {
+        const evidence: { lineNumber: number; text: string }[] = [];
+
+        try {
+          let searchPattern: string | null = null;
+          if (finding.category === 'new-crash') {
+            // Extract crash keyword from title
+            const kwMatch = finding.title.match(/crash keyword[:\s]*["']?(\w+)/i) ||
+                           finding.title.match(/["'](\w+)["']/);
+            searchPattern = kwMatch ? kwMatch[1] : null;
+          } else if (finding.category === 'new-component' || finding.category === 'error-rate') {
+            // Extract component name from detail
+            const compMatch = finding.detail?.match(/["']([^"']+)["']/) ||
+                             finding.title?.match(/["']([^"']+)["']/);
+            searchPattern = compMatch ? compMatch[1] : null;
+          } else if (finding.category === 'level-shift' && finding.currentValue) {
+            // For level shifts, search the shifted level
+            const levelMatch = finding.title?.match(/(error|warning|fatal)/i);
+            if (levelMatch) searchPattern = levelMatch[1];
+          }
+
+          if (searchPattern) {
+            const searchResult = await apiCall('POST', '/api/search', {
+              pattern: searchPattern, isRegex: false, matchCase: false, wholeWord: false,
+            });
+            if (searchResult.success && searchResult.matches) {
+              const matches = searchResult.matches.slice(0, maxEvidencePerFinding);
+              for (const m of matches) {
+                evidence.push({ lineNumber: m.lineNumber, text: m.lineText });
+              }
+            }
+          }
+        } catch { /* evidence is best-effort */ }
+
+        enrichedFindings.push({
+          severity: finding.severity,
+          category: finding.category,
+          title: finding.title,
+          detail: finding.detail,
+          baselineValue: finding.baselineValue,
+          currentValue: finding.currentValue,
+          evidence,
+        });
+      }
+
+      // 4. Compute overall verdict
+      const critical = report.summary.critical;
+      const warning = report.summary.warning;
+      let overallVerdict: 'improved' | 'stable' | 'degraded' | 'significantly-degraded' = 'stable';
+      if (critical > 2) {
+        overallVerdict = 'significantly-degraded';
+      } else if (critical > 0 || warning > 3) {
+        overallVerdict = 'degraded';
+      } else {
+        // Check if error rate dropped with no new crashes
+        const hasNewCrash = enrichedFindings.some(f => f.category === 'new-crash');
+        const hasErrorDrop = enrichedFindings.some(f =>
+          f.category === 'level-shift' && f.title?.toLowerCase().includes('error') &&
+          parseFloat(f.currentValue || '0') < parseFloat(f.baselineValue || '0')
+        );
+        if (!hasNewCrash && hasErrorDrop) {
+          overallVerdict = 'improved';
+        }
+      }
+
+      const output = {
+        baselineName: report.baselineName,
+        baselineId: report.baselineId,
+        overallVerdict,
+        summary: report.summary,
+        findings: enrichedFindings,
+      };
+
+      const finalOutput = redact ? maybeRedact(output, true) : output;
+      return { content: [{ type: 'text', text: JSON.stringify(finalOutput, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_investigate_timerange ===
+server.tool(
+  'logan_investigate_timerange',
+  'Analyze a specific time window: "What happened between 14:00 and 15:00?" — returns level counts, crashes, time gaps, and sample lines for the period',
+  {
+    startTime: z.string().describe('Start of time window (ISO 8601 or parseable date string)'),
+    endTime: z.string().describe('End of time window (ISO 8601 or parseable date string)'),
+    maxSamples: z.number().int().min(1).max(100).default(20).describe('Max sample lines per category'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+  },
+  async ({ startTime, endTime, maxSamples, redact }) => {
+    try {
+      const result = await apiCall('POST', '/api/investigate-timerange', {
+        startTime, endTime, maxSamples,
+      });
+      const output = redact ? maybeRedact(result, true) : result;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // --- Start server ---
 
 async function main(): Promise<void> {
