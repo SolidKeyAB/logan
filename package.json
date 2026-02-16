@@ -4,7 +4,7 @@
   "description": "Fast log file viewer and analyzer for large files with pattern detection, search, and bookmarks",
   "main": "dist/main/index.js",
   "scripts": {
-    "postinstall": "npx @electron/rebuild",
+    "postinstall": "electron-builder install-app-deps || echo 'Native module rebuild skipped (install build-essential if on Linux)'",
     "build": "tsc && npm run copy-assets",
     "copy-assets": "node scripts/copy-assets.js",
     "start": "npm run build && electron .",
@@ -30,7 +30,6 @@
     "url": "https://github.com/SolidKeyAB/logan.git"
   },
   "devDependencies": {
-    "@electron/rebuild": "^3.7.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/diff": "^7.0.2",
     "@types/node": "^20.10.0",
