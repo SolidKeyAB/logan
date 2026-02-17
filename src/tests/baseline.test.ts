@@ -49,11 +49,11 @@ function makeFingerprint(overrides: Partial<BaselineFingerprint> = {}): Baseline
 describe('BaselineStore', () => {
   beforeEach(() => {
     tmpDir = makeTmpDir();
-    store = new BaselineStore(path.join(tmpDir, 'test-baselines.db'));
+    store = new BaselineStore(path.join(tmpDir, 'test-baselines.json'));
   });
 
   afterEach(() => {
-    store.close();
+    // JSON store needs no close
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -212,11 +212,11 @@ describe('BaselineStore', () => {
 describe('BaselineStore.compare()', () => {
   beforeEach(() => {
     tmpDir = makeTmpDir();
-    store = new BaselineStore(path.join(tmpDir, 'test-compare.db'));
+    store = new BaselineStore(path.join(tmpDir, 'test-compare.json'));
   });
 
   afterEach(() => {
-    store.close();
+    // JSON store needs no close
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -724,11 +724,11 @@ describe('buildFingerprint()', () => {
 describe('BaselineStore edge cases', () => {
   beforeEach(() => {
     tmpDir = makeTmpDir();
-    store = new BaselineStore(path.join(tmpDir, 'edge.db'));
+    store = new BaselineStore(path.join(tmpDir, 'edge.json'));
   });
 
   afterEach(() => {
-    store.close();
+    // JSON store needs no close
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 

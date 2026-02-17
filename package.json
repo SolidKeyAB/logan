@@ -4,7 +4,7 @@
   "description": "Fast log file viewer and analyzer for large files with pattern detection, search, and bookmarks",
   "main": "dist/main/index.js",
   "scripts": {
-    "postinstall": "electron-builder install-app-deps || echo 'Native module rebuild skipped (install build-essential if on Linux)'",
+    "postinstall": "electron-builder install-app-deps 2>/dev/null || true",
     "build": "tsc && npm run copy-assets",
     "copy-assets": "node scripts/copy-assets.js",
     "start": "npm run build && electron .",
@@ -30,7 +30,6 @@
     "url": "https://github.com/SolidKeyAB/logan.git"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/diff": "^7.0.2",
     "@types/node": "^20.10.0",
     "@types/ssh2": "^1.15.5",
@@ -41,7 +40,6 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
-    "better-sqlite3": "^12.6.2",
     "diff": "^8.0.3",
     "marked": "^17.0.1",
     "node-pty": "^1.1.0",
@@ -63,7 +61,6 @@
       "package.json"
     ],
     "asarUnpack": [
-      "node_modules/better-sqlite3/**",
       "node_modules/node-pty/**",
       "node_modules/serialport/**",
       "node_modules/@serialport/**"

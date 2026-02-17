@@ -5,7 +5,7 @@ import * as os from 'os';
 import { BrowserWindow } from 'electron';
 import { SearchOptions, Bookmark, Highlight } from '../shared/types';
 import { FileHandler } from './fileHandler';
-import { BaselineStore, buildFingerprint } from './baselineStore';
+import { type BaselineStore, buildFingerprint } from './baselineStore';
 import { AnalysisResult } from './analyzers/types';
 
 const API_PORT = 19532;

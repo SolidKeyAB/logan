@@ -41,7 +41,7 @@ const MAX_LIVE_CONNECTIONS = 4;
 // Keep one SshHandler for SFTP/profile operations (not for live connections)
 const sshUtilHandler = new SshHandler();
 
-// Baseline store (SQLite)
+// Baseline store (JSON file in ~/.logan/baselines.json)
 const baselineStore = new BaselineStore();
 
 // Cache last analysis result per file for baseline fingerprinting

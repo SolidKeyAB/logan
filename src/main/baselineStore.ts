@@ -1,5 +1,3 @@
-import Database from 'better-sqlite3';
-import * as zlib from 'zlib';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
@@ -226,104 +224,189 @@ export function buildFingerprint(
   };
 }
 
-// --- BaselineStore ---
+// --- JSON file storage ---
+
+interface StoredBaseline {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  sourceFile: string;
+  totalLines: number;
+  createdAt: number;
+  updatedAt: number;
+  fingerprint: BaselineFingerprint;
+}
+
+interface StoreData {
+  version: 1;
+  baselines: StoredBaseline[];
+}
+
+// --- BaselineStore (JSON file) ---
 
 export class BaselineStore {
-  private db: Database.Database;
+  private filePath: string;
+  private data: StoreData;
 
-  constructor(dbPathOverride?: string) {
-    let dbPath: string;
-    if (dbPathOverride) {
-      const dir = path.dirname(dbPathOverride);
+  constructor(filePathOverride?: string) {
+    if (filePathOverride) {
+      const dir = path.dirname(filePathOverride);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      dbPath = dbPathOverride;
+      this.filePath = filePathOverride;
     } else {
       const configDir = path.join(os.homedir(), '.logan');
       if (!fs.existsSync(configDir)) {
         fs.mkdirSync(configDir, { recursive: true });
       }
-      dbPath = path.join(configDir, 'baselines.db');
+      this.filePath = path.join(configDir, 'baselines.json');
     }
-    this.db = new Database(dbPath);
-    this.db.pragma('journal_mode = WAL');
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS baselines (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT DEFAULT '',
-        tags TEXT DEFAULT '[]',
-        source_file TEXT,
-        total_lines INTEGER,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        fingerprint BLOB NOT NULL
-      )
-    `);
+    this.data = this.load();
+  }
+
+  private load(): StoreData {
+    try {
+      if (fs.existsSync(this.filePath)) {
+        const raw = fs.readFileSync(this.filePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.version === 1 && Array.isArray(parsed.baselines)) {
+          return parsed;
+        }
+      }
+    } catch {
+      // Corrupted file — start fresh
+    }
+
+    // Migrate from SQLite if it exists
+    const migrated = this.migrateFromSqlite();
+    if (migrated) return migrated;
+
+    return { version: 1, baselines: [] };
+  }
+
+  private migrateFromSqlite(): StoreData | null {
+    try {
+      const dbPath = path.join(path.dirname(this.filePath), 'baselines.db');
+      if (!fs.existsSync(dbPath)) return null;
+
+      // Try to load better-sqlite3 for one-time migration
+      let Database: any;
+      try {
+        Database = require('better-sqlite3');
+      } catch {
+        // better-sqlite3 not available — skip migration, old DB will remain
+        return null;
+      }
+
+      const db = new Database(dbPath, { readonly: true });
+      const rows = db.prepare(
+        'SELECT id, name, description, tags, source_file, total_lines, created_at, updated_at, fingerprint FROM baselines ORDER BY created_at DESC'
+      ).all() as Array<any>;
+
+      const zlib = require('zlib');
+      const baselines: StoredBaseline[] = [];
+      for (const r of rows) {
+        try {
+          const fpJson = zlib.inflateSync(r.fingerprint).toString('utf-8');
+          baselines.push({
+            id: r.id,
+            name: r.name,
+            description: r.description || '',
+            tags: JSON.parse(r.tags || '[]'),
+            sourceFile: r.source_file || '',
+            totalLines: r.total_lines || 0,
+            createdAt: r.created_at,
+            updatedAt: r.updated_at,
+            fingerprint: JSON.parse(fpJson),
+          });
+        } catch {
+          // Skip corrupted rows
+        }
+      }
+      db.close();
+
+      const data: StoreData = { version: 1, baselines };
+      this.persist(data);
+
+      // Rename old DB so migration doesn't re-run
+      fs.renameSync(dbPath, dbPath + '.migrated');
+      console.log(`Migrated ${baselines.length} baselines from SQLite to JSON`);
+
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  private persist(data?: StoreData): void {
+    const d = data || this.data;
+    fs.writeFileSync(this.filePath, JSON.stringify(d, null, 2), 'utf-8');
   }
 
   save(name: string, description: string, tags: string[], fingerprint: BaselineFingerprint): string {
     const id = `bl-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
     const now = Date.now();
-    const compressed = zlib.deflateSync(JSON.stringify(fingerprint));
-    this.db.prepare(
-      `INSERT INTO baselines (id, name, description, tags, source_file, total_lines, created_at, updated_at, fingerprint)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(id, name, description, JSON.stringify(tags), fingerprint.sourceFile, fingerprint.totalLines, now, now, compressed);
+    this.data.baselines.unshift({
+      id,
+      name,
+      description,
+      tags,
+      sourceFile: fingerprint.sourceFile,
+      totalLines: fingerprint.totalLines,
+      createdAt: now,
+      updatedAt: now,
+      fingerprint,
+    });
+    this.persist();
     return id;
   }
 
   list(): BaselineRecord[] {
-    const rows = this.db.prepare(
-      `SELECT id, name, description, tags, source_file, total_lines, created_at, updated_at FROM baselines ORDER BY created_at DESC`
-    ).all() as Array<{ id: string; name: string; description: string; tags: string; source_file: string; total_lines: number; created_at: number; updated_at: number }>;
-    return rows.map(r => ({
-      id: r.id,
-      name: r.name,
-      description: r.description,
-      tags: JSON.parse(r.tags || '[]'),
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-      sourceFile: r.source_file,
-      totalLines: r.total_lines,
+    return this.data.baselines.map(b => ({
+      id: b.id,
+      name: b.name,
+      description: b.description,
+      tags: b.tags,
+      createdAt: b.createdAt,
+      updatedAt: b.updatedAt,
+      sourceFile: b.sourceFile,
+      totalLines: b.totalLines,
     }));
   }
 
   get(id: string): BaselineRecordFull | null {
-    const row = this.db.prepare(
-      `SELECT id, name, description, tags, source_file, total_lines, created_at, updated_at, fingerprint FROM baselines WHERE id = ?`
-    ).get(id) as { id: string; name: string; description: string; tags: string; source_file: string; total_lines: number; created_at: number; updated_at: number; fingerprint: Buffer } | undefined;
-    if (!row) return null;
-    const fpJson = zlib.inflateSync(row.fingerprint).toString('utf-8');
+    const b = this.data.baselines.find(b => b.id === id);
+    if (!b) return null;
     return {
-      id: row.id,
-      name: row.name,
-      description: row.description,
-      tags: JSON.parse(row.tags || '[]'),
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      sourceFile: row.source_file,
-      totalLines: row.total_lines,
-      fingerprint: JSON.parse(fpJson),
+      id: b.id,
+      name: b.name,
+      description: b.description,
+      tags: b.tags,
+      createdAt: b.createdAt,
+      updatedAt: b.updatedAt,
+      sourceFile: b.sourceFile,
+      totalLines: b.totalLines,
+      fingerprint: b.fingerprint,
     };
   }
 
   update(id: string, fields: { name?: string; description?: string; tags?: string[] }): boolean {
-    const sets: string[] = [];
-    const params: any[] = [];
-    if (fields.name !== undefined) { sets.push('name = ?'); params.push(fields.name); }
-    if (fields.description !== undefined) { sets.push('description = ?'); params.push(fields.description); }
-    if (fields.tags !== undefined) { sets.push('tags = ?'); params.push(JSON.stringify(fields.tags)); }
-    if (sets.length === 0) return false;
-    sets.push('updated_at = ?');
-    params.push(Date.now());
-    params.push(id);
-    const result = this.db.prepare(`UPDATE baselines SET ${sets.join(', ')} WHERE id = ?`).run(...params);
-    return result.changes > 0;
+    const b = this.data.baselines.find(b => b.id === id);
+    if (!b) return false;
+    if (fields.name !== undefined) b.name = fields.name;
+    if (fields.description !== undefined) b.description = fields.description;
+    if (fields.tags !== undefined) b.tags = fields.tags;
+    b.updatedAt = Date.now();
+    this.persist();
+    return true;
   }
 
   delete(id: string): boolean {
-    const result = this.db.prepare(`DELETE FROM baselines WHERE id = ?`).run(id);
-    return result.changes > 0;
+    const idx = this.data.baselines.findIndex(b => b.id === id);
+    if (idx === -1) return false;
+    this.data.baselines.splice(idx, 1);
+    this.persist();
+    return true;
   }
 
   compare(currentFingerprint: BaselineFingerprint, baselineId: string): ComparisonReport | null {
@@ -459,10 +542,6 @@ export class BaselineStore {
         info: findings.filter(f => f.severity === 'info').length,
       },
     };
-  }
-
-  close(): void {
-    this.db.close();
   }
 }
 
