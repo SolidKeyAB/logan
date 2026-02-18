@@ -58,6 +58,19 @@ const IPC = {
   BASELINE_UPDATE: 'baseline-update',
   BASELINE_DELETE: 'baseline-delete',
   BASELINE_COMPARE: 'baseline-compare',
+  // Tabbed terminal
+  TERMINAL_CREATE_LOCAL: 'terminal-create-local',
+  TERMINAL_CREATE_SSH: 'terminal-create-ssh',
+  TERMINAL_WRITE: 'terminal-write',
+  TERMINAL_RESIZE: 'terminal-resize',
+  TERMINAL_KILL: 'terminal-kill',
+  TERMINAL_DATA: 'terminal-data',
+  TERMINAL_EXIT: 'terminal-exit',
+  // Saved connections
+  CONNECTION_LIST: 'connection-list',
+  CONNECTION_SAVE: 'connection-save',
+  CONNECTION_DELETE: 'connection-delete',
+  CONNECTION_UPDATE: 'connection-update',
 } as const;
 
 // API exposed to renderer
@@ -276,33 +289,52 @@ const api = {
     return () => ipcRenderer.removeListener(IPC.DATADOG_FETCH_PROGRESS, handler);
   },
 
-  // Terminal
-  terminalCreate: (options?: { cwd?: string; cols?: number; rows?: number }): Promise<{ success: boolean; pid?: number; error?: string }> =>
-    ipcRenderer.invoke('terminal-create', options),
+  // Terminal (tabbed, multi-session)
+  terminalCreateLocal: (sessionId: string, options?: { cwd?: string; cols?: number; rows?: number }): Promise<{ success: boolean; label?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.TERMINAL_CREATE_LOCAL, sessionId, options),
 
-  terminalWrite: (data: string): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke('terminal-write', data),
+  terminalCreateSsh: (sessionId: string, options: {
+    liveConnectionId?: string;
+    savedConnectionId?: string;
+    sshConfig?: { host: string; port: number; username: string; identityFile?: string; passphrase?: string };
+    cols?: number;
+    rows?: number;
+  }): Promise<{ success: boolean; label?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.TERMINAL_CREATE_SSH, sessionId, options),
 
-  terminalResize: (cols: number, rows: number): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke('terminal-resize', cols, rows),
+  terminalWrite: (sessionId: string, data: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.TERMINAL_WRITE, sessionId, data),
 
-  terminalKill: (): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke('terminal-kill'),
+  terminalResize: (sessionId: string, cols: number, rows: number): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.TERMINAL_RESIZE, sessionId, cols, rows),
 
-  terminalCd: (directory: string): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke('terminal-cd', directory),
+  terminalKill: (sessionId: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.TERMINAL_KILL, sessionId),
 
-  onTerminalData: (callback: (data: string) => void): (() => void) => {
-    const handler = (_: any, data: string) => callback(data);
-    ipcRenderer.on('terminal-data', handler);
-    return () => ipcRenderer.removeListener('terminal-data', handler);
+  onTerminalData: (callback: (sessionId: string, data: string) => void): (() => void) => {
+    const handler = (_: any, sessionId: string, data: string) => callback(sessionId, data);
+    ipcRenderer.on(IPC.TERMINAL_DATA, handler);
+    return () => ipcRenderer.removeListener(IPC.TERMINAL_DATA, handler);
   },
 
-  onTerminalExit: (callback: (exitCode: number) => void): (() => void) => {
-    const handler = (_: any, exitCode: number) => callback(exitCode);
-    ipcRenderer.on('terminal-exit', handler);
-    return () => ipcRenderer.removeListener('terminal-exit', handler);
+  onTerminalExit: (callback: (sessionId: string, exitCode: number) => void): (() => void) => {
+    const handler = (_: any, sessionId: string, exitCode: number) => callback(sessionId, exitCode);
+    ipcRenderer.on(IPC.TERMINAL_EXIT, handler);
+    return () => ipcRenderer.removeListener(IPC.TERMINAL_EXIT, handler);
   },
+
+  // Saved connections
+  connectionList: (): Promise<{ success: boolean; connections?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.CONNECTION_LIST),
+
+  connectionSave: (connection: any): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.CONNECTION_SAVE, connection),
+
+  connectionDelete: (id: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.CONNECTION_DELETE, id),
+
+  connectionUpdate: (id: string, fields: any): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.CONNECTION_UPDATE, id, fields),
 
   // Split/Diff view
   getLinesForFile: (filePath: string, startLine: number, count: number): Promise<{ success: boolean; lines?: any[]; error?: string }> =>

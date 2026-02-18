@@ -224,6 +224,16 @@ export interface LiveConnectionInfo {
   tempFilePath: string;
 }
 
+// Saved connection (persisted in ~/.logan/connections.json)
+export interface SavedConnection {
+  id: string;
+  name: string;
+  source: 'serial' | 'logcat' | 'ssh';
+  config: any; // SerialPortConfig | LogcatConfig | SshConnectionConfig
+  createdAt: number;
+  lastUsedAt: number | null;
+}
+
 // IPC Channels
 export const IPC = {
   OPEN_FILE_DIALOG: 'open-file-dialog',
@@ -280,6 +290,19 @@ export const IPC = {
   LIVE_LINES_ADDED: 'live-lines-added',
   LIVE_ERROR: 'live-error',
   LIVE_DISCONNECTED: 'live-disconnected',
+  // Tabbed terminal
+  TERMINAL_CREATE_LOCAL: 'terminal-create-local',
+  TERMINAL_CREATE_SSH: 'terminal-create-ssh',
+  TERMINAL_WRITE: 'terminal-write',
+  TERMINAL_RESIZE: 'terminal-resize',
+  TERMINAL_KILL: 'terminal-kill',
+  TERMINAL_DATA: 'terminal-data',
+  TERMINAL_EXIT: 'terminal-exit',
+  // Saved connections
+  CONNECTION_LIST: 'connection-list',
+  CONNECTION_SAVE: 'connection-save',
+  CONNECTION_DELETE: 'connection-delete',
+  CONNECTION_UPDATE: 'connection-update',
   // Baseline store
   BASELINE_LIST: 'baseline-list',
   BASELINE_SAVE: 'baseline-save',

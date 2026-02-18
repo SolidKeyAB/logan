@@ -373,6 +373,31 @@ export class SshHandler extends EventEmitter {
     });
   }
 
+  /**
+   * Open an interactive shell channel on this handler's existing SSH client.
+   * Used by tabbed terminal to reuse a live connection's SSH session.
+   * The tail stream continues unaffected (ssh2 supports multiple channels).
+   */
+  openShell(cols: number, rows: number): Promise<any> {
+    if (!this.client) {
+      return Promise.reject(new Error('SSH client not connected'));
+    }
+    return new Promise((resolve, reject) => {
+      this.client!.shell(
+        { term: 'xterm-256color', cols, rows },
+        (err: Error | undefined, stream: any) => {
+          if (err) return reject(err);
+          resolve(stream);
+        }
+      );
+    });
+  }
+
+  /** Check if the SSH client is connected */
+  isClientConnected(): boolean {
+    return this.client !== null;
+  }
+
   getStatus(): SshStatus {
     return {
       connected: this.client !== null && this.stream !== null,

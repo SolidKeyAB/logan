@@ -333,14 +333,21 @@ interface Api {
   // Utilities
   openExternalUrl: (url: string) => Promise<void>;
 
-  // Terminal
-  terminalCreate: (options?: { cwd?: string; cols?: number; rows?: number }) => Promise<{ success: boolean; pid?: number; error?: string }>;
-  terminalWrite: (data: string) => Promise<{ success: boolean; error?: string }>;
-  terminalResize: (cols: number, rows: number) => Promise<{ success: boolean; error?: string }>;
-  terminalKill: () => Promise<{ success: boolean; error?: string }>;
+  // Terminal (session-based)
+  terminalCreateLocal: (sessionId: string, options: { cwd?: string; cols: number; rows: number }) => Promise<{ success: boolean; pid?: number; label?: string; error?: string }>;
+  terminalCreateSsh: (sessionId: string, options: { liveConnectionId?: string; sshConfig?: any; cols: number; rows: number }) => Promise<{ success: boolean; label?: string; error?: string }>;
+  terminalWrite: (sessionId: string, data: string) => Promise<{ success: boolean; error?: string }>;
+  terminalResize: (sessionId: string, cols: number, rows: number) => Promise<{ success: boolean; error?: string }>;
+  terminalKill: (sessionId: string) => Promise<{ success: boolean; error?: string }>;
   terminalCd: (directory: string) => Promise<{ success: boolean; error?: string }>;
-  onTerminalData: (callback: (data: string) => void) => () => void;
-  onTerminalExit: (callback: (exitCode: number) => void) => () => void;
+  onTerminalData: (callback: (sessionId: string, data: string) => void) => () => void;
+  onTerminalExit: (callback: (sessionId: string, exitCode: number) => void) => () => void;
+
+  // Saved connections
+  connectionList: () => Promise<{ success: boolean; connections?: any[]; error?: string }>;
+  connectionSave: (connection: any) => Promise<{ success: boolean; error?: string }>;
+  connectionDelete: (id: string) => Promise<{ success: boolean; error?: string }>;
+  connectionUpdate: (connection: any) => Promise<{ success: boolean; error?: string }>;
 
   // Datadog
   datadogLoadConfig: () => Promise<{ success: boolean; config?: { site: string; hasApiKey: boolean; hasAppKey: boolean } | null }>;

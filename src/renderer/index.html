@@ -232,9 +232,13 @@
       <!-- Panel Resize Handle -->
       <div id="panel-resize-handle" class="panel-resize-handle hidden"></div>
 
-      <!-- Terminal Overlay (Quake-style drop-down) -->
+      <!-- Terminal Overlay (Quake-style drop-down, tabbed) -->
       <div id="terminal-overlay" class="terminal-overlay hidden">
         <div id="terminal-panel" class="terminal-drop-panel">
+          <div id="terminal-tab-bar" class="terminal-tab-bar">
+            <!-- Tab buttons inserted dynamically -->
+            <div id="terminal-tab-add" class="terminal-tab-add" title="New terminal">+</div>
+          </div>
           <div id="terminal-container" class="terminal-container"></div>
           <div id="terminal-resize-handle" class="terminal-resize-handle-bottom"></div>
         </div>
@@ -462,7 +466,10 @@
               <button id="btn-live-connect" class="live-connect-btn">Connect</button>
             </div>
             <div id="live-cards-row" class="live-cards-row">
-              <!-- Connection cards rendered dynamically -->
+              <!-- Active connection cards rendered dynamically -->
+            </div>
+            <div id="saved-connections-row" class="saved-connections-row">
+              <!-- Saved/dormant connection cards rendered dynamically -->
             </div>
           </div>
         </div>

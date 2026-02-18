@@ -4,6 +4,10 @@
       "command": "node",
       "args": ["dist/mcp-server/index.js"],
       "cwd": "/Users/storm/MY/REPOS/log-analyzer"
+    },
+    "lore": {
+      "type": "url",
+      "url": "https://europe-west4-lore-de692.cloudfunctions.net/mcp"
     }
   }
 }

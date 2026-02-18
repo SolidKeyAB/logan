@@ -253,6 +253,7 @@ interface AppState {
   // Terminal
   terminalVisible: boolean;
   terminalInitialized: boolean;
+  activeTerminalTabId: string | null;
   // Bottom panel (tabbed)
   bottomPanelVisible: boolean;
   activeBottomTab: string | null;
@@ -304,6 +305,7 @@ const state: AppState = {
   isFolderSearching: false,
   terminalVisible: false,
   terminalInitialized: false,
+  activeTerminalTabId: null,
   bottomPanelVisible: false,
   activeBottomTab: null,
   lastActiveBottomTab: null,
@@ -793,6 +795,8 @@ const elements = {
   terminalPanel: document.getElementById('terminal-panel') as HTMLDivElement,
   terminalContainer: document.getElementById('terminal-container') as HTMLDivElement,
   terminalResizeHandle: document.getElementById('terminal-resize-handle') as HTMLDivElement,
+  terminalTabBar: document.getElementById('terminal-tab-bar') as HTMLDivElement,
+  terminalTabAdd: document.getElementById('terminal-tab-add') as HTMLDivElement,
   btnTerminalToggle: document.getElementById('btn-terminal-toggle') as HTMLButtonElement,
   // Notes content (in bottom panel)
   notesTextarea: document.getElementById('notes-textarea') as HTMLTextAreaElement,
@@ -895,6 +899,7 @@ const elements = {
   btnLiveConnect: document.getElementById('btn-live-connect') as HTMLButtonElement,
   btnLive: document.getElementById('btn-live') as HTMLButtonElement,
   liveCardsRow: document.getElementById('live-cards-row') as HTMLDivElement,
+  savedConnectionsRow: document.getElementById('saved-connections-row') as HTMLDivElement,
   // Logcat-specific controls
   liveSerialControls: document.getElementById('live-serial-controls') as HTMLSpanElement,
   liveLogcatControls: document.getElementById('live-logcat-controls') as HTMLSpanElement,
@@ -937,12 +942,17 @@ let activeHighlightGroupId: string | null = null;
 let searchConfigSessions: SearchConfigSessionDef[] = [];
 let activeSessionId: string | null = null;
 
-// Terminal - xterm.js instance
-// @ts-ignore - Terminal loaded via script tag
-let terminal: any = null;
-// @ts-ignore - FitAddon loaded via script tag
-let fitAddon: any = null;
-let terminalInputDisposable: { dispose(): void } | null = null;
+// Terminal - tabbed multi-session
+interface TerminalTab {
+  id: string;
+  type: 'local' | 'ssh';
+  label: string;
+  terminal: any;
+  fitAddon: any;
+  containerEl: HTMLDivElement;
+  alive: boolean;
+}
+const terminalTabs = new Map<string, TerminalTab>();
 let terminalDataUnsubscribe: (() => void) | null = null;
 let terminalExitUnsubscribe: (() => void) | null = null;
 
@@ -4082,144 +4092,398 @@ function renderFolderSearchResults(pattern: string, cancelled?: boolean): void {
   });
 }
 
-// === Terminal ===
+// === Terminal (tabbed, multi-session) ===
+
+const TERMINAL_THEME = {
+  background: 'rgba(30, 30, 30, 0)',
+  foreground: '#cccccc',
+  cursor: '#cccccc',
+  cursorAccent: '#1e1e1e',
+  selectionBackground: '#264f78',
+  black: '#1e1e1e',
+  red: '#f14c4c',
+  green: '#23d18b',
+  yellow: '#f5f543',
+  blue: '#3b8eea',
+  magenta: '#d670d6',
+  cyan: '#29b8db',
+  white: '#cccccc',
+  brightBlack: '#666666',
+  brightRed: '#f14c4c',
+  brightGreen: '#23d18b',
+  brightYellow: '#f5f543',
+  brightBlue: '#3b8eea',
+  brightMagenta: '#d670d6',
+  brightCyan: '#29b8db',
+  brightWhite: '#ffffff',
+};
 
 async function initTerminal(): Promise<void> {
   if (state.terminalInitialized) return;
 
-  // @ts-ignore - Terminal loaded via script tag
+  // Register global data/exit routing (once)
+  terminalDataUnsubscribe = window.api.onTerminalData((sessionId: string, data: string) => {
+    const tab = terminalTabs.get(sessionId);
+    if (tab) tab.terminal.write(data);
+  });
+
+  terminalExitUnsubscribe = window.api.onTerminalExit((sessionId: string, exitCode: number) => {
+    const tab = terminalTabs.get(sessionId);
+    if (!tab) return;
+    tab.alive = false;
+    tab.terminal.writeln(`\r\n[Process exited with code ${exitCode}]`);
+    tab.terminal.writeln('Press any key to restart...');
+    const restartHandler = tab.terminal.onKey(() => {
+      restartHandler.dispose();
+      restartTerminalTab(tab.id);
+    });
+    updateTerminalTabButton(sessionId, tab.label + ' (exited)');
+  });
+
+  // "+" button click
+  elements.terminalTabAdd.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showTerminalNewTabMenu();
+  });
+
+  // Handle window resize
+  window.addEventListener('resize', () => fitTerminalToPanel());
+
+  // Click container to focus active tab
+  elements.terminalContainer.addEventListener('click', () => {
+    const tab = state.activeTerminalTabId ? terminalTabs.get(state.activeTerminalTabId) : null;
+    tab?.terminal?.focus();
+  });
+
+  state.terminalInitialized = true;
+
+  // Create first local tab
+  await createTerminalTab('local');
+}
+
+function generateSessionId(): string {
+  return 'ts-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+}
+
+async function createTerminalTab(
+  type: 'local' | 'ssh',
+  sshOptions?: { liveConnectionId?: string; savedConnectionId?: string; sshConfig?: any }
+): Promise<void> {
+  // @ts-ignore
   const Terminal = window.Terminal;
-  // @ts-ignore - FitAddon loaded via script tag
+  // @ts-ignore
   const FitAddon = window.FitAddon;
+  if (!Terminal || !FitAddon) return;
 
-  if (!Terminal || !FitAddon) {
-    console.error('xterm.js not loaded');
-    return;
-  }
+  const sessionId = generateSessionId();
 
-  terminal = new Terminal({
+  const term = new Terminal({
     cursorBlink: true,
     fontSize: 12,
     fontFamily: "'SF Mono', 'Consolas', 'Monaco', monospace",
     allowProposedApi: true,
     allowTransparency: true,
-    theme: {
-      background: 'rgba(30, 30, 30, 0)',
-      foreground: '#cccccc',
-      cursor: '#cccccc',
-      cursorAccent: '#1e1e1e',
-      selectionBackground: '#264f78',
-      black: '#1e1e1e',
-      red: '#f14c4c',
-      green: '#23d18b',
-      yellow: '#f5f543',
-      blue: '#3b8eea',
-      magenta: '#d670d6',
-      cyan: '#29b8db',
-      white: '#cccccc',
-      brightBlack: '#666666',
-      brightRed: '#f14c4c',
-      brightGreen: '#23d18b',
-      brightYellow: '#f5f543',
-      brightBlue: '#3b8eea',
-      brightMagenta: '#d670d6',
-      brightCyan: '#29b8db',
-      brightWhite: '#ffffff',
-    },
+    theme: TERMINAL_THEME,
   });
 
-  fitAddon = new FitAddon.FitAddon();
-  terminal.loadAddon(fitAddon);
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
 
-  terminal.open(elements.terminalContainer);
+  // Create container div
+  const container = document.createElement('div');
+  container.className = 'terminal-tab-content';
+  container.dataset.sessionId = sessionId;
+  elements.terminalContainer.appendChild(container);
+  term.open(container);
 
-  // Handle terminal input
-  terminalInputDisposable = terminal.onData((data: string) => {
-    window.api.terminalWrite(data);
+  // Wire input
+  term.onData((data: string) => {
+    window.api.terminalWrite(sessionId, data);
   });
 
-  // Handle terminal output
-  terminalDataUnsubscribe = window.api.onTerminalData((data) => {
-    terminal.write(data);
-  });
-
-  // Handle terminal exit
-  terminalExitUnsubscribe = window.api.onTerminalExit((exitCode) => {
-    terminal.writeln(`\r\n[Process exited with code ${exitCode}]`);
-    terminal.writeln('Press any key to restart...');
-    const restartHandler = terminal.onKey(() => {
-      restartHandler.dispose();
-      startTerminalProcess();
-    });
-  });
-
-  // Handle Ctrl+C/V/A in terminal (copy/paste/select-all)
-  terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+  // Copy/paste/select-all handler
+  term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
     if ((e.ctrlKey || e.metaKey) && e.type === 'keydown') {
-      if (e.key === 'c' && terminal.hasSelection()) {
-        navigator.clipboard.writeText(terminal.getSelection());
-        return false; // Prevent sending Ctrl+C to shell when copying
+      if (e.key === 'c' && term.hasSelection()) {
+        navigator.clipboard.writeText(term.getSelection());
+        return false;
       }
       if (e.key === 'v') {
         navigator.clipboard.readText().then((text: string) => {
-          window.api.terminalWrite(text);
+          window.api.terminalWrite(sessionId, text);
         });
         return false;
       }
       if (e.key === 'a') {
-        terminal.selectAll();
+        term.selectAll();
         return false;
       }
     }
-    return true; // Let all other keys pass through to terminal
+    return true;
   });
 
-  // Start the terminal process
-  await startTerminalProcess();
+  const label = type === 'local' ? 'Local' : 'SSH';
 
-  state.terminalInitialized = true;
+  const tab: TerminalTab = {
+    id: sessionId,
+    type,
+    label,
+    terminal: term,
+    fitAddon: fit,
+    containerEl: container,
+    alive: true,
+  };
 
-  // Handle window resize
-  window.addEventListener('resize', () => fitTerminalToPanel());
+  terminalTabs.set(sessionId, tab);
+  addTerminalTabButton(tab);
+  switchTerminalTab(sessionId);
 
-  // Click to focus terminal
-  elements.terminalContainer.addEventListener('click', () => {
-    terminal?.focus();
-  });
-}
-
-async function startTerminalProcess(): Promise<void> {
-  // Get current file directory or home
-  let cwd: string | undefined;
-  if (state.filePath) {
-    const lastSlash = state.filePath.lastIndexOf('/');
-    if (lastSlash > 0) {
-      cwd = state.filePath.substring(0, lastSlash);
-    }
-  }
-
-  const dims = fitAddon?.proposeDimensions();
+  // Start backend
+  const dims = fit.proposeDimensions();
   const cols = dims?.cols || 80;
   const rows = dims?.rows || 24;
 
-  await window.api.terminalCreate({ cwd, cols, rows });
+  if (type === 'local') {
+    let cwd: string | undefined;
+    if (state.filePath) {
+      const lastSlash = state.filePath.lastIndexOf('/');
+      if (lastSlash > 0) cwd = state.filePath.substring(0, lastSlash);
+    }
+    const result = await window.api.terminalCreateLocal(sessionId, { cwd, cols, rows });
+    if (result.label) {
+      tab.label = result.label;
+      updateTerminalTabButton(sessionId, result.label);
+    }
+  } else {
+    const result = await window.api.terminalCreateSsh(sessionId, { ...sshOptions, cols, rows });
+    if (!result.success) {
+      term.writeln(`\r\n[SSH connection failed: ${result.error}]`);
+      tab.alive = false;
+      return;
+    }
+    if (result.label) {
+      tab.label = result.label;
+      updateTerminalTabButton(sessionId, result.label);
+    }
+  }
+}
+
+async function restartTerminalTab(sessionId: string): Promise<void> {
+  const tab = terminalTabs.get(sessionId);
+  if (!tab) return;
+  tab.terminal.clear();
+  tab.alive = true;
+  updateTerminalTabButton(sessionId, tab.label.replace(' (exited)', ''));
+
+  const dims = tab.fitAddon.proposeDimensions();
+  const cols = dims?.cols || 80;
+  const rows = dims?.rows || 24;
+
+  // Kill old session first
+  await window.api.terminalKill(sessionId);
+
+  if (tab.type === 'local') {
+    let cwd: string | undefined;
+    if (state.filePath) {
+      const lastSlash = state.filePath.lastIndexOf('/');
+      if (lastSlash > 0) cwd = state.filePath.substring(0, lastSlash);
+    }
+    await window.api.terminalCreateLocal(sessionId, { cwd, cols, rows });
+  }
+  // For SSH tabs, user needs to create a new tab since connection state may be stale
+}
+
+function addTerminalTabButton(tab: TerminalTab): void {
+  const btn = document.createElement('div');
+  btn.className = 'terminal-tab-btn';
+  btn.dataset.sessionId = tab.id;
+  const icon = tab.type === 'ssh' ? '&#8689;' : '$';
+  btn.innerHTML = `<span class="terminal-tab-icon">${icon}</span><span class="terminal-tab-label">${escapeHtml(tab.label)}</span><span class="terminal-tab-close" title="Close">&times;</span>`;
+
+  btn.querySelector('.terminal-tab-close')!.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeTerminalTab(tab.id);
+  });
+  btn.addEventListener('click', () => switchTerminalTab(tab.id));
+
+  elements.terminalTabBar.insertBefore(btn, elements.terminalTabAdd);
+}
+
+function updateTerminalTabButton(sessionId: string, label: string): void {
+  const btn = elements.terminalTabBar.querySelector(`[data-session-id="${sessionId}"]`);
+  if (btn) {
+    const labelEl = btn.querySelector('.terminal-tab-label');
+    if (labelEl) labelEl.textContent = label;
+  }
+}
+
+function switchTerminalTab(sessionId: string): void {
+  // Hide all tab contents
+  elements.terminalContainer.querySelectorAll('.terminal-tab-content').forEach(el => {
+    (el as HTMLElement).classList.remove('active');
+  });
+  // Deactivate all tab buttons
+  elements.terminalTabBar.querySelectorAll('.terminal-tab-btn').forEach(el => {
+    (el as HTMLElement).classList.remove('active');
+  });
+
+  const tab = terminalTabs.get(sessionId);
+  if (!tab) return;
+
+  tab.containerEl.classList.add('active');
+  const btn = elements.terminalTabBar.querySelector(`[data-session-id="${sessionId}"]`);
+  if (btn) btn.classList.add('active');
+
+  state.activeTerminalTabId = sessionId;
+
+  // Fit and focus
+  requestAnimationFrame(() => {
+    tab.fitAddon.fit();
+    const dims = tab.fitAddon.proposeDimensions();
+    if (dims) {
+      window.api.terminalResize(sessionId, dims.cols, dims.rows);
+    }
+    tab.terminal.focus();
+  });
+}
+
+async function closeTerminalTab(sessionId: string): Promise<void> {
+  const tab = terminalTabs.get(sessionId);
+  if (!tab) return;
+
+  await window.api.terminalKill(sessionId);
+  tab.terminal.dispose();
+  tab.containerEl.remove();
+  terminalTabs.delete(sessionId);
+
+  // Remove tab button
+  const btn = elements.terminalTabBar.querySelector(`[data-session-id="${sessionId}"]`);
+  if (btn) btn.remove();
+
+  // Switch to another tab or close overlay
+  if (terminalTabs.size > 0) {
+    const nextTab = terminalTabs.keys().next().value;
+    if (nextTab) switchTerminalTab(nextTab);
+  } else {
+    closeTerminal();
+  }
+}
+
+let terminalNewTabMenu: HTMLDivElement | null = null;
+
+function showTerminalNewTabMenu(): void {
+  // Close existing menu if open
+  if (terminalNewTabMenu) {
+    terminalNewTabMenu.remove();
+    terminalNewTabMenu = null;
+    return;
+  }
+
+  const menu = document.createElement('div');
+  menu.className = 'terminal-new-tab-menu';
+
+  // Local shell option
+  const localItem = document.createElement('div');
+  localItem.className = 'terminal-new-tab-item';
+  localItem.textContent = '$ Local Shell';
+  localItem.addEventListener('click', () => {
+    menu.remove();
+    terminalNewTabMenu = null;
+    createTerminalTab('local');
+  });
+  menu.appendChild(localItem);
+
+  // SSH from live connections
+  const sshLiveConns: Array<{ id: string; name: string }> = [];
+  for (const [id, conn] of state.liveConnections) {
+    if (conn.source === 'ssh' && conn.connected) {
+      sshLiveConns.push({ id, name: conn.displayName });
+    }
+  }
+
+  if (sshLiveConns.length > 0) {
+    const sep = document.createElement('div');
+    sep.className = 'terminal-new-tab-separator';
+    menu.appendChild(sep);
+
+    const header = document.createElement('div');
+    header.className = 'terminal-new-tab-header';
+    header.textContent = 'SSH (Live Connections)';
+    menu.appendChild(header);
+
+    for (const conn of sshLiveConns) {
+      const item = document.createElement('div');
+      item.className = 'terminal-new-tab-item';
+      item.textContent = `↗ ${conn.name}`;
+      item.addEventListener('click', () => {
+        menu.remove();
+        terminalNewTabMenu = null;
+        createTerminalTab('ssh', { liveConnectionId: conn.id });
+      });
+      menu.appendChild(item);
+    }
+  }
+
+  // SSH from saved connections (loaded async)
+  window.api.connectionList().then((result: any) => {
+    if (!result.success || !result.connections) return;
+    const sshSaved = result.connections.filter((c: any) => c.source === 'ssh');
+    if (sshSaved.length === 0) return;
+
+    const sep = document.createElement('div');
+    sep.className = 'terminal-new-tab-separator';
+    menu.appendChild(sep);
+
+    const header = document.createElement('div');
+    header.className = 'terminal-new-tab-header';
+    header.textContent = 'SSH (Saved)';
+    menu.appendChild(header);
+
+    for (const saved of sshSaved) {
+      const item = document.createElement('div');
+      item.className = 'terminal-new-tab-item';
+      item.textContent = `↗ ${saved.name}`;
+      item.addEventListener('click', () => {
+        menu.remove();
+        terminalNewTabMenu = null;
+        createTerminalTab('ssh', { savedConnectionId: saved.id });
+      });
+      menu.appendChild(item);
+    }
+  });
+
+  // Position menu below the "+" button using fixed positioning (avoids overflow clipping)
+  const addRect = elements.terminalTabAdd.getBoundingClientRect();
+  menu.style.left = `${addRect.left}px`;
+  menu.style.top = `${addRect.bottom + 2}px`;
+  document.body.appendChild(menu);
+  terminalNewTabMenu = menu;
+
+  // Close on outside click
+  const closeHandler = (e: MouseEvent) => {
+    if (!menu.contains(e.target as Node) && e.target !== elements.terminalTabAdd) {
+      menu.remove();
+      terminalNewTabMenu = null;
+      document.removeEventListener('click', closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', closeHandler), 0);
 }
 
 function showTerminalOverlay(): void {
   const overlay = elements.terminalOverlay;
   overlay.classList.remove('hidden');
-  // Force reflow so the transition triggers from initial state
   void overlay.offsetHeight;
   overlay.classList.add('visible');
   elements.btnTerminalToggle.classList.add('active');
 
-  // Fit terminal and focus after slide animation completes
   const panel = overlay.querySelector('.terminal-drop-panel') as HTMLElement;
   if (panel) {
     const onShown = () => {
       panel.removeEventListener('transitionend', onShown);
       fitTerminalToPanel();
-      terminal?.focus();
+      const tab = state.activeTerminalTabId ? terminalTabs.get(state.activeTerminalTabId) : null;
+      tab?.terminal?.focus();
     };
     panel.addEventListener('transitionend', onShown);
   }
@@ -4229,7 +4493,6 @@ function hideTerminalOverlay(): void {
   const overlay = elements.terminalOverlay;
   overlay.classList.remove('visible');
   elements.btnTerminalToggle.classList.remove('active');
-  // Fallback if transitionend doesn't fire (e.g., display:none, no transition)
   const fallback = setTimeout(() => hide(), 350);
   const hide = () => {
     clearTimeout(fallback);
@@ -4243,12 +4506,13 @@ function hideTerminalOverlay(): void {
 }
 
 function fitTerminalToPanel(): void {
-  if (fitAddon && state.terminalVisible) {
-    fitAddon.fit();
-    const dims = fitAddon.proposeDimensions();
-    if (dims) {
-      window.api.terminalResize(dims.cols, dims.rows);
-    }
+  if (!state.terminalVisible || !state.activeTerminalTabId) return;
+  const tab = terminalTabs.get(state.activeTerminalTabId);
+  if (!tab) return;
+  tab.fitAddon.fit();
+  const dims = tab.fitAddon.proposeDimensions();
+  if (dims) {
+    window.api.terminalResize(tab.id, dims.cols, dims.rows);
   }
 }
 
@@ -4273,17 +4537,12 @@ function closeTerminal(): void {
 }
 
 async function terminalCdToFile(filePath: string): Promise<void> {
-  if (!state.terminalInitialized || !filePath) return;
-
-  const lastSlash = filePath.lastIndexOf('/');
-  if (lastSlash > 0) {
-    const dir = filePath.substring(0, lastSlash);
-    await window.api.terminalCd(dir);
-    // Clear terminal and show fresh prompt
-    if (terminal) {
-      terminal.clear();
-    }
-  }
+  // Only cd for the active local terminal tab
+  if (!state.terminalInitialized || !filePath || !state.activeTerminalTabId) return;
+  const tab = terminalTabs.get(state.activeTerminalTabId);
+  if (!tab || tab.type !== 'local') return;
+  // No terminalCd IPC any more — we'd need to write cd command directly
+  // Skip auto-cd for tabbed terminal (user controls their own shell)
 }
 
 // ─── Bottom Panel (unified tabbed panel) ────────────────────────────
@@ -5055,7 +5314,8 @@ function renderConnectionCards(): void {
             ? `<button class="live-card-btn stop" title="Stop" data-action="stop">\u25A0</button>`
             : `<button class="live-card-btn restart" title="Restart" data-action="restart">\u21BB</button>`
           }
-          <button class="live-card-btn save" title="Save" data-action="save">\u{1F4BE}</button>
+          <button class="live-card-btn save" title="Save session log" data-action="save">\u{1F4BE}</button>
+          <button class="live-card-btn save-config" title="Save connection config" data-action="save-config">\u2606</button>
           <button class="live-card-btn remove" title="Remove" data-action="remove">\u00D7</button>
         </div>
       </div>
@@ -5087,6 +5347,7 @@ function renderConnectionCards(): void {
         if (action === 'stop') liveStopConnection(conn.id);
         else if (action === 'restart') liveRestartConnection(conn.id);
         else if (action === 'save') liveSaveConnection(conn.id);
+        else if (action === 'save-config') liveSaveConnectionConfig(conn.id);
         else if (action === 'remove') liveRemoveConnection(conn.id);
       });
     });
@@ -5230,6 +5491,168 @@ async function liveRemoveConnection(connectionId: string): Promise<void> {
   }
 
   renderConnectionCards();
+}
+
+// === Saved Connections (persistent config) ===
+
+async function liveSaveConnectionConfig(connectionId: string): Promise<void> {
+  const conn = state.liveConnections.get(connectionId);
+  if (!conn) return;
+
+  // Electron doesn't support window.prompt — use a small inline dialog
+  const name = await showInputDialog('Save Connection', 'Connection name:', conn.displayName);
+  if (!name) return;
+
+  const saved = {
+    id: crypto.randomUUID(),
+    name,
+    source: conn.source,
+    config: conn.config,
+    createdAt: Date.now(),
+    lastUsedAt: null,
+  };
+
+  const result = await window.api.connectionSave(saved);
+  if (result.success) {
+    renderSavedConnections();
+  } else {
+    alert(`Failed to save: ${result.error}`);
+  }
+}
+
+function showInputDialog(title: string, label: string, defaultValue: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;';
+    const dialog = document.createElement('div');
+    dialog.style.cssText = 'background:#1e1e1e;border:1px solid #555;border-radius:6px;padding:16px;min-width:300px;';
+    dialog.innerHTML = `
+      <div style="font-size:13px;font-weight:600;color:#ddd;margin-bottom:8px;">${escapeHtml(title)}</div>
+      <div style="font-size:11px;color:#aaa;margin-bottom:4px;">${escapeHtml(label)}</div>
+      <input type="text" style="width:100%;box-sizing:border-box;background:#2d2d2d;border:1px solid #555;border-radius:3px;color:#ddd;padding:6px 8px;font-size:12px;outline:none;" />
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+        <button class="dlg-cancel" style="background:none;border:1px solid #555;color:#aaa;padding:4px 12px;border-radius:3px;cursor:pointer;font-size:11px;">Cancel</button>
+        <button class="dlg-ok" style="background:var(--accent-color,#007acc);border:none;color:#fff;padding:4px 12px;border-radius:3px;cursor:pointer;font-size:11px;">Save</button>
+      </div>
+    `;
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    const input = dialog.querySelector('input')!;
+    input.value = defaultValue;
+    input.select();
+    input.focus();
+
+    const cleanup = (val: string | null) => { overlay.remove(); resolve(val); };
+
+    dialog.querySelector('.dlg-ok')!.addEventListener('click', () => cleanup(input.value.trim() || null));
+    dialog.querySelector('.dlg-cancel')!.addEventListener('click', () => cleanup(null));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(null); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') cleanup(input.value.trim() || null);
+      if (e.key === 'Escape') cleanup(null);
+    });
+  });
+}
+
+async function renderSavedConnections(): Promise<void> {
+  const container = elements.savedConnectionsRow;
+  if (!container) return;
+
+  const result = await window.api.connectionList();
+  if (!result.success || !result.connections || result.connections.length === 0) {
+    container.innerHTML = '';
+    return;
+  }
+
+  container.innerHTML = '';
+
+  const sourceIcons: Record<string, string> = {
+    serial: '\u{1F50C}',  // plug
+    logcat: '\u{1F4F1}',  // phone
+    ssh: '\u{1F5A5}',     // desktop
+  };
+
+  for (const saved of result.connections) {
+    const card = document.createElement('div');
+    card.className = 'saved-connection-card';
+    card.dataset.savedId = saved.id;
+
+    card.innerHTML = `
+      <span class="saved-connection-icon">${sourceIcons[saved.source] || '\u25CB'}</span>
+      <span class="saved-connection-name">${escapeHtml(saved.name)}</span>
+      <span class="saved-connection-source">${escapeHtml(saved.source)}</span>
+      <button class="saved-connection-delete" title="Delete saved connection">\u00D7</button>
+    `;
+
+    // Click → connect using saved config
+    card.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('.saved-connection-delete')) return;
+      activateSavedConnection(saved);
+    });
+
+    // Delete button
+    const delBtn = card.querySelector('.saved-connection-delete')!;
+    delBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const ok = confirm(`Delete saved connection "${saved.name}"?`);
+      if (!ok) return;
+      await window.api.connectionDelete(saved.id);
+      renderSavedConnections();
+    });
+
+    container.appendChild(card);
+  }
+}
+
+async function activateSavedConnection(saved: any): Promise<void> {
+  if (state.liveConnections.size >= 4) {
+    alert('Maximum 4 concurrent connections.');
+    return;
+  }
+
+  const source = saved.source;
+  const config = saved.config;
+  const displayName = saved.name;
+  let detail = '';
+
+  if (source === 'serial') {
+    detail = config.baudRate ? `@ ${config.baudRate}` : '';
+  } else if (source === 'logcat') {
+    detail = config.filter ? `filter: ${config.filter}` : '';
+  } else if (source === 'ssh') {
+    detail = config.remotePath || config.host || '';
+    if (config.host) {
+      const result = await window.api.liveConnect(source, config, displayName, detail);
+      if (!result.success) {
+        if (result.error && result.error.includes('passphrase')) {
+          const passphrase = await showInputDialog('SSH Authentication', 'Key passphrase:', '');
+          if (!passphrase) return;
+          config.passphrase = passphrase;
+          const retry = await window.api.liveConnect(source, config, displayName, detail);
+          if (!retry.success) { alert(`Failed to connect: ${retry.error}`); return; }
+          liveOnConnected(retry.connectionId!, source, retry.tempFilePath!, displayName, detail, config);
+        } else {
+          alert(`Failed to connect: ${result.error}`);
+        }
+        return;
+      }
+      liveOnConnected(result.connectionId!, source, result.tempFilePath!, displayName, detail, config);
+      saved.lastUsedAt = Date.now();
+      window.api.connectionUpdate(saved);
+      return;
+    }
+  }
+
+  // Serial / Logcat
+  const result = await window.api.liveConnect(source, config, displayName, detail);
+  if (!result.success) {
+    alert(`Failed to connect: ${result.error}`);
+    return;
+  }
+  liveOnConnected(result.connectionId!, source, result.tempFilePath!, displayName, detail, config);
+  saved.lastUsedAt = Date.now();
+  window.api.connectionUpdate(saved);
 }
 
 // Line cache invalidation for live streaming
@@ -8580,6 +9003,9 @@ function getTab(tabId?: string): TabState | undefined {
 let globalLoading = { isLoading: false, text: '', percent: 0 };
 
 // Sync loading UI with current state (Single Responsibility)
+// Show video overlay only for large files where operations take noticeable time
+const OVERLAY_LINE_THRESHOLD = 100_000;
+
 function syncLoadingOverlay(): void {
   const tab = getTab();
 
@@ -8589,19 +9015,22 @@ function syncLoadingOverlay(): void {
   const percent = tab ? tab.loadingPercent : globalLoading.percent;
 
   if (isLoading) {
-    // Show loading
+    // Status bar progress always shows
     elements.progressContainer.classList.remove('hidden');
     elements.progressBar.style.setProperty('--progress', `${percent}%`);
     elements.progressText.textContent = text || `${percent}%`;
 
-    elements.loadingOverlay.classList.remove('hidden');
-    elements.loadingText.textContent = text;
-    elements.loadingProgressFill.style.width = `${percent}%`;
-    elements.loadingPercent.textContent = `${percent}%`;
-
-    elements.loadingVideo.play().catch(() => {});
+    // Video overlay for large files (>100K lines) or when size is unknown (file opening)
+    const lineCount = state.totalLines || 0;
+    if (lineCount === 0 || lineCount >= OVERLAY_LINE_THRESHOLD) {
+      elements.loadingOverlay.classList.remove('hidden');
+      elements.loadingText.textContent = text;
+      elements.loadingProgressFill.style.width = `${percent}%`;
+      elements.loadingPercent.textContent = `${percent}%`;
+      elements.loadingVideo.play().catch(() => {});
+    }
   } else {
-    // Hide loading
+    // Hide everything
     elements.loadingOverlay.classList.add('hidden');
     elements.progressContainer.classList.add('hidden');
     elements.loadingVideo.pause();
@@ -9878,6 +10307,9 @@ function init(): void {
 
   // Unified live connection event listeners (register once)
   setupLiveEventListeners();
+
+  // Load saved connections
+  renderSavedConnections();
 
   // Panel resize is handled in setupActivityBar
   document.addEventListener('mousemove', (e) => {

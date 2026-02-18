@@ -14,7 +14,8 @@ import { BaselineStore, buildFingerprint } from './baselineStore';
 import { SerialHandler } from './serialHandler';
 import { LogcatHandler } from './logcatHandler';
 import { SshHandler } from './sshHandler';
-import { SshProfile } from '../shared/types';
+import { Client } from 'ssh2';
+import { SshProfile, SavedConnection } from '../shared/types';
 
 let mainWindow: BrowserWindow | null = null;
 let searchSignal: { cancelled: boolean } = { cancelled: false };
@@ -1452,6 +1453,76 @@ ipcMain.handle(IPC.SSH_DELETE_PROFILE, async (_, id: string) => {
   try {
     const profiles = loadSshProfiles().filter(p => p.id !== id);
     saveSshProfiles(profiles);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// === Saved Connections ===
+
+const getConnectionsPath = () => path.join(getConfigDir(), 'connections.json');
+
+function loadSavedConnections(): SavedConnection[] {
+  try {
+    const p = getConnectionsPath();
+    if (fs.existsSync(p)) {
+      return JSON.parse(fs.readFileSync(p, 'utf-8'));
+    }
+  } catch { /* */ }
+  return [];
+}
+
+function persistSavedConnections(connections: SavedConnection[]): void {
+  try {
+    ensureConfigDir();
+    fs.writeFileSync(getConnectionsPath(), JSON.stringify(connections, null, 2), 'utf-8');
+  } catch (error) {
+    console.error('Failed to save connections:', error);
+  }
+}
+
+ipcMain.handle(IPC.CONNECTION_LIST, async () => {
+  try {
+    return { success: true, connections: loadSavedConnections() };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.CONNECTION_SAVE, async (_, connection: SavedConnection) => {
+  try {
+    const connections = loadSavedConnections();
+    const idx = connections.findIndex(c => c.id === connection.id);
+    if (idx >= 0) {
+      connections[idx] = connection;
+    } else {
+      connections.push(connection);
+    }
+    persistSavedConnections(connections);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.CONNECTION_DELETE, async (_, id: string) => {
+  try {
+    const connections = loadSavedConnections().filter(c => c.id !== id);
+    persistSavedConnections(connections);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.CONNECTION_UPDATE, async (_, id: string, fields: Partial<SavedConnection>) => {
+  try {
+    const connections = loadSavedConnections();
+    const conn = connections.find(c => c.id === id);
+    if (!conn) return { success: false, error: 'Connection not found' };
+    Object.assign(conn, fields);
+    persistSavedConnections(connections);
     return { success: true };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -3999,9 +4070,21 @@ ipcMain.handle('format-json-file', async (_, filePath: string) => {
   }
 });
 
-// === Terminal ===
+// === Terminal (tabbed, multi-session) ===
 
-let ptyProcess: pty.IPty | null = null;
+interface TerminalSession {
+  id: string;
+  type: 'local' | 'ssh';
+  label: string;
+  ptyProcess?: pty.IPty;
+  sshStream?: any;
+  borrowedClient?: boolean; // true = live connection's client, don't close
+  ownedClient?: Client;     // standalone SSH, close on kill
+  cols: number;
+  rows: number;
+}
+
+const terminalSessions = new Map<string, TerminalSession>();
 
 function getDefaultShell(): string {
   if (process.platform === 'win32') {
@@ -4010,20 +4093,14 @@ function getDefaultShell(): string {
   return process.env.SHELL || '/bin/bash';
 }
 
-ipcMain.handle('terminal-create', async (_, options?: { cwd?: string; cols?: number; rows?: number }) => {
+ipcMain.handle(IPC.TERMINAL_CREATE_LOCAL, async (_, sessionId: string, options?: { cwd?: string; cols?: number; rows?: number }) => {
   try {
-    // Kill existing terminal if any
-    if (ptyProcess) {
-      ptyProcess.kill();
-      ptyProcess = null;
-    }
-
     const shell = getDefaultShell();
     const cwd = options?.cwd || os.homedir();
     const cols = options?.cols || 80;
     const rows = options?.rows || 24;
 
-    ptyProcess = pty.spawn(shell, [], {
+    const proc = pty.spawn(shell, [], {
       name: 'xterm-256color',
       cols,
       rows,
@@ -4031,55 +4108,206 @@ ipcMain.handle('terminal-create', async (_, options?: { cwd?: string; cols?: num
       env: process.env as { [key: string]: string },
     });
 
-    // Forward terminal output to renderer
-    ptyProcess.onData((data: string) => {
-      mainWindow?.webContents.send('terminal-data', data);
+    const session: TerminalSession = {
+      id: sessionId,
+      type: 'local',
+      label: 'Local',
+      ptyProcess: proc,
+      cols,
+      rows,
+    };
+    terminalSessions.set(sessionId, session);
+
+    proc.onData((data: string) => {
+      mainWindow?.webContents.send(IPC.TERMINAL_DATA, sessionId, data);
     });
 
-    ptyProcess.onExit(({ exitCode }) => {
-      mainWindow?.webContents.send('terminal-exit', exitCode);
-      ptyProcess = null;
+    proc.onExit(({ exitCode }) => {
+      mainWindow?.webContents.send(IPC.TERMINAL_EXIT, sessionId, exitCode);
+      terminalSessions.delete(sessionId);
     });
 
-    return { success: true, pid: ptyProcess.pid };
+    return { success: true, label: 'Local' };
   } catch (error) {
     return { success: false, error: String(error) };
   }
 });
 
-ipcMain.handle('terminal-write', async (_, data: string) => {
-  if (ptyProcess) {
-    ptyProcess.write(data);
-    return { success: true };
+ipcMain.handle(IPC.TERMINAL_CREATE_SSH, async (_, sessionId: string, options: {
+  liveConnectionId?: string;
+  savedConnectionId?: string;
+  sshConfig?: { host: string; port: number; username: string; identityFile?: string; passphrase?: string };
+  cols?: number;
+  rows?: number;
+}) => {
+  try {
+    const cols = options.cols || 80;
+    const rows = options.rows || 24;
+    let stream: any;
+    let label: string;
+    let borrowedClient = false;
+    let ownedClient: Client | undefined;
+
+    if (options.liveConnectionId) {
+      // Borrow client from live connection
+      const conn = liveConnections.get(options.liveConnectionId);
+      if (!conn || conn.source !== 'ssh' || !conn.connected) {
+        return { success: false, error: 'SSH live connection not found or not connected' };
+      }
+      const handler = conn.handler as SshHandler;
+      if (!handler.isClientConnected()) {
+        return { success: false, error: 'SSH client not connected' };
+      }
+      stream = await handler.openShell(cols, rows);
+      label = conn.displayName || 'SSH';
+      borrowedClient = true;
+    } else if (options.savedConnectionId) {
+      // Load saved connection config
+      const saved = loadSavedConnections().find(c => c.id === options.savedConnectionId);
+      if (!saved || saved.source !== 'ssh') {
+        return { success: false, error: 'Saved SSH connection not found' };
+      }
+      const cfg = saved.config;
+      const result = await createStandaloneSshShell(cfg, cols, rows);
+      stream = result.stream;
+      ownedClient = result.client;
+      label = saved.name || cfg.host || 'SSH';
+      // Update lastUsedAt
+      saved.lastUsedAt = Date.now();
+      persistSavedConnections(loadSavedConnections().map(c => c.id === saved.id ? saved : c));
+    } else if (options.sshConfig) {
+      const result = await createStandaloneSshShell(options.sshConfig, cols, rows);
+      stream = result.stream;
+      ownedClient = result.client;
+      label = `${options.sshConfig.username}@${options.sshConfig.host}`;
+    } else {
+      return { success: false, error: 'No SSH connection source specified' };
+    }
+
+    const session: TerminalSession = {
+      id: sessionId,
+      type: 'ssh',
+      label,
+      sshStream: stream,
+      borrowedClient,
+      ownedClient,
+      cols,
+      rows,
+    };
+    terminalSessions.set(sessionId, session);
+
+    stream.on('data', (chunk: Buffer) => {
+      mainWindow?.webContents.send(IPC.TERMINAL_DATA, sessionId, chunk.toString('utf-8'));
+    });
+
+    stream.on('close', () => {
+      mainWindow?.webContents.send(IPC.TERMINAL_EXIT, sessionId, 0);
+      if (session.ownedClient) {
+        try { session.ownedClient.end(); } catch { /* */ }
+      }
+      terminalSessions.delete(sessionId);
+    });
+
+    return { success: true, label };
+  } catch (error) {
+    return { success: false, error: String(error) };
   }
-  return { success: false, error: 'No terminal process' };
 });
 
-ipcMain.handle('terminal-resize', async (_, cols: number, rows: number) => {
-  if (ptyProcess) {
-    ptyProcess.resize(cols, rows);
+async function createStandaloneSshShell(
+  config: { host: string; port: number; username: string; identityFile?: string; passphrase?: string },
+  cols: number,
+  rows: number
+): Promise<{ client: Client; stream: any }> {
+  const client = new Client();
+
+  const connectConfig: any = {
+    host: config.host,
+    port: config.port || 22,
+    username: config.username,
+    readyTimeout: 10000,
+  };
+
+  if (process.env.SSH_AUTH_SOCK) {
+    connectConfig.agent = process.env.SSH_AUTH_SOCK;
+  }
+
+  const keyPaths: string[] = [];
+  if (config.identityFile && fs.existsSync(config.identityFile)) {
+    keyPaths.push(config.identityFile);
+  }
+  const defaultKeys = [
+    path.join(os.homedir(), '.ssh', 'id_ed25519'),
+    path.join(os.homedir(), '.ssh', 'id_rsa'),
+  ];
+  for (const k of defaultKeys) {
+    if (fs.existsSync(k) && !keyPaths.includes(k)) keyPaths.push(k);
+  }
+  if (keyPaths.length > 0) {
+    try {
+      connectConfig.privateKey = fs.readFileSync(keyPaths[0]);
+      if (config.passphrase) connectConfig.passphrase = config.passphrase;
+    } catch { /* fall through to agent auth */ }
+  }
+
+  return new Promise((resolve, reject) => {
+    client.on('ready', () => {
+      client.shell({ term: 'xterm-256color', cols, rows }, (err: Error | undefined, stream: any) => {
+        if (err) { client.end(); return reject(err); }
+        resolve({ client, stream });
+      });
+    });
+    client.on('error', (err) => {
+      reject(err);
+    });
+    client.connect(connectConfig);
+  });
+}
+
+ipcMain.handle(IPC.TERMINAL_WRITE, async (_, sessionId: string, data: string) => {
+  const session = terminalSessions.get(sessionId);
+  if (!session) return { success: false, error: 'Session not found' };
+  if (session.ptyProcess) {
+    session.ptyProcess.write(data);
     return { success: true };
   }
-  return { success: false, error: 'No terminal process' };
+  if (session.sshStream) {
+    session.sshStream.write(data);
+    return { success: true };
+  }
+  return { success: false, error: 'No process/stream' };
 });
 
-ipcMain.handle('terminal-kill', async () => {
-  if (ptyProcess) {
-    ptyProcess.kill();
-    ptyProcess = null;
+ipcMain.handle(IPC.TERMINAL_RESIZE, async (_, sessionId: string, cols: number, rows: number) => {
+  const session = terminalSessions.get(sessionId);
+  if (!session) return { success: false, error: 'Session not found' };
+  session.cols = cols;
+  session.rows = rows;
+  if (session.ptyProcess) {
+    session.ptyProcess.resize(cols, rows);
     return { success: true };
   }
-  return { success: false, error: 'No terminal process' };
+  if (session.sshStream) {
+    try { session.sshStream.setWindow(rows, cols, 0, 0); } catch { /* some ssh2 versions */ }
+    return { success: true };
+  }
+  return { success: false, error: 'No process/stream' };
 });
 
-ipcMain.handle('terminal-cd', async (_, directory: string) => {
-  if (ptyProcess && fs.existsSync(directory)) {
-    // Send cd command to terminal
-    const cdCmd = process.platform === 'win32' ? `cd /d "${directory}"\r` : `cd "${directory}"\r`;
-    ptyProcess.write(cdCmd);
-    return { success: true };
+ipcMain.handle(IPC.TERMINAL_KILL, async (_, sessionId: string) => {
+  const session = terminalSessions.get(sessionId);
+  if (!session) return { success: false, error: 'Session not found' };
+  if (session.ptyProcess) {
+    session.ptyProcess.kill();
   }
-  return { success: false, error: 'No terminal process or invalid directory' };
+  if (session.sshStream) {
+    try { session.sshStream.close(); } catch { /* */ }
+  }
+  if (session.ownedClient) {
+    try { session.ownedClient.end(); } catch { /* */ }
+  }
+  terminalSessions.delete(sessionId);
+  return { success: true };
 });
 
 // === Datadog Integration ===

@@ -3068,7 +3068,7 @@ kbd {
 .terminal-overlay {
   position: absolute;
   top: 0;
-  left: 0;
+  left: 40px;
   right: 0;
   bottom: 0;
   z-index: 50;
@@ -3122,21 +3122,168 @@ kbd {
   background: var(--accent-color);
 }
 
-.terminal-container {
+/* Terminal Tab Bar */
+.terminal-tab-bar {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  background: rgba(24, 24, 24, 0.9);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  overflow-x: auto;
+  flex-shrink: 0;
+  gap: 1px;
+  padding: 0 4px;
+}
+
+.terminal-tab-bar::-webkit-scrollbar { height: 0; }
+
+.terminal-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  border-radius: 4px 4px 0 0;
+  white-space: nowrap;
+  max-width: 160px;
+  user-select: none;
+  border: none;
+  background: none;
+}
+
+.terminal-tab-btn:hover {
+  color: rgba(255, 255, 255, 0.8);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.terminal-tab-btn.active {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+  border-bottom: 2px solid var(--accent-color);
+}
+
+.terminal-tab-icon {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.terminal-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.terminal-tab-close {
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0;
+  padding: 0 2px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.terminal-tab-btn:hover .terminal-tab-close {
+  opacity: 0.6;
+}
+
+.terminal-tab-close:hover {
+  opacity: 1 !important;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.terminal-tab-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  font-size: 16px;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  border-radius: 4px;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.terminal-tab-add:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* New-tab dropdown menu */
+.terminal-new-tab-menu {
+  position: fixed;
+  background: #252526;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  padding: 4px 0;
+  z-index: 200;
+  min-width: 220px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.terminal-new-tab-item {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #ccc;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.terminal-new-tab-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.terminal-new-tab-item.disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.terminal-new-tab-separator {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 4px 0;
+}
+
+.terminal-new-tab-header {
+  padding: 4px 12px 2px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.35);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Per-tab content containers */
+.terminal-tab-content {
+  display: none;
   flex: 1;
   padding: 4px;
   overflow: hidden;
   min-height: 0;
 }
 
-.terminal-container .xterm {
+.terminal-tab-content.active {
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-tab-content .xterm {
   height: 100%;
   -webkit-user-select: text;
   user-select: text;
 }
 
-.terminal-container .xterm-viewport {
+.terminal-tab-content .xterm-viewport {
   overflow-y: auto;
+}
+
+.terminal-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
 }
 
 /* ─── Bottom Panel (tabbed, VS Code-style) ────────────────────── */
@@ -5149,6 +5296,9 @@ kbd {
 .live-card-btn.remove:hover {
   color: #e74c3c;
 }
+.live-card-btn.save-config:hover {
+  color: #f1c40f;
+}
 .live-card-stats {
   display: flex;
   align-items: center;
@@ -5179,6 +5329,73 @@ kbd {
   margin-top: 4px;
   border-radius: 2px;
   background: rgba(0,0,0,0.3);
+}
+
+/* Saved connections row */
+.saved-connections-row {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  padding: 2px 0 4px;
+  flex-wrap: wrap;
+  min-height: 0;
+}
+.saved-connections-row:empty {
+  display: none;
+}
+.saved-connection-card {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255,255,255,0.02);
+  border: 1px dashed rgba(255,255,255,0.12);
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  font-size: 11px;
+  color: #888;
+  min-width: 120px;
+  max-width: 260px;
+}
+.saved-connection-card:hover {
+  border-color: rgba(255,255,255,0.25);
+  background: rgba(255,255,255,0.05);
+  color: #ccc;
+}
+.saved-connection-icon {
+  font-size: 13px;
+  opacity: 0.6;
+}
+.saved-connection-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.saved-connection-source {
+  font-size: 9px;
+  color: #666;
+  text-transform: uppercase;
+}
+.saved-connection-delete {
+  background: none;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  font-size: 10px;
+  padding: 0 2px;
+  border-radius: 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.saved-connection-card:hover .saved-connection-delete {
+  opacity: 1;
+}
+.saved-connection-delete:hover {
+  color: #e74c3c;
 }
 
 /* SSH Badge on remote folders */
