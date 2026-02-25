@@ -365,6 +365,7 @@ interface Api {
   // Notes drawer
   loadNotes: () => Promise<{ success: boolean; content?: string }>;
   saveNotes: (content: string) => Promise<{ success: boolean; error?: string }>;
+  saveNotesAs: (content: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
 
   // Search configs
   searchConfigSave: (config: SearchConfigDef) => Promise<{ success: boolean }>;

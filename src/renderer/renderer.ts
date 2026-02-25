@@ -79,11 +79,16 @@ interface AnalysisResult {
   insights: AnalysisInsights;
 }
 
+interface IncludePattern {
+  pattern: string;
+  caseSensitive: boolean;
+}
+
 interface FilterConfig {
   minFrequency?: number;
   maxFrequency?: number;
   excludePatterns: string[];
-  includePatterns: string[];
+  includePatterns: IncludePattern[];
   levels: string[];
   matchCase?: boolean;
   exactMatch?: boolean;
@@ -727,7 +732,8 @@ const elements = {
   btnColumnsNone: document.getElementById('btn-columns-none') as HTMLButtonElement,
   btnColumnsApply: document.getElementById('btn-columns-apply') as HTMLButtonElement,
   btnColumnsCancel: document.getElementById('btn-columns-cancel') as HTMLButtonElement,
-  includePatterns: document.getElementById('include-patterns') as HTMLTextAreaElement,
+  includePatternsContainer: document.getElementById('include-patterns-container') as HTMLDivElement,
+  btnAddIncludePattern: document.getElementById('btn-add-include-pattern') as HTMLButtonElement,
   excludePatterns: document.getElementById('exclude-patterns') as HTMLTextAreaElement,
   filterMatchCase: document.getElementById('filter-match-case') as HTMLInputElement,
   filterExactMatch: document.getElementById('filter-exact-match') as HTMLInputElement,
@@ -812,7 +818,6 @@ const elements = {
   panelTitle: document.getElementById('panel-title') as HTMLSpanElement,
   panelResizeHandle: document.getElementById('panel-resize-handle') as HTMLDivElement,
   btnClosePanel: document.getElementById('btn-close-panel') as HTMLButtonElement,
-  btnPinPanel: document.getElementById('btn-pin-panel') as HTMLButtonElement,
   // Advanced Filter
   btnAdvancedFilter: document.getElementById('btn-advanced-filter') as HTMLButtonElement,
   advancedFilterModal: document.getElementById('advanced-filter-modal') as HTMLDivElement,
@@ -4724,6 +4729,44 @@ function saveNotesDebounced(): void {
   }, 1000);
 }
 
+function showNotesContextMenu(e: MouseEvent): void {
+  const existing = document.querySelector('.tab-context-menu');
+  if (existing) existing.remove();
+
+  const menu = document.createElement('div');
+  menu.className = 'tab-context-menu';
+  menu.innerHTML = `<div class="tab-context-item" data-action="save-as">Save As...</div>`;
+  menu.style.left = `${e.clientX}px`;
+  menu.style.top = `${e.clientY}px`;
+  document.body.appendChild(menu);
+
+  menu.addEventListener('click', async (ev) => {
+    const target = (ev.target as HTMLElement).closest('.tab-context-item') as HTMLElement;
+    if (!target) return;
+    menu.remove();
+    if (target.dataset.action === 'save-as') {
+      const content = elements.notesTextarea.value;
+      const result = await window.api.saveNotesAs(content);
+      if (result.success && result.filePath) {
+        elements.notesSaveStatus.textContent = `Saved to ${result.filePath}`;
+        setTimeout(() => {
+          if (elements.notesSaveStatus.textContent?.startsWith('Saved to')) {
+            elements.notesSaveStatus.textContent = '';
+          }
+        }, 3000);
+      }
+    }
+  });
+
+  const closeMenu = (ev: MouseEvent) => {
+    if (!menu.contains(ev.target as Node)) {
+      menu.remove();
+      document.removeEventListener('click', closeMenu);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', closeMenu), 0);
+}
+
 // ─── Search Results Panel ────────────────────────────────────────────
 
 const SEARCH_RESULTS_LIST_CAP = 500;
@@ -7204,8 +7247,62 @@ function goToLine(lineNumber: number): void {
 }
 
 // Filter
+function addIncludePatternRow(pattern = '', caseSensitive = true): void {
+  const row = document.createElement('div');
+  row.className = 'include-pattern-row';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = pattern;
+  input.placeholder = 'e.g., error';
+
+  const caseBtn = document.createElement('button');
+  caseBtn.className = 'include-pattern-case-btn' + (caseSensitive ? ' active' : '');
+  caseBtn.textContent = 'Aa';
+  caseBtn.title = caseSensitive ? 'Case sensitive (click to toggle)' : 'Case insensitive (click to toggle)';
+  caseBtn.type = 'button';
+  caseBtn.addEventListener('click', () => {
+    caseBtn.classList.toggle('active');
+    caseBtn.title = caseBtn.classList.contains('active')
+      ? 'Case sensitive (click to toggle)'
+      : 'Case insensitive (click to toggle)';
+  });
+
+  const removeBtn = document.createElement('button');
+  removeBtn.className = 'include-pattern-remove-btn';
+  removeBtn.textContent = '\u00d7';
+  removeBtn.title = 'Remove pattern';
+  removeBtn.type = 'button';
+  removeBtn.addEventListener('click', () => row.remove());
+
+  row.append(input, caseBtn, removeBtn);
+  elements.includePatternsContainer.appendChild(row);
+  input.focus();
+}
+
+function getIncludePatterns(): IncludePattern[] {
+  const rows = elements.includePatternsContainer.querySelectorAll('.include-pattern-row');
+  const patterns: IncludePattern[] = [];
+  rows.forEach(row => {
+    const input = row.querySelector('input') as HTMLInputElement;
+    const caseBtn = row.querySelector('.include-pattern-case-btn') as HTMLElement;
+    const val = input.value.trim();
+    if (val) {
+      patterns.push({
+        pattern: val,
+        caseSensitive: caseBtn.classList.contains('active'),
+      });
+    }
+  });
+  return patterns;
+}
+
 function showFilterModal(): void {
   elements.filterModal.classList.remove('hidden');
+  // Add an empty row if container is empty
+  if (elements.includePatternsContainer.children.length === 0) {
+    addIncludePatternRow();
+  }
 }
 
 function hideFilterModal(): void {
@@ -7225,9 +7322,7 @@ async function applyFilter(providedConfig?: FilterConfig): Promise<void> {
 
     config = {
       levels,
-      includePatterns: elements.includePatterns.value
-        .split('\n')
-        .filter((p) => p.trim()),
+      includePatterns: getIncludePatterns(),
       excludePatterns: elements.excludePatterns.value
         .split('\n')
         .filter((p) => p.trim()),
@@ -8711,7 +8806,7 @@ function updateAnalysisUI(): void {
 
       const filterConfig: FilterConfig = {
         excludePatterns: suggestion.filter.excludePatterns || [],
-        includePatterns: suggestion.filter.includePatterns || [],
+        includePatterns: (suggestion.filter.includePatterns || []).map((p: string) => ({ pattern: p, caseSensitive: true })),
         levels: suggestion.filter.levels || [],
       };
 
@@ -9295,14 +9390,10 @@ const BOTTOM_TAB_NAMES: Record<string, string> = {
 
 let activePanel: string | null = null;
 let lastActivePanel: string | null = null;
-let pinnedPanels: Set<string> = new Set();
 
 function togglePanel(panelId: string): void {
   if (activePanel === panelId) {
-    // Close panel (but not if pinned)
-    if (!pinnedPanels.has(panelId)) {
-      closePanel();
-    }
+    closePanel();
     return;
   }
   openPanel(panelId);
@@ -9326,9 +9417,6 @@ function openPanel(panelId: string): void {
   document.querySelectorAll('.activity-bar-btn[data-panel]').forEach(btn => {
     btn.classList.toggle('active', (btn as HTMLElement).dataset.panel === panelId);
   });
-
-  // Update pin button state
-  elements.btnPinPanel.classList.toggle('pinned', pinnedPanels.has(panelId));
 
   // Lazy-load history panel
   if (panelId === 'history') {
@@ -9361,23 +9449,11 @@ function togglePanelVisibility(): void {
   }
 }
 
-function togglePinPanel(): void {
-  if (!activePanel) return;
-  if (pinnedPanels.has(activePanel)) {
-    pinnedPanels.delete(activePanel);
-  } else {
-    pinnedPanels.add(activePanel);
-  }
-  elements.btnPinPanel.classList.toggle('pinned', pinnedPanels.has(activePanel));
-  savePanelState();
-}
-
 function savePanelState(): void {
   localStorage.setItem('logan-panel', JSON.stringify({
     activePanel,
     lastActivePanel,
     panelWidth: elements.panelContainer.style.width || '300px',
-    pinnedPanels: [...pinnedPanels],
   }));
 }
 
@@ -9388,9 +9464,6 @@ function restorePanelState(): void {
       const data = JSON.parse(saved);
       if (data.panelWidth) {
         elements.panelContainer.style.width = data.panelWidth;
-      }
-      if (data.pinnedPanels) {
-        pinnedPanels = new Set(data.pinnedPanels);
       }
       lastActivePanel = data.lastActivePanel || null;
       if (data.activePanel) {
@@ -9632,9 +9705,6 @@ function setupActivityBar(): void {
 
   // Close panel button
   elements.btnClosePanel.addEventListener('click', closePanel);
-
-  // Pin panel button
-  elements.btnPinPanel.addEventListener('click', togglePinPanel);
 
   // Settings button in activity bar
   document.getElementById('btn-activity-settings')?.addEventListener('click', async () => {
@@ -10292,6 +10362,15 @@ function init(): void {
   elements.btnNotesToggle.addEventListener('click', () => toggleBottomTab('notes'));
   elements.notesTextarea.addEventListener('input', saveNotesDebounced);
 
+  // Notes tab right-click context menu
+  const notesTabBtn = document.querySelector('.bottom-tab-btn[data-bottom-tab="notes"]');
+  if (notesTabBtn) {
+    notesTabBtn.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showNotesContextMenu(e as MouseEvent);
+    });
+  }
+
   // Bottom panel tab bar click delegation
   document.querySelectorAll('.bottom-tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -10463,6 +10542,7 @@ function init(): void {
   elements.btnFilter.addEventListener('click', showFilterModal);
   elements.btnApplyFilter.addEventListener('click', () => applyFilter());
   elements.btnClearFilter.addEventListener('click', clearFilter);
+  elements.btnAddIncludePattern.addEventListener('click', () => addIncludePatternRow());
 
   // Advanced Filter
   elements.btnAdvancedFilter.addEventListener('click', showAdvancedFilterModal);
@@ -10847,6 +10927,17 @@ function updateHighlightGroupsUI(): void {
 }
 
 async function applyHighlightGroup(groupId: string): Promise<void> {
+  // Toggle off if already active (unload)
+  if (activeHighlightGroupId === groupId) {
+    await window.api.clearAllHighlights();
+    state.highlights = [];
+    activeHighlightGroupId = null;
+    updateHighlightGroupsUI();
+    updateHighlightsUI();
+    renderVisibleLines();
+    return;
+  }
+
   const group = highlightGroups.find(g => g.id === groupId);
   if (!group) return;
 

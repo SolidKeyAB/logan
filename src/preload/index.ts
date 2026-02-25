@@ -376,6 +376,9 @@ const api = {
   saveNotes: (content: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('save-notes', content),
 
+  saveNotesAs: (content: string): Promise<{ success: boolean; filePath?: string; error?: string }> =>
+    ipcRenderer.invoke('save-notes-as', content),
+
   // File context menu actions
   showItemInFolder: (filePath: string): Promise<void> =>
     ipcRenderer.invoke('show-item-in-folder', filePath),

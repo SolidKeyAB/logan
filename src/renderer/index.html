@@ -147,7 +147,6 @@
         <div class="panel-header">
           <span id="panel-title" class="panel-title">Folders</span>
           <div class="panel-header-actions">
-            <button id="btn-pin-panel" class="panel-header-btn" title="Pin this panel (always visible)">&#128204;</button>
             <button id="btn-close-panel" class="panel-header-btn" title="Close panel">&times;</button>
           </div>
         </div>
@@ -532,8 +531,9 @@
             </div>
           </div>
           <div class="filter-group">
-            <label for="include-patterns">Include Patterns (one per line)</label>
-            <textarea id="include-patterns" class="filter-textarea" placeholder="e.g., error\nfailed"></textarea>
+            <label>Include Patterns</label>
+            <div id="include-patterns-container" class="include-patterns-container"></div>
+            <button id="btn-add-include-pattern" class="secondary-btn small" style="margin-top:4px">+ Add pattern</button>
             <div class="context-lines-row">
               <label for="basic-context-lines">Context lines around matches:</label>
               <input type="number" id="basic-context-lines" class="context-lines-input" value="0" min="0" max="50">

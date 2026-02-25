@@ -612,9 +612,11 @@ app.whenReady().then(() => {
               matches = config.levels.includes(lineLevel);
             }
             if (matches && config.includePatterns && config.includePatterns.length > 0) {
-              matches = config.includePatterns.some((p: string) => {
-                try { return new RegExp(p, config.matchCase ? '' : 'i').test(line.text); }
-                catch { return line.text.toLowerCase().includes(p.toLowerCase()); }
+              matches = config.includePatterns.some((p: any) => {
+                const pattern = typeof p === 'string' ? p : p.pattern;
+                const cs = typeof p === 'string' ? (config.matchCase || false) : p.caseSensitive;
+                try { return new RegExp(pattern, cs ? '' : 'i').test(line.text); }
+                catch { return cs ? line.text.includes(pattern) : line.text.toLowerCase().includes(pattern.toLowerCase()); }
               });
             }
             if (matches && config.excludePatterns && config.excludePatterns.length > 0) {
@@ -3415,26 +3417,48 @@ ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
     const exactMatch = config.exactMatch || false;
 
     // Pre-compile regex patterns once for performance (avoid re-creating RegExp per line)
-    type CompiledPattern = { regex: RegExp } | { literal: string; lowerLiteral: string };
-    const compilePattern = (pattern: string): CompiledPattern => {
+    type CompiledPattern = { regex: RegExp } | { literal: string; lowerLiteral: string; patternCaseSensitive: boolean };
+
+    // Compile exclude patterns (use global caseSensitive)
+    const compileExcludePattern = (pattern: string): CompiledPattern => {
       if (exactMatch) {
-        return { literal: pattern, lowerLiteral: pattern.toLowerCase() };
+        return { literal: pattern, lowerLiteral: pattern.toLowerCase(), patternCaseSensitive: caseSensitive };
       }
       try {
         return { regex: new RegExp(pattern, caseSensitive ? '' : 'i') };
       } catch {
-        return { literal: pattern, lowerLiteral: pattern.toLowerCase() };
+        return { literal: pattern, lowerLiteral: pattern.toLowerCase(), patternCaseSensitive: caseSensitive };
       }
     };
 
-    const compiledIncludePatterns = config.includePatterns.map(compilePattern);
-    const compiledExcludePatterns = config.excludePatterns.map(compilePattern);
+    // Normalize include patterns: support both old string[] and new {pattern,caseSensitive}[]
+    const normalizedIncludes: Array<{ pattern: string; caseSensitive: boolean }> =
+      config.includePatterns.map((p: any) =>
+        typeof p === 'string'
+          ? { pattern: p, caseSensitive: caseSensitive }
+          : { pattern: p.pattern, caseSensitive: p.caseSensitive }
+      );
+
+    // Compile include patterns with per-pattern case sensitivity
+    const compileIncludePattern = (ip: { pattern: string; caseSensitive: boolean }): CompiledPattern => {
+      if (exactMatch) {
+        return { literal: ip.pattern, lowerLiteral: ip.pattern.toLowerCase(), patternCaseSensitive: ip.caseSensitive };
+      }
+      try {
+        return { regex: new RegExp(ip.pattern, ip.caseSensitive ? '' : 'i') };
+      } catch {
+        return { literal: ip.pattern, lowerLiteral: ip.pattern.toLowerCase(), patternCaseSensitive: ip.caseSensitive };
+      }
+    };
+
+    const compiledIncludePatterns = normalizedIncludes.map(compileIncludePattern);
+    const compiledExcludePatterns = config.excludePatterns.map(compileExcludePattern);
 
     const matchCompiled = (text: string, compiled: CompiledPattern): boolean => {
       if ('regex' in compiled) {
         return compiled.regex.test(text);
       }
-      return caseSensitive
+      return compiled.patternCaseSensitive
         ? text.includes(compiled.literal)
         : text.toLowerCase().includes(compiled.lowerLiteral);
     };
@@ -4406,4 +4430,23 @@ ipcMain.handle('save-notes', async (_e: any, content: string) => {
     path.basename(currentFilePath) + '.notes.txt');
   fs.writeFileSync(notesPath, content, 'utf-8');
   return { success: true };
+});
+
+ipcMain.handle('save-notes-as', async (_e: any, content: string) => {
+  if (!mainWindow) return { success: false, error: 'No window' };
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Save Notes As',
+    defaultPath: currentFilePath
+      ? path.basename(currentFilePath) + '.notes.txt'
+      : 'notes.txt',
+    filters: [
+      { name: 'Text Files', extensions: ['txt', 'md'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled || !result.filePath) {
+    return { success: false, error: 'Cancelled' };
+  }
+  fs.writeFileSync(result.filePath, content, 'utf-8');
+  return { success: true, filePath: result.filePath };
 });
