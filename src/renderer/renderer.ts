@@ -26,6 +26,7 @@ interface SearchResult {
   column: number;
   length: number;
   text: string;
+  displayIndex?: number;
 }
 
 interface HiddenMatch {
@@ -2115,6 +2116,18 @@ function getTotalLines(): number {
     : state.totalLines;
 }
 
+// Find the display index for an original line number when filtered.
+// Searches visible cached lines for a match. Returns undefined if not found.
+function findDisplayIndexForLine(originalLineNumber: number): number | undefined {
+  if (!state.isFiltered) return originalLineNumber;
+  const total = getTotalLines();
+  // Search cached lines for matching original lineNumber
+  for (let i = 0; i < total; i++) {
+    const line = cachedLines.get(i);
+    if (line && line.lineNumber === originalLineNumber) return i;
+  }
+  return undefined;
+}
 
 async function loadVisibleLines(): Promise<void> {
   if (!logContentElement) return;
@@ -3310,7 +3323,9 @@ function renderMinimapMarkers(): void {
     const result = state.searchResults[i];
     const marker = document.createElement('div');
     marker.className = 'minimap-search-marker';
-    marker.style.top = `${(result.lineNumber / totalLines) * minimapHeight}px`;
+    const markerPos = state.isFiltered && result.displayIndex != null
+      ? result.displayIndex : result.lineNumber;
+    marker.style.top = `${(markerPos / totalLines) * minimapHeight}px`;
     fragment.appendChild(marker);
   }
 
@@ -3324,7 +3339,9 @@ function renderMinimapMarkers(): void {
       const r = results[i];
       const marker = document.createElement('div');
       marker.className = 'minimap-sc-marker';
-      marker.style.top = `${(r.lineNumber / totalLines) * minimapHeight}px`;
+      const scMarkerPos = state.isFiltered && r.displayIndex != null
+        ? r.displayIndex : r.lineNumber;
+      marker.style.top = `${(scMarkerPos / totalLines) * minimapHeight}px`;
       marker.style.backgroundColor = config.color;
       fragment.appendChild(marker);
     }
@@ -7165,7 +7182,11 @@ function goToSearchResult(index: number): void {
 
   state.currentSearchIndex = index;
   const result = state.searchResults[index];
-  goToLine(result.lineNumber);
+  // When filtered, scroll to display index but select by original line number
+  const scrollTarget = state.isFiltered && result.displayIndex != null
+    ? result.displayIndex : result.lineNumber;
+  goToLine(scrollTarget);
+  state.selectedLine = result.lineNumber; // original line number for highlight matching
   updateSearchUI();
   renderVisibleLines(); // Update current match highlight
   updateSearchResultsCurrent();
@@ -9982,18 +10003,26 @@ function setupKeyboardShortcuts(): void {
       // Arrow Down: Move down one line
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        const newLine = Math.min((state.selectedLine ?? 0) + 1, totalLines - 1);
-        state.selectedLine = newLine;
-        goToLine(newLine);
+        const currentDisplayIdx = state.isFiltered
+          ? (findDisplayIndexForLine(state.selectedLine ?? 0) ?? 0)
+          : (state.selectedLine ?? 0);
+        const newDisplayIdx = Math.min(currentDisplayIdx + 1, totalLines - 1);
+        goToLine(newDisplayIdx);
+        const cachedLine = cachedLines.get(newDisplayIdx);
+        state.selectedLine = cachedLine ? cachedLine.lineNumber : newDisplayIdx;
         renderVisibleLines();
       }
 
       // Arrow Up: Move up one line
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        const newLine = Math.max((state.selectedLine ?? 0) - 1, 0);
-        state.selectedLine = newLine;
-        goToLine(newLine);
+        const currentDisplayIdx = state.isFiltered
+          ? (findDisplayIndexForLine(state.selectedLine ?? 0) ?? 0)
+          : (state.selectedLine ?? 0);
+        const newDisplayIdx = Math.max(currentDisplayIdx - 1, 0);
+        goToLine(newDisplayIdx);
+        const cachedLine = cachedLines.get(newDisplayIdx);
+        state.selectedLine = cachedLine ? cachedLine.lineNumber : newDisplayIdx;
         renderVisibleLines();
       }
 
@@ -10012,34 +10041,45 @@ function setupKeyboardShortcuts(): void {
       // Page Down: Move down by visible lines
       if (e.key === 'PageDown' && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
-        const newLine = Math.min((state.selectedLine ?? 0) + visibleLines, totalLines - 1);
-        state.selectedLine = newLine;
-        goToLine(newLine);
+        const currentDisplayIdx = state.isFiltered
+          ? (findDisplayIndexForLine(state.selectedLine ?? 0) ?? 0)
+          : (state.selectedLine ?? 0);
+        const newDisplayIdx = Math.min(currentDisplayIdx + visibleLines, totalLines - 1);
+        goToLine(newDisplayIdx);
+        const cachedLine = cachedLines.get(newDisplayIdx);
+        state.selectedLine = cachedLine ? cachedLine.lineNumber : newDisplayIdx;
         renderVisibleLines();
       }
 
       // Page Up: Move up by visible lines
       if (e.key === 'PageUp' && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
-        const newLine = Math.max((state.selectedLine ?? 0) - visibleLines, 0);
-        state.selectedLine = newLine;
-        goToLine(newLine);
+        const currentDisplayIdx = state.isFiltered
+          ? (findDisplayIndexForLine(state.selectedLine ?? 0) ?? 0)
+          : (state.selectedLine ?? 0);
+        const newDisplayIdx = Math.max(currentDisplayIdx - visibleLines, 0);
+        goToLine(newDisplayIdx);
+        const cachedLine = cachedLines.get(newDisplayIdx);
+        state.selectedLine = cachedLine ? cachedLine.lineNumber : newDisplayIdx;
         renderVisibleLines();
       }
 
       // Home: Go to first line
       if (e.key === 'Home' && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
-        state.selectedLine = 0;
         goToLine(0);
+        const cachedLine = cachedLines.get(0);
+        state.selectedLine = cachedLine && state.isFiltered ? cachedLine.lineNumber : 0;
         renderVisibleLines();
       }
 
       // End: Go to last line
       if (e.key === 'End' && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
-        state.selectedLine = totalLines - 1;
-        goToLine(totalLines - 1);
+        const lastIdx = totalLines - 1;
+        goToLine(lastIdx);
+        const cachedLine = cachedLines.get(lastIdx);
+        state.selectedLine = cachedLine && state.isFiltered ? cachedLine.lineNumber : lastIdx;
         renderVisibleLines();
       }
     }

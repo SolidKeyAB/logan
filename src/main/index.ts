@@ -2148,8 +2148,7 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
         if (filteredSet.has(m.lineNumber)) {
           filteredMatches.push({
             ...m,
-            originalLineNumber: m.lineNumber,
-            lineNumber: lineToFilteredIndex.get(m.lineNumber) ?? m.lineNumber,
+            displayIndex: lineToFilteredIndex.get(m.lineNumber),
           });
         } else {
           hiddenMatches.push({

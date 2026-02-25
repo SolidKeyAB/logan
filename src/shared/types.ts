@@ -17,6 +17,7 @@ export interface SearchMatch {
   column: number;
   length: number;
   lineText: string;
+  displayIndex?: number;
 }
 
 export interface SearchColumnConfig {
