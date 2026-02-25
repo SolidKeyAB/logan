@@ -10550,6 +10550,10 @@ function init(): void {
   elements.btnApplyAdvancedFilter.addEventListener('click', applyAdvancedFilter);
   elements.btnClearAdvancedFilter.addEventListener('click', clearAdvancedFilter);
   elements.btnCancelAdvancedFilter.addEventListener('click', hideAdvancedFilterModal);
+  document.getElementById('btn-basic-filter')?.addEventListener('click', () => {
+    hideAdvancedFilterModal();
+    showFilterModal();
+  });
   elements.advancedContextLinesEnabled.addEventListener('change', () => {
     elements.advancedContextLines.disabled = !elements.advancedContextLinesEnabled.checked;
   });
