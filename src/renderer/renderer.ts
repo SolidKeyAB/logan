@@ -6578,6 +6578,55 @@ function showSearchConfigSessionContextMenu(e: MouseEvent, session: SearchConfig
   setTimeout(() => document.addEventListener('click', closeMenu), 0);
 }
 
+async function formatAndLoadJson(): Promise<void> {
+  if (!state.filePath) return;
+
+  if (!jsonFormattingEnabled) {
+    // Enable JSON mode - format and open formatted file
+    elements.btnJsonFormat.classList.add('active');
+    const originalPath = state.filePath;
+
+    showProgress('Formatting JSON... 0%');
+    const unsubFormatProgress = (window.api as any).onJsonFormatProgress?.((data: { percent: number }) => {
+      updateProgress(data.percent);
+      updateProgressText(`Formatting JSON... ${data.percent}%`);
+    });
+    try {
+      const result = await (window.api as any).formatJsonFile(originalPath);
+      if (unsubFormatProgress) unsubFormatProgress();
+      if (result.success && result.formattedPath) {
+        jsonFormattingEnabled = true;
+        jsonOriginalFile = originalPath;
+        elements.longLinesWarning.classList.add('hidden');
+        await loadFile(result.formattedPath);
+      } else {
+        elements.btnJsonFormat.classList.remove('active');
+        hideProgress();
+        // Show error in the warning bar
+        const warningText = elements.longLinesWarning.querySelector('.warning-text');
+        if (warningText && result.error) {
+          warningText.innerHTML = `<strong>Format failed:</strong> ${escapeHtml(result.error)}`;
+          elements.longLinesWarning.classList.remove('hidden');
+          elements.btnFormatWarning.classList.add('hidden');
+        }
+      }
+    } catch (error) {
+      if (unsubFormatProgress) unsubFormatProgress();
+      elements.btnJsonFormat.classList.remove('active');
+      hideProgress();
+    }
+  } else {
+    // Disable JSON mode - go back to original file
+    jsonFormattingEnabled = false;
+    elements.btnJsonFormat.classList.remove('active');
+
+    if (jsonOriginalFile) {
+      await loadFile(jsonOriginalFile);
+      jsonOriginalFile = null;
+    }
+  }
+}
+
 async function loadFile(filePath: string, createNewTab: boolean = true): Promise<void> {
   // Check if file is already open in a tab BEFORE calling backend
   const existingTab = findTabByFilePath(filePath);
@@ -6718,6 +6767,11 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
         jsonFormattingEnabled = false;
         jsonOriginalFile = null;
         elements.btnJsonFormat.classList.remove('active');
+
+        // Auto-activate JSON formatting for .json files
+        if (isJsonLike) {
+          formatAndLoadJson();
+        }
       }
 
       // Reset scroll slowness detection
@@ -10585,55 +10639,6 @@ function init(): void {
   elements.btnWordWrap.addEventListener('click', toggleMarkdownPreview);
 
   // JSON formatting toggle
-  async function formatAndLoadJson(): Promise<void> {
-    if (!state.filePath) return;
-
-    if (!jsonFormattingEnabled) {
-      // Enable JSON mode - format and open formatted file
-      elements.btnJsonFormat.classList.add('active');
-      const originalPath = state.filePath;
-
-      showProgress('Formatting JSON... 0%');
-      const unsubFormatProgress = (window.api as any).onJsonFormatProgress?.((data: { percent: number }) => {
-        updateProgress(data.percent);
-        updateProgressText(`Formatting JSON... ${data.percent}%`);
-      });
-      try {
-        const result = await (window.api as any).formatJsonFile(originalPath);
-        if (unsubFormatProgress) unsubFormatProgress();
-        if (result.success && result.formattedPath) {
-          jsonFormattingEnabled = true;
-          jsonOriginalFile = originalPath;
-          elements.longLinesWarning.classList.add('hidden');
-          await loadFile(result.formattedPath);
-        } else {
-          elements.btnJsonFormat.classList.remove('active');
-          hideProgress();
-          // Show error in the warning bar
-          const warningText = elements.longLinesWarning.querySelector('.warning-text');
-          if (warningText && result.error) {
-            warningText.innerHTML = `<strong>Format failed:</strong> ${escapeHtml(result.error)}`;
-            elements.longLinesWarning.classList.remove('hidden');
-            elements.btnFormatWarning.classList.add('hidden');
-          }
-        }
-      } catch (error) {
-        if (unsubFormatProgress) unsubFormatProgress();
-        elements.btnJsonFormat.classList.remove('active');
-        hideProgress();
-      }
-    } else {
-      // Disable JSON mode - go back to original file
-      jsonFormattingEnabled = false;
-      elements.btnJsonFormat.classList.remove('active');
-
-      if (jsonOriginalFile) {
-        await loadFile(jsonOriginalFile);
-        jsonOriginalFile = null;
-      }
-    }
-  }
-
   elements.btnJsonFormat.addEventListener('click', formatAndLoadJson);
 
   // Long lines warning buttons
