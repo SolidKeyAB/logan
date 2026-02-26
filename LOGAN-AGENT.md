@@ -250,4 +250,30 @@ There is no forced kill mechanism. The convention is:
 
 ## Connection Indicator
 
-When an agent connects via SSE (`/api/events`), LOGAN's Chat tab shows a green dot with "Agent connected". When the agent disconnects, it returns to a grey dot.
+When an agent connects via SSE (`/api/events?name=My%20Agent`), LOGAN's Chat tab shows a green dot with the agent's name (e.g. "Claude Code connected"). When the agent disconnects, it returns to a grey dot.
+
+Only **one agent** can be connected at a time. A second connection attempt gets a `409 Conflict` response.
+
+## Claude Code: Approving Tool Calls
+
+When using Claude Code as the agent, it will ask for permission on every tool call (curl, node, etc.). To avoid repeated prompts during a LOGAN session:
+
+### Allow all for the session
+
+Type `/permissions` in the Claude Code prompt, then add rules to auto-approve. Or simply press **`a`** (Allow All) the first time a permission prompt appears — this grants all permissions for the current session only.
+
+### Scoped approach (recommended)
+
+Use `/allowed-tools` to pre-approve only the tools Claude Code needs for LOGAN interaction:
+
+```
+/allowed-tools add Bash(npm run build)
+/allowed-tools add Bash(curl *)
+/allowed-tools add Bash(node -e *)
+```
+
+### Revoking
+
+- Session-level permissions expire when you close the Claude Code session
+- To revoke scoped tools: `/allowed-tools remove <pattern>`
+- To reset everything: restart the Claude Code session
