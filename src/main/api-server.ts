@@ -20,27 +20,33 @@ export interface ChatMessage {
 }
 
 const chatMessages: ChatMessage[] = [];
-const sseClients: Set<http.ServerResponse> = new Set();
+
+// Single-agent connection: one SSE client at a time
+let activeAgent: { res: http.ServerResponse; name: string } | null = null;
 
 export function getSseClientCount(): number {
-  return sseClients.size;
+  return activeAgent ? 1 : 0;
+}
+
+export function getAgentName(): string | null {
+  return activeAgent?.name || null;
 }
 
 function notifyAgentConnectionChanged(ctx: ApiContext): void {
   const win = ctx.getMainWindow();
   if (win && !win.isDestroyed()) {
     win.webContents.send('agent-connection-changed', {
-      connected: sseClients.size > 0,
-      count: sseClients.size,
+      connected: activeAgent !== null,
+      count: activeAgent ? 1 : 0,
+      name: activeAgent?.name || null,
     });
   }
 }
 
 function broadcastSSE(msg: ChatMessage): void {
+  if (!activeAgent) return;
   const data = `event: message\ndata: ${JSON.stringify(msg)}\n\n`;
-  for (const client of sseClients) {
-    try { client.write(data); } catch { sseClients.delete(client); }
-  }
+  try { activeAgent.res.write(data); } catch { activeAgent = null; }
 }
 
 export function addChatMessage(from: 'user' | 'agent', text: string): ChatMessage {
@@ -199,21 +205,36 @@ export function startApiServer(ctx: ApiContext): void {
         }
 
         if (url === '/api/agent-status') {
-          sendJson(res, { success: true, connected: sseClients.size > 0, count: sseClients.size });
+          sendJson(res, {
+            success: true,
+            connected: activeAgent !== null,
+            count: activeAgent ? 1 : 0,
+            name: activeAgent?.name || null,
+          });
           return;
         }
 
-        if (url === '/api/events') {
+        if (url === '/api/events' || (req.url || '').startsWith('/api/events?')) {
+          // Enforce single agent connection
+          if (activeAgent) {
+            sendJson(res, { success: false, error: 'Another agent is already connected', connectedAgent: activeAgent.name }, 409);
+            return;
+          }
+
+          // Parse agent name from query string
+          const fullUrl = new URL(req.url || '/api/events', `http://${req.headers.host || 'localhost'}`);
+          const agentName = fullUrl.searchParams.get('name') || 'Unknown Agent';
+
           res.writeHead(200, {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
           });
-          res.write(`event: connected\ndata: {}\n\n`);
-          sseClients.add(res);
+          res.write(`event: connected\ndata: ${JSON.stringify({ name: agentName })}\n\n`);
+          activeAgent = { res, name: agentName };
           notifyAgentConnectionChanged(ctx);
           req.on('close', () => {
-            sseClients.delete(res);
+            if (activeAgent?.res === res) activeAgent = null;
             notifyAgentConnectionChanged(ctx);
           });
           return; // keep connection open

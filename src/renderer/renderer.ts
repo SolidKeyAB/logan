@@ -4639,7 +4639,7 @@ function openBottomTab(tabId: string): void {
     const badge = document.getElementById('badge-chat');
     if (badge) badge.textContent = '';
     // Refresh agent connection status
-    window.api.getAgentStatus().then((s) => updateAgentConnectionStatus(s.connected, s.count));
+    window.api.getAgentStatus().then((s: any) => updateAgentConnectionStatus(s.connected, s.count, s.name));
   }
   if (tabId === 'live') {
     refreshLiveDevices();
@@ -4721,12 +4721,12 @@ function sendChatMessage(): void {
   });
 }
 
-function updateAgentConnectionStatus(connected: boolean, count: number): void {
+function updateAgentConnectionStatus(connected: boolean, count: number, name?: string | null): void {
   const dot = elements.chatAgentDot;
   const text = elements.chatAgentStatusText;
   if (connected) {
     dot.className = 'chat-agent-status-dot connected';
-    text.textContent = count === 1 ? 'Agent connected' : `${count} agents connected`;
+    text.textContent = name ? `${name} connected` : 'Agent connected';
   } else {
     dot.className = 'chat-agent-status-dot disconnected';
     text.textContent = 'No agent connected';
@@ -7190,29 +7190,34 @@ function renderContextTimeline(): void {
   canvas.classList.remove('hidden');
   elements.ctxResults.style.display = '';
 
-  const totalLines = state.totalLines || 1;
-  const rect = canvas.parentElement!.getBoundingClientRect();
-  canvas.width = rect.width - 16;
-  canvas.height = 32;
-  const ctx2d = canvas.getContext('2d')!;
-  ctx2d.clearRect(0, 0, canvas.width, canvas.height);
+  const totalLines = getTotalLines() || 1;
 
-  // Background
-  ctx2d.fillStyle = 'rgba(255,255,255,0.03)';
-  ctx2d.fillRect(0, 0, canvas.width, canvas.height);
+  // Defer drawing to next frame so canvas has layout dimensions
+  requestAnimationFrame(() => {
+    const rect = canvas.parentElement!.getBoundingClientRect();
+    const w = Math.max(rect.width - 16, 100);
+    canvas.width = w;
+    canvas.height = 32;
+    const ctx2d = canvas.getContext('2d')!;
+    ctx2d.clearRect(0, 0, w, canvas.height);
 
-  // Draw marks for each context
-  for (const def of state.contextDefinitions) {
-    if (!def.enabled) continue;
-    const groups = state.contextResults.get(def.id);
-    if (!groups) continue;
+    // Background
+    ctx2d.fillStyle = 'rgba(255,255,255,0.03)';
+    ctx2d.fillRect(0, 0, w, canvas.height);
 
-    ctx2d.fillStyle = def.color;
-    for (const group of groups) {
-      const x = (group.mustLine / totalLines) * canvas.width;
-      ctx2d.fillRect(Math.round(x), 2, 3, canvas.height - 4);
+    // Draw marks for each context
+    for (const def of state.contextDefinitions) {
+      if (!def.enabled) continue;
+      const groups = state.contextResults.get(def.id);
+      if (!groups) continue;
+
+      ctx2d.fillStyle = def.color;
+      for (const group of groups) {
+        const x = (group.mustLine / totalLines) * w;
+        ctx2d.fillRect(Math.round(x), 2, 3, canvas.height - 4);
+      }
     }
-  }
+  });
 
   // Click handler for timeline
   canvas.onclick = (e) => {
@@ -11214,8 +11219,8 @@ function init(): void {
     }
   });
   // Agent connection status changes
-  window.api.onAgentConnectionChanged((data) => {
-    updateAgentConnectionStatus(data.connected, data.count);
+  window.api.onAgentConnectionChanged((data: any) => {
+    updateAgentConnectionStatus(data.connected, data.count, data.name);
     // If agent was running but disconnected (count dropped to 0), update button
     if (agentRunning && !data.connected) {
       agentRunning = false;

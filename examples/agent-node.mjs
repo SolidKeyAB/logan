@@ -89,7 +89,7 @@ function waitForMessage(timeoutSec = 120) {
       {
         hostname: '127.0.0.1',
         port,
-        path: '/api/events',
+        path: '/api/events?name=LOGAN%20Built-in%20Agent',
         headers: { Accept: 'text/event-stream' },
       },
       (res) => {
