@@ -7021,6 +7021,9 @@ function showContextForm(existingDef?: ContextDefinitionDef): void {
 }
 
 async function runContextSearch(): Promise<void> {
+  // Always reload definitions from disk before searching
+  await loadContextDefinitions();
+
   const enabled = state.contextDefinitions.filter(d => d.enabled);
   if (enabled.length === 0) {
     elements.ctxResultsSummary.textContent = 'No enabled contexts';
