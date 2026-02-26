@@ -274,6 +274,20 @@
         <div id="editor-container" class="editor-container">
           <!-- Markdown Preview -->
           <div id="markdown-preview" class="markdown-preview hidden"></div>
+          <!-- Image Viewer -->
+          <div id="image-viewer" class="image-viewer hidden">
+            <div class="image-viewer-toolbar">
+              <button id="btn-image-zoom-in" class="image-viewer-btn" title="Zoom in (+)">+</button>
+              <span id="image-zoom-level" class="image-zoom-level">100%</span>
+              <button id="btn-image-zoom-out" class="image-viewer-btn" title="Zoom out (-)">−</button>
+              <button id="btn-image-zoom-fit" class="image-viewer-btn" title="Fit to window">Fit</button>
+              <button id="btn-image-zoom-actual" class="image-viewer-btn" title="Actual size (1:1)">1:1</button>
+              <span id="image-dimensions" class="image-dimensions"></span>
+            </div>
+            <div class="image-viewer-container" id="image-viewer-container">
+              <img id="image-viewer-img" draggable="false" />
+            </div>
+          </div>
           <div id="welcome-message" class="welcome-message">
             <img src="assets/logo.png" alt="LOGAN" class="welcome-logo">
             <h2>LOGAN</h2>

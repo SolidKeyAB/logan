@@ -1612,6 +1612,10 @@ const TEXT_EXTENSIONS = new Set([
   '.properties', '.env', '.gitignore', '.dockerignore',
 ]);
 
+const IMAGE_EXTENSIONS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.svg', '.bmp', '.webp', '.ico', '.avif',
+]);
+
 ipcMain.handle(IPC.READ_FOLDER, async (_, folderPath: string) => {
   try {
     const entries = await fs.promises.readdir(folderPath, { withFileTypes: true });
@@ -1626,7 +1630,7 @@ ipcMain.handle(IPC.READ_FOLDER, async (_, folderPath: string) => {
       if (entry.isFile()) {
         const ext = path.extname(entry.name).toLowerCase();
         // Include text-based files or files without extension
-        if (TEXT_EXTENSIONS.has(ext) || ext === '') {
+        if (TEXT_EXTENSIONS.has(ext) || IMAGE_EXTENSIONS.has(ext) || ext === '') {
           try {
             const stat = await fs.promises.stat(fullPath);
             files.push({

@@ -6637,6 +6637,27 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
     return;
   }
 
+  // Handle image files directly (no backend indexing needed)
+  if (isImageFile(filePath)) {
+    if (state.activeTabId && createNewTab) {
+      saveCurrentTabState();
+    }
+    if (createNewTab && !existingTab) {
+      const newTab = createTab(filePath);
+      state.tabs.push(newTab);
+      state.activeTabId = newTab.id;
+    }
+    state.filePath = filePath;
+    hideImageViewer(); // reset first
+    elements.markdownPreview.classList.add('hidden');
+    elements.markdownPreview.innerHTML = '';
+    showImageViewer(filePath);
+    renderTabBar();
+    renderFolderTree();
+    updateStatusBar();
+    return;
+  }
+
   showProgress('Indexing file...');
 
   const unsubscribe = window.api.onIndexingProgress((progress) => {
@@ -6797,6 +6818,7 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
         isMarkdownFile = false;
         elements.markdownPreview.classList.add('hidden');
         elements.markdownPreview.innerHTML = '';
+        hideImageViewer();
         elements.btnWordWrap.textContent = 'Wrap';
         elements.btnWordWrap.title = 'Toggle word wrap (⌥Z)';
         const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
@@ -9307,6 +9329,76 @@ function isMarkdownExtension(filePath: string): boolean {
   return ext === 'md' || ext === 'markdown';
 }
 
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'bmp', 'webp', 'ico', 'avif']);
+
+function isImageFile(filePath: string): boolean {
+  const ext = filePath.toLowerCase().split('.').pop() || '';
+  return IMAGE_EXTENSIONS.has(ext);
+}
+
+// Image viewer state
+let imageZoom = 1;
+const imageViewerEl = document.getElementById('image-viewer') as HTMLDivElement;
+const imageViewerContainer = document.getElementById('image-viewer-container') as HTMLDivElement;
+const imageViewerImg = document.getElementById('image-viewer-img') as HTMLImageElement;
+const imageZoomLevelEl = document.getElementById('image-zoom-level') as HTMLSpanElement;
+const imageDimensionsEl = document.getElementById('image-dimensions') as HTMLSpanElement;
+
+function showImageViewer(filePath: string): void {
+  imageZoom = 1;
+  imageViewerImg.src = '';
+  imageViewerEl.classList.remove('hidden');
+
+  // Hide log viewer
+  const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
+  if (wrapper) wrapper.style.display = 'none';
+
+  // Load image using file:// protocol
+  imageViewerImg.onload = () => {
+    imageDimensionsEl.textContent = `${imageViewerImg.naturalWidth} × ${imageViewerImg.naturalHeight}`;
+    fitImageToWindow();
+  };
+  imageViewerImg.src = `file://${filePath}`;
+}
+
+function hideImageViewer(): void {
+  imageViewerEl.classList.add('hidden');
+  imageViewerImg.src = '';
+  imageDimensionsEl.textContent = '';
+  const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
+  if (wrapper) wrapper.style.display = '';
+}
+
+function setImageZoom(zoom: number): void {
+  imageZoom = Math.max(0.05, Math.min(zoom, 20));
+  imageViewerImg.style.width = `${imageViewerImg.naturalWidth * imageZoom}px`;
+  imageViewerImg.style.height = `${imageViewerImg.naturalHeight * imageZoom}px`;
+  imageZoomLevelEl.textContent = `${Math.round(imageZoom * 100)}%`;
+}
+
+function fitImageToWindow(): void {
+  const containerW = imageViewerContainer.clientWidth - 40;
+  const containerH = imageViewerContainer.clientHeight - 40;
+  const imgW = imageViewerImg.naturalWidth;
+  const imgH = imageViewerImg.naturalHeight;
+  if (imgW === 0 || imgH === 0) return;
+  const scale = Math.min(containerW / imgW, containerH / imgH, 1);
+  setImageZoom(scale);
+}
+
+// Image viewer controls
+document.getElementById('btn-image-zoom-in')?.addEventListener('click', () => setImageZoom(imageZoom * 1.25));
+document.getElementById('btn-image-zoom-out')?.addEventListener('click', () => setImageZoom(imageZoom / 1.25));
+document.getElementById('btn-image-zoom-fit')?.addEventListener('click', fitImageToWindow);
+document.getElementById('btn-image-zoom-actual')?.addEventListener('click', () => setImageZoom(1));
+
+// Mouse wheel zoom on image
+imageViewerContainer?.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const delta = e.deltaY > 0 ? 0.9 : 1.1;
+  setImageZoom(imageZoom * delta);
+}, { passive: false });
+
 async function renderMarkdownPreview(): Promise<void> {
   if (!state.filePath || !isMarkdownFile) return;
 
@@ -11211,23 +11303,30 @@ async function switchToTab(tabId: string): Promise<void> {
       // Restore tab state
       restoreTabState(tab);
 
-      // Handle markdown preview state for the new tab
-      isMarkdownFile = isMarkdownExtension(tab.filePath);
-      if (isMarkdownFile) {
-        markdownPreviewMode = true;
-        elements.btnWordWrap.textContent = 'Raw';
-        elements.btnWordWrap.title = 'Show raw markdown';
-        await renderMarkdownPreview();
-        showMarkdownPreview();
-      } else {
-        markdownPreviewMode = false;
+      // Handle special file viewers for the new tab
+      if (isImageFile(tab.filePath)) {
         elements.markdownPreview.classList.add('hidden');
         elements.markdownPreview.innerHTML = '';
-        elements.btnWordWrap.textContent = 'Wrap';
-        elements.btnWordWrap.title = 'Toggle word wrap (⌥Z)';
-        const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
-        if (wrapper) {
-          wrapper.style.display = '';
+        showImageViewer(tab.filePath);
+      } else {
+        hideImageViewer();
+        isMarkdownFile = isMarkdownExtension(tab.filePath);
+        if (isMarkdownFile) {
+          markdownPreviewMode = true;
+          elements.btnWordWrap.textContent = 'Raw';
+          elements.btnWordWrap.title = 'Show raw markdown';
+          await renderMarkdownPreview();
+          showMarkdownPreview();
+        } else {
+          markdownPreviewMode = false;
+          elements.markdownPreview.classList.add('hidden');
+          elements.markdownPreview.innerHTML = '';
+          elements.btnWordWrap.textContent = 'Wrap';
+          elements.btnWordWrap.title = 'Toggle word wrap (⌥Z)';
+          const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
+          if (wrapper) {
+            wrapper.style.display = '';
+          }
         }
       }
 
