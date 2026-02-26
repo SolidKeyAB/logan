@@ -7073,7 +7073,10 @@ async function runContextSearch(): Promise<void> {
 function renderContextResults(): void {
   const container = elements.ctxResults;
   container.innerHTML = '';
-  elements.ctxTimeline.classList.add('hidden');
+  // Only hide timeline when in tree-only mode (not when called from renderContextTimeline)
+  if (state.contextViewMode === 'tree') {
+    elements.ctxTimeline.classList.add('hidden');
+  }
   container.style.display = '';
 
   for (const def of state.contextDefinitions) {
@@ -7194,35 +7197,47 @@ function renderContextResults(): void {
 function renderContextTimeline(): void {
   const canvas = elements.ctxTimeline;
   canvas.classList.remove('hidden');
+  canvas.style.display = 'block';
+  canvas.style.width = '100%';
+  canvas.style.height = '32px';
   elements.ctxResults.style.display = '';
 
   const totalLines = getTotalLines() || 1;
 
   // Defer drawing to next frame so canvas has layout dimensions
   requestAnimationFrame(() => {
-    const rect = canvas.parentElement!.getBoundingClientRect();
-    const w = Math.max(rect.width - 16, 100);
+    const w = Math.max(canvas.offsetWidth, 100);
     canvas.width = w;
     canvas.height = 32;
     const ctx2d = canvas.getContext('2d')!;
-    ctx2d.clearRect(0, 0, w, canvas.height);
+    ctx2d.clearRect(0, 0, w, 32);
 
-    // Background
-    ctx2d.fillStyle = 'rgba(255,255,255,0.03)';
-    ctx2d.fillRect(0, 0, w, canvas.height);
+    // Background bar — subtle gradient
+    const grad = ctx2d.createLinearGradient(0, 0, 0, 32);
+    grad.addColorStop(0, '#1a2030');
+    grad.addColorStop(1, '#141820');
+    ctx2d.fillStyle = grad;
+    ctx2d.fillRect(0, 0, w, 32);
 
     // Draw marks for each context
+    let markCount = 0;
     for (const def of state.contextDefinitions) {
       if (!def.enabled) continue;
       const groups = state.contextResults.get(def.id);
-      if (!groups) continue;
+      if (!groups || groups.length === 0) continue;
 
-      ctx2d.fillStyle = def.color;
       for (const group of groups) {
-        const x = (group.mustLine / totalLines) * w;
-        ctx2d.fillRect(Math.round(x), 2, 3, canvas.height - 4);
+        const x = Math.round((group.mustLine / totalLines) * w);
+        // Glow
+        ctx2d.fillStyle = def.color + '40';
+        ctx2d.fillRect(x - 1, 0, 5, 32);
+        // Core mark
+        ctx2d.fillStyle = def.color;
+        ctx2d.fillRect(x, 1, 3, 30);
+        markCount++;
       }
     }
+    if (markCount === 0) console.log('[ctx-timeline] no marks to draw — run context search first');
   });
 
   // Click handler for timeline
