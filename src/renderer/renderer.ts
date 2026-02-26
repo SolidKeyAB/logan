@@ -809,6 +809,12 @@ const elements = {
   notesTextarea: document.getElementById('notes-textarea') as HTMLTextAreaElement,
   notesSaveStatus: document.getElementById('notes-save-status') as HTMLSpanElement,
   btnNotesToggle: document.getElementById('btn-notes-toggle') as HTMLButtonElement,
+  // Agent Chat (in bottom panel)
+  chatMessages: document.getElementById('chat-messages') as HTMLDivElement,
+  chatInput: document.getElementById('chat-input') as HTMLInputElement,
+  chatSendBtn: document.getElementById('chat-send-btn') as HTMLButtonElement,
+  chatAgentDot: document.getElementById('chat-agent-dot') as HTMLSpanElement,
+  chatAgentStatusText: document.getElementById('chat-agent-status-text') as HTMLSpanElement,
   // Bottom panel
   bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
   bottomPanelResizeHandle: document.getElementById('bottom-panel-resize-handle') as HTMLDivElement,
@@ -4606,6 +4612,15 @@ function openBottomTab(tabId: string): void {
       }
     });
   }
+  if (tabId === 'chat') {
+    loadChatHistory();
+    elements.chatInput.focus();
+    // Clear notification badge
+    const badge = document.getElementById('badge-chat');
+    if (badge) badge.textContent = '';
+    // Refresh agent connection status
+    window.api.getAgentStatus().then((s) => updateAgentConnectionStatus(s.connected, s.count));
+  }
   if (tabId === 'live') {
     refreshLiveDevices();
   }
@@ -4640,6 +4655,78 @@ function toggleBottomTab(tabId: string): void {
   } else {
     openBottomTab(tabId);
   }
+}
+
+// ─── Agent Chat ──────────────────────────────────────────────────────
+
+function addChatMessage(msg: { id?: string; from: string; text: string; timestamp: number }): void {
+  const el = document.createElement('div');
+  el.className = `chat-message from-${msg.from}`;
+  if (msg.id) el.dataset.msgId = msg.id;
+
+  const sender = document.createElement('div');
+  sender.className = 'chat-sender';
+  sender.textContent = msg.from === 'user' ? 'You' : 'Agent';
+
+  const text = document.createElement('div');
+  text.className = 'chat-text';
+  text.textContent = msg.text;
+
+  const time = document.createElement('div');
+  time.className = 'chat-time';
+  const d = new Date(msg.timestamp);
+  time.textContent = d.toLocaleTimeString();
+
+  el.appendChild(sender);
+  el.appendChild(text);
+  el.appendChild(time);
+  elements.chatMessages.appendChild(el);
+
+  // Auto-scroll to bottom
+  elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+}
+
+function sendChatMessage(): void {
+  const text = elements.chatInput.value.trim();
+  if (!text) return;
+
+  // Optimistically show in UI
+  const msg = { from: 'user', text, timestamp: Date.now() };
+  addChatMessage(msg);
+  elements.chatInput.value = '';
+
+  // Send to main process
+  window.api.sendAgentMessage(text).catch(() => {
+    // Message already shown; ignore send failure silently
+  });
+}
+
+function updateAgentConnectionStatus(connected: boolean, count: number): void {
+  const dot = elements.chatAgentDot;
+  const text = elements.chatAgentStatusText;
+  if (connected) {
+    dot.className = 'chat-agent-status-dot connected';
+    text.textContent = count === 1 ? 'Agent connected' : `${count} agents connected`;
+  } else {
+    dot.className = 'chat-agent-status-dot disconnected';
+    text.textContent = 'No agent connected';
+  }
+}
+
+let chatHistoryLoaded = false;
+
+function loadChatHistory(): void {
+  if (chatHistoryLoaded) return;
+  window.api.getAgentMessages().then((result) => {
+    if (result.success && result.messages) {
+      // Clear existing (if any)
+      elements.chatMessages.innerHTML = '';
+      for (const msg of result.messages) {
+        addChatMessage(msg);
+      }
+      chatHistoryLoaded = true;
+    }
+  });
 }
 
 function setupBottomPanelResize(): void {
@@ -10489,6 +10576,28 @@ function init(): void {
   elements.btnBottomPanelClose.addEventListener('click', closeBottomPanel);
   elements.btnNotesToggle.addEventListener('click', () => toggleBottomTab('notes'));
   elements.notesTextarea.addEventListener('input', saveNotesDebounced);
+
+  // Agent Chat event listeners
+  elements.chatSendBtn.addEventListener('click', sendChatMessage);
+  elements.chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendChatMessage();
+    }
+  });
+  // Receive agent messages in real-time
+  window.api.onAgentMessage((msg) => {
+    addChatMessage(msg);
+    // Show badge if chat tab is not active
+    if (state.activeBottomTab !== 'chat') {
+      const badge = document.getElementById('badge-chat');
+      if (badge) badge.textContent = '!';
+    }
+  });
+  // Agent connection status changes
+  window.api.onAgentConnectionChanged((data) => {
+    updateAgentConnectionStatus(data.connected, data.count);
+  });
 
   // Notes tab right-click context menu
   const notesTabBtn = document.querySelector('.bottom-tab-btn[data-bottom-tab="notes"]');

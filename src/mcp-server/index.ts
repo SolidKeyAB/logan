@@ -80,6 +80,75 @@ function maybeRedact<T>(data: T, redact: boolean): T {
   return obfuscator.obfuscateObject(data);
 }
 
+// --- SSE Client for Chat ---
+
+interface ChatMessage {
+  id: string;
+  from: 'user' | 'agent';
+  text: string;
+  timestamp: number;
+}
+
+let sseBuffer: ChatMessage[] = [];
+let sseWaiters: Array<(msg: ChatMessage) => void> = [];
+let sseConnected = false;
+let sseReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+function connectSSE(): void {
+  const port = getApiPort();
+  if (!port) {
+    // Retry after a delay
+    sseReconnectTimer = setTimeout(connectSSE, 5000);
+    return;
+  }
+
+  const req = http.get(`http://127.0.0.1:${port}/api/events`, (res) => {
+    sseConnected = true;
+    let buffer = '';
+
+    res.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString();
+      // Parse SSE events from buffer
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || ''; // Keep incomplete chunk
+
+      for (const part of parts) {
+        const lines = part.split('\n');
+        let eventType = '';
+        let data = '';
+        for (const line of lines) {
+          if (line.startsWith('event: ')) eventType = line.slice(7);
+          else if (line.startsWith('data: ')) data = line.slice(6);
+        }
+        if (eventType === 'message' && data) {
+          try {
+            const msg: ChatMessage = JSON.parse(data);
+            // Only deliver user messages (agent doesn't need to see its own messages)
+            if (msg.from === 'user') {
+              if (sseWaiters.length > 0) {
+                const waiter = sseWaiters.shift()!;
+                waiter(msg);
+              } else {
+                sseBuffer.push(msg);
+              }
+            }
+          } catch { /* ignore parse errors */ }
+        }
+      }
+    });
+
+    res.on('end', () => {
+      sseConnected = false;
+      sseReconnectTimer = setTimeout(connectSSE, 3000);
+    });
+  });
+
+  req.on('error', () => {
+    sseConnected = false;
+    sseReconnectTimer = setTimeout(connectSSE, 5000);
+  });
+}
+
 // --- MCP Server Setup ---
 
 const server = new McpServer({
@@ -825,12 +894,88 @@ server.tool(
   }
 );
 
+// === Tool: logan_send_message ===
+server.tool(
+  'logan_send_message',
+  'Send a message to the LOGAN user. The message appears in the Chat panel inside LOGAN.',
+  {
+    message: z.string().describe('Message text to send to the user'),
+  },
+  async ({ message }) => {
+    try {
+      const result = await apiCall('POST', '/api/agent-message', { message });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_wait_for_message ===
+server.tool(
+  'logan_wait_for_message',
+  'Wait for the LOGAN user to send a message via the Chat panel. Blocks until a message arrives or timeout. Use this for interactive conversations.',
+  {
+    timeout: z.number().min(1).max(300).default(120).describe('Seconds to wait before timing out (max 300)'),
+  },
+  async ({ timeout }) => {
+    try {
+      // If buffer has messages, return immediately
+      if (sseBuffer.length > 0) {
+        const msg = sseBuffer.shift()!;
+        return { content: [{ type: 'text', text: JSON.stringify({ message: msg.text, timestamp: msg.timestamp }) }] };
+      }
+
+      // Wait for a message via SSE
+      const result = await new Promise<{ message: string; timestamp: number } | { timeout: true }>((resolve) => {
+        const timer = setTimeout(() => {
+          // Remove waiter on timeout
+          const idx = sseWaiters.indexOf(waiterFn);
+          if (idx !== -1) sseWaiters.splice(idx, 1);
+          resolve({ timeout: true });
+        }, timeout * 1000);
+
+        const waiterFn = (msg: ChatMessage) => {
+          clearTimeout(timer);
+          resolve({ message: msg.text, timestamp: msg.timestamp });
+        };
+        sseWaiters.push(waiterFn);
+      });
+
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_get_messages ===
+server.tool(
+  'logan_get_messages',
+  'Get the full chat message history between agent and user',
+  {
+    since: z.number().optional().describe('Only return messages after this Unix timestamp (ms)'),
+  },
+  async ({ since }) => {
+    try {
+      const urlPath = since ? `/api/messages?since=${since}` : '/api/messages';
+      const result = await apiCall('GET', urlPath);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // --- Start server ---
 
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('LOGAN MCP server started (stdio transport)');
+
+  // Start SSE connection for real-time chat
+  connectSSE();
 }
 
 main().catch((err) => {

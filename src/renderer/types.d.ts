@@ -394,6 +394,13 @@ interface Api {
   // MCP navigation
   onNavigateToLine: (callback: (lineNumber: number) => void) => () => void;
 
+  // Agent chat
+  sendAgentMessage: (text: string) => Promise<{ success: boolean; message?: { id: string; from: string; text: string; timestamp: number } }>;
+  getAgentMessages: () => Promise<{ success: boolean; messages?: Array<{ id: string; from: string; text: string; timestamp: number }> }>;
+  onAgentMessage: (callback: (msg: { id: string; from: string; text: string; timestamp: number }) => void) => () => void;
+  getAgentStatus: () => Promise<{ connected: boolean; count: number }>;
+  onAgentConnectionChanged: (callback: (data: { connected: boolean; count: number }) => void) => () => void;
+
   // Device discovery
   serialListPorts: () => Promise<{ success: boolean; ports?: Array<{ path: string; manufacturer?: string; vendorId?: string; productId?: string }>; error?: string }>;
   logcatListDevices: () => Promise<{ success: boolean; devices?: Array<{ id: string; state: string; model?: string }>; error?: string }>;

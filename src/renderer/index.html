@@ -133,6 +133,10 @@
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
             <span class="activity-badge" id="badge-live"></span>
           </button>
+          <button class="activity-bar-btn" id="btn-agent-chat" data-bottom-tab="chat" title="Agent Chat (Ctrl+Shift+C)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <span class="activity-badge" id="badge-chat"></span>
+          </button>
         </div>
         <div class="activity-bar-bottom">
           <button class="activity-bar-btn" id="btn-activity-settings" title="Settings">
@@ -310,6 +314,7 @@
           <button class="bottom-tab-btn" data-bottom-tab="video">Video</button>
           <button class="bottom-tab-btn" data-bottom-tab="image">Image</button>
           <button class="bottom-tab-btn" data-bottom-tab="live">Live</button>
+          <button class="bottom-tab-btn" data-bottom-tab="chat">Agent Chat</button>
           <button class="bottom-tab-btn" data-bottom-tab="notes">Notes</button>
         </div>
         <button id="btn-bottom-panel-close" class="bottom-panel-close-btn" title="Close panel">&times;</button>
@@ -493,6 +498,21 @@
             </div>
             <div id="saved-connections-row" class="saved-connections-row">
               <!-- Saved/dormant connection cards rendered dynamically -->
+            </div>
+          </div>
+        </div>
+        <!-- Agent Chat tab -->
+        <div class="bottom-tab-view" data-bottom-tab="chat">
+          <div class="chat-panel-body">
+            <div id="chat-agent-status" class="chat-agent-status-bar">
+              <span id="chat-agent-dot" class="chat-agent-status-dot disconnected"></span>
+              <span id="chat-agent-status-text">No agent connected</span>
+              <span class="chat-agent-status-hint">Type "stop" to end the session</span>
+            </div>
+            <div id="chat-messages" class="chat-messages"></div>
+            <div class="chat-input-bar">
+              <input id="chat-input" type="text" placeholder="Message the AI agent..." />
+              <button id="chat-send-btn" class="chat-send-btn">Send</button>
             </div>
           </div>
         </div>

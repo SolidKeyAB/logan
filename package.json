@@ -18,7 +18,8 @@
     "package:win": "npm run build && electron-builder --win",
     "package:linux": "npm run build && electron-builder --linux",
     "package:all": "npm run build && electron-builder --mac --win --linux",
-    "mcp": "node dist/mcp-server/index.js"
+    "mcp": "node dist/mcp-server/index.js",
+    "logan-listen": "node dist/mcp-server/logan-listen.js"
   },
   "author": {
     "name": "SolidKey AB",

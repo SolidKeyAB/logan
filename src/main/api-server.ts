@@ -11,6 +11,55 @@ import { AnalysisResult } from './analyzers/types';
 const API_PORT = 19532;
 const PORT_FILE = path.join(os.homedir(), '.logan', 'mcp-port');
 
+// --- Chat message queue & SSE ---
+export interface ChatMessage {
+  id: string;
+  from: 'user' | 'agent';
+  text: string;
+  timestamp: number;
+}
+
+const chatMessages: ChatMessage[] = [];
+const sseClients: Set<http.ServerResponse> = new Set();
+
+export function getSseClientCount(): number {
+  return sseClients.size;
+}
+
+function notifyAgentConnectionChanged(ctx: ApiContext): void {
+  const win = ctx.getMainWindow();
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('agent-connection-changed', {
+      connected: sseClients.size > 0,
+      count: sseClients.size,
+    });
+  }
+}
+
+function broadcastSSE(msg: ChatMessage): void {
+  const data = `event: message\ndata: ${JSON.stringify(msg)}\n\n`;
+  for (const client of sseClients) {
+    try { client.write(data); } catch { sseClients.delete(client); }
+  }
+}
+
+export function addChatMessage(from: 'user' | 'agent', text: string): ChatMessage {
+  const msg: ChatMessage = {
+    id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+    from,
+    text,
+    timestamp: Date.now(),
+  };
+  chatMessages.push(msg);
+  broadcastSSE(msg);
+  return msg;
+}
+
+export function getChatMessages(since?: number): ChatMessage[] {
+  if (since) return chatMessages.filter(m => m.timestamp > since);
+  return [...chatMessages];
+}
+
 export interface ApiContext {
   getMainWindow(): BrowserWindow | null;
   getCurrentFilePath(): string | null;
@@ -146,6 +195,36 @@ export function startApiServer(ctx: ApiContext): void {
         if (url === '/api/notes') {
           const result = await ctx.loadNotes();
           sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/agent-status') {
+          sendJson(res, { success: true, connected: sseClients.size > 0, count: sseClients.size });
+          return;
+        }
+
+        if (url === '/api/events') {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          });
+          res.write(`event: connected\ndata: {}\n\n`);
+          sseClients.add(res);
+          notifyAgentConnectionChanged(ctx);
+          req.on('close', () => {
+            sseClients.delete(res);
+            notifyAgentConnectionChanged(ctx);
+          });
+          return; // keep connection open
+        }
+
+        if (url === '/api/messages' || url?.startsWith('/api/messages?')) {
+          const urlObj = new URL(url, `http://127.0.0.1:${API_PORT}`);
+          const sinceStr = urlObj.searchParams.get('since');
+          const since = sinceStr ? parseInt(sinceStr, 10) : undefined;
+          const messages = getChatMessages(since);
+          sendJson(res, { success: true, messages });
           return;
         }
 
@@ -353,6 +432,25 @@ export function startApiServer(ctx: ApiContext): void {
           if (!body.baselineId) return sendError(res, 'baselineId required');
           const ok = ctx.getBaselineStore().delete(body.baselineId);
           sendJson(res, { success: ok, error: ok ? undefined : 'Baseline not found' });
+          return;
+        }
+
+        if (url === '/api/user-message') {
+          if (!body.message) return sendError(res, 'message required');
+          const msg = addChatMessage('user', body.message);
+          sendJson(res, { success: true, message: msg });
+          return;
+        }
+
+        if (url === '/api/agent-message') {
+          if (!body.message) return sendError(res, 'message required');
+          const msg = addChatMessage('agent', body.message);
+          // Push to renderer via main window
+          const win = ctx.getMainWindow();
+          if (win && !win.isDestroyed()) {
+            win.webContents.send('agent-message', msg);
+          }
+          sendJson(res, { success: true, message: msg });
           return;
         }
 

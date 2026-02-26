@@ -432,6 +432,28 @@ const api = {
     return () => ipcRenderer.removeListener('navigate-to-line', handler);
   },
 
+  // Agent chat
+  sendAgentMessage: (text: string): Promise<{ success: boolean; message?: any }> =>
+    ipcRenderer.invoke('agent-send-message', text),
+
+  getAgentMessages: (): Promise<{ success: boolean; messages?: any[] }> =>
+    ipcRenderer.invoke('agent-get-messages'),
+
+  onAgentMessage: (callback: (msg: any) => void): (() => void) => {
+    const handler = (_: any, msg: any) => callback(msg);
+    ipcRenderer.on('agent-message', handler);
+    return () => ipcRenderer.removeListener('agent-message', handler);
+  },
+
+  getAgentStatus: (): Promise<{ connected: boolean; count: number }> =>
+    ipcRenderer.invoke('agent-get-status'),
+
+  onAgentConnectionChanged: (callback: (data: { connected: boolean; count: number }) => void): (() => void) => {
+    const handler = (_: any, data: { connected: boolean; count: number }) => callback(data);
+    ipcRenderer.on('agent-connection-changed', handler);
+    return () => ipcRenderer.removeListener('agent-connection-changed', handler);
+  },
+
   // Device discovery
   serialListPorts: (): Promise<{ success: boolean; ports?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.SERIAL_LIST_PORTS),

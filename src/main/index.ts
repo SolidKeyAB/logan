@@ -9,7 +9,7 @@ import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, 
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
-import { startApiServer, stopApiServer, ApiContext } from './api-server';
+import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount } from './api-server';
 import { BaselineStore, buildFingerprint } from './baselineStore';
 import { SerialHandler } from './serialHandler';
 import { LogcatHandler } from './logcatHandler';
@@ -4522,4 +4522,20 @@ ipcMain.handle('save-notes-as', async (_e: any, content: string) => {
   }
   fs.writeFileSync(result.filePath, content, 'utf-8');
   return { success: true, filePath: result.filePath };
+});
+
+// Agent chat — user sends message from renderer
+ipcMain.handle('agent-send-message', async (_e: any, text: string) => {
+  const msg = addChatMessage('user', text);
+  return { success: true, message: msg };
+});
+
+// Agent chat — get chat history
+ipcMain.handle('agent-get-messages', async () => {
+  return { success: true, messages: getChatMessages() };
+});
+
+// Agent connection status
+ipcMain.handle('agent-get-status', async () => {
+  return { connected: getSseClientCount() > 0, count: getSseClientCount() };
 });
