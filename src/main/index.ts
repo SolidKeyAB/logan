@@ -650,10 +650,72 @@ app.whenReady().then(() => {
       if (currentFilePath) logActivity(currentFilePath, 'bookmark_added', { lineNumber: bookmark.lineNumber, label: bookmark.label });
       return { success: true };
     },
+    removeBookmark: (id: string) => {
+      bookmarks.delete(id);
+      saveBookmarksForCurrentFile();
+      if (currentFilePath) logActivity(currentFilePath, 'bookmark_removed', { bookmarkId: id });
+      return { success: true };
+    },
+    updateBookmark: (bookmark: Bookmark) => {
+      if (!bookmarks.has(bookmark.id)) return { success: false, error: 'Bookmark not found' };
+      bookmarks.set(bookmark.id, bookmark);
+      saveBookmarksForCurrentFile();
+      return { success: true };
+    },
+    clearBookmarks: () => {
+      const count = bookmarks.size;
+      bookmarks.clear();
+      saveBookmarksForCurrentFile();
+      if (currentFilePath && count > 0) logActivity(currentFilePath, 'bookmark_cleared', { count });
+      return { success: true };
+    },
     addHighlight: (highlight: Highlight) => {
       highlights.set(highlight.id, highlight);
       saveHighlight(highlight);
       if (currentFilePath) logActivity(currentFilePath, 'highlight_added', { pattern: highlight.pattern, isGlobal: !!highlight.isGlobal });
+      return { success: true };
+    },
+    removeHighlight: (id: string) => {
+      highlights.delete(id);
+      removeHighlightFromStore(id);
+      if (currentFilePath) logActivity(currentFilePath, 'highlight_removed', { highlightId: id });
+      return { success: true };
+    },
+    updateHighlight: (highlight: Highlight) => {
+      if (!highlights.has(highlight.id)) return { success: false, error: 'Highlight not found' };
+      highlights.set(highlight.id, highlight);
+      saveHighlight(highlight);
+      return { success: true };
+    },
+    clearHighlights: () => {
+      highlights.clear();
+      saveHighlightsStore({});
+      if (currentFilePath && currentFileUsesLocalStorage) {
+        const localData = loadLocalFileData(currentFilePath);
+        localData.highlights = [];
+        saveLocalFileData(currentFilePath, localData);
+      }
+      return { success: true };
+    },
+    loadNotes: async () => {
+      if (!currentFilePath) return { success: false, error: 'No file open' };
+      const notesPath = path.join(getLocalLoganDir(currentFilePath),
+        path.basename(currentFilePath) + '.notes.txt');
+      try {
+        const content = fs.readFileSync(notesPath, 'utf-8');
+        return { success: true, content };
+      } catch {
+        return { success: true, content: '' };
+      }
+    },
+    saveNotes: async (content: string) => {
+      if (!currentFilePath) return { success: false, error: 'No file open' };
+      if (!ensureLocalLoganDir(currentFilePath)) {
+        return { success: false, error: 'Cannot write to local .logan/ directory' };
+      }
+      const notesPath = path.join(getLocalLoganDir(currentFilePath),
+        path.basename(currentFilePath) + '.notes.txt');
+      fs.writeFileSync(notesPath, content, 'utf-8');
       return { success: true };
     },
     detectTimeGaps: async (options: any) => {

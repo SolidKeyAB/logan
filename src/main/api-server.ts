@@ -26,7 +26,15 @@ export interface ApiContext {
   applyFilter(config: any): Promise<any>;
   clearFilter(): any;
   addBookmark(bookmark: Bookmark): any;
+  removeBookmark(id: string): any;
+  updateBookmark(bookmark: Bookmark): any;
+  clearBookmarks(): any;
   addHighlight(highlight: Highlight): any;
+  removeHighlight(id: string): any;
+  updateHighlight(highlight: Highlight): any;
+  clearHighlights(): any;
+  loadNotes(): Promise<any>;
+  saveNotes(content: string): Promise<any>;
   detectTimeGaps(options: any): Promise<any>;
   navigateToLine(lineNumber: number): void;
   getBaselineStore(): BaselineStore;
@@ -135,6 +143,12 @@ export function startApiServer(ctx: ApiContext): void {
           return;
         }
 
+        if (url === '/api/notes') {
+          const result = await ctx.loadNotes();
+          sendJson(res, result);
+          return;
+        }
+
         sendError(res, 'Not found', 404);
         return;
       }
@@ -223,6 +237,68 @@ export function startApiServer(ctx: ApiContext): void {
             isGlobal: body.isGlobal ?? false,
           };
           const result = ctx.addHighlight(highlight);
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/bookmark-remove') {
+          if (!body.id) return sendError(res, 'id required');
+          const result = ctx.removeBookmark(body.id);
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/bookmark-update') {
+          if (!body.id) return sendError(res, 'id required');
+          const existing = ctx.getBookmarks().get(body.id);
+          if (!existing) return sendError(res, 'Bookmark not found');
+          const updated: Bookmark = {
+            ...existing,
+            label: body.label ?? existing.label,
+            color: body.color ?? existing.color,
+          };
+          const result = ctx.updateBookmark(updated);
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/bookmark-clear') {
+          const result = ctx.clearBookmarks();
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/highlight-remove') {
+          if (!body.id) return sendError(res, 'id required');
+          const result = ctx.removeHighlight(body.id);
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/highlight-update') {
+          if (!body.id) return sendError(res, 'id required');
+          const existing = ctx.getHighlights().get(body.id);
+          if (!existing) return sendError(res, 'Highlight not found');
+          const updated: Highlight = {
+            ...existing,
+            pattern: body.pattern ?? existing.pattern,
+            backgroundColor: body.backgroundColor ?? existing.backgroundColor,
+            textColor: body.textColor !== undefined ? body.textColor : existing.textColor,
+          };
+          const result = ctx.updateHighlight(updated);
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/highlight-clear') {
+          const result = ctx.clearHighlights();
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/notes') {
+          if (body.content === undefined) return sendError(res, 'content required');
+          const result = await ctx.saveNotes(body.content);
           sendJson(res, result);
           return;
         }

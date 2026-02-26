@@ -672,6 +672,159 @@ server.tool(
   }
 );
 
+// === Tool: logan_get_notes ===
+server.tool(
+  'logan_get_notes',
+  'Read the notes for the currently open log file. Notes are stored in .logan/<filename>.notes.txt alongside the log file.',
+  {
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+  },
+  async ({ redact }) => {
+    try {
+      const result = await apiCall('GET', '/api/notes');
+      if (!result.success) {
+        return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
+      }
+      const content = result.content || '';
+      const output = redact ? maybeRedact({ notes: content }, true) : { notes: content };
+      return { content: [{ type: 'text', text: content ? JSON.stringify(output, null, 2) : 'No notes for this file yet.' }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_save_notes ===
+server.tool(
+  'logan_save_notes',
+  'Write notes for the currently open log file. By default appends to existing notes with a separator. Set append=false to overwrite.',
+  {
+    content: z.string().describe('The notes content to save'),
+    append: z.boolean().default(true).describe('If true, append to existing notes; if false, overwrite'),
+  },
+  async ({ content, append }) => {
+    try {
+      let finalContent = content;
+      if (append) {
+        const existing = await apiCall('GET', '/api/notes');
+        if (existing.success && existing.content) {
+          finalContent = existing.content + '\n\n---\n\n' + content;
+        }
+      }
+      const result = await apiCall('POST', '/api/notes', { content: finalContent });
+      if (!result.success) {
+        return { content: [{ type: 'text', text: `Error: ${result.error}` }], isError: true };
+      }
+      return { content: [{ type: 'text', text: append ? 'Notes appended successfully.' : 'Notes saved successfully.' }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_remove_bookmark ===
+server.tool(
+  'logan_remove_bookmark',
+  'Delete a bookmark by its ID. Use logan_bookmarks to list all bookmarks and get their IDs.',
+  {
+    id: z.string().describe('The bookmark ID to remove'),
+  },
+  async ({ id }) => {
+    try {
+      const result = await apiCall('POST', '/api/bookmark-remove', { id });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_update_bookmark ===
+server.tool(
+  'logan_update_bookmark',
+  'Update a bookmark\'s label or color. Use logan_bookmarks to list all bookmarks and get their IDs.',
+  {
+    id: z.string().describe('The bookmark ID to update'),
+    label: z.string().optional().describe('New label text for the bookmark'),
+    color: z.string().optional().describe('New color hex code (e.g. "#ff0000")'),
+  },
+  async ({ id, label, color }) => {
+    try {
+      const result = await apiCall('POST', '/api/bookmark-update', { id, label, color });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_clear_bookmarks ===
+server.tool(
+  'logan_clear_bookmarks',
+  'Remove all bookmarks from the currently open file',
+  {},
+  async () => {
+    try {
+      const result = await apiCall('POST', '/api/bookmark-clear', {});
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_remove_highlight ===
+server.tool(
+  'logan_remove_highlight',
+  'Delete a highlight rule by its ID. Use logan_highlights to list all highlights and get their IDs.',
+  {
+    id: z.string().describe('The highlight ID to remove'),
+  },
+  async ({ id }) => {
+    try {
+      const result = await apiCall('POST', '/api/highlight-remove', { id });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_update_highlight ===
+server.tool(
+  'logan_update_highlight',
+  'Update a highlight rule\'s pattern or colors. Use logan_highlights to list all highlights and get their IDs.',
+  {
+    id: z.string().describe('The highlight ID to update'),
+    pattern: z.string().optional().describe('New pattern text'),
+    backgroundColor: z.string().optional().describe('New background color hex (e.g. "#ff0000")'),
+    textColor: z.string().optional().describe('New text color hex (e.g. "#ffffff")'),
+  },
+  async ({ id, pattern, backgroundColor, textColor }) => {
+    try {
+      const result = await apiCall('POST', '/api/highlight-update', { id, pattern, backgroundColor, textColor });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_clear_highlights ===
+server.tool(
+  'logan_clear_highlights',
+  'Remove all highlight rules from the currently open file',
+  {},
+  async () => {
+    try {
+      const result = await apiCall('POST', '/api/highlight-clear', {});
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // --- Start server ---
 
 async function main(): Promise<void> {
