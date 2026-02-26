@@ -278,6 +278,11 @@ interface AppState {
   // Baselines
   baselineList: BaselineRecord[];
   comparisonReport: ComparisonReport | null;
+  // Context search
+  contextDefinitions: ContextDefinitionDef[];
+  contextResults: Map<string, ContextMatchGroupDef[]>;
+  contextViewMode: 'tree' | 'timeline';
+  editingContextId: string | null;
 }
 
 const state: AppState = {
@@ -325,6 +330,10 @@ const state: AppState = {
   sshProfiles: [],
   baselineList: [],
   comparisonReport: null,
+  contextDefinitions: [],
+  contextResults: new Map(),
+  contextViewMode: 'tree' as 'tree' | 'timeline',
+  editingContextId: null,
 };
 
 // Constants
@@ -890,6 +899,16 @@ const elements = {
   scColorInput: document.getElementById('sc-color-input') as HTMLInputElement,
   btnScSave: document.getElementById('btn-sc-save') as HTMLButtonElement,
   btnScCancel: document.getElementById('btn-sc-cancel') as HTMLButtonElement,
+  // Context search (in bottom panel)
+  ctxAddBtn: document.getElementById('ctx-add-btn') as HTMLButtonElement,
+  ctxRunBtn: document.getElementById('ctx-run-btn') as HTMLButtonElement,
+  ctxResultsSummary: document.getElementById('ctx-results-summary') as HTMLSpanElement,
+  ctxViewTree: document.getElementById('ctx-view-tree') as HTMLButtonElement,
+  ctxViewTimeline: document.getElementById('ctx-view-timeline') as HTMLButtonElement,
+  ctxChips: document.getElementById('ctx-chips') as HTMLDivElement,
+  ctxForm: document.getElementById('ctx-form') as HTMLDivElement,
+  ctxResults: document.getElementById('ctx-results') as HTMLDivElement,
+  ctxTimeline: document.getElementById('ctx-timeline') as HTMLCanvasElement,
   // Search results content (in bottom panel)
   searchResultsSummary: document.getElementById('search-results-summary') as HTMLSpanElement,
   searchResultsList: document.getElementById('search-results-list') as HTMLDivElement,
@@ -6700,6 +6719,570 @@ function showSearchConfigSessionContextMenu(e: MouseEvent, session: SearchConfig
   setTimeout(() => document.addEventListener('click', closeMenu), 0);
 }
 
+// === Context Search ===
+
+const CTX_DEFAULT_COLORS = ['#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22', '#34495e'];
+let ctxColorIndex = 0;
+
+async function loadContextDefinitions(): Promise<void> {
+  const result = await window.api.contextDefinitionsLoad();
+  if (result.success && result.definitions) {
+    state.contextDefinitions = result.definitions;
+  }
+  renderContextChips();
+}
+
+function renderContextChips(): void {
+  const container = elements.ctxChips;
+  container.innerHTML = '';
+
+  for (const def of state.contextDefinitions) {
+    const chip = document.createElement('div');
+    chip.className = `ctx-chip${def.enabled ? '' : ' disabled'}`;
+
+    const swatch = document.createElement('span');
+    swatch.className = 'ctx-chip-swatch';
+    swatch.style.backgroundColor = def.color;
+
+    const name = document.createElement('span');
+    name.className = 'ctx-chip-name';
+    name.textContent = def.name;
+    name.title = def.name;
+
+    const count = document.createElement('span');
+    count.className = 'ctx-chip-count';
+    const groups = state.contextResults.get(def.id);
+    count.textContent = groups ? `(${groups.length})` : '';
+
+    const toggleBtn = document.createElement('button');
+    toggleBtn.className = 'ctx-chip-toggle';
+    toggleBtn.innerHTML = def.enabled ? '&#9673;' : '&#9675;';
+    toggleBtn.title = def.enabled ? 'Disable' : 'Enable';
+    toggleBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      def.enabled = !def.enabled;
+      await window.api.contextDefinitionsSave(def);
+      renderContextChips();
+    });
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'ctx-chip-edit';
+    editBtn.textContent = 'edit';
+    editBtn.title = 'Edit';
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showContextForm(def);
+    });
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'ctx-chip-delete';
+    deleteBtn.innerHTML = '&times;';
+    deleteBtn.title = 'Delete';
+    deleteBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`Delete context "${def.name}"?`)) return;
+      await window.api.contextDefinitionDelete(def.id);
+      state.contextDefinitions = state.contextDefinitions.filter(d => d.id !== def.id);
+      state.contextResults.delete(def.id);
+      renderContextChips();
+      renderContextResults();
+    });
+
+    chip.appendChild(swatch);
+    chip.appendChild(name);
+    chip.appendChild(count);
+    chip.appendChild(toggleBtn);
+    chip.appendChild(editBtn);
+    chip.appendChild(deleteBtn);
+    container.appendChild(chip);
+  }
+}
+
+function showContextForm(existingDef?: ContextDefinitionDef): void {
+  const form = elements.ctxForm;
+  form.classList.remove('hidden');
+  form.innerHTML = '';
+  state.editingContextId = existingDef?.id || null;
+
+  const def = existingDef || {
+    id: '',
+    name: '',
+    color: CTX_DEFAULT_COLORS[ctxColorIndex % CTX_DEFAULT_COLORS.length],
+    patterns: [
+      { id: `cp-${Date.now()}-1`, pattern: '', isRegex: false, matchCase: false, role: 'must' as const, distance: undefined, timeWindow: undefined },
+    ],
+    proximityMode: 'lines' as const,
+    defaultDistance: 10,
+    enabled: true,
+    isGlobal: false,
+    createdAt: 0,
+  };
+
+  // Name + color row
+  const nameRow = document.createElement('div');
+  nameRow.className = 'ctx-form-row';
+  nameRow.innerHTML = `<label>Name</label>`;
+  const nameInput = document.createElement('input');
+  nameInput.className = 'ctx-form-input';
+  nameInput.value = def.name;
+  nameInput.placeholder = 'Context name...';
+  const colorInput = document.createElement('input');
+  colorInput.type = 'color';
+  colorInput.className = 'ctx-color-input';
+  colorInput.value = def.color;
+  nameRow.appendChild(nameInput);
+  nameRow.appendChild(colorInput);
+
+  // Global toggle
+  const globalLabel = document.createElement('label');
+  globalLabel.style.cssText = 'font-size:10px;color:var(--text-secondary);display:flex;align-items:center;gap:3px';
+  const globalCheck = document.createElement('input');
+  globalCheck.type = 'checkbox';
+  globalCheck.checked = def.isGlobal;
+  globalLabel.appendChild(globalCheck);
+  globalLabel.appendChild(document.createTextNode('Global'));
+  nameRow.appendChild(globalLabel);
+  form.appendChild(nameRow);
+
+  // Patterns section
+  const patSection = document.createElement('div');
+  patSection.className = 'ctx-form-section';
+  patSection.textContent = 'PATTERNS';
+  form.appendChild(patSection);
+
+  const patternsContainer = document.createElement('div');
+  patternsContainer.id = 'ctx-patterns-container';
+
+  function addPatternRow(pat: ContextPatternDef): void {
+    const row = document.createElement('div');
+    row.className = 'ctx-pattern-row';
+
+    const roleSelect = document.createElement('select');
+    roleSelect.className = 'ctx-pattern-role';
+    roleSelect.innerHTML = `<option value="must">must</option><option value="clue">clue</option>`;
+    roleSelect.value = pat.role;
+
+    const patternInput = document.createElement('input');
+    patternInput.className = 'ctx-pattern-input';
+    patternInput.value = pat.pattern;
+    patternInput.placeholder = 'Pattern...';
+
+    const regexBtn = document.createElement('button');
+    regexBtn.className = `ctx-pattern-toggle${pat.isRegex ? ' active' : ''}`;
+    regexBtn.textContent = '.*';
+    regexBtn.title = 'Regex';
+    regexBtn.addEventListener('click', () => {
+      regexBtn.classList.toggle('active');
+    });
+
+    const caseBtn = document.createElement('button');
+    caseBtn.className = `ctx-pattern-toggle${pat.matchCase ? ' active' : ''}`;
+    caseBtn.textContent = 'Aa';
+    caseBtn.title = 'Match case';
+    caseBtn.addEventListener('click', () => {
+      caseBtn.classList.toggle('active');
+    });
+
+    const distInput = document.createElement('input');
+    distInput.type = 'number';
+    distInput.className = 'ctx-pattern-dist';
+    distInput.value = pat.distance !== undefined ? String(pat.distance) : '';
+    distInput.placeholder = '±N';
+    distInput.title = 'Override distance for this pattern';
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'ctx-pattern-remove';
+    removeBtn.innerHTML = '&times;';
+    removeBtn.addEventListener('click', () => row.remove());
+
+    row.appendChild(roleSelect);
+    row.appendChild(patternInput);
+    row.appendChild(regexBtn);
+    row.appendChild(caseBtn);
+    row.appendChild(distInput);
+    row.appendChild(removeBtn);
+    row.dataset.patId = pat.id;
+    patternsContainer.appendChild(row);
+  }
+
+  for (const pat of def.patterns) addPatternRow(pat);
+  form.appendChild(patternsContainer);
+
+  const addPatBtn = document.createElement('button');
+  addPatBtn.className = 'ctx-add-pattern-btn';
+  addPatBtn.textContent = '+ Add pattern';
+  addPatBtn.addEventListener('click', () => {
+    addPatternRow({
+      id: `cp-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+      pattern: '',
+      isRegex: false,
+      matchCase: false,
+      role: 'clue',
+    });
+  });
+  form.appendChild(addPatBtn);
+
+  // Proximity settings
+  const proxRow = document.createElement('div');
+  proxRow.className = 'ctx-proximity-row';
+  proxRow.innerHTML = `<label>Proximity:</label>`;
+  const distGlobal = document.createElement('input');
+  distGlobal.type = 'number';
+  distGlobal.className = 'ctx-proximity-input';
+  distGlobal.value = String(def.defaultDistance);
+  distGlobal.min = '1';
+  const distLabel = document.createElement('label');
+  distLabel.textContent = 'lines';
+  proxRow.appendChild(distGlobal);
+  proxRow.appendChild(distLabel);
+  form.appendChild(proxRow);
+
+  // Actions
+  const actions = document.createElement('div');
+  actions.className = 'ctx-form-actions';
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'ctx-form-btn primary';
+  saveBtn.textContent = existingDef ? 'Update' : 'Save';
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'ctx-form-btn';
+  cancelBtn.textContent = 'Cancel';
+
+  cancelBtn.addEventListener('click', () => {
+    form.classList.add('hidden');
+    form.innerHTML = '';
+    state.editingContextId = null;
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    const ctxName = nameInput.value.trim();
+    if (!ctxName) { nameInput.focus(); return; }
+
+    // Collect patterns
+    const patRows = patternsContainer.querySelectorAll('.ctx-pattern-row');
+    const patterns: ContextPatternDef[] = [];
+    patRows.forEach((row) => {
+      const r = row as HTMLElement;
+      const role = (r.querySelector('.ctx-pattern-role') as HTMLSelectElement).value as 'must' | 'clue';
+      const pattern = (r.querySelector('.ctx-pattern-input') as HTMLInputElement).value.trim();
+      if (!pattern) return;
+      const isRegex = r.querySelector('.ctx-pattern-toggle')?.classList.contains('active') || false;
+      const toggles = r.querySelectorAll('.ctx-pattern-toggle');
+      const matchCase = toggles[1]?.classList.contains('active') || false;
+      const distVal = (r.querySelector('.ctx-pattern-dist') as HTMLInputElement).value;
+      patterns.push({
+        id: r.dataset.patId || `cp-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+        pattern,
+        isRegex,
+        matchCase,
+        role,
+        distance: distVal ? parseInt(distVal, 10) : undefined,
+      });
+    });
+
+    if (patterns.length === 0) return;
+    if (!patterns.some(p => p.role === 'must')) {
+      alert('At least one "must" pattern is required.');
+      return;
+    }
+
+    const newDef: ContextDefinitionDef = {
+      id: existingDef?.id || `ctx-${Date.now()}`,
+      name: ctxName,
+      color: colorInput.value,
+      patterns,
+      proximityMode: 'lines',
+      defaultDistance: parseInt(distGlobal.value, 10) || 10,
+      enabled: true,
+      isGlobal: globalCheck.checked,
+      createdAt: existingDef?.createdAt || Date.now(),
+    };
+
+    await window.api.contextDefinitionsSave(newDef);
+
+    // Update local state
+    const idx = state.contextDefinitions.findIndex(d => d.id === newDef.id);
+    if (idx >= 0) {
+      state.contextDefinitions[idx] = newDef;
+    } else {
+      state.contextDefinitions.push(newDef);
+      ctxColorIndex++;
+    }
+
+    form.classList.add('hidden');
+    form.innerHTML = '';
+    state.editingContextId = null;
+    renderContextChips();
+  });
+
+  actions.appendChild(saveBtn);
+  actions.appendChild(cancelBtn);
+  form.appendChild(actions);
+  nameInput.focus();
+}
+
+async function runContextSearch(): Promise<void> {
+  const enabled = state.contextDefinitions.filter(d => d.enabled);
+  if (enabled.length === 0) {
+    elements.ctxResultsSummary.textContent = 'No enabled contexts';
+    return;
+  }
+
+  elements.ctxResultsSummary.textContent = 'Searching...';
+  showProgress('Context search... 0%');
+
+  const cleanupProgress = window.api.onContextSearchProgress((data) => {
+    updateProgress(data.percent);
+    updateProgressText(`Context search... ${data.percent}%`);
+  });
+
+  try {
+    const result = await window.api.contextSearch([]);
+    cleanupProgress();
+    hideProgress();
+
+    if (result.success && result.results) {
+      state.contextResults.clear();
+      let totalGroups = 0;
+      for (const r of result.results) {
+        state.contextResults.set(r.contextId, r.groups);
+        totalGroups += r.groups.length;
+      }
+      elements.ctxResultsSummary.textContent = `${totalGroups} match group${totalGroups !== 1 ? 's' : ''}`;
+      renderContextChips();
+      if (state.contextViewMode === 'tree') {
+        renderContextResults();
+      } else {
+        renderContextTimeline();
+      }
+    } else {
+      elements.ctxResultsSummary.textContent = result.error || 'Search failed';
+    }
+  } catch (err) {
+    cleanupProgress();
+    hideProgress();
+    elements.ctxResultsSummary.textContent = 'Search error';
+  }
+}
+
+function renderContextResults(): void {
+  const container = elements.ctxResults;
+  container.innerHTML = '';
+  elements.ctxTimeline.classList.add('hidden');
+  container.style.display = '';
+
+  for (const def of state.contextDefinitions) {
+    if (!def.enabled) continue;
+    const groups = state.contextResults.get(def.id);
+    if (!groups || groups.length === 0) continue;
+
+    const section = document.createElement('div');
+    section.className = 'ctx-context-section';
+
+    const header = document.createElement('div');
+    header.className = 'ctx-context-header';
+    const colorBar = document.createElement('span');
+    colorBar.className = 'ctx-context-color-bar';
+    colorBar.style.backgroundColor = def.color;
+    const headerName = document.createElement('span');
+    headerName.textContent = def.name;
+    const matchCount = document.createElement('span');
+    matchCount.className = 'ctx-context-match-count';
+    matchCount.textContent = `${groups.length} groups`;
+    header.appendChild(colorBar);
+    header.appendChild(headerName);
+    header.appendChild(matchCount);
+    section.appendChild(header);
+
+    const shouldCollapseAll = groups.length > 10;
+
+    groups.forEach((group, gi) => {
+      const groupEl = document.createElement('div');
+      groupEl.className = 'ctx-group';
+      if (shouldCollapseAll && gi >= 3) groupEl.classList.add('collapsed');
+
+      // Group header (must match line)
+      const gHeader = document.createElement('div');
+      gHeader.className = 'ctx-group-header';
+      gHeader.style.borderLeft = `2px solid ${def.color}`;
+
+      const toggle = document.createElement('span');
+      toggle.className = 'ctx-group-toggle';
+      toggle.textContent = (shouldCollapseAll && gi >= 3) ? '\u25B6' : '\u25BC';
+
+      const lineNum = document.createElement('span');
+      lineNum.className = 'ctx-group-line-num';
+      lineNum.textContent = `L${group.mustLine + 1}`;
+
+      const text = document.createElement('span');
+      text.className = 'ctx-group-text';
+      text.textContent = group.mustText;
+      text.title = group.mustText;
+
+      const score = document.createElement('span');
+      score.className = 'ctx-score-badge';
+      score.textContent = `${group.score} clue${group.score !== 1 ? 's' : ''}`;
+
+      gHeader.appendChild(toggle);
+      gHeader.appendChild(lineNum);
+      gHeader.appendChild(text);
+      gHeader.appendChild(score);
+
+      gHeader.addEventListener('click', (e) => {
+        if ((e.target as HTMLElement).classList.contains('ctx-group-toggle')) {
+          groupEl.classList.toggle('collapsed');
+          toggle.textContent = groupEl.classList.contains('collapsed') ? '\u25B6' : '\u25BC';
+        } else {
+          goToLine(group.mustLine);
+        }
+      });
+
+      groupEl.appendChild(gHeader);
+
+      // Clue lines
+      const cluesEl = document.createElement('div');
+      cluesEl.className = 'ctx-group-clues';
+
+      group.clues.forEach((clue, ci) => {
+        const clueItem = document.createElement('div');
+        clueItem.className = 'ctx-clue-item';
+
+        const connector = document.createElement('span');
+        connector.className = 'ctx-connector';
+        connector.style.color = def.color;
+        connector.textContent = ci === group.clues.length - 1 ? '\u2514\u2500' : '\u251C\u2500';
+
+        const cLineNum = document.createElement('span');
+        cLineNum.className = 'ctx-clue-line-num';
+        cLineNum.textContent = `L${clue.lineNumber + 1}`;
+
+        const cText = document.createElement('span');
+        cText.className = 'ctx-clue-text';
+        cText.textContent = clue.text;
+        cText.title = clue.text;
+
+        const dist = document.createElement('span');
+        dist.className = 'ctx-clue-dist';
+        dist.textContent = `\u00B1${clue.distance}`;
+
+        clueItem.appendChild(connector);
+        clueItem.appendChild(cLineNum);
+        clueItem.appendChild(cText);
+        clueItem.appendChild(dist);
+
+        clueItem.addEventListener('click', () => goToLine(clue.lineNumber));
+        cluesEl.appendChild(clueItem);
+      });
+
+      groupEl.appendChild(cluesEl);
+      section.appendChild(groupEl);
+    });
+
+    container.appendChild(section);
+  }
+
+  if (container.children.length === 0) {
+    container.innerHTML = '<p class="placeholder">No context matches found. Create contexts and click Run.</p>';
+  }
+}
+
+function renderContextTimeline(): void {
+  const canvas = elements.ctxTimeline;
+  canvas.classList.remove('hidden');
+  elements.ctxResults.style.display = '';
+
+  const totalLines = state.totalLines || 1;
+  const rect = canvas.parentElement!.getBoundingClientRect();
+  canvas.width = rect.width - 16;
+  canvas.height = 32;
+  const ctx2d = canvas.getContext('2d')!;
+  ctx2d.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Background
+  ctx2d.fillStyle = 'rgba(255,255,255,0.03)';
+  ctx2d.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Draw marks for each context
+  for (const def of state.contextDefinitions) {
+    if (!def.enabled) continue;
+    const groups = state.contextResults.get(def.id);
+    if (!groups) continue;
+
+    ctx2d.fillStyle = def.color;
+    for (const group of groups) {
+      const x = (group.mustLine / totalLines) * canvas.width;
+      ctx2d.fillRect(Math.round(x), 2, 3, canvas.height - 4);
+    }
+  }
+
+  // Click handler for timeline
+  canvas.onclick = (e) => {
+    const x = e.offsetX;
+    const clickedLine = Math.round((x / canvas.width) * totalLines);
+
+    // Find nearest group
+    let nearest: { def: ContextDefinitionDef; group: ContextMatchGroupDef; dist: number } | null = null;
+    for (const def of state.contextDefinitions) {
+      if (!def.enabled) continue;
+      const groups = state.contextResults.get(def.id);
+      if (!groups) continue;
+      for (const group of groups) {
+        const dist = Math.abs(group.mustLine - clickedLine);
+        if (!nearest || dist < nearest.dist) {
+          nearest = { def, group, dist };
+        }
+      }
+    }
+
+    if (nearest && nearest.dist < totalLines * 0.02) {
+      // Focus this group in results, fade others
+      const allGroups = elements.ctxResults.querySelectorAll('.ctx-group');
+      allGroups.forEach(g => {
+        g.classList.remove('focused');
+        g.classList.add('faded');
+      });
+
+      // Find and focus the matching group
+      const targetLineText = `L${nearest.group.mustLine + 1}`;
+      allGroups.forEach(g => {
+        const lineEl = g.querySelector('.ctx-group-line-num');
+        if (lineEl && lineEl.textContent === targetLineText) {
+          g.classList.remove('faded');
+          g.classList.add('focused');
+          g.classList.remove('collapsed');
+          const toggleEl = g.querySelector('.ctx-group-toggle');
+          if (toggleEl) toggleEl.textContent = '\u25BC';
+          g.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+      });
+
+      goToLine(nearest.group.mustLine);
+    } else {
+      // Click on empty space - clear focus
+      const allGroups = elements.ctxResults.querySelectorAll('.ctx-group');
+      allGroups.forEach(g => {
+        g.classList.remove('focused');
+        g.classList.remove('faded');
+      });
+    }
+  };
+
+  // Also render the tree below timeline
+  renderContextResults();
+}
+
+function toggleContextView(mode: 'tree' | 'timeline'): void {
+  state.contextViewMode = mode;
+  elements.ctxViewTree.classList.toggle('active', mode === 'tree');
+  elements.ctxViewTimeline.classList.toggle('active', mode === 'timeline');
+
+  if (mode === 'tree') {
+    elements.ctxTimeline.classList.add('hidden');
+    renderContextResults();
+  } else {
+    renderContextTimeline();
+  }
+}
+
 async function formatAndLoadJson(): Promise<void> {
   if (!state.filePath) return;
 
@@ -6936,9 +7519,10 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       // Restore video player state for this file
       restoreVideoState();
 
-      // Load search configs and sessions for this file
+      // Load search configs, sessions, and context definitions for this file
       loadSearchConfigs();
       loadSearchConfigSessions();
+      loadContextDefinitions();
 
       // Build minimap with progress
       unsubscribe(); // Stop listening to indexing progress
@@ -10684,6 +11268,12 @@ function init(): void {
     if (e.key === 'Escape') { e.preventDefault(); hideSearchConfigForm(); }
   });
 
+  // Context search panel events (inside bottom panel)
+  elements.ctxAddBtn.addEventListener('click', () => showContextForm());
+  elements.ctxRunBtn.addEventListener('click', () => runContextSearch());
+  elements.ctxViewTree.addEventListener('click', () => toggleContextView('tree'));
+  elements.ctxViewTimeline.addEventListener('click', () => toggleContextView('timeline'));
+
   // Video player events (inside bottom panel)
   elements.btnVideoOpen.addEventListener('click', openVideoFile);
   elements.btnVideoSyncFromLine.addEventListener('click', setVideoSyncFromCurrentLine);
@@ -11474,9 +12064,10 @@ async function switchToTab(tabId: string): Promise<void> {
       }
       updateHighlightsUI();
 
-      // Reload search configs and sessions for the new file
+      // Reload search configs, sessions, and context definitions for the new file
       loadSearchConfigs();
       loadSearchConfigSessions();
+      loadContextDefinitions();
 
       createLogViewer();
 

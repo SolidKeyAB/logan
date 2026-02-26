@@ -58,6 +58,11 @@ const IPC = {
   BASELINE_UPDATE: 'baseline-update',
   BASELINE_DELETE: 'baseline-delete',
   BASELINE_COMPARE: 'baseline-compare',
+  // Context search
+  CONTEXT_DEFINITIONS_LOAD: 'context-definitions-load',
+  CONTEXT_DEFINITIONS_SAVE: 'context-definitions-save',
+  CONTEXT_SEARCH: 'context-search',
+  CONTEXT_SEARCH_PROGRESS: 'context-search-progress',
   // Tabbed terminal
   TERMINAL_CREATE_LOCAL: 'terminal-create-local',
   TERMINAL_CREATE_SSH: 'terminal-create-ssh',
@@ -541,6 +546,25 @@ const api = {
 
   baselineCompare: (baselineId: string): Promise<{ success: boolean; report?: any; error?: string }> =>
     ipcRenderer.invoke(IPC.BASELINE_COMPARE, baselineId),
+
+  // Context search
+  contextDefinitionsLoad: (): Promise<{ success: boolean; definitions?: any[] }> =>
+    ipcRenderer.invoke(IPC.CONTEXT_DEFINITIONS_LOAD),
+
+  contextDefinitionsSave: (def: any): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.CONTEXT_DEFINITIONS_SAVE, def),
+
+  contextDefinitionDelete: (id: string): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('context-definition-delete', id),
+
+  contextSearch: (contextIds: string[]): Promise<{ success: boolean; results?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.CONTEXT_SEARCH, contextIds),
+
+  onContextSearchProgress: (callback: (data: { percent: number; contextId: string }) => void): (() => void) => {
+    const handler = (_: any, data: { percent: number; contextId: string }) => callback(data);
+    ipcRenderer.on(IPC.CONTEXT_SEARCH_PROGRESS, handler);
+    return () => ipcRenderer.removeListener(IPC.CONTEXT_SEARCH_PROGRESS, handler);
+  },
 
   // Window controls
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),

@@ -311,6 +311,7 @@
           <button class="bottom-tab-btn" data-bottom-tab="time-gaps">Time Gaps</button>
           <button class="bottom-tab-btn" data-bottom-tab="search-results">Search Results</button>
           <button class="bottom-tab-btn" data-bottom-tab="search-configs">Search Configs</button>
+          <button class="bottom-tab-btn" data-bottom-tab="contexts">Contexts</button>
           <button class="bottom-tab-btn" data-bottom-tab="video">Video</button>
           <button class="bottom-tab-btn" data-bottom-tab="image">Image</button>
           <button class="bottom-tab-btn" data-bottom-tab="live">Live</button>
@@ -397,6 +398,24 @@
             <button id="btn-sc-cancel" class="sc-form-btn">Cancel</button>
           </div>
           <div id="search-configs-results" class="search-configs-results"></div>
+        </div>
+        <!-- Contexts tab -->
+        <div class="bottom-tab-view" data-bottom-tab="contexts">
+          <div class="contexts-panel-body">
+            <div class="contexts-toolbar">
+              <button id="ctx-add-btn" class="ctx-toolbar-btn" title="New context">+ New</button>
+              <button id="ctx-run-btn" class="ctx-toolbar-btn" title="Run all enabled contexts">Run</button>
+              <span id="ctx-results-summary" class="ctx-results-summary"></span>
+              <div class="ctx-view-toggle">
+                <button id="ctx-view-tree" class="ctx-view-btn active" title="Tree view">Tree</button>
+                <button id="ctx-view-timeline" class="ctx-view-btn" title="Timeline view">Timeline</button>
+              </div>
+            </div>
+            <div id="ctx-chips" class="ctx-chips"></div>
+            <div id="ctx-form" class="ctx-form hidden"></div>
+            <div id="ctx-results" class="ctx-results"></div>
+            <canvas id="ctx-timeline" class="ctx-timeline hidden"></canvas>
+          </div>
         </div>
         <!-- Video tab -->
         <div class="bottom-tab-view" data-bottom-tab="video">

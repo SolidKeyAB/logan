@@ -245,6 +245,43 @@ interface ComparisonReport {
   summary: { critical: number; warning: number; info: number };
 }
 
+interface ContextPatternDef {
+  id: string;
+  pattern: string;
+  isRegex: boolean;
+  matchCase: boolean;
+  role: 'must' | 'clue';
+  distance?: number;
+  timeWindow?: number;
+}
+
+interface ContextDefinitionDef {
+  id: string;
+  name: string;
+  color: string;
+  patterns: ContextPatternDef[];
+  proximityMode: 'lines' | 'time' | 'both';
+  defaultDistance: number;
+  defaultTimeWindow?: number;
+  enabled: boolean;
+  isGlobal: boolean;
+  createdAt: number;
+}
+
+interface ContextMatchGroupDef {
+  contextId: string;
+  mustLine: number;
+  mustText: string;
+  mustPatternId: string;
+  clues: Array<{
+    lineNumber: number;
+    text: string;
+    patternId: string;
+    distance: number;
+  }>;
+  score: number;
+}
+
 interface Api {
   // File operations
   openFileDialog: () => Promise<string | null>;
@@ -433,6 +470,13 @@ interface Api {
   baselineUpdate: (id: string, fields: { name?: string; description?: string; tags?: string[] }) => Promise<{ success: boolean; error?: string }>;
   baselineDelete: (id: string) => Promise<{ success: boolean; error?: string }>;
   baselineCompare: (baselineId: string) => Promise<{ success: boolean; report?: ComparisonReport; error?: string }>;
+
+  // Context search
+  contextDefinitionsLoad: () => Promise<{ success: boolean; definitions?: ContextDefinitionDef[] }>;
+  contextDefinitionsSave: (def: ContextDefinitionDef) => Promise<{ success: boolean }>;
+  contextDefinitionDelete: (id: string) => Promise<{ success: boolean }>;
+  contextSearch: (contextIds: string[]) => Promise<{ success: boolean; results?: Array<{ contextId: string; groups: ContextMatchGroupDef[] }>; error?: string }>;
+  onContextSearchProgress: (callback: (data: { percent: number; contextId: string }) => void) => () => void;
 
   // Window controls
   windowMinimize: () => Promise<void>;

@@ -5,7 +5,7 @@ import * as os from 'os';
 import { spawn } from 'child_process';
 import * as pty from 'node-pty';
 import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
-import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, LiveConnectionInfo } from '../shared/types';
+import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, LiveConnectionInfo, ContextDefinition, ContextPattern, ContextMatchGroup } from '../shared/types';
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
@@ -2965,6 +2965,199 @@ ipcMain.handle(IPC.SEARCH_CONFIG_SESSION_DELETE, async (_, sessionId: string, is
     saveLocalSearchConfigSessions(currentFilePath, sessions);
   }
   return { success: true };
+});
+
+// === Context Search ===
+
+const getContextDefinitionsPath = () => path.join(getConfigDir(), 'context-definitions.json');
+const GLOBAL_CONTEXT_KEY = '_global';
+
+interface ContextDefinitionsStore {
+  [key: string]: ContextDefinition[];
+}
+
+function loadContextDefinitionsStore(): ContextDefinitionsStore {
+  try {
+    ensureConfigDir();
+    const configPath = getContextDefinitionsPath();
+    if (fs.existsSync(configPath)) {
+      return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    }
+  } catch (error) {
+    console.error('Failed to load context definitions:', error);
+  }
+  return {};
+}
+
+function saveContextDefinitionsStore(store: ContextDefinitionsStore): void {
+  try {
+    ensureConfigDir();
+    const configPath = getContextDefinitionsPath();
+    const cleanStore: ContextDefinitionsStore = {};
+    for (const [key, value] of Object.entries(store)) {
+      if (value.length > 0) {
+        cleanStore[key] = value;
+      }
+    }
+    fs.writeFileSync(configPath, JSON.stringify(cleanStore, null, 2), 'utf-8');
+  } catch (error) {
+    console.error('Failed to save context definitions:', error);
+  }
+}
+
+function loadContextDefinitionsForFile(filePath: string): ContextDefinition[] {
+  const store = loadContextDefinitionsStore();
+  const defs: ContextDefinition[] = [];
+  const globalDefs = store[GLOBAL_CONTEXT_KEY] || [];
+  for (const d of globalDefs) defs.push({ ...d, isGlobal: true });
+  if (filePath) {
+    const fileDefs = store[filePath] || [];
+    for (const d of fileDefs) defs.push({ ...d, isGlobal: false });
+  }
+  return defs;
+}
+
+function saveContextDefinition(def: ContextDefinition): void {
+  const store = loadContextDefinitionsStore();
+  // Remove from all keys first
+  for (const k of Object.keys(store)) {
+    store[k] = store[k].filter(d => d.id !== def.id);
+  }
+  const key = def.isGlobal ? GLOBAL_CONTEXT_KEY : (currentFilePath || GLOBAL_CONTEXT_KEY);
+  if (!store[key]) store[key] = [];
+  store[key].push(def);
+  saveContextDefinitionsStore(store);
+}
+
+function removeContextDefinition(id: string): void {
+  const store = loadContextDefinitionsStore();
+  let changed = false;
+  for (const k of Object.keys(store)) {
+    const before = store[k].length;
+    store[k] = store[k].filter(d => d.id !== id);
+    if (store[k].length !== before) changed = true;
+  }
+  if (changed) saveContextDefinitionsStore(store);
+}
+
+ipcMain.handle(IPC.CONTEXT_DEFINITIONS_LOAD, async () => {
+  const definitions = loadContextDefinitionsForFile(currentFilePath || '');
+  return { success: true, definitions };
+});
+
+ipcMain.handle(IPC.CONTEXT_DEFINITIONS_SAVE, async (_, def: ContextDefinition) => {
+  saveContextDefinition(def);
+  return { success: true };
+});
+
+ipcMain.handle('context-definition-delete', async (_, id: string) => {
+  removeContextDefinition(id);
+  return { success: true };
+});
+
+ipcMain.handle(IPC.CONTEXT_SEARCH, async (_, contextIds: string[]) => {
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+
+  const allDefs = loadContextDefinitionsForFile(currentFilePath || '');
+  const enabledDefs = allDefs.filter(d => d.enabled && (contextIds.length === 0 || contextIds.includes(d.id)));
+
+  if (enabledDefs.length === 0) return { success: true, results: [] };
+
+  const filteredIndices = getFilteredLines();
+  const fileInfo = handler.getFileInfo();
+  const totalLines = fileInfo ? fileInfo.totalLines : 0;
+  const results: Array<{ contextId: string; groups: ContextMatchGroup[] }> = [];
+
+  for (let ci = 0; ci < enabledDefs.length; ci++) {
+    const ctx = enabledDefs[ci];
+    const mustPatterns = ctx.patterns.filter(p => p.role === 'must');
+    const cluePatterns = ctx.patterns.filter(p => p.role === 'clue');
+
+    if (mustPatterns.length === 0) continue;
+
+    const groups: ContextMatchGroup[] = [];
+
+    // Find all must-pattern matches
+    for (const mustPat of mustPatterns) {
+      const searchOpts: SearchOptions = {
+        pattern: mustPat.pattern,
+        isRegex: mustPat.isRegex,
+        isWildcard: false,
+        matchCase: mustPat.matchCase,
+        wholeWord: false,
+      };
+      if (filteredIndices) searchOpts.filteredLineIndices = filteredIndices;
+
+      let mustMatches: Array<{ lineNumber: number; lineText: string }>;
+      try {
+        mustMatches = await handler.search(searchOpts, () => {}, { cancelled: false });
+      } catch { continue; }
+
+      // For each must match, search for clues in proximity
+      for (const mm of mustMatches) {
+        const mustLineNum = mm.lineNumber;
+        const distance = ctx.defaultDistance || 10;
+        const windowStart = Math.max(0, mustLineNum - distance);
+        const windowEnd = Math.min(totalLines - 1, mustLineNum + distance);
+        const windowSize = windowEnd - windowStart + 1;
+
+        // Read window lines
+        let windowLines: Array<{ lineNumber: number; text: string }>;
+        try {
+          const res = await handler.getLines(windowStart, windowSize);
+          windowLines = res.map((l: any) => ({ lineNumber: l.lineNumber, text: l.text }));
+        } catch { continue; }
+
+        const clues: ContextMatchGroup['clues'] = [];
+
+        for (const cluePat of cluePatterns) {
+          const clueDistance = cluePat.distance ?? distance;
+          let regex: RegExp;
+          try {
+            regex = cluePat.isRegex
+              ? new RegExp(cluePat.pattern, cluePat.matchCase ? '' : 'i')
+              : new RegExp(cluePat.pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), cluePat.matchCase ? '' : 'i');
+          } catch { continue; }
+
+          for (const wl of windowLines) {
+            if (wl.lineNumber === mustLineNum) continue;
+            const lineDist = Math.abs(wl.lineNumber - mustLineNum);
+            if (lineDist > clueDistance) continue;
+            if (regex.test(wl.text)) {
+              clues.push({
+                lineNumber: wl.lineNumber,
+                text: wl.text,
+                patternId: cluePat.id,
+                distance: lineDist,
+              });
+            }
+          }
+        }
+
+        if (clues.length > 0) {
+          groups.push({
+            contextId: ctx.id,
+            mustLine: mustLineNum,
+            mustText: mm.lineText,
+            mustPatternId: mustPat.id,
+            clues,
+            score: clues.length,
+          });
+        }
+      }
+    }
+
+    // Sort by line number
+    groups.sort((a, b) => a.mustLine - b.mustLine);
+    results.push({ contextId: ctx.id, groups });
+
+    // Report progress
+    const percent = Math.round(((ci + 1) / enabledDefs.length) * 100);
+    mainWindow?.webContents.send(IPC.CONTEXT_SEARCH_PROGRESS, { percent, contextId: ctx.id });
+  }
+
+  return { success: true, results };
 });
 
 // === Utility ===
