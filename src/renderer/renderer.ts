@@ -6794,7 +6794,9 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       } else {
         // Reset for non-markdown files
         markdownPreviewMode = false;
+        isMarkdownFile = false;
         elements.markdownPreview.classList.add('hidden');
+        elements.markdownPreview.innerHTML = '';
         elements.btnWordWrap.textContent = 'Wrap';
         elements.btnWordWrap.title = 'Toggle word wrap (⌥Z)';
         const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
@@ -11208,6 +11210,26 @@ async function switchToTab(tabId: string): Promise<void> {
     if (result.success && result.info) {
       // Restore tab state
       restoreTabState(tab);
+
+      // Handle markdown preview state for the new tab
+      isMarkdownFile = isMarkdownExtension(tab.filePath);
+      if (isMarkdownFile) {
+        markdownPreviewMode = true;
+        elements.btnWordWrap.textContent = 'Raw';
+        elements.btnWordWrap.title = 'Show raw markdown';
+        await renderMarkdownPreview();
+        showMarkdownPreview();
+      } else {
+        markdownPreviewMode = false;
+        elements.markdownPreview.classList.add('hidden');
+        elements.markdownPreview.innerHTML = '';
+        elements.btnWordWrap.textContent = 'Wrap';
+        elements.btnWordWrap.title = 'Toggle word wrap (⌥Z)';
+        const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
+        if (wrapper) {
+          wrapper.style.display = '';
+        }
+      }
 
       // Update with fresh info from backend
       state.totalLines = result.info.totalLines;
