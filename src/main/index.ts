@@ -1629,8 +1629,17 @@ ipcMain.handle(IPC.READ_FOLDER, async (_, folderPath: string) => {
 
       if (entry.isFile()) {
         const ext = path.extname(entry.name).toLowerCase();
-        // Include text-based files or files without extension
-        if (TEXT_EXTENSIONS.has(ext) || IMAGE_EXTENSIONS.has(ext) || ext === '') {
+        // Exclude known binary formats, show everything else (text + images)
+        const BINARY_EXTENSIONS = new Set([
+          '.exe', '.dll', '.so', '.dylib', '.o', '.a', '.lib',
+          '.zip', '.tar', '.gz', '.bz2', '.xz', '.7z', '.rar', '.zst',
+          '.bin', '.dat', '.db', '.sqlite', '.sqlite3',
+          '.class', '.pyc', '.pyo', '.wasm',
+          '.dmg', '.iso', '.img',
+          '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+          '.ttf', '.otf', '.woff', '.woff2', '.eot',
+        ]);
+        if (!BINARY_EXTENSIONS.has(ext)) {
           try {
             const stat = await fs.promises.stat(fullPath);
             files.push({
