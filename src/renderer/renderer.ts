@@ -4644,6 +4644,9 @@ function openBottomTab(tabId: string): void {
   if (tabId === 'live') {
     refreshLiveDevices();
   }
+  if (tabId === 'contexts') {
+    loadContextDefinitions();
+  }
 
   saveBottomPanelState();
 }
