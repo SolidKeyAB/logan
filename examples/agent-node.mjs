@@ -16,6 +16,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import http from 'http';
+import { matchIntent, isStopWord, HELP_TEXT } from './agent-intents.mjs';
 
 // --- Config ---
 const PORT_FILE = join(homedir(), '.logan', 'mcp-port');
@@ -126,16 +127,12 @@ function waitForMessage(timeoutSec = 120) {
   });
 }
 
-function isStopWord(msg) {
-  return /^(stop|bye|exit|quit)$/i.test(msg.trim());
-}
-
 // --- Main loop ---
 
 console.log('=== LOGAN Chat Agent (Node.js) ===');
 console.log(`Connecting to LOGAN on port ${port}...`);
 
-await sendMessage("Hi! I'm a Node.js agent. Ask me anything about this log, or type 'stop' to end.");
+await sendMessage("Hi! I'm a LOGAN agent. " + HELP_TEXT.split('\n')[0]);
 
 while (true) {
   console.log('[waiting for user message...]');
@@ -155,44 +152,9 @@ while (true) {
     break;
   }
 
-  // --- Example command handling ---
-  // Replace this section with your own logic.
-
-  const lower = userMsg.toLowerCase();
-
-  if (lower.includes('status')) {
-    const res = await apiCall('GET', '/api/status');
-    const s = res.status;
-    await sendMessage(`File: ${s.filePath}\nLines: ${s.totalLines}`);
-
-  } else if (lower.includes('analyze')) {
-    await sendMessage('Running analysis...');
-    const res = await apiCall('POST', '/api/analyze', {});
-    if (res.success) {
-      const lc = res.result.levelCounts || {};
-      await sendMessage(`Analysis complete: ${lc.error || 0} errors, ${lc.warning || 0} warnings.`);
-    } else {
-      await sendMessage('Analysis failed.');
-    }
-
-  } else if (lower.startsWith('search ')) {
-    const pattern = userMsg.slice(7).trim();
-    await sendMessage(`Searching for '${pattern}'...`);
-    const res = await apiCall('POST', '/api/search', {
-      pattern,
-      isRegex: false,
-      matchCase: false,
-      wholeWord: false,
-    });
-    if (res.success) {
-      await sendMessage(`Found ${res.matches.length} matches for '${pattern}'.`);
-    } else {
-      await sendMessage('Search failed.');
-    }
-
-  } else {
-    await sendMessage("I understand: status, analyze, search <pattern>. Type 'stop' to end.");
-  }
+  // Dispatch to intent engine
+  const response = await matchIntent(userMsg, apiCall);
+  await sendMessage(response);
 }
 
 console.log('=== Agent exited ===');

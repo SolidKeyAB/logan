@@ -400,6 +400,9 @@ interface Api {
   onAgentMessage: (callback: (msg: { id: string; from: string; text: string; timestamp: number }) => void) => () => void;
   getAgentStatus: () => Promise<{ connected: boolean; count: number }>;
   onAgentConnectionChanged: (callback: (data: { connected: boolean; count: number }) => void) => () => void;
+  launchAgent: () => Promise<{ success: boolean; error?: string }>;
+  stopAgent: () => Promise<{ success: boolean }>;
+  getAgentRunning: () => Promise<{ running: boolean }>;
 
   // Device discovery
   serialListPorts: () => Promise<{ success: boolean; ports?: Array<{ path: string; manufacturer?: string; vendorId?: string; productId?: string }>; error?: string }>;

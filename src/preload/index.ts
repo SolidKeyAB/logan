@@ -454,6 +454,15 @@ const api = {
     return () => ipcRenderer.removeListener('agent-connection-changed', handler);
   },
 
+  launchAgent: (): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('agent-launch'),
+
+  stopAgent: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('agent-stop'),
+
+  getAgentRunning: (): Promise<{ running: boolean }> =>
+    ipcRenderer.invoke('agent-get-running'),
+
   // Device discovery
   serialListPorts: (): Promise<{ success: boolean; ports?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.SERIAL_LIST_PORTS),

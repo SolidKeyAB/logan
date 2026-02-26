@@ -815,6 +815,7 @@ const elements = {
   chatSendBtn: document.getElementById('chat-send-btn') as HTMLButtonElement,
   chatAgentDot: document.getElementById('chat-agent-dot') as HTMLSpanElement,
   chatAgentStatusText: document.getElementById('chat-agent-status-text') as HTMLSpanElement,
+  chatLaunchAgent: document.getElementById('chat-launch-agent') as HTMLButtonElement,
   // Bottom panel
   bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
   bottomPanelResizeHandle: document.getElementById('bottom-panel-resize-handle') as HTMLDivElement,
@@ -4710,6 +4711,40 @@ function updateAgentConnectionStatus(connected: boolean, count: number): void {
   } else {
     dot.className = 'chat-agent-status-dot disconnected';
     text.textContent = 'No agent connected';
+  }
+}
+
+let agentRunning = false;
+
+function updateLaunchButton(): void {
+  const btn = elements.chatLaunchAgent;
+  if (agentRunning) {
+    btn.textContent = 'Stop Agent';
+    btn.classList.add('running');
+  } else {
+    btn.textContent = 'Launch Agent';
+    btn.classList.remove('running');
+  }
+}
+
+async function toggleAgent(): Promise<void> {
+  const btn = elements.chatLaunchAgent;
+  btn.disabled = true;
+  try {
+    if (agentRunning) {
+      await window.api.stopAgent();
+      agentRunning = false;
+    } else {
+      const res = await window.api.launchAgent();
+      if (res.success) {
+        agentRunning = true;
+      } else {
+        addChatMessage({ from: 'agent', text: `Failed to launch agent: ${res.error || 'unknown error'}`, timestamp: Date.now() });
+      }
+    }
+    updateLaunchButton();
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -10597,6 +10632,18 @@ function init(): void {
   // Agent connection status changes
   window.api.onAgentConnectionChanged((data) => {
     updateAgentConnectionStatus(data.connected, data.count);
+    // If agent was running but disconnected (count dropped to 0), update button
+    if (agentRunning && !data.connected) {
+      agentRunning = false;
+      updateLaunchButton();
+    }
+  });
+  // Launch/Stop agent button
+  elements.chatLaunchAgent.addEventListener('click', toggleAgent);
+  // Sync initial agent running state
+  window.api.getAgentRunning().then((r) => {
+    agentRunning = r.running;
+    updateLaunchButton();
   });
 
   // Notes tab right-click context menu

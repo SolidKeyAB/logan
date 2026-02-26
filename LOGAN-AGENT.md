@@ -182,6 +182,64 @@ See ready-to-run examples:
 
 ---
 
+## D. Built-in Agent (Launch from LOGAN)
+
+LOGAN includes a built-in agent that you can launch directly from the Chat tab — no terminal or API key needed.
+
+### How to Use
+
+1. Open LOGAN with a log file
+2. Open the **Agent Chat** tab in the bottom panel
+3. Click **"Launch Agent"** in the status bar
+4. The agent connects automatically and greets you
+5. Type commands like `triage`, `search error`, `crashes`, `help`
+6. Type `stop` or click **"Stop Agent"** to end the session
+
+### What the Built-in Agent Can Do
+
+| Command | What it does |
+|---|---|
+| `triage` / `summary` | Quick severity assessment with error counts |
+| `analyze` / `errors` | Level counts + top components |
+| `crashes` / `fatal` | Find crash sites with surrounding context |
+| `component X` | Investigate a specific component |
+| `search X` / `find X` | Search for a pattern |
+| `status` / `info` | File path, line count, filter state |
+| `time gaps` | Find pauses in the log |
+| `filter errors` | Show only error-level lines |
+| `clear filter` | Show all lines again |
+| `go to 500` | Navigate to a line |
+| `bookmark 42` | Bookmark a line |
+| `highlight X` | Highlight a pattern |
+| `between T1 and T2` | Analyze a time window |
+| `notes` | View notes for this file |
+| `help` | List all commands |
+| `stop` | End the session |
+
+### Custom Agent Script
+
+To use a different agent script, create `~/.logan/agent-config.json`:
+
+```json
+{
+  "scriptPath": "/path/to/your/agent-script.mjs"
+}
+```
+
+The script must be a Node.js ESM module that connects to LOGAN's HTTP API (same pattern as `examples/agent-node.mjs`).
+
+### Shared Intent Engine
+
+The built-in agent's command handling lives in `examples/agent-intents.mjs`. You can import it in your own scripts:
+
+```js
+import { matchIntent, isStopWord, HELP_TEXT } from './agent-intents.mjs';
+
+const response = await matchIntent(userMessage, apiCall);
+```
+
+---
+
 ## Stop Convention
 
 There is no forced kill mechanism. The convention is:

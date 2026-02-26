@@ -204,6 +204,44 @@ export interface SshStatus {
   tempFilePath: string | null;
 }
 
+// Context Search types
+export interface ContextPattern {
+  id: string;
+  pattern: string;
+  isRegex: boolean;
+  matchCase: boolean;
+  role: 'must' | 'clue';
+  distance?: number;
+  timeWindow?: number;
+}
+
+export interface ContextDefinition {
+  id: string;
+  name: string;
+  color: string;
+  patterns: ContextPattern[];
+  proximityMode: 'lines' | 'time' | 'both';
+  defaultDistance: number;
+  defaultTimeWindow?: number;
+  enabled: boolean;
+  isGlobal: boolean;
+  createdAt: number;
+}
+
+export interface ContextMatchGroup {
+  contextId: string;
+  mustLine: number;
+  mustText: string;
+  mustPatternId: string;
+  clues: Array<{
+    lineNumber: number;
+    text: string;
+    patternId: string;
+    distance: number;
+  }>;
+  score: number;
+}
+
 // Search config session (saved group of search configs)
 export interface SearchConfigSession {
   id: string;           // `scs-${Date.now()}`
@@ -311,4 +349,9 @@ export const IPC = {
   BASELINE_UPDATE: 'baseline-update',
   BASELINE_DELETE: 'baseline-delete',
   BASELINE_COMPARE: 'baseline-compare',
+  // Context search
+  CONTEXT_DEFINITIONS_LOAD: 'context-definitions-load',
+  CONTEXT_DEFINITIONS_SAVE: 'context-definitions-save',
+  CONTEXT_SEARCH: 'context-search',
+  CONTEXT_SEARCH_PROGRESS: 'context-search-progress',
 } as const;

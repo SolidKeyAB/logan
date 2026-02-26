@@ -3588,6 +3588,30 @@ kbd {
   font-style: italic;
 }
 
+.chat-launch-btn {
+  background: var(--accent-color, #007acc);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.chat-launch-btn:hover {
+  opacity: 0.9;
+}
+
+.chat-launch-btn.running {
+  background: #c0392b;
+}
+
+.chat-launch-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .chat-messages {
   flex: 1;
   overflow-y: auto;

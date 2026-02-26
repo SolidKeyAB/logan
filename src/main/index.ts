@@ -22,6 +22,10 @@ let searchSignal: { cancelled: boolean } = { cancelled: false };
 let diffSignal: { cancelled: boolean } = { cancelled: false };
 let currentFilePath: string | null = null;
 
+// Built-in agent child process
+import type { ChildProcess } from 'child_process';
+let agentProcess: ChildProcess | null = null;
+
 // Live connection registry (replaces per-source singletons)
 interface LiveConnection {
   id: string;
@@ -1212,6 +1216,10 @@ app.on('will-quit', () => {
     } catch { /* ignore cleanup errors */ }
   }
   liveConnections.clear();
+  if (agentProcess) {
+    agentProcess.kill();
+    agentProcess = null;
+  }
   stopApiServer();
 });
 
@@ -4538,4 +4546,96 @@ ipcMain.handle('agent-get-messages', async () => {
 // Agent connection status
 ipcMain.handle('agent-get-status', async () => {
   return { connected: getSseClientCount() > 0, count: getSseClientCount() };
+});
+
+// --- Built-in agent launch/stop ---
+
+function getAgentScriptPath(): string {
+  // Check for user-configured agent script
+  const configPath = path.join(os.homedir(), '.logan', 'agent-config.json');
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    if (config.scriptPath && fs.existsSync(config.scriptPath)) {
+      return config.scriptPath;
+    }
+  } catch { /* use default */ }
+
+  // Default: examples/agent-node.mjs relative to app root
+  const devPath = path.join(app.getAppPath(), 'examples', 'agent-node.mjs');
+  if (fs.existsSync(devPath)) return devPath;
+
+  // Fallback for packaged app
+  const pkgPath = path.join(path.dirname(app.getAppPath()), 'examples', 'agent-node.mjs');
+  if (fs.existsSync(pkgPath)) return pkgPath;
+
+  return devPath; // will fail with a clear error
+}
+
+ipcMain.handle('agent-launch', async () => {
+  if (agentProcess) {
+    return { success: false, error: 'Agent is already running' };
+  }
+  const scriptPath = getAgentScriptPath();
+  if (!fs.existsSync(scriptPath)) {
+    return { success: false, error: `Agent script not found: ${scriptPath}` };
+  }
+  try {
+    agentProcess = spawn(process.execPath, [scriptPath], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+
+    agentProcess.stdout?.on('data', (data: Buffer) => {
+      const text = data.toString().trim();
+      if (text) console.log(`[agent-stdout] ${text}`);
+    });
+
+    agentProcess.stderr?.on('data', (data: Buffer) => {
+      const text = data.toString().trim();
+      if (text) console.error(`[agent-stderr] ${text}`);
+    });
+
+    agentProcess.on('exit', (code) => {
+      console.log(`[agent] exited with code ${code}`);
+      agentProcess = null;
+    });
+
+    return { success: true };
+  } catch (err: any) {
+    agentProcess = null;
+    return { success: false, error: err.message || String(err) };
+  }
+});
+
+ipcMain.handle('agent-stop', async () => {
+  if (!agentProcess) {
+    return { success: true };
+  }
+  // Send "stop" as a user message so the agent exits its loop gracefully
+  addChatMessage('user', 'stop');
+  // Give it a moment to exit, then force kill
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      if (agentProcess) {
+        agentProcess.kill();
+        agentProcess = null;
+      }
+      resolve();
+    }, 3000);
+    if (agentProcess) {
+      agentProcess.on('exit', () => {
+        clearTimeout(timer);
+        agentProcess = null;
+        resolve();
+      });
+    } else {
+      clearTimeout(timer);
+      resolve();
+    }
+  });
+  return { success: true };
+});
+
+ipcMain.handle('agent-get-running', async () => {
+  return { running: agentProcess !== null };
 });
