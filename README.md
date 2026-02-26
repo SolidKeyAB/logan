@@ -148,6 +148,9 @@ See [LOGAN-AGENT.md](LOGAN-AGENT.md) for the full API reference, example scripts
 | Ctrl+H | Highlight all occurrences of selection |
 | Ctrl+Shift+H | Highlight first occurrence per line |
 | Ctrl+Shift+S | Save selected lines to notes |
+| PageDown / PageUp | Scroll one full page |
+| Ctrl+D / Ctrl+U | Half page down / up (Mac-friendly) |
+| Option+Down / Option+Up | Fast scroll (5 lines at a time) |
 | Ctrl++ / Ctrl+- / Ctrl+0 | Zoom in / out / reset |
 | Ctrl+1...7 | Toggle panels (Folders/Stats/Analysis/Gaps/Bookmarks/Highlights/History) |
 | Ctrl+8 | Toggle search configs |

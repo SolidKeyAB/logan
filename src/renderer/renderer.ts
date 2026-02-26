@@ -2047,8 +2047,10 @@ function handleScroll(): void {
   const renderTime = performance.now() - renderStart;
   updateMinimapViewport();
 
-  // Detect scroll slowness and suggest formatting
-  if (!scrollSlownessWarningShown && renderTime > SLOW_SCROLL_THRESHOLD_MS) {
+  // Detect scroll slowness and suggest formatting (only for JSON-like files)
+  const lowerFilePath = (state.filePath || '').toLowerCase();
+  const isJsonFile = lowerFilePath.endsWith('.json') || lowerFilePath.endsWith('.jsonl') || lowerFilePath.endsWith('.ndjson');
+  if (!scrollSlownessWarningShown && isJsonFile && renderTime > SLOW_SCROLL_THRESHOLD_MS) {
     slowScrollFrames++;
     if (slowScrollFrames >= SLOW_SCROLL_FRAME_COUNT) {
       scrollSlownessWarningShown = true;
@@ -10968,26 +10970,50 @@ function setupKeyboardShortcuts(): void {
         logViewerElement.scrollLeft = Math.max(0, logViewerElement.scrollLeft - 50);
       }
 
-      // Page Down: Move down by visible lines
-      if (e.key === 'PageDown' && !e.ctrlKey && !e.metaKey) {
+      // Page Down: Scroll down by one screen from current view
+      // Also: Ctrl+D = half page down (vim-style, Mac-friendly)
+      const isPageDown = (e.key === 'PageDown' && !e.ctrlKey && !e.metaKey) ||
+        (e.key === 'd' && e.ctrlKey && !e.metaKey && !e.shiftKey);
+      if (isPageDown) {
         e.preventDefault();
-        const currentDisplayIdx = state.isFiltered
-          ? (findDisplayIndexForLine(state.selectedLine ?? 0) ?? 0)
-          : (state.selectedLine ?? 0);
-        const newDisplayIdx = Math.min(currentDisplayIdx + visibleLines, totalLines - 1);
+        const currentLine = scrollTopToLine(logViewerElement.scrollTop);
+        const jump = e.key === 'd' ? Math.floor(visibleLines / 2) : visibleLines;
+        const newDisplayIdx = Math.min(currentLine + jump, totalLines - 1);
         goToLine(newDisplayIdx);
         const cachedLine = cachedLines.get(newDisplayIdx);
         state.selectedLine = cachedLine ? cachedLine.lineNumber : newDisplayIdx;
         renderVisibleLines();
       }
 
-      // Page Up: Move up by visible lines
-      if (e.key === 'PageUp' && !e.ctrlKey && !e.metaKey) {
+      // Page Up: Scroll up by one screen from current view
+      // Also: Ctrl+U = half page up (vim-style, Mac-friendly)
+      const isPageUp = (e.key === 'PageUp' && !e.ctrlKey && !e.metaKey) ||
+        (e.key === 'u' && e.ctrlKey && !e.metaKey && !e.shiftKey);
+      if (isPageUp) {
         e.preventDefault();
-        const currentDisplayIdx = state.isFiltered
-          ? (findDisplayIndexForLine(state.selectedLine ?? 0) ?? 0)
-          : (state.selectedLine ?? 0);
-        const newDisplayIdx = Math.max(currentDisplayIdx - visibleLines, 0);
+        const currentLine = scrollTopToLine(logViewerElement.scrollTop);
+        const jump = e.key === 'u' ? Math.floor(visibleLines / 2) : visibleLines;
+        const newDisplayIdx = Math.max(currentLine - jump, 0);
+        goToLine(newDisplayIdx);
+        const cachedLine = cachedLines.get(newDisplayIdx);
+        state.selectedLine = cachedLine ? cachedLine.lineNumber : newDisplayIdx;
+        renderVisibleLines();
+      }
+
+      // Option+Down / Option+Up: Fast scroll (5 lines at a time, Mac-friendly)
+      if (e.key === 'ArrowDown' && e.altKey && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        const currentLine = scrollTopToLine(logViewerElement.scrollTop);
+        const newDisplayIdx = Math.min(currentLine + 5, totalLines - 1);
+        goToLine(newDisplayIdx);
+        const cachedLine = cachedLines.get(newDisplayIdx);
+        state.selectedLine = cachedLine ? cachedLine.lineNumber : newDisplayIdx;
+        renderVisibleLines();
+      }
+      if (e.key === 'ArrowUp' && e.altKey && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        const currentLine = scrollTopToLine(logViewerElement.scrollTop);
+        const newDisplayIdx = Math.max(currentLine - 5, 0);
         goToLine(newDisplayIdx);
         const cachedLine = cachedLines.get(newDisplayIdx);
         state.selectedLine = cachedLine ? cachedLine.lineNumber : newDisplayIdx;
