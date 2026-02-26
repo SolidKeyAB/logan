@@ -274,20 +274,6 @@
         <div id="editor-container" class="editor-container">
           <!-- Markdown Preview -->
           <div id="markdown-preview" class="markdown-preview hidden"></div>
-          <!-- Image Viewer -->
-          <div id="image-viewer" class="image-viewer hidden">
-            <div class="image-viewer-toolbar">
-              <button id="btn-image-zoom-in" class="image-viewer-btn" title="Zoom in (+)">+</button>
-              <span id="image-zoom-level" class="image-zoom-level">100%</span>
-              <button id="btn-image-zoom-out" class="image-viewer-btn" title="Zoom out (-)">−</button>
-              <button id="btn-image-zoom-fit" class="image-viewer-btn" title="Fit to window">Fit</button>
-              <button id="btn-image-zoom-actual" class="image-viewer-btn" title="Actual size (1:1)">1:1</button>
-              <span id="image-dimensions" class="image-dimensions"></span>
-            </div>
-            <div class="image-viewer-container" id="image-viewer-container">
-              <img id="image-viewer-img" draggable="false" />
-            </div>
-          </div>
           <div id="welcome-message" class="welcome-message">
             <img src="assets/logo.png" alt="LOGAN" class="welcome-logo">
             <h2>LOGAN</h2>
@@ -322,6 +308,7 @@
           <button class="bottom-tab-btn" data-bottom-tab="search-results">Search Results</button>
           <button class="bottom-tab-btn" data-bottom-tab="search-configs">Search Configs</button>
           <button class="bottom-tab-btn" data-bottom-tab="video">Video</button>
+          <button class="bottom-tab-btn" data-bottom-tab="image">Image</button>
           <button class="bottom-tab-btn" data-bottom-tab="live">Live</button>
           <button class="bottom-tab-btn" data-bottom-tab="notes">Notes</button>
         </div>
@@ -425,6 +412,29 @@
               <button id="btn-video-sync-from-line" class="video-sync-btn" title="Sync selected line to current video time">Set from line</button>
               <span id="video-file-name" class="video-file-name"></span>
               <span id="video-sync-status" class="video-sync-status"></span>
+            </div>
+          </div>
+        </div>
+        <!-- Image tab -->
+        <div class="bottom-tab-view" data-bottom-tab="image">
+          <div class="image-panel-body">
+            <div class="image-viewer-toolbar">
+              <button id="btn-image-zoom-in" class="image-viewer-btn" title="Zoom in (+)">+</button>
+              <span id="image-zoom-level" class="image-zoom-level">100%</span>
+              <button id="btn-image-zoom-out" class="image-viewer-btn" title="Zoom out (-)">−</button>
+              <button id="btn-image-zoom-fit" class="image-viewer-btn" title="Fit to window">Fit</button>
+              <button id="btn-image-zoom-actual" class="image-viewer-btn" title="Actual size (1:1)">1:1</button>
+              <span id="image-file-name" class="image-file-name"></span>
+              <span id="image-dimensions" class="image-dimensions"></span>
+            </div>
+            <div class="image-viewer-container" id="image-viewer-container">
+              <div id="image-drop-zone" class="video-drop-zone">
+                <div class="video-drop-zone-content">
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                  <p>Open an image file from the folder panel</p>
+                </div>
+              </div>
+              <img id="image-viewer-img" draggable="false" style="display:none" />
             </div>
           </div>
         </div>

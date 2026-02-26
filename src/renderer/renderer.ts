@@ -6637,24 +6637,9 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
     return;
   }
 
-  // Handle image files directly (no backend indexing needed)
+  // Handle image files in bottom panel (like video)
   if (isImageFile(filePath)) {
-    if (state.activeTabId && createNewTab) {
-      saveCurrentTabState();
-    }
-    if (createNewTab && !existingTab) {
-      const newTab = createTab(filePath);
-      state.tabs.push(newTab);
-      state.activeTabId = newTab.id;
-    }
-    state.filePath = filePath;
-    hideImageViewer(); // reset first
-    elements.markdownPreview.classList.add('hidden');
-    elements.markdownPreview.innerHTML = '';
-    showImageViewer(filePath);
-    renderTabBar();
-    renderFolderTree();
-    updateStatusBar();
+    openImageInPanel(filePath);
     return;
   }
 
@@ -6818,7 +6803,6 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
         isMarkdownFile = false;
         elements.markdownPreview.classList.add('hidden');
         elements.markdownPreview.innerHTML = '';
-        hideImageViewer();
         elements.btnWordWrap.textContent = 'Wrap';
         elements.btnWordWrap.title = 'Toggle word wrap (⌥Z)';
         const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
@@ -9336,37 +9320,33 @@ function isImageFile(filePath: string): boolean {
   return IMAGE_EXTENSIONS.has(ext);
 }
 
-// Image viewer state
+// Image viewer state (bottom panel)
 let imageZoom = 1;
-const imageViewerEl = document.getElementById('image-viewer') as HTMLDivElement;
 const imageViewerContainer = document.getElementById('image-viewer-container') as HTMLDivElement;
 const imageViewerImg = document.getElementById('image-viewer-img') as HTMLImageElement;
 const imageZoomLevelEl = document.getElementById('image-zoom-level') as HTMLSpanElement;
 const imageDimensionsEl = document.getElementById('image-dimensions') as HTMLSpanElement;
+const imageFileNameEl = document.getElementById('image-file-name') as HTMLSpanElement;
+const imageDropZone = document.getElementById('image-drop-zone') as HTMLDivElement;
 
-function showImageViewer(filePath: string): void {
+function openImageInPanel(filePath: string): void {
   imageZoom = 1;
   imageViewerImg.src = '';
-  imageViewerEl.classList.remove('hidden');
+  imageViewerImg.style.display = 'none';
+  if (imageDropZone) imageDropZone.style.display = 'none';
 
-  // Hide log viewer
-  const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
-  if (wrapper) wrapper.style.display = 'none';
+  const fileName = filePath.split('/').pop() || filePath;
+  if (imageFileNameEl) imageFileNameEl.textContent = fileName;
 
-  // Load image using file:// protocol
   imageViewerImg.onload = () => {
+    imageViewerImg.style.display = '';
     imageDimensionsEl.textContent = `${imageViewerImg.naturalWidth} × ${imageViewerImg.naturalHeight}`;
     fitImageToWindow();
   };
   imageViewerImg.src = `file://${filePath}`;
-}
 
-function hideImageViewer(): void {
-  imageViewerEl.classList.add('hidden');
-  imageViewerImg.src = '';
-  imageDimensionsEl.textContent = '';
-  const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
-  if (wrapper) wrapper.style.display = '';
+  // Switch to image tab in bottom panel
+  toggleBottomTab('image');
 }
 
 function setImageZoom(zoom: number): void {
@@ -11303,30 +11283,23 @@ async function switchToTab(tabId: string): Promise<void> {
       // Restore tab state
       restoreTabState(tab);
 
-      // Handle special file viewers for the new tab
-      if (isImageFile(tab.filePath)) {
+      // Handle markdown preview state for the new tab
+      isMarkdownFile = isMarkdownExtension(tab.filePath);
+      if (isMarkdownFile) {
+        markdownPreviewMode = true;
+        elements.btnWordWrap.textContent = 'Raw';
+        elements.btnWordWrap.title = 'Show raw markdown';
+        await renderMarkdownPreview();
+        showMarkdownPreview();
+      } else {
+        markdownPreviewMode = false;
         elements.markdownPreview.classList.add('hidden');
         elements.markdownPreview.innerHTML = '';
-        showImageViewer(tab.filePath);
-      } else {
-        hideImageViewer();
-        isMarkdownFile = isMarkdownExtension(tab.filePath);
-        if (isMarkdownFile) {
-          markdownPreviewMode = true;
-          elements.btnWordWrap.textContent = 'Raw';
-          elements.btnWordWrap.title = 'Show raw markdown';
-          await renderMarkdownPreview();
-          showMarkdownPreview();
-        } else {
-          markdownPreviewMode = false;
-          elements.markdownPreview.classList.add('hidden');
-          elements.markdownPreview.innerHTML = '';
-          elements.btnWordWrap.textContent = 'Wrap';
-          elements.btnWordWrap.title = 'Toggle word wrap (⌥Z)';
-          const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
-          if (wrapper) {
-            wrapper.style.display = '';
-          }
+        elements.btnWordWrap.textContent = 'Wrap';
+        elements.btnWordWrap.title = 'Toggle word wrap (⌥Z)';
+        const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
+        if (wrapper) {
+          wrapper.style.display = '';
         }
       }
 

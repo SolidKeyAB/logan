@@ -4123,21 +4123,11 @@ kbd {
   height: auto;
 }
 
-/* Image Viewer */
-.image-viewer {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+/* Image Viewer (bottom panel) */
+.image-panel-body {
   display: flex;
   flex-direction: column;
-  background: var(--bg-primary);
-  z-index: 5;
-}
-
-.image-viewer.hidden {
-  display: none;
+  height: 100%;
 }
 
 .image-viewer-toolbar {
@@ -4169,6 +4159,15 @@ kbd {
   color: var(--text-secondary);
   min-width: 40px;
   text-align: center;
+}
+
+.image-file-name {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-left: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .image-dimensions {
