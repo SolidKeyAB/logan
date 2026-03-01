@@ -24,6 +24,9 @@
     "observability"
   ],
   "main": "dist/main/index.js",
+  "bin": {
+    "logan": "./bin/logan"
+  },
   "scripts": {
     "postinstall": "electron-builder install-app-deps 2>/dev/null || true",
     "build": "tsc && npm run copy-assets",

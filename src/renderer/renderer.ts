@@ -11265,6 +11265,11 @@ function init(): void {
     }
   });
 
+  // CLI file open — allow main process to open a file (from `logan myfile.log` or API)
+  window.api.onOpenFileFromCli((filePath: string) => {
+    loadFile(filePath);
+  });
+
   // Logo click - open GitHub
   elements.logo.addEventListener('click', () => {
     window.api.openExternalUrl(GITHUB_URL);

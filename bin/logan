@@ -1,0 +1,84 @@
+#!/usr/bin/env node
+'use strict';
+
+const http = require('http');
+const path = require('path');
+const fs = require('fs');
+const { spawn } = require('child_process');
+
+const filePath = process.argv[2];
+
+if (!filePath) {
+  // No file arg — try to launch LOGAN or show usage
+  tryApi(null, () => {
+    launchElectron(null);
+  });
+} else {
+  const abs = path.resolve(filePath);
+  if (!fs.existsSync(abs)) {
+    console.error(`logan: file not found: ${abs}`);
+    process.exit(1);
+  }
+  tryApi(abs, () => {
+    launchElectron(abs);
+  });
+}
+
+function tryApi(absPath, onFail) {
+  const postData = absPath ? JSON.stringify({ filePath: absPath }) : null;
+  const options = {
+    hostname: '127.0.0.1',
+    port: 19532,
+    path: absPath ? '/api/open-file' : '/api/status',
+    method: absPath ? 'POST' : 'GET',
+    headers: absPath
+      ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) }
+      : {},
+    timeout: 2000,
+  };
+
+  const req = http.request(options, (res) => {
+    let body = '';
+    res.on('data', (chunk) => (body += chunk));
+    res.on('end', () => {
+      if (absPath) {
+        console.log(`Opened ${path.basename(absPath)} in LOGAN`);
+      } else {
+        console.log('LOGAN is already running');
+      }
+    });
+  });
+
+  req.on('error', () => onFail());
+  req.on('timeout', () => { req.destroy(); onFail(); });
+
+  if (postData) req.write(postData);
+  req.end();
+}
+
+function launchElectron(absPath) {
+  // Find the electron binary and app root
+  const appRoot = path.resolve(__dirname, '..');
+  const electronPath = path.join(appRoot, 'node_modules', '.bin', 'electron');
+
+  if (!fs.existsSync(electronPath)) {
+    console.error('logan: electron not found. Run "npm install" in the LOGAN directory first.');
+    process.exit(1);
+  }
+
+  const args = [appRoot];
+  if (absPath) args.push('--', absPath);
+
+  const child = spawn(electronPath, args, {
+    detached: true,
+    stdio: 'ignore',
+    env: { ...process.env },
+  });
+  child.unref();
+
+  if (absPath) {
+    console.log(`Launching LOGAN with ${path.basename(absPath)}...`);
+  } else {
+    console.log('Launching LOGAN...');
+  }
+}

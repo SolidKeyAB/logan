@@ -437,6 +437,13 @@ const api = {
     return () => ipcRenderer.removeListener('navigate-to-line', handler);
   },
 
+  // CLI file open
+  onOpenFileFromCli: (callback: (filePath: string) => void): (() => void) => {
+    const handler = (_: any, filePath: string) => callback(filePath);
+    ipcRenderer.on('open-file-from-cli', handler);
+    return () => ipcRenderer.removeListener('open-file-from-cli', handler);
+  },
+
   // Agent chat
   sendAgentMessage: (text: string): Promise<{ success: boolean; message?: any }> =>
     ipcRenderer.invoke('agent-send-message', text),

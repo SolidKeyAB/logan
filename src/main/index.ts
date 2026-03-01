@@ -518,9 +518,56 @@ function createWindow() {
   });
 }
 
+// --- Single-instance lock ---
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+}
+app.on('second-instance', (_event, argv) => {
+  // Focus existing window
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+  // Extract file path from argv (skip flags and electron internals)
+  const filePath = extractFilePathFromArgv(argv);
+  if (filePath && mainWindow) {
+    mainWindow.webContents.send('open-file-from-cli', filePath);
+  }
+});
+
+function extractFilePathFromArgv(argv: string[]): string | null {
+  // argv layout: [electron, app-path, ...flags, --, filePath]
+  // or: [electron, app-path, filePath] (no --)
+  const dashDashIdx = argv.indexOf('--');
+  if (dashDashIdx !== -1 && dashDashIdx + 1 < argv.length) {
+    return argv[dashDashIdx + 1];
+  }
+  // Fallback: last arg that looks like a file path (not a flag, not electron path)
+  for (let i = argv.length - 1; i >= 1; i--) {
+    const arg = argv[i];
+    if (arg.startsWith('-')) continue;
+    // Skip the electron binary and app directory
+    if (arg.includes('electron') || arg.includes('node_modules')) continue;
+    if (fs.existsSync(arg)) return arg;
+  }
+  return null;
+}
+
 app.whenReady().then(() => {
   ensureConfigDir();
   createWindow();
+
+  // Check if launched with a file path argument (e.g. `logan myfile.log`)
+  const cliFilePath = extractFilePathFromArgv(process.argv);
+  if (cliFilePath && mainWindow) {
+    mainWindow.once('ready-to-show', () => {
+      // Small delay to let renderer finish init
+      setTimeout(() => {
+        mainWindow?.webContents.send('open-file-from-cli', cliFilePath);
+      }, 300);
+    });
+  }
 
   // Start HTTP API server for MCP integration
   const apiContext: ApiContext = {
@@ -552,6 +599,8 @@ app.whenReady().then(() => {
         saveLocalFileData(filePath, localData);
       }
       logActivity(filePath, 'file_opened', { filePath });
+      // Notify renderer to load the file in the UI
+      mainWindow?.webContents.send('open-file-from-cli', filePath);
       return { success: true, info };
     },
     getLines: (startLine: number, count: number) => {

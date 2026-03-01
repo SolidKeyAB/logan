@@ -431,6 +431,9 @@ interface Api {
   // MCP navigation
   onNavigateToLine: (callback: (lineNumber: number) => void) => () => void;
 
+  // CLI file open
+  onOpenFileFromCli: (callback: (filePath: string) => void) => () => void;
+
   // Agent chat
   sendAgentMessage: (text: string) => Promise<{ success: boolean; message?: { id: string; from: string; text: string; timestamp: number } }>;
   getAgentMessages: () => Promise<{ success: boolean; messages?: Array<{ id: string; from: string; text: string; timestamp: number }> }>;
