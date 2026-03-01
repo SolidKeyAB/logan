@@ -3135,14 +3135,15 @@ ipcMain.handle(IPC.CONTEXT_SEARCH, async (_, contextIds: string[]) => {
           }
         }
 
-        if (clues.length > 0) {
+        // Keep group if it has clues, or if context has no clue patterns (must-only context)
+        if (clues.length > 0 || cluePatterns.length === 0) {
           groups.push({
             contextId: ctx.id,
             mustLine: mustLineNum,
             mustText: mm.lineText,
             mustPatternId: mustPat.id,
             clues,
-            score: clues.length,
+            score: cluePatterns.length === 0 ? 1 : clues.length,
           });
         }
       }

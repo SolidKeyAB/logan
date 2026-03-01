@@ -281,7 +281,8 @@ interface AppState {
   // Context search
   contextDefinitions: ContextDefinitionDef[];
   contextResults: Map<string, ContextMatchGroupDef[]>;
-  contextViewMode: 'tree' | 'timeline';
+  contextViewMode: 'tree' | 'lanes';
+  contextGroupMode: 'separate' | 'combined';
   editingContextId: string | null;
 }
 
@@ -332,7 +333,8 @@ const state: AppState = {
   comparisonReport: null,
   contextDefinitions: [],
   contextResults: new Map(),
-  contextViewMode: 'tree' as 'tree' | 'timeline',
+  contextViewMode: 'tree' as 'tree' | 'lanes',
+  contextGroupMode: 'separate' as 'separate' | 'combined',
   editingContextId: null,
 };
 
@@ -904,11 +906,13 @@ const elements = {
   ctxRunBtn: document.getElementById('ctx-run-btn') as HTMLButtonElement,
   ctxResultsSummary: document.getElementById('ctx-results-summary') as HTMLSpanElement,
   ctxViewTree: document.getElementById('ctx-view-tree') as HTMLButtonElement,
-  ctxViewTimeline: document.getElementById('ctx-view-timeline') as HTMLButtonElement,
+  ctxViewLanes: document.getElementById('ctx-view-lanes') as HTMLButtonElement,
+  ctxGroupSeparate: document.getElementById('ctx-group-separate') as HTMLButtonElement,
+  ctxGroupCombined: document.getElementById('ctx-group-combined') as HTMLButtonElement,
   ctxChips: document.getElementById('ctx-chips') as HTMLDivElement,
   ctxForm: document.getElementById('ctx-form') as HTMLDivElement,
   ctxResults: document.getElementById('ctx-results') as HTMLDivElement,
-  ctxTimeline: document.getElementById('ctx-timeline') as HTMLCanvasElement,
+  ctxLanes: document.getElementById('ctx-lanes') as HTMLDivElement,
   // Search results content (in bottom panel)
   searchResultsSummary: document.getElementById('search-results-summary') as HTMLSpanElement,
   searchResultsList: document.getElementById('search-results-list') as HTMLDivElement,
@@ -7026,6 +7030,11 @@ function showContextForm(existingDef?: ContextDefinitionDef): void {
 }
 
 async function runContextSearch(): Promise<void> {
+  if (!state.filePath) {
+    elements.ctxResultsSummary.textContent = 'No file open';
+    return;
+  }
+
   // Always reload definitions from disk before searching
   await loadContextDefinitions();
 
@@ -7060,7 +7069,7 @@ async function runContextSearch(): Promise<void> {
       if (state.contextViewMode === 'tree') {
         renderContextResults();
       } else {
-        renderContextTimeline();
+        renderContextLanes();
       }
     } else {
       elements.ctxResultsSummary.textContent = result.error || 'Search failed';
@@ -7075,12 +7084,24 @@ async function runContextSearch(): Promise<void> {
 function renderContextResults(): void {
   const container = elements.ctxResults;
   container.innerHTML = '';
-  // Only hide timeline when in tree-only mode (not when called from renderContextTimeline)
+  // Only hide lanes when in tree-only mode (not when called from renderContextLanes)
   if (state.contextViewMode === 'tree') {
-    elements.ctxTimeline.classList.add('hidden');
+    elements.ctxLanes.classList.add('hidden');
   }
   container.style.display = '';
 
+  if (state.contextGroupMode === 'combined') {
+    renderContextResultsCombined(container);
+  } else {
+    renderContextResultsSeparate(container);
+  }
+
+  if (container.children.length === 0) {
+    container.innerHTML = '<p class="placeholder">No context matches found. Create contexts and click Run.</p>';
+  }
+}
+
+function renderContextResultsSeparate(container: HTMLDivElement): void {
   for (const def of state.contextDefinitions) {
     if (!def.enabled) continue;
     const groups = state.contextResults.get(def.id);
@@ -7091,9 +7112,12 @@ function renderContextResults(): void {
 
     const header = document.createElement('div');
     header.className = 'ctx-context-header';
+    header.style.borderLeftColor = def.color;
+    header.style.background = `linear-gradient(to right, ${def.color}18, ${def.color}08 60%, #1c2230)`;
     const colorBar = document.createElement('span');
     colorBar.className = 'ctx-context-color-bar';
     colorBar.style.backgroundColor = def.color;
+    colorBar.style.color = def.color;
     const headerName = document.createElement('span');
     headerName.textContent = def.name;
     const matchCount = document.createElement('span');
@@ -7107,207 +7131,216 @@ function renderContextResults(): void {
     const shouldCollapseAll = groups.length > 10;
 
     groups.forEach((group, gi) => {
-      const groupEl = document.createElement('div');
-      groupEl.className = 'ctx-group';
-      if (shouldCollapseAll && gi >= 3) groupEl.classList.add('collapsed');
-
-      // Group header (must match line)
-      const gHeader = document.createElement('div');
-      gHeader.className = 'ctx-group-header';
-      gHeader.style.borderLeft = `2px solid ${def.color}`;
-
-      const toggle = document.createElement('span');
-      toggle.className = 'ctx-group-toggle';
-      toggle.textContent = (shouldCollapseAll && gi >= 3) ? '\u25B6' : '\u25BC';
-
-      const lineNum = document.createElement('span');
-      lineNum.className = 'ctx-group-line-num';
-      lineNum.textContent = `L${group.mustLine + 1}`;
-
-      const text = document.createElement('span');
-      text.className = 'ctx-group-text';
-      text.textContent = group.mustText;
-      text.title = group.mustText;
-
-      const score = document.createElement('span');
-      score.className = 'ctx-score-badge';
-      score.textContent = `${group.score} clue${group.score !== 1 ? 's' : ''}`;
-
-      gHeader.appendChild(toggle);
-      gHeader.appendChild(lineNum);
-      gHeader.appendChild(text);
-      gHeader.appendChild(score);
-
-      gHeader.addEventListener('click', (e) => {
-        if ((e.target as HTMLElement).classList.contains('ctx-group-toggle')) {
-          groupEl.classList.toggle('collapsed');
-          toggle.textContent = groupEl.classList.contains('collapsed') ? '\u25B6' : '\u25BC';
-        } else {
-          goToLine(group.mustLine);
-        }
-      });
-
-      groupEl.appendChild(gHeader);
-
-      // Clue lines
-      const cluesEl = document.createElement('div');
-      cluesEl.className = 'ctx-group-clues';
-
-      group.clues.forEach((clue, ci) => {
-        const clueItem = document.createElement('div');
-        clueItem.className = 'ctx-clue-item';
-
-        const connector = document.createElement('span');
-        connector.className = 'ctx-connector';
-        connector.style.color = def.color;
-        connector.textContent = ci === group.clues.length - 1 ? '\u2514\u2500' : '\u251C\u2500';
-
-        const cLineNum = document.createElement('span');
-        cLineNum.className = 'ctx-clue-line-num';
-        cLineNum.textContent = `L${clue.lineNumber + 1}`;
-
-        const cText = document.createElement('span');
-        cText.className = 'ctx-clue-text';
-        cText.textContent = clue.text;
-        cText.title = clue.text;
-
-        const dist = document.createElement('span');
-        dist.className = 'ctx-clue-dist';
-        dist.textContent = `\u00B1${clue.distance}`;
-
-        clueItem.appendChild(connector);
-        clueItem.appendChild(cLineNum);
-        clueItem.appendChild(cText);
-        clueItem.appendChild(dist);
-
-        clueItem.addEventListener('click', () => goToLine(clue.lineNumber));
-        cluesEl.appendChild(clueItem);
-      });
-
-      groupEl.appendChild(cluesEl);
-      section.appendChild(groupEl);
+      section.appendChild(buildGroupElement(def, group, shouldCollapseAll && gi >= 3, false));
     });
 
     container.appendChild(section);
   }
-
-  if (container.children.length === 0) {
-    container.innerHTML = '<p class="placeholder">No context matches found. Create contexts and click Run.</p>';
-  }
 }
 
-function renderContextTimeline(): void {
-  const canvas = elements.ctxTimeline;
-  canvas.classList.remove('hidden');
-  canvas.style.display = 'block';
-  canvas.style.width = '100%';
-  canvas.style.height = '32px';
+function renderContextResultsCombined(container: HTMLDivElement): void {
+  // Collect all groups with their context def, then sort by line number
+  const allGroups: { def: ContextDefinitionDef; group: ContextMatchGroupDef }[] = [];
+  for (const def of state.contextDefinitions) {
+    if (!def.enabled) continue;
+    const groups = state.contextResults.get(def.id);
+    if (!groups || groups.length === 0) continue;
+    for (const group of groups) {
+      allGroups.push({ def, group });
+    }
+  }
+  allGroups.sort((a, b) => a.group.mustLine - b.group.mustLine);
+
+  const shouldCollapseAll = allGroups.length > 10;
+  allGroups.forEach((item, i) => {
+    container.appendChild(buildGroupElement(item.def, item.group, shouldCollapseAll && i >= 5, true));
+  });
+}
+
+function buildGroupElement(def: ContextDefinitionDef, group: ContextMatchGroupDef, collapsed: boolean, showCtxTag: boolean): HTMLDivElement {
+  const groupEl = document.createElement('div');
+  groupEl.className = 'ctx-group';
+  if (collapsed) groupEl.classList.add('collapsed');
+
+  // Group header (must match line)
+  const gHeader = document.createElement('div');
+  gHeader.className = 'ctx-group-header';
+  gHeader.style.borderLeft = `2px solid ${def.color}`;
+
+  const toggle = document.createElement('span');
+  toggle.className = 'ctx-group-toggle';
+  toggle.textContent = collapsed ? '\u25B6' : '\u25BC';
+
+  if (showCtxTag) {
+    const ctxTag = document.createElement('span');
+    ctxTag.className = 'ctx-group-ctx-tag';
+    ctxTag.style.background = def.color;
+    ctxTag.textContent = def.name;
+    gHeader.appendChild(ctxTag);
+  }
+
+  const lineNum = document.createElement('span');
+  lineNum.className = 'ctx-group-line-num';
+  lineNum.textContent = `L${group.mustLine + 1}`;
+
+  const text = document.createElement('span');
+  text.className = 'ctx-group-text';
+  text.textContent = group.mustText;
+  text.title = group.mustText;
+
+  const score = document.createElement('span');
+  score.className = 'ctx-score-badge';
+  score.textContent = `${group.score} clue${group.score !== 1 ? 's' : ''}`;
+
+  gHeader.appendChild(toggle);
+  gHeader.appendChild(lineNum);
+  gHeader.appendChild(text);
+  gHeader.appendChild(score);
+
+  gHeader.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement).classList.contains('ctx-group-toggle')) {
+      groupEl.classList.toggle('collapsed');
+      toggle.textContent = groupEl.classList.contains('collapsed') ? '\u25B6' : '\u25BC';
+    } else {
+      goToLine(group.mustLine);
+    }
+  });
+
+  groupEl.appendChild(gHeader);
+
+  // Clue lines
+  const cluesEl = document.createElement('div');
+  cluesEl.className = 'ctx-group-clues';
+
+  group.clues.forEach((clue, ci) => {
+    const clueItem = document.createElement('div');
+    clueItem.className = 'ctx-clue-item';
+
+    const connector = document.createElement('span');
+    connector.className = 'ctx-connector';
+    connector.style.color = def.color;
+    connector.textContent = ci === group.clues.length - 1 ? '\u2514\u2500' : '\u251C\u2500';
+
+    const cLineNum = document.createElement('span');
+    cLineNum.className = 'ctx-clue-line-num';
+    cLineNum.textContent = `L${clue.lineNumber + 1}`;
+
+    const cText = document.createElement('span');
+    cText.className = 'ctx-clue-text';
+    cText.textContent = clue.text;
+    cText.title = clue.text;
+
+    const dist = document.createElement('span');
+    dist.className = 'ctx-clue-dist';
+    dist.textContent = `\u00B1${clue.distance}`;
+
+    clueItem.appendChild(connector);
+    clueItem.appendChild(cLineNum);
+    clueItem.appendChild(cText);
+    clueItem.appendChild(dist);
+
+    clueItem.addEventListener('click', () => goToLine(clue.lineNumber));
+    cluesEl.appendChild(clueItem);
+  });
+
+  groupEl.appendChild(cluesEl);
+  return groupEl;
+}
+
+function renderContextLanes(): void {
+  const lanesEl = elements.ctxLanes;
+  lanesEl.classList.remove('hidden');
+  lanesEl.innerHTML = '';
   elements.ctxResults.style.display = '';
 
   const totalLines = getTotalLines() || 1;
 
-  // Defer drawing to next frame so canvas has layout dimensions
-  requestAnimationFrame(() => {
-    const w = Math.max(canvas.offsetWidth, 100);
-    canvas.width = w;
-    canvas.height = 32;
-    const ctx2d = canvas.getContext('2d')!;
-    ctx2d.clearRect(0, 0, w, 32);
+  for (const def of state.contextDefinitions) {
+    if (!def.enabled) continue;
+    const groups = state.contextResults.get(def.id);
+    if (!groups || groups.length === 0) continue;
 
-    // Background bar — subtle gradient
-    const grad = ctx2d.createLinearGradient(0, 0, 0, 32);
-    grad.addColorStop(0, '#1a2030');
-    grad.addColorStop(1, '#141820');
-    ctx2d.fillStyle = grad;
-    ctx2d.fillRect(0, 0, w, 32);
+    const lane = document.createElement('div');
+    lane.className = 'ctx-lane';
 
-    // Draw marks for each context
-    let markCount = 0;
-    for (const def of state.contextDefinitions) {
-      if (!def.enabled) continue;
-      const groups = state.contextResults.get(def.id);
-      if (!groups || groups.length === 0) continue;
+    // Label with color swatch
+    const label = document.createElement('div');
+    label.className = 'ctx-lane-label';
+    const swatch = document.createElement('span');
+    swatch.className = 'ctx-lane-color';
+    swatch.style.background = def.color;
+    swatch.style.color = def.color;
+    label.appendChild(swatch);
+    label.appendChild(document.createTextNode(def.name));
+    label.title = def.name;
+    lane.appendChild(label);
 
-      for (const group of groups) {
-        const x = Math.round((group.mustLine / totalLines) * w);
-        // Glow
-        ctx2d.fillStyle = def.color + '40';
-        ctx2d.fillRect(x - 1, 0, 5, 32);
-        // Core mark
-        ctx2d.fillStyle = def.color;
-        ctx2d.fillRect(x, 1, 3, 30);
-        markCount++;
-      }
-    }
-    if (markCount === 0) console.log('[ctx-timeline] no marks to draw — run context search first');
-  });
+    // Track with marks — tinted background per context color
+    const track = document.createElement('div');
+    track.className = 'ctx-lane-track';
+    track.style.background = `linear-gradient(to right, ${def.color}15, ${def.color}08)`;
 
-  // Click handler for timeline
-  canvas.onclick = (e) => {
-    const x = e.offsetX;
-    const clickedLine = Math.round((x / canvas.width) * totalLines);
-
-    // Find nearest group
-    let nearest: { def: ContextDefinitionDef; group: ContextMatchGroupDef; dist: number } | null = null;
-    for (const def of state.contextDefinitions) {
-      if (!def.enabled) continue;
-      const groups = state.contextResults.get(def.id);
-      if (!groups) continue;
-      for (const group of groups) {
-        const dist = Math.abs(group.mustLine - clickedLine);
-        if (!nearest || dist < nearest.dist) {
-          nearest = { def, group, dist };
-        }
-      }
-    }
-
-    if (nearest && nearest.dist < totalLines * 0.02) {
-      // Focus this group in results, fade others
-      const allGroups = elements.ctxResults.querySelectorAll('.ctx-group');
-      allGroups.forEach(g => {
-        g.classList.remove('focused');
-        g.classList.add('faded');
+    for (const group of groups) {
+      const mark = document.createElement('div');
+      mark.className = 'ctx-lane-mark';
+      mark.style.left = `${(group.mustLine / totalLines) * 100}%`;
+      mark.style.background = def.color;
+      mark.style.color = def.color;
+      mark.title = `${def.name} — L${group.mustLine + 1}`;
+      mark.addEventListener('click', () => {
+        goToLine(group.mustLine);
+        // Focus matching group in tree below
+        const allGroups = elements.ctxResults.querySelectorAll('.ctx-group');
+        allGroups.forEach(g => {
+          g.classList.remove('focused');
+          g.classList.add('faded');
+        });
+        const targetLineText = `L${group.mustLine + 1}`;
+        allGroups.forEach(g => {
+          const lineEl = g.querySelector('.ctx-group-line-num');
+          if (lineEl && lineEl.textContent === targetLineText) {
+            g.classList.remove('faded');
+            g.classList.add('focused');
+            g.classList.remove('collapsed');
+            const toggleEl = g.querySelector('.ctx-group-toggle');
+            if (toggleEl) toggleEl.textContent = '\u25BC';
+            g.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          }
+        });
       });
-
-      // Find and focus the matching group
-      const targetLineText = `L${nearest.group.mustLine + 1}`;
-      allGroups.forEach(g => {
-        const lineEl = g.querySelector('.ctx-group-line-num');
-        if (lineEl && lineEl.textContent === targetLineText) {
-          g.classList.remove('faded');
-          g.classList.add('focused');
-          g.classList.remove('collapsed');
-          const toggleEl = g.querySelector('.ctx-group-toggle');
-          if (toggleEl) toggleEl.textContent = '\u25BC';
-          g.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-        }
-      });
-
-      goToLine(nearest.group.mustLine);
-    } else {
-      // Click on empty space - clear focus
-      const allGroups = elements.ctxResults.querySelectorAll('.ctx-group');
-      allGroups.forEach(g => {
-        g.classList.remove('focused');
-        g.classList.remove('faded');
-      });
+      track.appendChild(mark);
     }
-  };
 
-  // Also render the tree below timeline
+    lane.appendChild(track);
+    lanesEl.appendChild(lane);
+  }
+
+  // Also render the tree below lanes
   renderContextResults();
 }
 
-function toggleContextView(mode: 'tree' | 'timeline'): void {
+function toggleContextView(mode: 'tree' | 'lanes'): void {
   state.contextViewMode = mode;
   elements.ctxViewTree.classList.toggle('active', mode === 'tree');
-  elements.ctxViewTimeline.classList.toggle('active', mode === 'timeline');
+  elements.ctxViewLanes.classList.toggle('active', mode === 'lanes');
 
   if (mode === 'tree') {
-    elements.ctxTimeline.classList.add('hidden');
+    elements.ctxLanes.classList.add('hidden');
     renderContextResults();
   } else {
-    renderContextTimeline();
+    renderContextLanes();
+  }
+}
+
+function toggleContextGroupMode(mode: 'separate' | 'combined'): void {
+  state.contextGroupMode = mode;
+  elements.ctxGroupSeparate.classList.toggle('active', mode === 'separate');
+  elements.ctxGroupCombined.classList.toggle('active', mode === 'combined');
+
+  if (state.contextViewMode === 'lanes') {
+    renderContextLanes();
+  } else {
+    renderContextResults();
   }
 }
 
@@ -11324,7 +11357,9 @@ function init(): void {
   elements.ctxAddBtn.addEventListener('click', () => showContextForm());
   elements.ctxRunBtn.addEventListener('click', () => runContextSearch());
   elements.ctxViewTree.addEventListener('click', () => toggleContextView('tree'));
-  elements.ctxViewTimeline.addEventListener('click', () => toggleContextView('timeline'));
+  elements.ctxViewLanes.addEventListener('click', () => toggleContextView('lanes'));
+  elements.ctxGroupSeparate.addEventListener('click', () => toggleContextGroupMode('separate'));
+  elements.ctxGroupCombined.addEventListener('click', () => toggleContextGroupMode('combined'));
 
   // Video player events (inside bottom panel)
   elements.btnVideoOpen.addEventListener('click', openVideoFile);

@@ -1,0 +1,53 @@
+# LOGAN — Log Analyzer (Cursor Agent Instructions)
+
+LOGAN is an Electron log analysis tool running locally. You can interact with the user through LOGAN's Chat panel.
+
+## MCP Integration
+
+The MCP server is configured in `.mcp.json`. If MCP tools are available, use:
+
+- `logan_status` — Check if a file is open before doing anything
+- `logan_send_message` — Send a chat message to the user in LOGAN
+- `logan_wait_for_message` — Wait for user reply (blocks up to 120s)
+- `logan_get_messages` — Fetch chat history
+- `logan_search` — Search the open log file
+- `logan_get_lines` — Read specific lines
+- `logan_navigate` — Jump viewer to a line
+- `logan_analyze` — Run full analysis
+
+### Chat Loop
+
+```
+logan_send_message("Hello!")
+loop:
+  response = logan_wait_for_message(timeout=120)
+  if response.timeout: continue
+  if "goodbye" in response.message: break
+  logan_send_message(your_reply)
+```
+
+## HTTP Fallback (if MCP unavailable)
+
+API base: `http://127.0.0.1:19532`
+
+| Action | Method | Endpoint | Body |
+|--------|--------|----------|------|
+| Status | GET | /api/status | — |
+| Send message | POST | /api/agent-message | `{"message": "text"}` |
+| Poll messages | GET | /api/messages?since=TS | — |
+| Search | POST | /api/search | `{"pattern": "ERROR", "maxResults": 50}` |
+| Get lines | GET | /api/lines?start=0&count=10 | — |
+| Navigate | POST | /api/navigate | `{"line": 123}` |
+| Analyze | POST | /api/analyze | — |
+| Filter | POST | /api/filter | `{"pattern": "ERROR"}` |
+| Clear filter | POST | /api/clear-filter | — |
+
+Always check `/api/status` first. Poll `/api/messages?since=<timestamp_ms>` every 2-3 seconds for chat.
+
+## Project Structure
+
+- `src/main/` — Electron main process, IPC handlers, API server
+- `src/renderer/` — Single-file renderer (~7000+ lines), UI logic
+- `src/mcp-server/` — MCP server (stdio), bridges to HTTP API
+- `src/preload/` — IPC bridge for renderer
+- `docs/AGENT_CHAT_GUIDE.md` — Full agent integration guide with examples
