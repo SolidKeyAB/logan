@@ -28,7 +28,8 @@ LOGAN supports AI agent integration through its local HTTP API and MCP server. A
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | /api/agent-message | Send message: `{"message": "text"}` |
+| POST | /api/agent-register | Register as connected: `{"name": "MyAgent"}` (shows green dot) |
+| POST | /api/agent-message | Send message: `{"message": "text", "name": "MyAgent"}` |
 | GET | /api/messages?since=TS | Get messages after timestamp (ms) |
 | GET | /api/events?name=Name | SSE stream (real-time, 1 agent max) |
 | GET | /api/agent-status | Check if an agent is connected |

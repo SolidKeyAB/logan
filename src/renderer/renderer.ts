@@ -11172,6 +11172,63 @@ function getDatadogTimeRange(): { from: string; to: string } {
   return { from, to };
 }
 
+function setupHelpTooltips(): void {
+  const tooltip = document.createElement('div');
+  tooltip.className = 'help-tooltip';
+  document.body.appendChild(tooltip);
+
+  let showTimer: ReturnType<typeof setTimeout> | null = null;
+  let currentTarget: HTMLElement | null = null;
+
+  document.addEventListener('mouseover', (e) => {
+    const target = (e.target as HTMLElement).closest('[data-help]') as HTMLElement | null;
+    if (!target) {
+      // Mouse moved to something without data-help — hide
+      if (currentTarget) {
+        if (showTimer) { clearTimeout(showTimer); showTimer = null; }
+        tooltip.classList.remove('visible');
+        currentTarget = null;
+      }
+      return;
+    }
+    // Still on the same target (moved between child elements) — do nothing
+    if (target === currentTarget) return;
+
+    // New target
+    if (showTimer) { clearTimeout(showTimer); showTimer = null; }
+    tooltip.classList.remove('visible');
+    currentTarget = target;
+
+    showTimer = setTimeout(() => {
+      const help = target.dataset.help;
+      if (!help) return;
+      tooltip.textContent = help;
+      const rect = target.getBoundingClientRect();
+      let top = rect.bottom + 6;
+      let left = rect.left;
+      tooltip.style.top = `${top}px`;
+      tooltip.style.left = `${left}px`;
+      tooltip.classList.add('visible');
+      // Adjust if overflowing right
+      const tipRect = tooltip.getBoundingClientRect();
+      if (tipRect.right > window.innerWidth - 8) {
+        tooltip.style.left = `${window.innerWidth - tipRect.width - 8}px`;
+      }
+      // Adjust if overflowing bottom — show above instead
+      if (tipRect.bottom > window.innerHeight - 8) {
+        tooltip.style.top = `${rect.top - tipRect.height - 6}px`;
+      }
+    }, 500);
+  });
+
+  // Hide when mouse leaves the window
+  document.addEventListener('mouseleave', () => {
+    if (showTimer) { clearTimeout(showTimer); showTimer = null; }
+    tooltip.classList.remove('visible');
+    currentTarget = null;
+  });
+}
+
 function init(): void {
   // Detect platform and setup window controls
   setupWindowControls();
@@ -12259,6 +12316,7 @@ function closeTab(tabId: string): void {
   }
 
   renderTabBar();
+  // setupHelpTooltips moved outside init
 }
 
 function renderTabBar(): void {
@@ -12410,3 +12468,10 @@ function findTabByFilePath(filePath: string): TabState | undefined {
 
 // Start the app
 init();
+
+// Setup help tooltips after init
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => setupHelpTooltips());
+} else {
+  setupHelpTooltips();
+}

@@ -24,21 +24,55 @@ const chatMessages: ChatMessage[] = [];
 // Single-agent connection: one SSE client at a time
 let activeAgent: { res: http.ServerResponse; name: string } | null = null;
 
+// Polling agent heartbeat: tracks agents that call the API without SSE
+let pollingAgent: { name: string; lastSeen: number } | null = null;
+let pollingAgentTimer: ReturnType<typeof setInterval> | null = null;
+const POLLING_AGENT_TIMEOUT = 30000; // 30s without activity = disconnected
+
+function touchPollingAgent(name: string, ctx: ApiContext): void {
+  const wasConnected = isAgentConnected();
+  pollingAgent = { name, lastSeen: Date.now() };
+  if (!wasConnected) notifyAgentConnectionChanged(ctx);
+
+  // Start expiry check if not running
+  if (!pollingAgentTimer) {
+    pollingAgentTimer = setInterval(() => {
+      if (pollingAgent && Date.now() - pollingAgent.lastSeen > POLLING_AGENT_TIMEOUT) {
+        pollingAgent = null;
+        if (!activeAgent) notifyAgentConnectionChanged(ctx);
+        if (pollingAgentTimer) { clearInterval(pollingAgentTimer); pollingAgentTimer = null; }
+      }
+    }, 5000);
+  }
+}
+
+function isAgentConnected(): boolean {
+  return activeAgent !== null || (pollingAgent !== null && Date.now() - pollingAgent.lastSeen <= POLLING_AGENT_TIMEOUT);
+}
+
+function getConnectedAgentName(): string | null {
+  if (activeAgent) return activeAgent.name;
+  if (pollingAgent && Date.now() - pollingAgent.lastSeen <= POLLING_AGENT_TIMEOUT) return pollingAgent.name;
+  return null;
+}
+
 export function getSseClientCount(): number {
-  return activeAgent ? 1 : 0;
+  return isAgentConnected() ? 1 : 0;
 }
 
 export function getAgentName(): string | null {
-  return activeAgent?.name || null;
+  return getConnectedAgentName();
 }
 
 function notifyAgentConnectionChanged(ctx: ApiContext): void {
+  const connected = isAgentConnected();
+  const name = getConnectedAgentName();
   const win = ctx.getMainWindow();
   if (win && !win.isDestroyed()) {
     win.webContents.send('agent-connection-changed', {
-      connected: activeAgent !== null,
-      count: activeAgent ? 1 : 0,
-      name: activeAgent?.name || null,
+      connected,
+      count: connected ? 1 : 0,
+      name,
     });
   }
 }
@@ -207,9 +241,9 @@ export function startApiServer(ctx: ApiContext): void {
         if (url === '/api/agent-status') {
           sendJson(res, {
             success: true,
-            connected: activeAgent !== null,
-            count: activeAgent ? 1 : 0,
-            name: activeAgent?.name || null,
+            connected: isAgentConnected(),
+            count: isAgentConnected() ? 1 : 0,
+            name: getConnectedAgentName(),
           });
           return;
         }
@@ -463,8 +497,19 @@ export function startApiServer(ctx: ApiContext): void {
           return;
         }
 
+        if (url === '/api/agent-register') {
+          const name = body.name || 'Unknown Agent';
+          touchPollingAgent(name, ctx);
+          sendJson(res, { success: true, name });
+          return;
+        }
+
         if (url === '/api/agent-message') {
           if (!body.message) return sendError(res, 'message required');
+          // Touch polling agent heartbeat if no SSE agent connected
+          if (!activeAgent) {
+            touchPollingAgent(body.name || 'Agent', ctx);
+          }
           const msg = addChatMessage('agent', body.message);
           // Push to renderer via main window
           const win = ctx.getMainWindow();

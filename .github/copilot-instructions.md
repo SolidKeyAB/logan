@@ -16,11 +16,18 @@ GET /api/status
 
 LOGAN has a Chat panel where the user can see your messages and reply.
 
-**Send a message:**
+**Register as connected** (shows green dot in LOGAN, call once on start):
+```
+POST /api/agent-register
+Content-Type: application/json
+{"name": "Copilot"}
+```
+
+**Send a message** (also refreshes your connected status):
 ```
 POST /api/agent-message
 Content-Type: application/json
-{"message": "Hello from Copilot!"}
+{"message": "Hello from Copilot!", "name": "Copilot"}
 ```
 
 **Poll for user replies** (every 2-3 seconds):
@@ -65,6 +72,7 @@ while True:
 
 | Action | Method | Endpoint | Body |
 |--------|--------|----------|------|
+| Register agent | POST | /api/agent-register | `{"name": "Copilot"}` |
 | Get status | GET | /api/status | — |
 | Open file | POST | /api/open-file | `{"filePath": "/path/to/file"}` |
 | Get lines | GET | /api/lines?start=0&count=10 | — |

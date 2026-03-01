@@ -3409,6 +3409,7 @@ kbd {
   white-space: nowrap;
   transition: color 0.15s, border-color 0.15s, background-color 0.15s;
   flex-shrink: 0;
+  position: relative;
 }
 
 .bottom-tab-btn:hover {
@@ -3419,6 +3420,33 @@ kbd {
 .bottom-tab-btn.active {
   color: #ffffff;
   border-bottom-color: var(--accent-hover);
+}
+
+/* Help tooltip — positioned by JS, appended to body */
+.help-tooltip {
+  position: fixed;
+  background: #141820;
+  color: #c8ddf0;
+  border: 1px solid #3a5068;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-line;
+  max-width: 320px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  z-index: 10000;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.help-tooltip.visible { opacity: 1; }
+
+:root.theme-paper .help-tooltip {
+  background: #e8ede8;
+  color: #2a4040;
+  border-color: #a0aca7;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
 }
 
 .bottom-panel-close-btn {

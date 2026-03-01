@@ -44,8 +44,15 @@ def api_post(path, body):
         return {"success": False, "error": str(e)}
 
 
-def send_message(text):
-    result = api_post("/api/agent-message", {"message": text})
+def register(name):
+    result = api_post("/api/agent-register", {"name": name})
+    if result.get("success"):
+        print(f"  Registered as: {name}")
+    return result
+
+
+def send_message(text, name="Python Agent"):
+    result = api_post("/api/agent-message", {"message": text, "name": name})
     if result.get("success"):
         print(f"  [agent] {text}")
     else:
@@ -89,7 +96,8 @@ def main():
 
     last_ts = int(time.time() * 1000)
 
-    send_message(f"Hello! {args.name} connected via polling.")
+    register(args.name)
+    send_message(f"Hello! {args.name} connected via polling.", args.name)
 
     print("\nListening for messages (Ctrl+C to stop)...\n")
 
@@ -103,14 +111,14 @@ def main():
 
                 # Echo reply — replace this with your agent logic
                 if "goodbye" in msg["text"].lower() or "bye" in msg["text"].lower():
-                    send_message("Goodbye! Disconnecting.")
+                    send_message("Goodbye! Disconnecting.", args.name)
                     return
                 else:
-                    send_message(f"Received: {msg['text']}")
+                    send_message(f"Received: {msg['text']}", args.name)
 
     except KeyboardInterrupt:
         print("\nDisconnecting...")
-        send_message("Agent disconnected.")
+        send_message("Agent disconnected.", args.name)
 
 
 if __name__ == "__main__":

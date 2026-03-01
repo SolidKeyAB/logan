@@ -27,7 +27,7 @@
     <!-- Toolbar -->
     <div class="toolbar">
       <div class="toolbar-left">
-        <button id="btn-open-file" class="toolbar-btn" title="Open file">
+        <button id="btn-open-file" class="toolbar-btn" title="Open file" data-help="Open a log file for analysis.&#10;Supports text logs, JSON logs, CSV, and large files (100K+ lines).&#10;Drag & drop also works.">
           <span class="icon">&#128194;</span> Open File
         </button>
         <div class="separator"></div>
@@ -45,7 +45,7 @@
           <label class="checkbox-label">
             <input type="checkbox" id="search-whole-word"> Whole Word
           </label>
-          <button id="btn-search" class="toolbar-btn" title="Search">Search</button>
+          <button id="btn-search" class="toolbar-btn" title="Search" data-help="Search the log file for a pattern.&#10;Toggle Regex, Wildcard, Match Case, Whole Word modes.&#10;Ctrl+F to focus, Enter to search forward.">Search</button>
           <div class="search-options-wrapper">
             <button id="btn-search-options" class="toolbar-btn small" title="Search options">&#9881;</button>
             <div id="search-options-popup" class="search-options-popup hidden">
@@ -66,18 +66,18 @@
           <button id="btn-next-result" class="toolbar-btn small" title="Next result" disabled>&gt;</button>
         </div>
         <div class="separator"></div>
-        <button id="btn-filter" class="toolbar-btn" title="Filter settings">Filter</button>
-        <button id="btn-split" class="toolbar-btn" title="Split file into parts" disabled>Split</button>
-        <button id="btn-analyze" class="toolbar-btn" title="Analyze file" disabled>Analyze</button>
-        <button id="btn-columns" class="toolbar-btn" title="Show/hide columns" disabled>Columns</button>
-        <button id="btn-word-wrap" class="toolbar-btn" title="Toggle word wrap (⌥Z)">Wrap</button>
-        <button id="btn-json-format" class="toolbar-btn" title="Format & highlight JSON in logs">JSON</button>
-        <button id="btn-datadog" class="toolbar-btn" title="Connect to Datadog">DD</button>
+        <button id="btn-filter" class="toolbar-btn" title="Filter settings" data-help="Filter visible lines by pattern, log level, or line range.&#10;Only matching lines are shown — others are hidden, not deleted.&#10;Ctrl+Shift+F to open filter dialog.">Filter</button>
+        <button id="btn-split" class="toolbar-btn" title="Split file into parts" disabled data-help="Split a large log file into smaller parts by line count.&#10;Creates numbered files in the same directory.">Split</button>
+        <button id="btn-analyze" class="toolbar-btn" title="Analyze file" disabled data-help="Run full analysis: log level distribution, crash detection,&#10;component breakdown, and timestamp patterns.&#10;Results appear in the Analysis panel below.">Analyze</button>
+        <button id="btn-columns" class="toolbar-btn" title="Show/hide columns" disabled data-help="Toggle column visibility: line numbers, timestamps, levels, tags.&#10;Columns are auto-detected from log format.">Columns</button>
+        <button id="btn-word-wrap" class="toolbar-btn" title="Toggle word wrap (⌥Z)" data-help="Wrap long lines to fit the viewer width.&#10;When off, scroll horizontally to see full lines.&#10;Shortcut: ⌥Z (Alt+Z)">Wrap</button>
+        <button id="btn-json-format" class="toolbar-btn" title="Format & highlight JSON in logs" data-help="Detect and pretty-print JSON embedded in log lines.&#10;Adds syntax highlighting for keys, strings, numbers.&#10;Toggle on/off — does not modify the file.">JSON</button>
+        <button id="btn-datadog" class="toolbar-btn" title="Connect to Datadog" data-help="Connect to Datadog to fetch and analyze logs remotely.&#10;Requires API and Application keys configured in Settings.">DD</button>
       </div>
       <div class="toolbar-right">
-        <button id="btn-notes-toggle" class="toolbar-btn small" title="Toggle Notes (Ctrl+Shift+N)">&#128221;</button>
-        <button id="btn-terminal-toggle" class="toolbar-btn small" title="Toggle Terminal (Ctrl+`)">&#9000;</button>
-        <button id="btn-help" class="toolbar-btn small" title="Keyboard shortcuts & help (F1)">&#9432;</button>
+        <button id="btn-notes-toggle" class="toolbar-btn small" title="Toggle Notes (Ctrl+Shift+N)" data-help="Open the Notes drawer (slides up from bottom).&#10;Freeform notes saved per file as .logan/filename.notes.txt.&#10;Use 'Save Snippet' to append selected log lines.">&#128221;</button>
+        <button id="btn-terminal-toggle" class="toolbar-btn small" title="Toggle Terminal (Ctrl+`)" data-help="Quake-style terminal that drops down from the top.&#10;Run shell commands without leaving LOGAN.&#10;Shortcut: Ctrl+` (backtick)">&#9000;</button>
+        <button id="btn-help" class="toolbar-btn small" title="Keyboard shortcuts & help (F1)" data-help="Show all keyboard shortcuts and feature overview.&#10;Press F1 anytime to open.">&#9432;</button>
       </div>
     </div>
 
@@ -92,23 +92,23 @@
       <!-- Activity Bar -->
       <div id="activity-bar" class="activity-bar">
         <div class="activity-bar-top">
-          <button class="activity-bar-btn" data-panel="folders" title="Folders (Ctrl+1)">
+          <button class="activity-bar-btn" data-panel="folders" title="Folders (Ctrl+1)" data-help="Browse and open log files from recent folders.&#10;Double-click a file to open it.&#10;Shortcut: Ctrl+1">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 19a4 4 0 0 1-2.24-7.32A3.5 3.5 0 0 1 9 6.03V6a3 3 0 1 1 6 0v.04a3.5 3.5 0 0 1 3.24 5.65A4 4 0 0 1 16 19Z"/><path d="M12 19v3"/></svg>
             <span class="activity-badge" id="badge-folders"></span>
           </button>
-          <button class="activity-bar-btn" data-panel="bookmarks" title="Bookmarks (Ctrl+2)">
+          <button class="activity-bar-btn" data-panel="bookmarks" title="Bookmarks (Ctrl+2)" data-help="Mark important lines with labels and colors.&#10;Click a bookmark to jump to that line.&#10;Ctrl+B to bookmark current line. Shortcut: Ctrl+2">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17l-5 3V7a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v13l-5-3z"/><line x1="12" y1="2" x2="12" y2="7"/><circle cx="12" cy="2" r="1" fill="currentColor"/></svg>
             <span class="activity-badge" id="badge-bookmarks"></span>
           </button>
-          <button class="activity-bar-btn" data-panel="highlights" title="Highlights (Ctrl+3)">
+          <button class="activity-bar-btn" data-panel="highlights" title="Highlights (Ctrl+3)" data-help="Color-code log lines matching patterns.&#10;Add patterns with custom colors to visually scan logs.&#10;Supports regex. Highlight groups for quick toggling. Ctrl+3">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l-6 6v3h9l3-3"/><path d="M22 12l-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>
             <span class="activity-badge" id="badge-highlights"></span>
           </button>
-          <button class="activity-bar-btn" data-panel="stats" title="Stats (Ctrl+4)">
+          <button class="activity-bar-btn" data-panel="stats" title="Stats (Ctrl+4)" data-help="File statistics: size, line count, encoding, timestamps.&#10;Quick overview of the loaded log file. Ctrl+4">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="18" y="3" width="4" height="18"></rect><rect x="10" y="8" width="4" height="13"></rect><rect x="2" y="13" width="4" height="8"></rect></svg>
             <span class="activity-badge" id="badge-stats"></span>
           </button>
-          <button class="activity-bar-btn" data-panel="history" title="History (Ctrl+5)">
+          <button class="activity-bar-btn" data-panel="history" title="History (Ctrl+5)" data-help="Action history: searches, filters, bookmarks, analysis runs.&#10;Grouped by date, filterable by category.&#10;Undo or replay past actions. Ctrl+5">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="4.5" cy="5" r="1.5"/><path d="M6 6q2 3 2 8"/><path d="M8 14q0-5 5-5t6 5"/><line x1="8" y1="14" x2="19" y2="14"/><path d="M19 14q2-3 3-6"/><line x1="10" y1="14" x2="10" y2="20"/><line x1="17" y1="14" x2="17" y2="20"/></svg>
             <span class="activity-badge" id="badge-history"></span>
           </button>
@@ -139,7 +139,7 @@
           </button>
         </div>
         <div class="activity-bar-bottom">
-          <button class="activity-bar-btn" id="btn-activity-settings" title="Settings">
+          <button class="activity-bar-btn" id="btn-activity-settings" title="Settings" data-help="App settings: theme, font size, Datadog keys,&#10;redaction rules, and default behaviors.">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
           </button>
         </div>
@@ -307,16 +307,16 @@
       <div id="bottom-panel-resize-handle" class="bottom-panel-resize-handle"></div>
       <div class="bottom-panel-header">
         <div class="bottom-panel-tabs">
-          <button class="bottom-tab-btn" data-bottom-tab="analysis">Analysis</button>
-          <button class="bottom-tab-btn" data-bottom-tab="time-gaps">Time Gaps</button>
-          <button class="bottom-tab-btn" data-bottom-tab="search-results">Search Results</button>
-          <button class="bottom-tab-btn" data-bottom-tab="search-configs">Search Configs</button>
-          <button class="bottom-tab-btn" data-bottom-tab="contexts">Contexts</button>
-          <button class="bottom-tab-btn" data-bottom-tab="video">Video</button>
-          <button class="bottom-tab-btn" data-bottom-tab="image">Image</button>
-          <button class="bottom-tab-btn" data-bottom-tab="live">Live</button>
-          <button class="bottom-tab-btn" data-bottom-tab="chat">Agent Chat</button>
-          <button class="bottom-tab-btn" data-bottom-tab="notes">Notes</button>
+          <button class="bottom-tab-btn" data-bottom-tab="analysis" data-help="Log level distribution, crash detection, component breakdown, and timestamp analysis.&#10;Click Run Analysis to scan the entire file.">Analysis</button>
+          <button class="bottom-tab-btn" data-bottom-tab="time-gaps" data-help="Find gaps in log timestamps where no events were recorded.&#10;Useful for detecting hangs, freezes, or missing data periods.">Time Gaps</button>
+          <button class="bottom-tab-btn" data-bottom-tab="search-results" data-help="Results from Ctrl+F search. Click a result to jump to that line.&#10;Supports regex, wildcard, case-sensitive, and whole-word modes.">Search Results</button>
+          <button class="bottom-tab-btn" data-bottom-tab="search-configs" data-help="Save and reuse complex search patterns across files.&#10;Each config stores pattern, regex/case/word flags, and a label.">Search Configs</button>
+          <button class="bottom-tab-btn" data-bottom-tab="contexts" data-help="Define must+clue patterns to find correlated log events.&#10;Example: must:&quot;ERROR&quot; + clue:&quot;timeout&quot; within 10 lines.&#10;Lanes view shows each context as a colored row for comparison.">Contexts</button>
+          <button class="bottom-tab-btn" data-bottom-tab="video" data-help="Sync a video recording with log timestamps.&#10;Set a sync point to correlate video playback with log lines.">Video</button>
+          <button class="bottom-tab-btn" data-bottom-tab="image" data-help="View images referenced in log files.&#10;Drag and drop or open image files for side-by-side analysis.">Image</button>
+          <button class="bottom-tab-btn" data-bottom-tab="live" data-help="Connect to live log sources: Serial ports, ADB logcat, or SSH.&#10;Up to 4 parallel connections with real-time streaming.">Live</button>
+          <button class="bottom-tab-btn" data-bottom-tab="chat" data-help="Chat with an AI agent connected via MCP or HTTP API.&#10;The agent can search, navigate, analyze, and bookmark for you.">Agent Chat</button>
+          <button class="bottom-tab-btn" data-bottom-tab="notes" data-help="Freeform notes saved per file as .logan/filename.notes.txt.&#10;Use Save Snippet to append selected log lines to notes.">Notes</button>
         </div>
         <button id="btn-bottom-panel-close" class="bottom-panel-close-btn" title="Close panel">&times;</button>
       </div>
