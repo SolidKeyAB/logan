@@ -121,6 +121,22 @@ npm run build
 npm start
 ```
 
+### CLI Command
+
+After installing from source, make the `logan` command available globally:
+
+```bash
+npm link
+```
+
+Then open any log file from your terminal:
+
+```bash
+logan /path/to/myfile.log
+```
+
+If LOGAN is already running, the file opens in the existing window. If not, a new instance launches with the file.
+
 ## AI Agent Integration
 
 LOGAN exposes a full log-analysis API that AI agents can use. Three integration paths:
