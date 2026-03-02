@@ -3,7 +3,13 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { spawn } from 'child_process';
-import * as pty from 'node-pty';
+// Lazy-loaded: node-pty may not be available on all platforms
+let pty: typeof import('node-pty') | null = null;
+try {
+  pty = require('node-pty');
+} catch {
+  console.warn('node-pty not available — terminal feature disabled');
+}
 import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
 import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, LiveConnectionInfo, ContextDefinition, ContextPattern, ContextMatchGroup } from '../shared/types';
 import * as Diff from 'diff';
@@ -11,10 +17,15 @@ import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
 import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount } from './api-server';
 import { BaselineStore, buildFingerprint } from './baselineStore';
-import { SerialHandler } from './serialHandler';
-import { LogcatHandler } from './logcatHandler';
-import { SshHandler } from './sshHandler';
-import { Client } from 'ssh2';
+// Native-dependent modules — lazy-loaded to prevent SIGSEGV if bindings aren't built
+let SerialHandler: any = null;
+let LogcatHandler: any = null;
+let SshHandler: any = null;
+let SshClient: any = null;
+try { SerialHandler = require('./serialHandler').SerialHandler; } catch { console.warn('serialport not available — serial feature disabled'); }
+try { LogcatHandler = require('./logcatHandler').LogcatHandler; } catch { console.warn('logcatHandler not available'); }
+try { SshHandler = require('./sshHandler').SshHandler; } catch { console.warn('ssh2 not available — SSH feature disabled'); }
+try { SshClient = require('ssh2').Client; } catch {}
 import { SshProfile, SavedConnection } from '../shared/types';
 
 let mainWindow: BrowserWindow | null = null;
@@ -30,7 +41,7 @@ let agentProcess: ChildProcess | null = null;
 interface LiveConnection {
   id: string;
   source: 'serial' | 'logcat' | 'ssh';
-  handler: SerialHandler | LogcatHandler | SshHandler;
+  handler: any;
   tempFilePath: string;
   displayName: string;
   detail: string;
@@ -44,7 +55,7 @@ const liveConnections = new Map<string, LiveConnection>();
 const MAX_LIVE_CONNECTIONS = 4;
 
 // Keep one SshHandler for SFTP/profile operations (not for live connections)
-const sshUtilHandler = new SshHandler();
+const sshUtilHandler = SshHandler ? new SshHandler() : null;
 
 // Baseline store (JSON file in ~/.logan/baselines.json)
 const baselineStore = new BaselineStore();
@@ -1371,7 +1382,7 @@ ipcMain.handle(IPC.LIVE_CONNECT, async (_, source: 'serial' | 'logcat' | 'ssh', 
 
     const connectionId = 'lc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
 
-    let handler: SerialHandler | LogcatHandler | SshHandler;
+    let handler: any;
     if (source === 'serial') {
       handler = new SerialHandler();
     } else if (source === 'logcat') {
@@ -1436,7 +1447,7 @@ ipcMain.handle(IPC.LIVE_RESTART, async (_, connectionId: string) => {
     removeConnectionListeners(conn);
 
     // Create fresh handler
-    let handler: SerialHandler | LogcatHandler | SshHandler;
+    let handler: any;
     if (conn.source === 'serial') {
       handler = new SerialHandler();
     } else if (conn.source === 'logcat') {
@@ -1663,7 +1674,7 @@ ipcMain.handle(IPC.SSH_LIST_REMOTE_DIR, async (_, remotePath: string) => {
     if (!sshConn) {
       return { success: false, error: 'No active SSH connection for SFTP' };
     }
-    const files = await (sshConn.handler as SshHandler).listRemoteDir(remotePath);
+    const files = await (sshConn.handler as any).listRemoteDir(remotePath);
     return { success: true, files };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -1682,7 +1693,7 @@ ipcMain.handle(IPC.SSH_DOWNLOAD_FILE, async (_, remotePath: string) => {
     if (!sshConn) {
       return { success: false, error: 'No active SSH connection for download' };
     }
-    const localPath = await (sshConn.handler as SshHandler).downloadRemoteFile(remotePath);
+    const localPath = await (sshConn.handler as any).downloadRemoteFile(remotePath);
     return { success: true, localPath };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -4423,10 +4434,10 @@ interface TerminalSession {
   id: string;
   type: 'local' | 'ssh';
   label: string;
-  ptyProcess?: pty.IPty;
+  ptyProcess?: any;
   sshStream?: any;
   borrowedClient?: boolean; // true = live connection's client, don't close
-  ownedClient?: Client;     // standalone SSH, close on kill
+  ownedClient?: any;     // standalone SSH, close on kill
   cols: number;
   rows: number;
 }
@@ -4442,6 +4453,7 @@ function getDefaultShell(): string {
 
 ipcMain.handle(IPC.TERMINAL_CREATE_LOCAL, async (_, sessionId: string, options?: { cwd?: string; cols?: number; rows?: number }) => {
   try {
+    if (!pty) return { success: false, error: 'Terminal not available (node-pty not installed)' };
     const shell = getDefaultShell();
     const cwd = options?.cwd || os.homedir();
     const cols = options?.cols || 80;
@@ -4493,7 +4505,7 @@ ipcMain.handle(IPC.TERMINAL_CREATE_SSH, async (_, sessionId: string, options: {
     let stream: any;
     let label: string;
     let borrowedClient = false;
-    let ownedClient: Client | undefined;
+    let ownedClient: any;
 
     if (options.liveConnectionId) {
       // Borrow client from live connection
@@ -4501,7 +4513,7 @@ ipcMain.handle(IPC.TERMINAL_CREATE_SSH, async (_, sessionId: string, options: {
       if (!conn || conn.source !== 'ssh' || !conn.connected) {
         return { success: false, error: 'SSH live connection not found or not connected' };
       }
-      const handler = conn.handler as SshHandler;
+      const handler = conn.handler as any;
       if (!handler.isClientConnected()) {
         return { success: false, error: 'SSH client not connected' };
       }
@@ -4565,8 +4577,9 @@ async function createStandaloneSshShell(
   config: { host: string; port: number; username: string; identityFile?: string; passphrase?: string },
   cols: number,
   rows: number
-): Promise<{ client: Client; stream: any }> {
-  const client = new Client();
+): Promise<{ client: any; stream: any }> {
+  if (!SshClient) throw new Error('SSH not available (ssh2 not installed)');
+  const client = new SshClient();
 
   const connectConfig: any = {
     host: config.host,
@@ -4604,7 +4617,7 @@ async function createStandaloneSshShell(
         resolve({ client, stream });
       });
     });
-    client.on('error', (err) => {
+    client.on('error', (err: any) => {
       reject(err);
     });
     client.connect(connectConfig);
