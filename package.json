@@ -28,7 +28,8 @@
     "logan": "./bin/logan"
   },
   "scripts": {
-    "postinstall": "electron-builder install-app-deps 2>/dev/null || true",
+    "postinstall": "electron-builder install-app-deps || echo 'Warning: native module rebuild failed — terminal/serial/SSH may not work'",
+    "rebuild-native": "electron-rebuild -f",
     "build": "tsc && npm run copy-assets",
     "copy-assets": "node scripts/copy-assets.js",
     "start": "npm run build && electron . --no-sandbox",
