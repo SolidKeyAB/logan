@@ -518,14 +518,22 @@ function createWindow() {
   });
 }
 
-// Linux workaround — prevents SIGSEGV on distros without unprivileged user namespaces
+// Linux workaround — prevents SIGSEGV from sandbox and GPU process crashes
 if (process.platform === 'linux') {
   app.commandLine.appendSwitch('no-sandbox');
   app.commandLine.appendSwitch('disable-gpu-sandbox');
+  app.commandLine.appendSwitch('disable-gpu');
+  app.commandLine.appendSwitch('disable-software-rasterizer');
+  app.disableHardwareAcceleration();
 }
 
 // --- Single-instance lock ---
-const gotTheLock = app.requestSingleInstanceLock();
+let gotTheLock = true;
+try {
+  gotTheLock = app.requestSingleInstanceLock();
+} catch {
+  // requestSingleInstanceLock can SIGSEGV on some Linux setups — skip it
+}
 if (!gotTheLock) {
   app.quit();
 }

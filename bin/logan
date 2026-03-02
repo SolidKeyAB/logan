@@ -68,7 +68,7 @@ function launchElectron(absPath) {
 
   const args = [];
   if (process.platform === 'linux') {
-    args.push('--no-sandbox', '--disable-gpu-sandbox');
+    args.push('--no-sandbox', '--disable-gpu-sandbox', '--disable-gpu', '--disable-software-rasterizer');
   }
   args.push(appRoot);
   if (absPath) args.push('--', absPath);
