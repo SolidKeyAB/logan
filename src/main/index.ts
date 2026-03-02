@@ -560,7 +560,7 @@ function extractFilePathFromArgv(argv: string[]): string | null {
     if (arg.startsWith('-')) continue;
     // Skip the electron binary and app directory
     if (arg.includes('electron') || arg.includes('node_modules')) continue;
-    if (fs.existsSync(arg)) return arg;
+    if (fs.existsSync(arg) && fs.statSync(arg).isFile()) return arg;
   }
   return null;
 }
