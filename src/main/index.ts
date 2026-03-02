@@ -518,37 +518,23 @@ function createWindow() {
   });
 }
 
-// Linux workaround — prevents SIGSEGV from sandbox and GPU process crashes
-if (process.platform === 'linux') {
-  app.commandLine.appendSwitch('no-sandbox');
-  app.commandLine.appendSwitch('disable-gpu-sandbox');
-  app.commandLine.appendSwitch('disable-gpu');
-  app.commandLine.appendSwitch('disable-software-rasterizer');
-  app.disableHardwareAcceleration();
-}
-
-// --- Single-instance lock ---
-let gotTheLock = true;
-try {
-  gotTheLock = app.requestSingleInstanceLock();
-} catch {
-  // requestSingleInstanceLock can SIGSEGV on some Linux setups — skip it
-}
-if (!gotTheLock) {
-  app.quit();
-}
-app.on('second-instance', (_event, argv) => {
-  // Focus existing window
-  if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
+// --- Single-instance lock (skipped on Linux — can SIGSEGV on some setups) ---
+if (process.platform !== 'linux') {
+  const gotTheLock = app.requestSingleInstanceLock();
+  if (!gotTheLock) {
+    app.quit();
   }
-  // Extract file path from argv (skip flags and electron internals)
-  const filePath = extractFilePathFromArgv(argv);
-  if (filePath && mainWindow) {
-    mainWindow.webContents.send('open-file-from-cli', filePath);
-  }
-});
+  app.on('second-instance', (_event, argv) => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+    const filePath = extractFilePathFromArgv(argv);
+    if (filePath && mainWindow) {
+      mainWindow.webContents.send('open-file-from-cli', filePath);
+    }
+  });
+}
 
 function extractFilePathFromArgv(argv: string[]): string | null {
   // argv layout: [electron, app-path, ...flags, --, filePath]

@@ -67,21 +67,14 @@ function launchElectron(absPath) {
   }
 
   const args = [];
-  if (process.platform === 'linux') {
-    args.push('--no-sandbox', '--disable-gpu-sandbox', '--disable-gpu', '--disable-software-rasterizer');
-  }
+  if (process.platform === 'linux') args.push('--no-sandbox');
   args.push(appRoot);
   if (absPath) args.push('--', absPath);
-
-  const env = { ...process.env };
-  if (process.platform === 'linux') {
-    env.ELECTRON_DISABLE_SANDBOX = '1';
-  }
 
   const child = spawn(electronPath, args, {
     detached: true,
     stdio: 'ignore',
-    env,
+    env: { ...process.env },
   });
   child.unref();
 
