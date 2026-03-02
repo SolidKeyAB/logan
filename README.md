@@ -71,6 +71,7 @@ A fast, AI-ready log file viewer built with Electron. Handles **14 million+ line
 
 - **Node.js** 18+
 - **ripgrep** (optional, recommended for fast search)
+- **Linux:** unprivileged user namespaces or `--no-sandbox` (handled automatically by the `logan` CLI)
 
 ### Installing ripgrep
 

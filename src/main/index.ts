@@ -518,6 +518,11 @@ function createWindow() {
   });
 }
 
+// Linux sandbox workaround — prevents SIGSEGV on distros without unprivileged user namespaces
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('no-sandbox');
+}
+
 // --- Single-instance lock ---
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {

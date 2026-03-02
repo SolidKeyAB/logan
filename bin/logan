@@ -66,7 +66,9 @@ function launchElectron(absPath) {
     process.exit(1);
   }
 
-  const args = [appRoot];
+  const args = [];
+  if (process.platform === 'linux') args.push('--no-sandbox');
+  args.push(appRoot);
   if (absPath) args.push('--', absPath);
 
   const child = spawn(electronPath, args, {
