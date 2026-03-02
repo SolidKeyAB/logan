@@ -118,22 +118,32 @@ Download the latest release from [GitHub Releases](https://github.com/SolidKeyAB
 git clone https://github.com/SolidKeyAB/logan.git
 cd logan
 npm install
-npm run build
-npm start
+npm start        # builds and launches LOGAN
+```
+
+To package a distributable binary for your platform:
+
+```bash
+npm run package          # macOS
+npm run package:win      # Windows
+npm run package:linux    # Linux
+npm run package:all      # all platforms
 ```
 
 ### CLI Command
 
-After installing from source, make the `logan` command available globally:
+Register the `logan` command globally (one-time, after install):
 
 ```bash
 npm link
 ```
 
-Then open any log file from your terminal:
+Then open log files from any terminal:
 
 ```bash
-logan /path/to/myfile.log
+logan myfile.log                # launch LOGAN with file
+logan /path/to/other.log        # open in existing window if LOGAN is running
+logan                           # launch LOGAN with no file
 ```
 
 If LOGAN is already running, the file opens in the existing window. If not, a new instance launches with the file.
