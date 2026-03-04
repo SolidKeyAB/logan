@@ -63,6 +63,8 @@ const IPC = {
   CONTEXT_DEFINITIONS_SAVE: 'context-definitions-save',
   CONTEXT_SEARCH: 'context-search',
   CONTEXT_SEARCH_PROGRESS: 'context-search-progress',
+  // Traceback
+  TRACEBACK: 'traceback',
   // Tabbed terminal
   TERMINAL_CREATE_LOCAL: 'terminal-create-local',
   TERMINAL_CREATE_SSH: 'terminal-create-ssh',
@@ -572,6 +574,10 @@ const api = {
     ipcRenderer.on(IPC.CONTEXT_SEARCH_PROGRESS, handler);
     return () => ipcRenderer.removeListener(IPC.CONTEXT_SEARCH_PROGRESS, handler);
   },
+
+  // Traceback
+  traceback: (request: { targetLine: number; windowLines?: number; windowSeconds?: number; maxResults?: number }): Promise<any> =>
+    ipcRenderer.invoke(IPC.TRACEBACK, request),
 
   // Window controls
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),

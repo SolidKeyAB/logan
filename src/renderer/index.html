@@ -315,6 +315,7 @@
           <button class="bottom-tab-btn" data-bottom-tab="video" data-help="Sync a video recording with log timestamps.&#10;Set a sync point to correlate video playback with log lines.">Video</button>
           <button class="bottom-tab-btn" data-bottom-tab="image" data-help="View images referenced in log files.&#10;Drag and drop or open image files for side-by-side analysis.">Image</button>
           <button class="bottom-tab-btn" data-bottom-tab="live" data-help="Connect to live log sources: Serial ports, ADB logcat, or SSH.&#10;Up to 4 parallel connections with real-time streaming.">Live</button>
+          <button class="bottom-tab-btn" data-bottom-tab="traceback" data-help="Reverse timeline from any error line.&#10;Right-click a line → Traceback from here.&#10;Shows what led to the error: same component, warnings, escalations.">Traceback</button>
           <button class="bottom-tab-btn" data-bottom-tab="chat" data-help="Chat with an AI agent connected via MCP or HTTP API.&#10;The agent can search, navigate, analyze, and bookmark for you.">Agent Chat</button>
           <button class="bottom-tab-btn" data-bottom-tab="notes" data-help="Freeform notes saved per file as .logan/filename.notes.txt.&#10;Use Save Snippet to append selected log lines to notes.">Notes</button>
         </div>
@@ -522,6 +523,34 @@
             <div id="saved-connections-row" class="saved-connections-row">
               <!-- Saved/dormant connection cards rendered dynamically -->
             </div>
+          </div>
+        </div>
+        <!-- Traceback tab -->
+        <div class="bottom-tab-view" data-bottom-tab="traceback">
+          <div class="traceback-panel-body">
+            <div class="traceback-toolbar">
+              <div class="traceback-target-info" id="traceback-target-info">
+                <span class="traceback-placeholder">Right-click a line and select "Traceback from here"</span>
+              </div>
+              <div class="traceback-controls">
+                <label class="traceback-label">Sort:</label>
+                <select id="traceback-sort" class="traceback-select">
+                  <option value="time">Chronological</option>
+                  <option value="score">Relevance</option>
+                </select>
+                <label class="traceback-label">Filter:</label>
+                <select id="traceback-filter" class="traceback-select">
+                  <option value="all">All</option>
+                  <option value="error">Errors</option>
+                  <option value="warning">Warnings</option>
+                  <option value="state-change">State Changes</option>
+                  <option value="related">Related</option>
+                  <option value="context">Context</option>
+                </select>
+              </div>
+            </div>
+            <div id="traceback-summary" class="traceback-summary"></div>
+            <div id="traceback-results" class="traceback-results"></div>
           </div>
         </div>
         <!-- Agent Chat tab -->

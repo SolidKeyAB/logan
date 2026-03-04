@@ -481,6 +481,25 @@ interface Api {
   contextSearch: (contextIds: string[]) => Promise<{ success: boolean; results?: Array<{ contextId: string; groups: ContextMatchGroupDef[] }>; error?: string }>;
   onContextSearchProgress: (callback: (data: { percent: number; contextId: string }) => void) => () => void;
 
+  // Traceback
+  traceback: (request: { targetLine: number; windowLines?: number; windowSeconds?: number; maxResults?: number }) => Promise<{
+    success: boolean;
+    targetLine?: number;
+    targetText?: string;
+    targetComponent?: string | null;
+    windowStart?: number;
+    lines?: Array<{
+      lineNumber: number;
+      text: string;
+      score: number;
+      category: 'error' | 'warning' | 'state-change' | 'related' | 'context';
+      component?: string | null;
+      level?: string;
+    }>;
+    summary?: { total: number; errors: number; warnings: number; stateChanges: number; related: number; context: number };
+    error?: string;
+  }>;
+
   // Window controls
   windowMinimize: () => Promise<void>;
   windowMaximize: () => Promise<void>;

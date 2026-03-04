@@ -3221,6 +3221,177 @@ ipcMain.handle(IPC.CONTEXT_SEARCH, async (_, contextIds: string[]) => {
   return { success: true, results };
 });
 
+// === Traceback ===
+
+function extractComponent(text: string): string | null {
+  const sample = text.length > 120 ? text.substring(0, 120) : text;
+  const match = sample.match(/\[([A-Za-z][A-Za-z0-9_.\-/]{1,40})\]/);
+  return match ? match[1] : null;
+}
+
+ipcMain.handle(IPC.TRACEBACK, async (_, request: { targetLine: number; windowLines?: number; windowSeconds?: number; maxResults?: number }) => {
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+
+  const { targetLine, windowLines = 200, windowSeconds = 60, maxResults = 50 } = request;
+
+  // Read target line
+  const [targetLineData] = handler.getLines(targetLine, 1);
+  if (!targetLineData) return { success: false, error: 'Target line not found' };
+
+  const targetText = targetLineData.text;
+  const targetComponent = extractComponent(targetText);
+  const targetTimestamp = parseTimestampFast(targetText);
+
+  // Determine scan window
+  let windowStart = Math.max(0, targetLine - windowLines);
+
+  // Read all lines in window
+  const count = targetLine - windowStart;
+  if (count <= 0) return { success: true, targetLine, targetText, targetComponent, windowStart, lines: [], summary: { total: 0, errors: 0, warnings: 0, stateChanges: 0, related: 0, context: 0 } };
+
+  const windowLineData = handler.getLines(windowStart, count);
+
+  // Narrow by time window if timestamps available
+  if (targetTimestamp && windowSeconds < Infinity) {
+    const cutoff = targetTimestamp.date.getTime() - windowSeconds * 1000;
+    const firstValid = windowLineData.findIndex(l => {
+      const ts = parseTimestampFast(l.text);
+      return ts && ts.date.getTime() >= cutoff;
+    });
+    if (firstValid > 0) {
+      windowLineData.splice(0, firstValid);
+      windowStart = windowLineData.length > 0 ? windowLineData[0].lineNumber : targetLine;
+    }
+  }
+
+  // Extract significant words from target line (3+ chars, alphanumeric)
+  const targetWords = new Set(
+    targetText.toLowerCase().match(/[a-z0-9]{3,}/g)?.filter(w => !['the', 'and', 'for', 'not', 'was', 'are', 'this', 'that', 'with', 'from', 'have', 'has'].includes(w)) || []
+  );
+
+  const windowSize = windowLineData.length;
+
+  // Track level escalation per component
+  const componentLastLevel = new Map<string, string>();
+  const escalationLines = new Set<number>();
+
+  // First pass: detect escalations
+  for (const line of windowLineData) {
+    const comp = extractComponent(line.text);
+    const level = line.level;
+    if (comp && level) {
+      const prev = componentLastLevel.get(comp);
+      if ((prev === 'info' && (level === 'warning' || level === 'error')) ||
+          (prev === 'warning' && level === 'error')) {
+        escalationLines.add(line.lineNumber);
+      }
+      componentLastLevel.set(comp, level);
+    }
+  }
+
+  // Score each line
+  const scored: Array<{
+    lineNumber: number;
+    text: string;
+    score: number;
+    component: string | null;
+    level?: string;
+  }> = [];
+
+  const crashRegex = /\b(fatal|crash|exception|panic|oom|segfault|abort|sigsegv|sigabrt|unhandled|stack\s*trace)\b/i;
+
+  for (let i = 0; i < windowLineData.length; i++) {
+    const line = windowLineData[i];
+    let score = 0;
+
+    const lineComponent = extractComponent(line.text);
+
+    // Same component: +30
+    if (targetComponent && lineComponent === targetComponent) {
+      score += 30;
+    }
+
+    // Level severity: +25
+    if (line.level === 'error') score += 25;
+    else if (line.level === 'warning') score += 15;
+    else if (line.level === 'info') score += 5;
+
+    // Level escalation: +15
+    if (escalationLines.has(line.lineNumber)) {
+      score += 15;
+    }
+
+    // Crash keyword: +20
+    if (crashRegex.test(line.text)) {
+      score += 20;
+    }
+
+    // Temporal proximity: +10
+    const distance = windowSize - i - 1; // distance from target (end of window)
+    score += Math.round(10 * (1 - distance / Math.max(windowSize, 1)));
+
+    // Keyword overlap: +10
+    if (targetWords.size > 0) {
+      const lineWords = line.text.toLowerCase().match(/[a-z0-9]{3,}/g) || [];
+      let overlap = 0;
+      for (const w of lineWords) {
+        if (targetWords.has(w)) { overlap++; break; }
+      }
+      if (overlap > 0) {
+        const overlapRatio = Math.min(1, lineWords.filter(w => targetWords.has(w)).length / targetWords.size);
+        score += Math.round(10 * overlapRatio);
+      }
+    }
+
+    if (score > 5) {
+      scored.push({
+        lineNumber: line.lineNumber,
+        text: line.text,
+        score,
+        component: lineComponent,
+        level: line.level,
+      });
+    }
+  }
+
+  // Take top maxResults by score
+  scored.sort((a, b) => b.score - a.score);
+  const top = scored.slice(0, maxResults);
+
+  // Re-sort chronologically
+  top.sort((a, b) => a.lineNumber - b.lineNumber);
+
+  // Assign categories
+  const results = top.map(line => {
+    let category: 'error' | 'warning' | 'state-change' | 'related' | 'context';
+    if (line.level === 'error' || crashRegex.test(line.text)) {
+      category = 'error';
+    } else if (line.level === 'warning') {
+      category = 'warning';
+    } else if (escalationLines.has(line.lineNumber)) {
+      category = 'state-change';
+    } else if (targetComponent && line.component === targetComponent) {
+      category = 'related';
+    } else {
+      category = 'context';
+    }
+    return { ...line, category };
+  });
+
+  // Build summary
+  const summary = {
+    total: results.length,
+    errors: results.filter(r => r.category === 'error').length,
+    warnings: results.filter(r => r.category === 'warning').length,
+    stateChanges: results.filter(r => r.category === 'state-change').length,
+    related: results.filter(r => r.category === 'related').length,
+    context: results.filter(r => r.category === 'context').length,
+  };
+
+  return { success: true, targetLine, targetText, targetComponent, windowStart, lines: results, summary };
+});
+
 // === Utility ===
 
 ipcMain.handle('get-file-info', async () => {

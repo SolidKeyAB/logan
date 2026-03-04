@@ -354,4 +354,6 @@ export const IPC = {
   CONTEXT_DEFINITIONS_SAVE: 'context-definitions-save',
   CONTEXT_SEARCH: 'context-search',
   CONTEXT_SEARCH_PROGRESS: 'context-search-progress',
+  // Traceback
+  TRACEBACK: 'traceback',
 } as const;

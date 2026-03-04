@@ -284,6 +284,10 @@ interface AppState {
   contextViewMode: 'tree' | 'lanes';
   contextGroupMode: 'separate' | 'combined';
   editingContextId: string | null;
+  // Traceback
+  tracebackResult: any | null;
+  tracebackSort: 'time' | 'score';
+  tracebackFilterCat: string;
 }
 
 const state: AppState = {
@@ -336,6 +340,9 @@ const state: AppState = {
   contextViewMode: 'tree' as 'tree' | 'lanes',
   contextGroupMode: 'separate' as 'separate' | 'combined',
   editingContextId: null,
+  tracebackResult: null,
+  tracebackSort: 'time' as 'time' | 'score',
+  tracebackFilterCat: 'all',
 };
 
 // Constants
@@ -827,6 +834,12 @@ const elements = {
   chatAgentDot: document.getElementById('chat-agent-dot') as HTMLSpanElement,
   chatAgentStatusText: document.getElementById('chat-agent-status-text') as HTMLSpanElement,
   chatLaunchAgent: document.getElementById('chat-launch-agent') as HTMLButtonElement,
+  // Traceback
+  tracebackTargetInfo: document.getElementById('traceback-target-info') as HTMLDivElement,
+  tracebackSort: document.getElementById('traceback-sort') as HTMLSelectElement,
+  tracebackFilter: document.getElementById('traceback-filter') as HTMLSelectElement,
+  tracebackSummary: document.getElementById('traceback-summary') as HTMLDivElement,
+  tracebackResults: document.getElementById('traceback-results') as HTMLDivElement,
   // Bottom panel
   bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
   bottomPanelResizeHandle: document.getElementById('bottom-panel-resize-handle') as HTMLDivElement,
@@ -3604,6 +3617,15 @@ function handleContextMenu(event: MouseEvent): void {
     }
   }
 
+  // Traceback
+  menu.appendChild(menuSeparator());
+  const tracebackItem = menuItem('\u{1F50E}', 'Traceback from here');
+  tracebackItem.addEventListener('click', () => {
+    menu.remove();
+    runTraceback(lineNumber);
+  });
+  menu.appendChild(tracebackItem);
+
   // Filter from selection — add to include/exclude patterns
   if (selectedText.trim()) {
     menu.appendChild(menuSeparator());
@@ -4684,6 +4706,126 @@ function toggleBottomTab(tabId: string): void {
   } else {
     openBottomTab(tabId);
   }
+}
+
+// ─── Traceback ───────────────────────────────────────────────────────
+
+async function runTraceback(targetLine: number): Promise<void> {
+  showProgress('Running traceback...');
+  openBottomTab('traceback');
+
+  try {
+    const result = await window.api.traceback({ targetLine });
+    hideProgress();
+
+    if (!result.success) {
+      elements.tracebackResults.innerHTML = `<p class="placeholder">${escapeHtml(result.error || 'Traceback failed')}</p>`;
+      return;
+    }
+
+    state.tracebackResult = result;
+    state.tracebackSort = 'time';
+    state.tracebackFilterCat = 'all';
+    elements.tracebackSort.value = 'time';
+    elements.tracebackFilter.value = 'all';
+    updateTracebackUI();
+  } catch (err: any) {
+    hideProgress();
+    elements.tracebackResults.innerHTML = `<p class="placeholder">Error: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function updateTracebackUI(): void {
+  const result = state.tracebackResult;
+  if (!result || !result.lines) {
+    elements.tracebackResults.innerHTML = '<p class="placeholder">No traceback results</p>';
+    elements.tracebackSummary.innerHTML = '';
+    elements.tracebackTargetInfo.innerHTML = '<span class="traceback-placeholder">Right-click a line and select "Traceback from here"</span>';
+    return;
+  }
+
+  // Update target info
+  const targetLineDisplay = result.targetLine + 1;
+  const targetTextPreview = result.targetText?.length > 100 ? result.targetText.substring(0, 100) + '...' : (result.targetText || '');
+  let targetHtml = `<span class="traceback-target-line">Ln ${targetLineDisplay}</span>`;
+  if (result.targetComponent) {
+    targetHtml += `<span class="traceback-target-component">[${escapeHtml(result.targetComponent)}]</span>`;
+  }
+  targetHtml += `<span class="traceback-target-text">${escapeHtml(targetTextPreview)}</span>`;
+  elements.tracebackTargetInfo.innerHTML = targetHtml;
+
+  // Update summary
+  const s = result.summary;
+  const categoryColors: Record<string, string> = {
+    error: '#e06c75', warning: '#e5c07b', stateChanges: '#61afef', related: '#98c379', context: '#5c6370'
+  };
+  const summaryItems = [
+    { label: 'Errors', count: s.errors, color: categoryColors.error },
+    { label: 'Warnings', count: s.warnings, color: categoryColors.warning },
+    { label: 'State Changes', count: s.stateChanges, color: categoryColors.stateChanges },
+    { label: 'Related', count: s.related, color: categoryColors.related },
+    { label: 'Context', count: s.context, color: categoryColors.context },
+  ];
+  elements.tracebackSummary.innerHTML = `<span class="traceback-summary-item" style="font-weight:500">${s.total} results</span>` +
+    summaryItems.filter(i => i.count > 0).map(i =>
+      `<span class="traceback-summary-item"><span class="traceback-summary-dot" style="background:${i.color}"></span>${i.count} ${i.label}</span>`
+    ).join('');
+
+  // Filter lines
+  let lines = [...result.lines];
+  if (state.tracebackFilterCat !== 'all') {
+    lines = lines.filter((l: any) => l.category === state.tracebackFilterCat);
+  }
+
+  // Sort
+  if (state.tracebackSort === 'score') {
+    lines.sort((a: any, b: any) => b.score - a.score);
+  } else {
+    lines.sort((a: any, b: any) => a.lineNumber - b.lineNumber);
+  }
+
+  // Render
+  if (lines.length === 0) {
+    elements.tracebackResults.innerHTML = '<p class="placeholder">No matching lines for this filter</p>';
+    return;
+  }
+
+  const maxScore = Math.max(...lines.map((l: any) => l.score));
+  const fragment = document.createDocumentFragment();
+
+  for (const line of lines) {
+    const item = document.createElement('div');
+    item.className = `traceback-item cat-${line.category}`;
+    item.addEventListener('click', () => goToLine(line.lineNumber));
+
+    const lineNum = document.createElement('span');
+    lineNum.className = 'traceback-line-num';
+    lineNum.textContent = String(line.lineNumber + 1);
+    item.appendChild(lineNum);
+
+    const tag = document.createElement('span');
+    tag.className = `traceback-category-tag cat-${line.category}`;
+    tag.textContent = line.category === 'state-change' ? 'STATE' : line.category.toUpperCase().substring(0, 4);
+    item.appendChild(tag);
+
+    const text = document.createElement('span');
+    text.className = 'traceback-text';
+    text.textContent = line.text.length > 200 ? line.text.substring(0, 200) + '...' : line.text;
+    item.appendChild(text);
+
+    const scoreBar = document.createElement('span');
+    scoreBar.className = 'traceback-score';
+    const bar = document.createElement('span');
+    bar.className = 'traceback-score-bar';
+    bar.style.width = `${Math.round((line.score / maxScore) * 100)}%`;
+    scoreBar.appendChild(bar);
+    item.appendChild(scoreBar);
+
+    fragment.appendChild(item);
+  }
+
+  elements.tracebackResults.innerHTML = '';
+  elements.tracebackResults.appendChild(fragment);
 }
 
 // ─── Agent Chat ──────────────────────────────────────────────────────
@@ -11404,6 +11546,16 @@ function init(): void {
 
   setupBottomPanelResize();
   restoreBottomPanelState();
+
+  // Traceback sort/filter
+  elements.tracebackSort.addEventListener('change', () => {
+    state.tracebackSort = elements.tracebackSort.value as 'time' | 'score';
+    updateTracebackUI();
+  });
+  elements.tracebackFilter.addEventListener('change', () => {
+    state.tracebackFilterCat = elements.tracebackFilter.value;
+    updateTracebackUI();
+  });
 
   // Search configs panel events (inside bottom panel)
   elements.btnAddSearchConfig.addEventListener('click', () => showSearchConfigForm());
