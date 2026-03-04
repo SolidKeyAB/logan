@@ -4326,6 +4326,11 @@ async function createTerminalTab(
       if (lastSlash > 0) cwd = state.filePath.substring(0, lastSlash);
     }
     const result = await window.api.terminalCreateLocal(sessionId, { cwd, cols, rows });
+    if (!result.success) {
+      term.writeln(`\r\n[Terminal failed: ${result.error || 'unknown error'}]`);
+      tab.alive = false;
+      return;
+    }
     if (result.label) {
       tab.label = result.label;
       updateTerminalTabButton(sessionId, result.label);
