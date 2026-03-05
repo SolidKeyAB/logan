@@ -288,6 +288,11 @@ interface AppState {
   tracebackResult: any | null;
   tracebackSort: 'time' | 'score';
   tracebackFilterCat: string;
+  // Time Align
+  timeAlignOffsets: Map<string, number>;
+  timeAlignTimestamps: Map<string, Array<{ lineNumber: number; epochMs: number }>>;
+  timeAlignMinTime: number;
+  timeAlignMaxTime: number;
 }
 
 const state: AppState = {
@@ -343,6 +348,10 @@ const state: AppState = {
   tracebackResult: null,
   tracebackSort: 'time' as 'time' | 'score',
   tracebackFilterCat: 'all',
+  timeAlignOffsets: new Map<string, number>(),
+  timeAlignTimestamps: new Map<string, Array<{ lineNumber: number; epochMs: number }>>(),
+  timeAlignMinTime: 0,
+  timeAlignMaxTime: 0,
 };
 
 // Constants
@@ -840,6 +849,13 @@ const elements = {
   tracebackFilter: document.getElementById('traceback-filter') as HTMLSelectElement,
   tracebackSummary: document.getElementById('traceback-summary') as HTMLDivElement,
   tracebackResults: document.getElementById('traceback-results') as HTMLDivElement,
+  // Time Align
+  taRefreshBtn: document.getElementById('ta-refresh-btn') as HTMLButtonElement,
+  taResetBtn: document.getElementById('ta-reset-btn') as HTMLButtonElement,
+  taSummary: document.getElementById('ta-summary') as HTMLSpanElement,
+  taAxis: document.getElementById('ta-axis') as HTMLDivElement,
+  taLanes: document.getElementById('ta-lanes') as HTMLDivElement,
+  taPlaceholder: document.getElementById('ta-placeholder') as HTMLParagraphElement,
   // Bottom panel
   bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
   bottomPanelResizeHandle: document.getElementById('bottom-panel-resize-handle') as HTMLDivElement,
@@ -4680,6 +4696,11 @@ function openBottomTab(tabId: string): void {
   if (tabId === 'contexts') {
     loadContextDefinitions();
   }
+  if (tabId === 'time-align') {
+    if (state.timeAlignTimestamps.size === 0 && state.searchConfigResults.size > 0) {
+      buildTimeAlignData();
+    }
+  }
 
   saveBottomPanelState();
 }
@@ -4710,6 +4731,310 @@ function toggleBottomTab(tabId: string): void {
     closeBottomPanel();
   } else {
     openBottomTab(tabId);
+  }
+}
+
+// ─── Time Align ──────────────────────────────────────────────────────
+
+async function buildTimeAlignData(): Promise<void> {
+  const enabledConfigs = state.searchConfigs.filter(c => c.enabled);
+  if (enabledConfigs.length === 0) {
+    state.timeAlignTimestamps.clear();
+    renderTimeAlignLanes();
+    return;
+  }
+
+  // Collect all unique line numbers from search config results
+  const allLineNumbers = new Set<number>();
+  for (const config of enabledConfigs) {
+    const results = state.searchConfigResults.get(config.id);
+    if (results) {
+      for (const r of results) allLineNumbers.add(r.lineNumber);
+    }
+  }
+
+  if (allLineNumbers.size === 0) {
+    state.timeAlignTimestamps.clear();
+    renderTimeAlignLanes();
+    return;
+  }
+
+  // Single batch IPC call for all line timestamps
+  const timestamps = await window.api.getLineTimestamps(Array.from(allLineNumbers));
+  const tsMap = new Map<number, number>();
+  for (const t of timestamps) tsMap.set(t.lineNumber, t.epochMs);
+
+  // Distribute to per-config maps
+  state.timeAlignTimestamps.clear();
+  let globalMin = Infinity;
+  let globalMax = -Infinity;
+
+  for (const config of enabledConfigs) {
+    const results = state.searchConfigResults.get(config.id);
+    if (!results) continue;
+    const entries: Array<{ lineNumber: number; epochMs: number }> = [];
+    for (const r of results) {
+      const ep = tsMap.get(r.lineNumber);
+      if (ep !== undefined) {
+        entries.push({ lineNumber: r.lineNumber, epochMs: ep });
+        if (ep < globalMin) globalMin = ep;
+        if (ep > globalMax) globalMax = ep;
+      }
+    }
+    if (entries.length > 0) {
+      state.timeAlignTimestamps.set(config.id, entries);
+    }
+  }
+
+  state.timeAlignMinTime = globalMin === Infinity ? 0 : globalMin;
+  state.timeAlignMaxTime = globalMax === -Infinity ? 0 : globalMax;
+
+  renderTimeAlignLanes();
+}
+
+function formatOffsetMs(ms: number): string {
+  const abs = Math.abs(ms);
+  const sign = ms >= 0 ? '+' : '-';
+  if (abs < 1000) return `${sign}${abs}ms`;
+  if (abs < 60000) return `${sign}${(abs / 1000).toFixed(1)}s`;
+  return `${sign}${(abs / 60000).toFixed(1)}m`;
+}
+
+function formatTimestamp(epochMs: number): string {
+  const d = new Date(epochMs);
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  const s = String(d.getSeconds()).padStart(2, '0');
+  const ms = String(d.getMilliseconds()).padStart(3, '0');
+  return `${h}:${m}:${s}.${ms}`;
+}
+
+function renderTimeAlignAxis(): void {
+  const axis = elements.taAxis;
+  axis.innerHTML = '';
+
+  const range = state.timeAlignMaxTime - state.timeAlignMinTime;
+  if (range <= 0) return;
+
+  // Adaptive tick count based on width
+  const axisWidth = axis.offsetWidth - 100; // subtract label area
+  if (axisWidth <= 0) return;
+  const tickCount = Math.min(10, Math.max(3, Math.floor(axisWidth / 80)));
+
+  for (let i = 0; i <= tickCount; i++) {
+    const frac = i / tickCount;
+    const pct = frac * 100;
+    const epochMs = state.timeAlignMinTime + frac * range;
+
+    const tick = document.createElement('div');
+    tick.className = 'ta-axis-tick';
+    tick.style.left = `calc(${pct}%)`;
+    axis.appendChild(tick);
+
+    const label = document.createElement('div');
+    label.className = 'ta-axis-label';
+    label.style.left = `calc(${pct}%)`;
+    label.textContent = formatTimestamp(epochMs);
+    axis.appendChild(label);
+  }
+}
+
+function renderTimeAlignLanes(): void {
+  const lanesEl = elements.taLanes;
+  lanesEl.innerHTML = '';
+
+  const enabledConfigs = state.searchConfigs.filter(c => c.enabled);
+  const hasData = enabledConfigs.some(c => state.timeAlignTimestamps.has(c.id));
+
+  elements.taPlaceholder.style.display = hasData ? 'none' : '';
+  if (!hasData) {
+    elements.taAxis.innerHTML = '';
+    elements.taSummary.textContent = '';
+    return;
+  }
+
+  const range = state.timeAlignMaxTime - state.timeAlignMinTime;
+  const safeRange = range > 0 ? range : 1;
+
+  let totalMarks = 0;
+
+  for (const config of enabledConfigs) {
+    const entries = state.timeAlignTimestamps.get(config.id);
+    if (!entries || entries.length === 0) continue;
+
+    const offsetMs = state.timeAlignOffsets.get(config.id) || 0;
+
+    const lane = document.createElement('div');
+    lane.className = 'ta-lane';
+    lane.dataset.configId = config.id;
+
+    // Label
+    const label = document.createElement('div');
+    label.className = 'ta-lane-label';
+    const swatch = document.createElement('span');
+    swatch.className = 'ta-lane-color';
+    swatch.style.background = config.color;
+    swatch.style.color = config.color;
+    label.appendChild(swatch);
+    label.appendChild(document.createTextNode(config.pattern));
+    label.title = config.pattern;
+
+    // Offset badge
+    if (offsetMs !== 0) {
+      const badge = document.createElement('span');
+      badge.className = 'ta-offset-badge';
+      badge.textContent = formatOffsetMs(offsetMs);
+      label.appendChild(badge);
+    }
+
+    lane.appendChild(label);
+
+    // Track
+    const track = document.createElement('div');
+    track.className = 'ta-lane-track';
+    track.style.background = `linear-gradient(to right, ${config.color}15, ${config.color}08)`;
+
+    for (const entry of entries) {
+      const adjustedMs = entry.epochMs + offsetMs;
+      const pct = ((adjustedMs - state.timeAlignMinTime) / safeRange) * 100;
+      if (pct < -5 || pct > 105) continue; // skip far-out marks
+
+      const mark = document.createElement('div');
+      mark.className = 'ta-lane-mark';
+      mark.style.left = `${Math.max(0, Math.min(100, pct))}%`;
+      mark.style.background = config.color;
+      mark.style.color = config.color;
+      mark.dataset.lineNumber = String(entry.lineNumber);
+      mark.dataset.epochMs = String(entry.epochMs);
+
+      // Click to navigate
+      mark.addEventListener('click', (e) => {
+        e.stopPropagation();
+        goToLine(entry.lineNumber);
+      });
+
+      // Hover tooltip
+      mark.addEventListener('mouseenter', (e) => {
+        const origStr = formatTimestamp(entry.epochMs);
+        let tipText = `${origStr} | L${entry.lineNumber + 1}`;
+        if (offsetMs !== 0) {
+          const adjStr = formatTimestamp(adjustedMs);
+          tipText = `Original: ${origStr} → Adjusted: ${adjStr} | L${entry.lineNumber + 1}`;
+        }
+        showTimeAlignTooltip(e as MouseEvent, tipText);
+      });
+      mark.addEventListener('mouseleave', hideTimeAlignTooltip);
+
+      track.appendChild(mark);
+      totalMarks++;
+    }
+
+    lane.appendChild(track);
+    lanesEl.appendChild(lane);
+
+    // Setup drag interaction for this lane
+    setupTimeAlignDrag(lane, track, config.id, safeRange);
+  }
+
+  elements.taSummary.textContent = `${enabledConfigs.length} lane${enabledConfigs.length !== 1 ? 's' : ''}, ${totalMarks} mark${totalMarks !== 1 ? 's' : ''}`;
+  renderTimeAlignAxis();
+}
+
+let taTooltipEl: HTMLDivElement | null = null;
+
+function showTimeAlignTooltip(e: MouseEvent, text: string): void {
+  if (!taTooltipEl) {
+    taTooltipEl = document.createElement('div');
+    taTooltipEl.className = 'ta-mark-tooltip';
+    document.body.appendChild(taTooltipEl);
+  }
+  taTooltipEl.textContent = text;
+  taTooltipEl.style.display = 'block';
+  taTooltipEl.style.left = `${e.clientX + 10}px`;
+  taTooltipEl.style.top = `${e.clientY - 30}px`;
+}
+
+function hideTimeAlignTooltip(): void {
+  if (taTooltipEl) taTooltipEl.style.display = 'none';
+}
+
+function setupTimeAlignDrag(lane: HTMLElement, track: HTMLElement, configId: string, rangeMs: number): void {
+  let isDragging = false;
+  let startX = 0;
+  let startOffset = 0;
+
+  track.addEventListener('mousedown', (e: MouseEvent) => {
+    // Don't start drag if clicking on a mark
+    if ((e.target as HTMLElement).classList.contains('ta-lane-mark')) return;
+    e.preventDefault();
+    isDragging = true;
+    startX = e.clientX;
+    startOffset = state.timeAlignOffsets.get(configId) || 0;
+    track.classList.add('dragging');
+    document.body.style.cursor = 'grabbing';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+
+  function onMouseMove(e: MouseEvent): void {
+    if (!isDragging) return;
+    const dx = e.clientX - startX;
+    const trackWidth = track.offsetWidth;
+    if (trackWidth <= 0) return;
+    const dMs = (dx / trackWidth) * rangeMs;
+    const newOffset = startOffset + dMs;
+    state.timeAlignOffsets.set(configId, newOffset);
+
+    // Update mark positions without full re-render
+    const marks = track.querySelectorAll('.ta-lane-mark');
+    const safeRange = rangeMs > 0 ? rangeMs : 1;
+    marks.forEach(m => {
+      const mark = m as HTMLElement;
+      const epochMs = Number(mark.dataset.epochMs);
+      const adjusted = epochMs + newOffset;
+      const pct = ((adjusted - state.timeAlignMinTime) / safeRange) * 100;
+      mark.style.left = `${Math.max(0, Math.min(100, pct))}%`;
+    });
+
+    // Update offset badge
+    updateLaneOffsetBadge(lane, configId);
+  }
+
+  function onMouseUp(): void {
+    isDragging = false;
+    track.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  }
+}
+
+function updateLaneOffsetBadge(lane: HTMLElement, configId: string): void {
+  const label = lane.querySelector('.ta-lane-label');
+  if (!label) return;
+  let badge = label.querySelector('.ta-offset-badge') as HTMLElement | null;
+  const offset = state.timeAlignOffsets.get(configId) || 0;
+  if (Math.abs(offset) < 1) {
+    if (badge) badge.remove();
+    return;
+  }
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'ta-offset-badge';
+    label.appendChild(badge);
+  }
+  badge.textContent = formatOffsetMs(offset);
+}
+
+function invalidateTimeAlignTimestamps(): void {
+  state.timeAlignTimestamps.clear();
+  state.timeAlignMinTime = 0;
+  state.timeAlignMaxTime = 0;
+  // If Time Align tab is currently active, auto-rebuild
+  if (state.activeBottomTab === 'time-align') {
+    buildTimeAlignData();
   }
 }
 
@@ -6425,6 +6750,7 @@ async function runSearchConfigsBatch(): Promise<void> {
   await yieldToUI();
   renderVisibleLines();
   renderMinimapMarkers();
+  invalidateTimeAlignTimestamps();
 }
 
 function renderSearchConfigsChips(): void {
@@ -11579,6 +11905,13 @@ function init(): void {
   elements.ctxViewLanes.addEventListener('click', () => toggleContextView('lanes'));
   elements.ctxGroupSeparate.addEventListener('click', () => toggleContextGroupMode('separate'));
   elements.ctxGroupCombined.addEventListener('click', () => toggleContextGroupMode('combined'));
+
+  // Time Align events (inside bottom panel)
+  elements.taRefreshBtn.addEventListener('click', () => buildTimeAlignData());
+  elements.taResetBtn.addEventListener('click', () => {
+    state.timeAlignOffsets.clear();
+    renderTimeAlignLanes();
+  });
 
   // Video player events (inside bottom panel)
   elements.btnVideoOpen.addEventListener('click', openVideoFile);
