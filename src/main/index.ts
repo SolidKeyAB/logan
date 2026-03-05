@@ -4232,6 +4232,24 @@ ipcMain.handle(IPC.GET_LINE_TIMESTAMP, async (_, lineNumber: number) => {
   }
 });
 
+// Batch timestamp fetch for Time Align
+ipcMain.handle(IPC.GET_LINE_TIMESTAMPS, async (_, lineNumbers: number[]) => {
+  const handler = getFileHandler();
+  if (!handler) return [];
+  const results: Array<{ lineNumber: number; epochMs: number }> = [];
+  try {
+    for (const ln of lineNumbers) {
+      const lines = handler.getLines(ln, 1);
+      if (lines.length === 0) continue;
+      const parsed = parseTimestampFast(lines[0].text);
+      if (parsed) {
+        results.push({ lineNumber: ln, epochMs: parsed.date.getTime() });
+      }
+    }
+  } catch { /* ignore */ }
+  return results;
+});
+
 ipcMain.handle('detect-time-gaps', async (_, options: TimeGapOptions) => {
   const handler = getFileHandler();
   if (!handler || !currentFilePath) {

@@ -65,6 +65,8 @@ const IPC = {
   CONTEXT_SEARCH_PROGRESS: 'context-search-progress',
   // Traceback
   TRACEBACK: 'traceback',
+  // Time Align
+  GET_LINE_TIMESTAMPS: 'get-line-timestamps',
   // Tabbed terminal
   TERMINAL_CREATE_LOCAL: 'terminal-create-local',
   TERMINAL_CREATE_SSH: 'terminal-create-ssh',
@@ -431,6 +433,9 @@ const api = {
   // Video player
   getLineTimestamp: (lineNumber: number): Promise<{ epochMs: number | null; timestampStr: string | null }> =>
     ipcRenderer.invoke(IPC.GET_LINE_TIMESTAMP, lineNumber),
+
+  getLineTimestamps: (lineNumbers: number[]): Promise<Array<{ lineNumber: number; epochMs: number }>> =>
+    ipcRenderer.invoke(IPC.GET_LINE_TIMESTAMPS, lineNumbers),
 
   // MCP navigation
   onNavigateToLine: (callback: (lineNumber: number) => void): (() => void) => {

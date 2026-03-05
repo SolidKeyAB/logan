@@ -428,6 +428,9 @@ interface Api {
   // Video player
   getLineTimestamp: (lineNumber: number) => Promise<{ epochMs: number | null; timestampStr: string | null }>;
 
+  // Time Align (batch)
+  getLineTimestamps: (lineNumbers: number[]) => Promise<Array<{ lineNumber: number; epochMs: number }>>;
+
   // MCP navigation
   onNavigateToLine: (callback: (lineNumber: number) => void) => () => void;
 
