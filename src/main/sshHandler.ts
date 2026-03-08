@@ -272,7 +272,7 @@ export class SshHandler extends EventEmitter {
     }
 
     if (this.stream) {
-      try { this.stream.close(); } catch { /* */ }
+      try { this.stream.removeAllListeners(); this.stream.close(); } catch { /* */ }
       this.stream = null;
     }
 
@@ -282,7 +282,7 @@ export class SshHandler extends EventEmitter {
     }
 
     if (this.client) {
-      try { this.client.end(); } catch { /* */ }
+      try { this.client.removeAllListeners(); this.client.end(); } catch { /* */ }
       this.client = null;
     }
 
@@ -428,7 +428,7 @@ export class SshHandler extends EventEmitter {
 
   private cleanup(): void {
     if (this.stream) {
-      try { this.stream.close(); } catch { /* */ }
+      try { this.stream.removeAllListeners(); this.stream.close(); } catch { /* */ }
       this.stream = null;
     }
     if (this.sftp) {
@@ -436,7 +436,7 @@ export class SshHandler extends EventEmitter {
       this.sftp = null;
     }
     if (this.client) {
-      try { this.client.end(); } catch { /* */ }
+      try { this.client.removeAllListeners(); this.client.end(); } catch { /* */ }
       this.client = null;
     }
     if (this.fd !== null) {

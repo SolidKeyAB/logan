@@ -143,11 +143,26 @@ export class LogcatHandler extends EventEmitter {
     if (!this.process) return;
 
     try {
+      this.process.stdout?.removeAllListeners();
+      this.process.stderr?.removeAllListeners();
+      this.process.removeAllListeners();
       this.process.kill('SIGTERM');
     } catch {
       // Process may already be dead
     }
-    // The 'close' event handler will do the rest
+    this.process = null;
+    // Flush partial line and close fd
+    if (this.lineBuffer.length > 0 && this.fd) {
+      fs.writeSync(this.fd, wallClockPrefix() + ' ' + this.lineBuffer + '\n');
+      this.linesReceived++;
+      this.lineBuffer = '';
+    }
+    if (this.fd !== null) {
+      fs.closeSync(this.fd);
+      this.fd = null;
+    }
+    this.config = null;
+    this.connectedSince = null;
   }
 
   getStatus(): LogcatStatus {

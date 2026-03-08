@@ -6086,12 +6086,23 @@ function renderCardMinimap(connectionId: string): void {
 }
 
 // Unified live event listeners — registered once in init()
+let liveListenersRegistered = false;
+const MAX_MINIMAP_LEVELS = 100000; // Cap minimap levels to prevent unbounded memory growth
+
 function setupLiveEventListeners(): void {
+  if (liveListenersRegistered) return;
+  liveListenersRegistered = true;
+
   window.api.onLiveLinesAdded(({ connectionId, totalLines, newLines }) => {
     const conn = state.liveConnections.get(connectionId);
     if (!conn) return;
     conn.linesReceived = totalLines;
-    for (let i = 0; i < newLines; i++) conn.minimapLevels.push(undefined);
+    // Cap minimap levels to prevent unbounded memory growth
+    if (conn.minimapLevels.length < MAX_MINIMAP_LEVELS) {
+      const remaining = MAX_MINIMAP_LEVELS - conn.minimapLevels.length;
+      const toAdd = Math.min(newLines, remaining);
+      for (let i = 0; i < toAdd; i++) conn.minimapLevels.push(undefined);
+    }
     updateConnectionCard(connectionId);
     requestCardMinimapRender();
 

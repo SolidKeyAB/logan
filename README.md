@@ -113,6 +113,15 @@ Download the latest release from [GitHub Releases](https://github.com/SolidKeyAB
 
 ### Build from Source
 
+**Linux (Debian/Ubuntu) prerequisites** — needed for native modules (`node-pty`, `better-sqlite3`):
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake python3
+```
+
+Then build:
+
 ```bash
 git clone https://github.com/SolidKeyAB/logan.git
 cd logan

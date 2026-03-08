@@ -60,8 +60,19 @@ const sshUtilHandler = SshHandler ? new SshHandler() : null;
 // Baseline store (JSON file in ~/.logan/baselines.json)
 const baselineStore = new BaselineStore();
 
-// Cache last analysis result per file for baseline fingerprinting
+// Cache last analysis result per file for baseline fingerprinting (capped)
 const analysisResultCache = new Map<string, AnalysisResult>();
+
+function cacheAnalysisResult(filePath: string, result: AnalysisResult): void {
+  if (analysisResultCache.has(filePath)) {
+    analysisResultCache.delete(filePath);
+  }
+  if (analysisResultCache.size >= MAX_CACHED_FILES) {
+    const firstKey = analysisResultCache.keys().next().value;
+    if (firstKey) analysisResultCache.delete(firstKey);
+  }
+  analysisResultCache.set(filePath, result);
+}
 
 // Filter state - maps file path to array of visible line indices
 const filterState = new Map<string, number[] | null>();
@@ -77,14 +88,26 @@ const MAX_CACHED_FILES = 10; // Limit cache size to prevent memory issues
 
 function getFileHandler(): FileHandler | null {
   if (!currentFilePath) return null;
-  return fileHandlerCache.get(currentFilePath) || null;
+  const handler = fileHandlerCache.get(currentFilePath);
+  if (handler) {
+    // Move to end for LRU ordering
+    fileHandlerCache.delete(currentFilePath);
+    fileHandlerCache.set(currentFilePath, handler);
+  }
+  return handler || null;
 }
 
 function addToCache(filePath: string, handler: FileHandler): void {
-  // If cache is full, remove oldest entry
+  // If already cached, remove so it goes to end (most-recently-used)
+  if (fileHandlerCache.has(filePath)) {
+    fileHandlerCache.delete(filePath);
+  }
+  // If cache is full, evict least-recently-used (first entry) and close its fd
   if (fileHandlerCache.size >= MAX_CACHED_FILES) {
     const firstKey = fileHandlerCache.keys().next().value;
     if (firstKey) {
+      const evicted = fileHandlerCache.get(firstKey);
+      if (evicted) evicted.close();
       fileHandlerCache.delete(firstKey);
     }
   }
@@ -651,7 +674,7 @@ app.whenReady().then(() => {
       try {
         const result = await analyzer.analyze(currentFilePath, {}, () => {}, analyzeSignal);
         logActivity(currentFilePath, 'analysis_run', { analyzerName: analyzer.name });
-        analysisResultCache.set(currentFilePath, result);
+        cacheAnalysisResult(currentFilePath, result);
         return { success: true, result };
       } catch (error) {
         return { success: false, error: String(error) };
@@ -856,7 +879,7 @@ app.whenReady().then(() => {
         if (!analyzer) return { success: false, error: 'No analyzer available' };
         analyzeSignal = { cancelled: false };
         analysisResult = await analyzer.analyze(currentFilePath, {}, () => {}, analyzeSignal);
-        analysisResultCache.set(currentFilePath, analysisResult);
+        cacheAnalysisResult(currentFilePath, analysisResult);
       }
 
       const crashes = analysisResult.insights.crashes.slice(0, maxCrashes);
@@ -968,7 +991,7 @@ app.whenReady().then(() => {
         if (!analyzer) return { success: false, error: 'No analyzer available' };
         analyzeSignal = { cancelled: false };
         analysisResult = await analyzer.analyze(currentFilePath, {}, () => {}, analyzeSignal);
-        analysisResultCache.set(currentFilePath, analysisResult);
+        cacheAnalysisResult(currentFilePath, analysisResult);
       }
 
       // Search for component mentions
@@ -3720,7 +3743,7 @@ ipcMain.handle('analyze-file', async (_, analyzerName?: string, options?: Analyz
     );
 
     logActivity(currentFilePath, 'analysis_run', { analyzerName: analyzer.name });
-    analysisResultCache.set(currentFilePath, result);
+    cacheAnalysisResult(currentFilePath, result);
 
     return { success: true, result };
   } catch (error) {
