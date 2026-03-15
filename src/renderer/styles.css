@@ -3774,6 +3774,8 @@ kbd {
   padding: 3px 12px;
   cursor: pointer;
   transition: background-color 0.1s;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .search-result-item:hover {
