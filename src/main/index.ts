@@ -60,8 +60,19 @@ const sshUtilHandler = SshHandler ? new SshHandler() : null;
 // Baseline store (JSON file in ~/.logan/baselines.json)
 const baselineStore = new BaselineStore();
 
-// Cache last analysis result per file for baseline fingerprinting
+// Cache last analysis result per file for baseline fingerprinting (capped)
 const analysisResultCache = new Map<string, AnalysisResult>();
+
+function cacheAnalysisResult(filePath: string, result: AnalysisResult): void {
+  if (analysisResultCache.has(filePath)) {
+    analysisResultCache.delete(filePath);
+  }
+  if (analysisResultCache.size >= MAX_CACHED_FILES) {
+    const firstKey = analysisResultCache.keys().next().value;
+    if (firstKey) analysisResultCache.delete(firstKey);
+  }
+  analysisResultCache.set(filePath, result);
+}
 
 // Filter state - maps file path to array of visible line indices
 const filterState = new Map<string, number[] | null>();
@@ -77,14 +88,26 @@ const MAX_CACHED_FILES = 10; // Limit cache size to prevent memory issues
 
 function getFileHandler(): FileHandler | null {
   if (!currentFilePath) return null;
-  return fileHandlerCache.get(currentFilePath) || null;
+  const handler = fileHandlerCache.get(currentFilePath);
+  if (handler) {
+    // Move to end for LRU ordering
+    fileHandlerCache.delete(currentFilePath);
+    fileHandlerCache.set(currentFilePath, handler);
+  }
+  return handler || null;
 }
 
 function addToCache(filePath: string, handler: FileHandler): void {
-  // If cache is full, remove oldest entry
+  // If already cached, remove so it goes to end (most-recently-used)
+  if (fileHandlerCache.has(filePath)) {
+    fileHandlerCache.delete(filePath);
+  }
+  // If cache is full, evict least-recently-used (first entry) and close its fd
   if (fileHandlerCache.size >= MAX_CACHED_FILES) {
     const firstKey = fileHandlerCache.keys().next().value;
     if (firstKey) {
+      const evicted = fileHandlerCache.get(firstKey);
+      if (evicted) evicted.close();
       fileHandlerCache.delete(firstKey);
     }
   }
@@ -651,7 +674,7 @@ app.whenReady().then(() => {
       try {
         const result = await analyzer.analyze(currentFilePath, {}, () => {}, analyzeSignal);
         logActivity(currentFilePath, 'analysis_run', { analyzerName: analyzer.name });
-        analysisResultCache.set(currentFilePath, result);
+        cacheAnalysisResult(currentFilePath, result);
         return { success: true, result };
       } catch (error) {
         return { success: false, error: String(error) };
@@ -856,7 +879,7 @@ app.whenReady().then(() => {
         if (!analyzer) return { success: false, error: 'No analyzer available' };
         analyzeSignal = { cancelled: false };
         analysisResult = await analyzer.analyze(currentFilePath, {}, () => {}, analyzeSignal);
-        analysisResultCache.set(currentFilePath, analysisResult);
+        cacheAnalysisResult(currentFilePath, analysisResult);
       }
 
       const crashes = analysisResult.insights.crashes.slice(0, maxCrashes);
@@ -968,7 +991,7 @@ app.whenReady().then(() => {
         if (!analyzer) return { success: false, error: 'No analyzer available' };
         analyzeSignal = { cancelled: false };
         analysisResult = await analyzer.analyze(currentFilePath, {}, () => {}, analyzeSignal);
-        analysisResultCache.set(currentFilePath, analysisResult);
+        cacheAnalysisResult(currentFilePath, analysisResult);
       }
 
       // Search for component mentions
@@ -2864,8 +2887,18 @@ ipcMain.handle(IPC.SEARCH_CONFIG_BATCH, async (_, configs: Array<{ id: string; p
   const handler = getFileHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
-  const results: Record<string, Array<{ lineNumber: number; column: number; length: number; lineText: string }>> = {};
+  const results: Record<string, Array<{ lineNumber: number; column: number; length: number; lineText: string; displayIndex?: number }>> = {};
   const totalConfigs = configs.length;
+
+  // Build filter lookup once (shared across all configs)
+  const filteredIndices = getFilteredLines();
+  let filteredSet: Set<number> | null = null;
+  let lineToFilteredIndex: Map<number, number> | null = null;
+  if (filteredIndices && filteredIndices.length > 0) {
+    filteredSet = new Set(filteredIndices);
+    lineToFilteredIndex = new Map<number, number>();
+    filteredIndices.forEach((lineNum, idx) => lineToFilteredIndex!.set(lineNum, idx));
+  }
 
   for (let i = 0; i < configs.length; i++) {
     const cfg = configs[i];
@@ -2878,30 +2911,22 @@ ipcMain.handle(IPC.SEARCH_CONFIG_BATCH, async (_, configs: Array<{ id: string; p
         wholeWord: cfg.wholeWord,
       };
 
-      // Add filtered lines if filter is active
-      const filteredIndices = getFilteredLines();
-      if (filteredIndices) {
-        searchOpts.filteredLineIndices = filteredIndices;
-      }
-
       const matches = await handler.search(searchOpts, (percent) => {
         const overallPercent = Math.round(((i + percent / 100) / totalConfigs) * 100);
         mainWindow?.webContents.send(IPC.SEARCH_CONFIG_BATCH_PROGRESS, { percent: overallPercent, configId: cfg.id });
       }, { cancelled: false });
 
-      // If filter is active, remap line numbers
-      if (filteredIndices && filteredIndices.length > 0) {
-        const filteredSet = new Set(filteredIndices);
-        const lineToFilteredIndex = new Map<number, number>();
-        filteredIndices.forEach((lineNum, idx) => lineToFilteredIndex.set(lineNum, idx));
-
+      // Keep original lineNumber, add displayIndex when filtered
+      // (matches the same pattern as the regular SEARCH handler)
+      if (filteredSet && lineToFilteredIndex) {
         results[cfg.id] = matches
-          .filter(m => filteredSet.has(m.lineNumber))
+          .filter(m => filteredSet!.has(m.lineNumber))
           .map(m => ({
-            lineNumber: lineToFilteredIndex.get(m.lineNumber) ?? m.lineNumber,
+            lineNumber: m.lineNumber,
             column: m.column,
             length: m.length,
             lineText: m.lineText,
+            displayIndex: lineToFilteredIndex!.get(m.lineNumber),
           }));
       } else {
         results[cfg.id] = matches.map(m => ({
@@ -3720,7 +3745,7 @@ ipcMain.handle('analyze-file', async (_, analyzerName?: string, options?: Analyz
     );
 
     logActivity(currentFilePath, 'analysis_run', { analyzerName: analyzer.name });
-    analysisResultCache.set(currentFilePath, result);
+    cacheAnalysisResult(currentFilePath, result);
 
     return { success: true, result };
   } catch (error) {

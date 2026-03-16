@@ -5389,14 +5389,20 @@ function showNotesContextMenu(e: MouseEvent): void {
   setTimeout(() => document.addEventListener('click', closeMenu), 0);
 }
 
-// ─── Search Results Panel ────────────────────────────────────────────
+// ─── Search Results Panel (Virtualized) ─────────────────────────────
 
-const SEARCH_RESULTS_LIST_CAP = 500;
+const SEARCH_RESULT_ITEM_HEIGHT = 26; // px per row
+let searchResultsScrollHandler: (() => void) | null = null;
 
 async function renderSearchResultsList(): Promise<void> {
   const list = elements.searchResultsList;
   const results = state.searchResults;
-  const searchPattern = elements.searchInput.value;
+
+  // Remove previous scroll handler if any
+  if (searchResultsScrollHandler) {
+    list.removeEventListener('scroll', searchResultsScrollHandler);
+    searchResultsScrollHandler = null;
+  }
 
   if (results.length === 0) {
     list.innerHTML = '<div class="search-results-cap-notice">No results</div>';
@@ -5404,26 +5410,40 @@ async function renderSearchResultsList(): Promise<void> {
     return;
   }
 
-  const displayCount = Math.min(results.length, SEARCH_RESULTS_LIST_CAP);
-  elements.searchResultsSummary.textContent = results.length > SEARCH_RESULTS_LIST_CAP
-    ? `Showing ${SEARCH_RESULTS_LIST_CAP} of ${results.length}`
-    : `${results.length} results`;
+  elements.searchResultsSummary.textContent = `${results.length.toLocaleString()} results`;
 
+  // Set up virtualized container: spacer for total height + viewport for visible items
+  const totalHeight = results.length * SEARCH_RESULT_ITEM_HEIGHT;
   list.innerHTML = '';
-  const CHUNK_SIZE = 200;
+  const spacer = document.createElement('div');
+  spacer.style.height = totalHeight + 'px';
+  spacer.style.position = 'relative';
+  list.appendChild(spacer);
 
-  for (let chunkStart = 0; chunkStart < displayCount; chunkStart += CHUNK_SIZE) {
-    const chunkEnd = Math.min(chunkStart + CHUNK_SIZE, displayCount);
+  const renderVisibleSearchResults = () => {
+    const scrollTop = list.scrollTop;
+    const viewHeight = list.clientHeight;
+    const startIdx = Math.max(0, Math.floor(scrollTop / SEARCH_RESULT_ITEM_HEIGHT) - 5);
+    const endIdx = Math.min(results.length, Math.ceil((scrollTop + viewHeight) / SEARCH_RESULT_ITEM_HEIGHT) + 5);
+    const searchPattern = elements.searchInput.value;
+
+    // Clear old items
+    const oldItems = spacer.querySelectorAll('.search-result-item');
+    oldItems.forEach(el => el.remove());
+
     const fragment = document.createDocumentFragment();
-
-    for (let i = chunkStart; i < chunkEnd; i++) {
+    for (let i = startIdx; i < endIdx; i++) {
       const r = results[i];
       const item = document.createElement('div');
       item.className = 'search-result-item';
-      if (i === state.currentSearchIndex) {
-        item.classList.add('current');
-      }
+      if (i === state.currentSearchIndex) item.classList.add('current');
       item.dataset.index = String(i);
+      item.style.position = 'absolute';
+      item.style.top = (i * SEARCH_RESULT_ITEM_HEIGHT) + 'px';
+      item.style.left = '0';
+      item.style.right = '0';
+      item.style.height = SEARCH_RESULT_ITEM_HEIGHT + 'px';
+      item.style.boxSizing = 'border-box';
 
       const lineNum = document.createElement('span');
       lineNum.className = 'search-result-line-num';
@@ -5451,17 +5471,23 @@ async function renderSearchResultsList(): Promise<void> {
       });
       fragment.appendChild(item);
     }
+    spacer.appendChild(fragment);
+  };
 
-    list.appendChild(fragment);
-    if (chunkEnd < displayCount) await yieldToUI();
-  }
+  // Debounce scroll rendering with RAF
+  let searchResultsRafPending = false;
+  searchResultsScrollHandler = () => {
+    if (searchResultsRafPending) return;
+    searchResultsRafPending = true;
+    requestAnimationFrame(() => {
+      searchResultsRafPending = false;
+      renderVisibleSearchResults();
+    });
+  };
+  list.addEventListener('scroll', searchResultsScrollHandler);
 
-  if (results.length > SEARCH_RESULTS_LIST_CAP) {
-    const notice = document.createElement('div');
-    notice.className = 'search-results-cap-notice';
-    notice.textContent = `... and ${results.length - SEARCH_RESULTS_LIST_CAP} more results`;
-    list.appendChild(notice);
-  }
+  // Initial render
+  renderVisibleSearchResults();
 }
 
 function updateSearchResultsCurrent(): void {
@@ -5470,7 +5496,7 @@ function updateSearchResultsCurrent(): void {
   if (prev) prev.classList.remove('current');
 
   const idx = state.currentSearchIndex;
-  if (idx >= 0 && idx < SEARCH_RESULTS_LIST_CAP) {
+  if (idx >= 0 && idx < state.searchResults.length) {
     const item = list.querySelector(`.search-result-item[data-index="${idx}"]`);
     if (item) item.classList.add('current');
   }
@@ -5478,11 +5504,19 @@ function updateSearchResultsCurrent(): void {
 
 function scrollSearchResultIntoView(): void {
   const idx = state.currentSearchIndex;
-  if (idx < 0 || idx >= SEARCH_RESULTS_LIST_CAP) return;
-  const item = elements.searchResultsList.querySelector(`.search-result-item[data-index="${idx}"]`);
-  if (item) {
-    item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  if (idx < 0 || idx >= state.searchResults.length) return;
+
+  const list = elements.searchResultsList;
+  const targetTop = idx * SEARCH_RESULT_ITEM_HEIGHT;
+  const viewHeight = list.clientHeight;
+  const scrollTop = list.scrollTop;
+
+  // Scroll so the item is visible, then re-render to update the 'current' highlight
+  if (targetTop < scrollTop || targetTop + SEARCH_RESULT_ITEM_HEIGHT > scrollTop + viewHeight) {
+    list.scrollTop = targetTop - viewHeight / 2 + SEARCH_RESULT_ITEM_HEIGHT / 2;
   }
+  // Trigger re-render to pick up the current highlight
+  if (searchResultsScrollHandler) searchResultsScrollHandler();
 }
 
 // ─── Search Configs Panel ────────────────────────────────────────────
@@ -6411,12 +6445,23 @@ function renderCardMinimap(connectionId: string): void {
 }
 
 // Unified live event listeners — registered once in init()
+let liveListenersRegistered = false;
+const MAX_MINIMAP_LEVELS = 100000; // Cap minimap levels to prevent unbounded memory growth
+
 function setupLiveEventListeners(): void {
+  if (liveListenersRegistered) return;
+  liveListenersRegistered = true;
+
   window.api.onLiveLinesAdded(({ connectionId, totalLines, newLines }) => {
     const conn = state.liveConnections.get(connectionId);
     if (!conn) return;
     conn.linesReceived = totalLines;
-    for (let i = 0; i < newLines; i++) conn.minimapLevels.push(undefined);
+    // Cap minimap levels to prevent unbounded memory growth
+    if (conn.minimapLevels.length < MAX_MINIMAP_LEVELS) {
+      const remaining = MAX_MINIMAP_LEVELS - conn.minimapLevels.length;
+      const toAdd = Math.min(newLines, remaining);
+      for (let i = 0; i < toAdd; i++) conn.minimapLevels.push(undefined);
+    }
     updateConnectionCard(connectionId);
     requestCardMinimapRender();
 
@@ -6841,7 +6886,7 @@ async function renderSearchConfigsResults(): Promise<void> {
   }
 
   // Merge all results sorted by line number
-  const allResults: Array<{ lineNumber: number; column: number; length: number; lineText: string; configId: string; color: string }> = [];
+  const allResults: Array<{ lineNumber: number; column: number; length: number; lineText: string; displayIndex?: number; configId: string; color: string }> = [];
   for (const config of enabledConfigs) {
     const matches = state.searchConfigResults.get(config.id) || [];
     for (const m of matches) {
@@ -6896,7 +6941,10 @@ async function renderSearchConfigsResults(): Promise<void> {
       item.appendChild(lineNum);
       item.appendChild(text);
       item.addEventListener('click', () => {
-        goToLine(r.lineNumber);
+        const scrollTarget = state.isFiltered && r.displayIndex != null
+          ? r.displayIndex : r.lineNumber;
+        goToLine(scrollTarget, r.lineNumber);
+        renderVisibleLines();
       });
       fragment.appendChild(item);
     }
@@ -8527,23 +8575,24 @@ function goToSearchResult(index: number): void {
 
   state.currentSearchIndex = index;
   const result = state.searchResults[index];
-  // When filtered, scroll to display index but select by original line number
   const scrollTarget = state.isFiltered && result.displayIndex != null
     ? result.displayIndex : result.lineNumber;
-  goToLine(scrollTarget);
-  state.selectedLine = result.lineNumber; // original line number for highlight matching
+  goToLine(scrollTarget, result.lineNumber);
   updateSearchUI();
-  renderVisibleLines(); // Update current match highlight
+  renderVisibleLines();
   updateSearchResultsCurrent();
   scrollSearchResultIntoView();
 }
 
-function goToLine(lineNumber: number): void {
+// Navigate to a line. displayIndex is the position in the current view (filtered or not).
+// originalLineNumber overrides which line gets highlighted/selected — use when the
+// display index differs from the real line number (e.g. filtered search results).
+function goToLine(displayIndex: number, originalLineNumber?: number): void {
   if (!logViewerElement) return;
 
+  const lineNumber = originalLineNumber ?? displayIndex;
   state.selectedLine = lineNumber;
-  // Use scroll mapping for large files
-  const targetScrollTop = lineToScrollTop(lineNumber);
+  const targetScrollTop = lineToScrollTop(displayIndex);
   logViewerElement.scrollTop = Math.max(0, targetScrollTop);
   updateCursorStatus(lineNumber);
 }
