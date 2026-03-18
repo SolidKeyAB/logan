@@ -1,6 +1,6 @@
 {
   "name": "logan",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "AI-powered log file viewer and analyzer — handles 14M+ lines with virtual scrolling, MCP agent integration, live serial/logcat/SSH connections, pattern correlation, diff view, and built-in terminal",
   "keywords": [
     "log-analyzer",
