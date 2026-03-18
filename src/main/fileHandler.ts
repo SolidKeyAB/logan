@@ -2,6 +2,9 @@ import * as fs from 'fs';
 import { spawn } from 'child_process';
 import { FileInfo, LineData, SearchMatch, SearchOptions } from '../shared/types';
 
+// Yield control to the event loop so Electron's UI stays responsive
+const yieldToEventLoop = () => new Promise<void>(resolve => setImmediate(resolve));
+
 // Convert wildcard pattern to regex string: * = .*, ? = ., rest escaped
 function wildcardToRegex(pattern: string): string {
   return pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&')
@@ -69,6 +72,7 @@ export class FileHandler {
   private _maxLineLength: number = 0;
   private headerLineCount: number = 0; // Lines to skip (hidden header)
   private indexedSize: number = 0; // Bytes indexed so far (for incremental indexing)
+  private _hasStandaloneCR: boolean = false; // Standalone \r found (not CRLF) — ripgrep can't handle these
 
   async open(
     filePath: string,
@@ -149,7 +153,8 @@ export class FileHandler {
             // Look ahead to see if next byte is LF
             if (chunkPos + 1 < chunk.length) {
               if (chunk[chunkPos + 1] !== 0x0A) {
-                // CR-only line ending (old Mac format)
+                // CR-only line ending — ripgrep won't count this as a line break
+                this._hasStandaloneCR = true;
                 const lineEnd = effectiveOffset + chunkPos;
                 const lineLength = lineEnd - lineStart;
                 this.lineOffsets.push({ offset: lineStart, length: lineLength });
@@ -185,6 +190,11 @@ export class FileHandler {
         }
 
         fileOffset += bytesRead;
+
+        // Yield to event loop every chunk so Electron UI stays responsive
+        if (fileOffset < fileSize) {
+          await yieldToEventLoop();
+        }
       }
 
       // Handle last line if file doesn't end with newline
@@ -426,6 +436,13 @@ export class FileHandler {
       return this.searchWithStream(options, onProgress, signal);
     }
 
+    // Ripgrep doesn't recognize standalone \r as a line break, so line numbers
+    // would be wrong for files that use CR-only line endings (old Mac, serial logs,
+    // progress output). Fall back to stream search which matches our indexer.
+    if (this._hasStandaloneCR) {
+      return this.searchWithStream(options, onProgress, signal);
+    }
+
     // Try ripgrep first for much faster search
     const hasRipgrep = await checkRipgrep();
     if (hasRipgrep) {
@@ -478,7 +495,7 @@ export class FileHandler {
       '--line-number',
       '--column',
       '--no-heading',
-      '--with-filename',
+      '--no-filename',
     ];
 
     if (!options.matchCase) {
@@ -517,19 +534,16 @@ export class FileHandler {
         for (const line of lines) {
           if (!line) continue;
 
-          // Parse ripgrep output: filename:line:column:text
+          // Parse ripgrep output (--no-filename): linenum:column:text
           const colonIndex1 = line.indexOf(':');
           if (colonIndex1 === -1) continue;
 
           const colonIndex2 = line.indexOf(':', colonIndex1 + 1);
           if (colonIndex2 === -1) continue;
 
-          const colonIndex3 = line.indexOf(':', colonIndex2 + 1);
-          if (colonIndex3 === -1) continue;
-
-          const lineNum = parseInt(line.substring(colonIndex1 + 1, colonIndex2), 10);
-          const column = parseInt(line.substring(colonIndex2 + 1, colonIndex3), 10);
-          const lineText = line.substring(colonIndex3 + 1);
+          const lineNum = parseInt(line.substring(0, colonIndex1), 10);
+          const column = parseInt(line.substring(colonIndex1 + 1, colonIndex2), 10);
+          const lineText = line.substring(colonIndex2 + 1);
 
           // Adjust for header offset
           const adjustedLineNum = lineNum - 1 - this.headerLineCount;
@@ -645,6 +659,7 @@ export class FileHandler {
     let lineBuffer = '';
     let lineBufferFull = false;
     let done = false;
+    let lastCharWasCR = false; // Track \r across chunk boundaries for CRLF detection
 
     const processSearchLine = (line: string): void => {
       // Skip header lines
@@ -699,13 +714,23 @@ export class FileHandler {
 
         for (let i = 0; i < chunk.length && !done; i++) {
           const ch = chunk[i];
+          if (ch === '\n' && lastCharWasCR) {
+            // Second half of CRLF that spanned a chunk boundary — skip it
+            lastCharWasCR = false;
+            continue;
+          }
+          lastCharWasCR = false;
           if (ch === '\n' || ch === '\r') {
             bytesRead += lineBuffer.length + 1;
             processSearchLine(lineBuffer);
             lineBuffer = '';
             lineBufferFull = false;
-            if (ch === '\r' && i + 1 < chunk.length && chunk[i + 1] === '\n') {
-              i++;
+            if (ch === '\r') {
+              if (i + 1 < chunk.length && chunk[i + 1] === '\n') {
+                i++; // Skip LF of CRLF within same chunk
+              } else if (i + 1 === chunk.length) {
+                lastCharWasCR = true; // CR at chunk boundary — check next chunk
+              }
             }
           } else if (!lineBufferFull) {
             lineBuffer += ch;
@@ -713,6 +738,11 @@ export class FileHandler {
               lineBufferFull = true;
             }
           }
+        }
+
+        // Yield to event loop every chunk so UI stays responsive
+        if (filePos < fileSize && !done) {
+          await yieldToEventLoop();
         }
       }
 
@@ -747,5 +777,6 @@ export class FileHandler {
     this.splitMetadata = null;
     this.headerLineCount = 0;
     this.indexedSize = 0;
+    this._hasStandaloneCR = false;
   }
 }

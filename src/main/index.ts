@@ -1747,68 +1747,117 @@ ipcMain.handle(IPC.OPEN_FOLDER_DIALOG, async () => {
   return result.canceled ? null : result.filePaths[0];
 });
 
-// Text file extensions to show in folder tree - expanded to support many formats
+// Text extensions used by folder search (ripgrep glob filters)
 const TEXT_EXTENSIONS = new Set([
-  // Log files
-  '.log', '.out', '.err',
-  // Text files
-  '.txt', '.text', '.md', '.markdown', '.rst',
-  // Config files
+  '.log', '.out', '.err', '.txt', '.text', '.md', '.markdown', '.rst',
   '.json', '.xml', '.yaml', '.yml', '.toml', '.ini', '.conf', '.cfg', '.config',
-  // Data files
   '.csv', '.tsv', '.ndjson', '.jsonl',
-  // Code/script files (often contain logs or can be viewed as text)
   '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd',
-  // Other common text formats
   '.properties', '.env', '.gitignore', '.dockerignore',
 ]);
 
-const IMAGE_EXTENSIONS = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.svg', '.bmp', '.webp', '.ico', '.avif',
-]);
+// Detect file type purely by reading file header (magic bytes).
+// No extension checks — works for extensionless files, misnamed files, etc.
+async function sniffFileType(filePath: string): Promise<'text' | 'image' | 'video' | 'binary'> {
+  try {
+    const fh = await fs.promises.open(filePath, 'r');
+    try {
+      const buf = Buffer.alloc(16);
+      const { bytesRead } = await fh.read(buf, 0, 16, 0);
+      if (bytesRead === 0) return 'text'; // empty file is openable as text
+
+      // --- Image signatures ---
+      if (bytesRead >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'image'; // PNG
+      if (bytesRead >= 3 && buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'image'; // JPEG
+      if (bytesRead >= 3 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return 'image'; // GIF
+      if (bytesRead >= 2 && buf[0] === 0x42 && buf[1] === 0x4D) return 'image'; // BMP
+      // RIFF container: check subtype for WebP vs AVI
+      if (bytesRead >= 12 && buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46) {
+        if (buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) return 'image'; // WebP
+        if (buf[8] === 0x41 && buf[9] === 0x56 && buf[10] === 0x49 && buf[11] === 0x20) return 'video'; // AVI
+      }
+
+      // --- Video signatures ---
+      if (bytesRead >= 8 && buf[4] === 0x66 && buf[5] === 0x74 && buf[6] === 0x79 && buf[7] === 0x70) return 'video'; // MP4/MOV/M4V (ftyp box)
+      if (bytesRead >= 4 && buf[0] === 0x1A && buf[1] === 0x45 && buf[2] === 0xDF && buf[3] === 0xA3) return 'video'; // MKV/WebM (EBML)
+      if (bytesRead >= 4 && buf[0] === 0x4F && buf[1] === 0x67 && buf[2] === 0x67 && buf[3] === 0x53) return 'video'; // OGG/OGV
+
+      // --- Binary detection: any NUL byte in the sample means binary ---
+      for (let i = 0; i < bytesRead; i++) {
+        if (buf[i] === 0x00) return 'binary';
+      }
+      return 'text';
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return 'binary';
+  }
+}
+
+interface FolderEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  size?: number;
+  fileType?: 'text' | 'image' | 'video' | 'binary';
+  children?: FolderEntry[];
+}
+
+const FOLDER_SCAN_MAX_DEPTH = 3;
+const FOLDER_SCAN_SKIP = new Set(['node_modules', '__pycache__', '.git', 'build', 'dist', '.next', 'target']);
+const FOLDER_SCAN_PARALLEL = 16; // concurrent file sniff operations
+
+async function scanFolder(folderPath: string, depth: number): Promise<FolderEntry[]> {
+  const dirEntries = await fs.promises.readdir(folderPath, { withFileTypes: true });
+  const results: FolderEntry[] = [];
+
+  // Process subdirectories first (sequential to avoid fd exhaustion)
+  if (depth < FOLDER_SCAN_MAX_DEPTH) {
+    for (const entry of dirEntries) {
+      if (entry.name.startsWith('.') || FOLDER_SCAN_SKIP.has(entry.name)) continue;
+      if (!entry.isDirectory()) continue;
+      const fullPath = path.join(folderPath, entry.name);
+      try {
+        const children = await scanFolder(fullPath, depth + 1);
+        if (children.length > 0) {
+          results.push({ name: entry.name, path: fullPath, isDirectory: true, children });
+        }
+      } catch { /* skip unreadable dirs */ }
+    }
+  }
+
+  // Process files in parallel batches for speed
+  const fileEntries = dirEntries.filter(e => !e.name.startsWith('.') && e.isFile());
+  for (let i = 0; i < fileEntries.length; i += FOLDER_SCAN_PARALLEL) {
+    const batch = fileEntries.slice(i, i + FOLDER_SCAN_PARALLEL);
+    const batchResults = await Promise.all(batch.map(async (entry) => {
+      const fullPath = path.join(folderPath, entry.name);
+      try {
+        const [stat, fileType] = await Promise.all([
+          fs.promises.stat(fullPath),
+          sniffFileType(fullPath),
+        ]);
+        if (fileType === 'binary') return null;
+        return { name: entry.name, path: fullPath, isDirectory: false, size: stat.size, fileType } as FolderEntry;
+      } catch { return null; }
+    }));
+    for (const r of batchResults) {
+      if (r) results.push(r);
+    }
+  }
+
+  // Directories first, then alphabetical
+  results.sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
+  return results;
+}
 
 ipcMain.handle(IPC.READ_FOLDER, async (_, folderPath: string) => {
   try {
-    const entries = await fs.promises.readdir(folderPath, { withFileTypes: true });
-    const files: Array<{ name: string; path: string; isDirectory: boolean; size?: number }> = [];
-
-    for (const entry of entries) {
-      // Skip hidden files
-      if (entry.name.startsWith('.')) continue;
-
-      const fullPath = path.join(folderPath, entry.name);
-
-      if (entry.isFile()) {
-        const ext = path.extname(entry.name).toLowerCase();
-        // Exclude known binary formats, show everything else (text + images)
-        const BINARY_EXTENSIONS = new Set([
-          '.exe', '.dll', '.so', '.dylib', '.o', '.a', '.lib',
-          '.zip', '.tar', '.gz', '.bz2', '.xz', '.7z', '.rar', '.zst',
-          '.bin', '.dat', '.db', '.sqlite', '.sqlite3',
-          '.class', '.pyc', '.pyo', '.wasm',
-          '.dmg', '.iso', '.img',
-          '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-          '.ttf', '.otf', '.woff', '.woff2', '.eot',
-        ]);
-        if (!BINARY_EXTENSIONS.has(ext)) {
-          try {
-            const stat = await fs.promises.stat(fullPath);
-            files.push({
-              name: entry.name,
-              path: fullPath,
-              isDirectory: false,
-              size: stat.size,
-            });
-          } catch {
-            // Skip files we can't stat
-          }
-        }
-      }
-    }
-
-    // Sort by name
-    files.sort((a, b) => a.name.localeCompare(b.name));
-
+    const files = await scanFolder(folderPath, 0);
     return { success: true, files, folderPath };
   } catch (error) {
     return { success: false, error: String(error) };
@@ -2887,8 +2936,18 @@ ipcMain.handle(IPC.SEARCH_CONFIG_BATCH, async (_, configs: Array<{ id: string; p
   const handler = getFileHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
-  const results: Record<string, Array<{ lineNumber: number; column: number; length: number; lineText: string }>> = {};
+  const results: Record<string, Array<{ lineNumber: number; column: number; length: number; lineText: string; displayIndex?: number }>> = {};
   const totalConfigs = configs.length;
+
+  // Build filter lookup once (shared across all configs)
+  const filteredIndices = getFilteredLines();
+  let filteredSet: Set<number> | null = null;
+  let lineToFilteredIndex: Map<number, number> | null = null;
+  if (filteredIndices && filteredIndices.length > 0) {
+    filteredSet = new Set(filteredIndices);
+    lineToFilteredIndex = new Map<number, number>();
+    filteredIndices.forEach((lineNum, idx) => lineToFilteredIndex!.set(lineNum, idx));
+  }
 
   for (let i = 0; i < configs.length; i++) {
     const cfg = configs[i];
@@ -2901,30 +2960,22 @@ ipcMain.handle(IPC.SEARCH_CONFIG_BATCH, async (_, configs: Array<{ id: string; p
         wholeWord: cfg.wholeWord,
       };
 
-      // Add filtered lines if filter is active
-      const filteredIndices = getFilteredLines();
-      if (filteredIndices) {
-        searchOpts.filteredLineIndices = filteredIndices;
-      }
-
       const matches = await handler.search(searchOpts, (percent) => {
         const overallPercent = Math.round(((i + percent / 100) / totalConfigs) * 100);
         mainWindow?.webContents.send(IPC.SEARCH_CONFIG_BATCH_PROGRESS, { percent: overallPercent, configId: cfg.id });
       }, { cancelled: false });
 
-      // If filter is active, remap line numbers
-      if (filteredIndices && filteredIndices.length > 0) {
-        const filteredSet = new Set(filteredIndices);
-        const lineToFilteredIndex = new Map<number, number>();
-        filteredIndices.forEach((lineNum, idx) => lineToFilteredIndex.set(lineNum, idx));
-
+      // Keep original lineNumber, add displayIndex when filtered
+      // (matches the same pattern as the regular SEARCH handler)
+      if (filteredSet && lineToFilteredIndex) {
         results[cfg.id] = matches
-          .filter(m => filteredSet.has(m.lineNumber))
+          .filter(m => filteredSet!.has(m.lineNumber))
           .map(m => ({
-            lineNumber: lineToFilteredIndex.get(m.lineNumber) ?? m.lineNumber,
+            lineNumber: m.lineNumber,
             column: m.column,
             length: m.length,
             lineText: m.lineText,
+            displayIndex: lineToFilteredIndex!.get(m.lineNumber),
           }));
       } else {
         results[cfg.id] = matches.map(m => ({
@@ -4253,6 +4304,24 @@ ipcMain.handle(IPC.GET_LINE_TIMESTAMP, async (_, lineNumber: number) => {
   } catch {
     return { epochMs: null, timestampStr: null };
   }
+});
+
+// Batch timestamp fetch for Time Align
+ipcMain.handle(IPC.GET_LINE_TIMESTAMPS, async (_, lineNumbers: number[]) => {
+  const handler = getFileHandler();
+  if (!handler) return [];
+  const results: Array<{ lineNumber: number; epochMs: number }> = [];
+  try {
+    for (const ln of lineNumbers) {
+      const lines = handler.getLines(ln, 1);
+      if (lines.length === 0) continue;
+      const parsed = parseTimestampFast(lines[0].text);
+      if (parsed) {
+        results.push({ lineNumber: ln, epochMs: parsed.date.getTime() });
+      }
+    }
+  } catch { /* ignore */ }
+  return results;
 });
 
 ipcMain.handle('detect-time-gaps', async (_, options: TimeGapOptions) => {

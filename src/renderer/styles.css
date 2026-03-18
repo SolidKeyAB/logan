@@ -1065,8 +1065,31 @@ body.platform-darwin .titlebar {
 }
 
 .folder-files {
-  padding-left: 16px;
+  padding-left: 0;
 }
+
+/* Subdirectory nodes in folder tree */
+.folder-subdir-header {
+  display: flex;
+  align-items: center;
+  padding: 3px 4px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-secondary);
+  gap: 4px;
+  border-radius: 3px;
+}
+.folder-subdir-header:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+.folder-subdir-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-subdir.collapsed .folder-subdir-files { display: none; }
+.folder-subdir.collapsed > .folder-subdir-header .folder-toggle { transform: rotate(-90deg); }
 
 .folder-file {
   display: flex;
@@ -1076,7 +1099,7 @@ body.platform-darwin .titlebar {
   color: var(--text-secondary);
   cursor: pointer;
   border-radius: 3px;
-  gap: 6px;
+  gap: 4px;
 }
 
 .folder-file:hover {
@@ -1087,6 +1110,13 @@ body.platform-darwin .titlebar {
 .folder-file.active {
   background: var(--accent-color);
   color: white;
+}
+
+.folder-file-icon {
+  font-size: 10px;
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
 }
 
 .folder-file-name {
@@ -5976,6 +6006,31 @@ kbd {
 :root.theme-paper .ctx-context-header:hover { background: rgba(0,0,0,0.04); }
 :root.theme-paper .ctx-lane-label { color: #5a7070; }
 :root.theme-paper .ctx-lane-track { background: #b5c0ba; border-color: #98a5a0; }
+
+/* === Time Align === */
+.ta-panel-body { display: flex; flex-direction: column; height: 100%; }
+.ta-toolbar { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-bottom: 1px solid #2e3a4a; flex-shrink: 0; }
+.ta-axis { display: flex; align-items: flex-end; height: 22px; padding: 0 10px 0 100px; position: relative; flex-shrink: 0; border-bottom: 1px solid #2e3a4a; }
+.ta-axis-tick { position: absolute; bottom: 0; width: 1px; height: 8px; background: #4a5568; }
+.ta-axis-label { position: absolute; bottom: 10px; font-size: 9px; color: #7a8a9a; transform: translateX(-50%); white-space: nowrap; font-family: var(--font-mono); }
+.ta-lanes { display: flex; flex-direction: column; gap: 3px; padding: 6px 10px; overflow-y: auto; flex: 1; }
+.ta-lane { display: flex; align-items: center; height: 28px; gap: 6px; }
+.ta-lane-label { font-size: 11px; color: #c0b8a0; width: 90px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 5px; font-weight: 500; }
+.ta-lane-color { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; box-shadow: 0 0 4px currentColor; }
+.ta-lane-track { flex: 1; position: relative; height: 24px; border-radius: 3px; border: 1px solid #2e3a4a; overflow: hidden; cursor: grab; }
+.ta-lane-track.dragging { cursor: grabbing; }
+.ta-lane-mark { position: absolute; top: 2px; bottom: 2px; width: 3px; border-radius: 1px; cursor: pointer; transition: opacity 0.15s; box-shadow: 0 0 3px currentColor; }
+.ta-lane-mark:hover { opacity: 0.8; box-shadow: 0 0 8px currentColor; z-index: 2; }
+.ta-offset-badge { font-size: 9px; color: #61afef; margin-left: 4px; font-family: var(--font-mono); white-space: nowrap; }
+.ta-mark-tooltip { position: fixed; background: #1e2a3a; border: 1px solid #3e4a5a; border-radius: 4px; padding: 4px 8px; font-size: 10px; color: #c8d8e8; font-family: var(--font-mono); z-index: 9999; pointer-events: none; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+
+:root.theme-paper .ta-toolbar { background: #bbc5c0; border-color: #a0aca7; }
+:root.theme-paper .ta-axis { border-color: #a0aca7; }
+:root.theme-paper .ta-axis-tick { background: #98a5a0; }
+:root.theme-paper .ta-axis-label { color: #5a7070; }
+:root.theme-paper .ta-lane-label { color: #5a7070; }
+:root.theme-paper .ta-lane-track { border-color: #98a5a0; }
+:root.theme-paper .ta-offset-badge { color: #3d7a8a; }
 
 /* === Traceback === */
 .traceback-panel-body { display: flex; flex-direction: column; height: 100%; }

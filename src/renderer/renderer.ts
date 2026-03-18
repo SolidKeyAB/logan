@@ -145,6 +145,10 @@ interface LocalFolderFile {
   name: string;
   path: string;
   size?: number;
+  fileType?: 'text' | 'image' | 'video';
+  isDirectory?: boolean;
+  children?: LocalFolderFile[];
+  collapsed?: boolean;
 }
 
 interface FolderState {
@@ -288,6 +292,11 @@ interface AppState {
   tracebackResult: any | null;
   tracebackSort: 'time' | 'score';
   tracebackFilterCat: string;
+  // Time Align
+  timeAlignOffsets: Map<string, number>;
+  timeAlignTimestamps: Map<string, Array<{ lineNumber: number; epochMs: number }>>;
+  timeAlignMinTime: number;
+  timeAlignMaxTime: number;
 }
 
 const state: AppState = {
@@ -343,6 +352,10 @@ const state: AppState = {
   tracebackResult: null,
   tracebackSort: 'time' as 'time' | 'score',
   tracebackFilterCat: 'all',
+  timeAlignOffsets: new Map<string, number>(),
+  timeAlignTimestamps: new Map<string, Array<{ lineNumber: number; epochMs: number }>>(),
+  timeAlignMinTime: 0,
+  timeAlignMaxTime: 0,
 };
 
 // Constants
@@ -840,6 +853,13 @@ const elements = {
   tracebackFilter: document.getElementById('traceback-filter') as HTMLSelectElement,
   tracebackSummary: document.getElementById('traceback-summary') as HTMLDivElement,
   tracebackResults: document.getElementById('traceback-results') as HTMLDivElement,
+  // Time Align
+  taRefreshBtn: document.getElementById('ta-refresh-btn') as HTMLButtonElement,
+  taResetBtn: document.getElementById('ta-reset-btn') as HTMLButtonElement,
+  taSummary: document.getElementById('ta-summary') as HTMLSpanElement,
+  taAxis: document.getElementById('ta-axis') as HTMLDivElement,
+  taLanes: document.getElementById('ta-lanes') as HTMLDivElement,
+  taPlaceholder: document.getElementById('ta-placeholder') as HTMLParagraphElement,
   // Bottom panel
   bottomPanel: document.getElementById('bottom-panel') as HTMLDivElement,
   bottomPanelResizeHandle: document.getElementById('bottom-panel-resize-handle') as HTMLDivElement,
@@ -3898,14 +3918,23 @@ async function openFile(): Promise<void> {
 
 // === Folder Operations ===
 
+function mapFolderEntries(entries: any[]): LocalFolderFile[] {
+  return entries.map(e => ({
+    name: e.name,
+    path: e.path,
+    size: e.size,
+    fileType: e.fileType,
+    isDirectory: e.isDirectory || false,
+    collapsed: true, // subdirs start collapsed
+    children: e.children ? mapFolderEntries(e.children) : undefined,
+  }));
+}
+
 async function openFolder(): Promise<void> {
   const folderPath = await window.api.openFolderDialog();
   if (!folderPath) return;
 
-  // Check if folder already open
-  if (state.folders.some((f) => f.path === folderPath)) {
-    return;
-  }
+  if (state.folders.some((f) => f.path === folderPath)) return;
 
   const result = await window.api.readFolder(folderPath);
   if (result.success && result.files) {
@@ -3913,7 +3942,7 @@ async function openFolder(): Promise<void> {
     state.folders.push({
       path: folderPath,
       name: folderName,
-      files: result.files.map((f) => ({ name: f.name, path: f.path, size: f.size })),
+      files: mapFolderEntries(result.files),
       collapsed: false,
     });
     renderFolderTree();
@@ -3938,23 +3967,39 @@ function toggleFolder(folderPath: string): void {
   }
 }
 
+// Carry over collapsed state from old tree to new tree by path matching
+function preserveCollapseState(newEntries: LocalFolderFile[], oldEntries: LocalFolderFile[]): void {
+  const oldMap = new Map<string, LocalFolderFile>();
+  (function walk(entries: LocalFolderFile[]) {
+    for (const e of entries) {
+      oldMap.set(e.path, e);
+      if (e.children) walk(e.children);
+    }
+  })(oldEntries);
+
+  (function apply(entries: LocalFolderFile[]) {
+    for (const e of entries) {
+      const old = oldMap.get(e.path);
+      if (old && e.isDirectory) e.collapsed = old.collapsed;
+      if (e.children) apply(e.children);
+    }
+  })(newEntries);
+}
+
 async function refreshFolders(): Promise<void> {
   if (state.folders.length === 0) return;
 
-  // Show refreshing state
   elements.btnRefreshFolders.disabled = true;
-  elements.btnRefreshFolders.textContent = '⟳';
+  elements.btnRefreshFolders.textContent = '\u27F3';
 
   try {
-    // Re-read each folder while preserving collapsed state
     for (const folder of state.folders) {
+      if (folder.isRemote) continue; // SSH folders don't recurse
       const result = await window.api.readFolder(folder.path);
       if (result.success && result.files) {
-        folder.files = result.files.map((f) => ({
-          name: f.name,
-          path: f.path,
-          size: f.size,
-        }));
+        const newFiles = mapFolderEntries(result.files);
+        preserveCollapseState(newFiles, folder.files);
+        folder.files = newFiles;
       }
     }
     renderFolderTree();
@@ -3970,6 +4015,46 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function renderFolderEntries(entries: LocalFolderFile[], depth: number, isRemote: boolean): string {
+  return entries.map(entry => {
+    if (entry.isDirectory && entry.children) {
+      return `
+        <div class="folder-subdir ${entry.collapsed ? 'collapsed' : ''}" data-subdir-path="${escapeHtml(entry.path)}">
+          <div class="folder-subdir-header" style="padding-left: ${8 + depth * 14}px">
+            <span class="folder-toggle">&#9660;</span>
+            <span class="folder-subdir-name" title="${escapeHtml(entry.path)}">${escapeHtml(entry.name)}</span>
+          </div>
+          <div class="folder-subdir-files">
+            ${renderFolderEntries(entry.children, depth + 1, isRemote)}
+          </div>
+        </div>`;
+    }
+    const icon = entry.fileType === 'image' ? '\uD83D\uDDBC' : entry.fileType === 'video' ? '\u25B6' : '';
+    return `
+      <div class="folder-file ${entry.path === state.filePath ? 'active' : ''}"
+           data-path="${escapeHtml(entry.path)}"
+           data-filetype="${entry.fileType || 'text'}"
+           ${isRemote ? 'data-remote="true"' : ''}
+           style="padding-left: ${8 + depth * 14}px">
+        ${icon ? `<span class="folder-file-icon">${icon}</span>` : ''}
+        <span class="folder-file-name" title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</span>
+        ${entry.size ? `<span class="folder-file-size">${formatFileSize(entry.size)}</span>` : ''}
+      </div>`;
+  }).join('');
+}
+
+// Find a subfolder node by path in a recursive tree
+function findSubfolder(entries: LocalFolderFile[], subdirPath: string): LocalFolderFile | null {
+  for (const e of entries) {
+    if (e.path === subdirPath && e.isDirectory) return e;
+    if (e.children) {
+      const found = findSubfolder(e.children, subdirPath);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 function renderFolderTree(): void {
   if (state.folders.length === 0) {
     elements.foldersList.innerHTML = '<p class="placeholder">No folders open</p>';
@@ -3979,26 +4064,17 @@ function renderFolderTree(): void {
   elements.foldersList.innerHTML = state.folders
     .map(
       (folder) => `
-      <div class="folder-group ${folder.collapsed ? 'collapsed' : ''}${folder.isRemote ? ' remote' : ''}" data-path="${folder.path}" ${folder.isRemote ? 'data-remote="true"' : ''}>
+      <div class="folder-group ${folder.collapsed ? 'collapsed' : ''}${folder.isRemote ? ' remote' : ''}" data-path="${escapeHtml(folder.path)}" ${folder.isRemote ? 'data-remote="true"' : ''}>
         <div class="folder-header">
           <span class="folder-toggle">&#9660;</span>
-          <span class="folder-name" title="${folder.path}">${folder.isRemote ? '<span class="ssh-badge">SSH</span> ' : ''}${escapeHtml(folder.name)}</span>
+          <span class="folder-name" title="${escapeHtml(folder.path)}">${folder.isRemote ? '<span class="ssh-badge">SSH</span> ' : ''}${escapeHtml(folder.name)}</span>
           <button class="folder-close" title="Remove folder">&times;</button>
         </div>
         <div class="folder-files">
           ${
             folder.files.length === 0
-              ? '<div class="placeholder" style="padding: 4px 0; font-size: 11px;">No files</div>'
-              : folder.files
-                  .map(
-                    (file) => `
-              <div class="folder-file ${file.path === state.filePath ? 'active' : ''}" data-path="${escapeHtml(file.path)}" ${folder.isRemote ? 'data-remote="true"' : ''}>
-                <span class="folder-file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
-                ${file.size ? `<span class="folder-file-size">${formatFileSize(file.size)}</span>` : ''}
-              </div>
-            `
-                  )
-                  .join('')
+              ? '<div class="placeholder" style="padding: 4px 0; font-size: 11px;">No supported files</div>'
+              : renderFolderEntries(folder.files, 1, !!folder.isRemote)
           }
         </div>
       </div>
@@ -4006,12 +4082,11 @@ function renderFolderTree(): void {
     )
     .join('');
 
-  // Add event listeners
+  // Top-level folder header events
   elements.foldersList.querySelectorAll('.folder-header').forEach((header) => {
     const folderPath = (header.closest('.folder-group') as HTMLElement)?.dataset.path;
     if (!folderPath) return;
 
-    // Toggle collapse
     header.querySelector('.folder-toggle')?.addEventListener('click', (e) => {
       e.stopPropagation();
       toggleFolder(folderPath);
@@ -4020,42 +4095,62 @@ function renderFolderTree(): void {
       e.stopPropagation();
       toggleFolder(folderPath);
     });
-
-    // Remove folder
     header.querySelector('.folder-close')?.addEventListener('click', (e) => {
       e.stopPropagation();
       removeFolder(folderPath);
     });
   });
 
-  // File click to open
-  elements.foldersList.querySelectorAll('.folder-file').forEach((fileEl) => {
-    fileEl.addEventListener('click', async () => {
-      const filePath = (fileEl as HTMLElement).dataset.path;
-      const isRemote = (fileEl as HTMLElement).dataset.remote === 'true';
-      if (filePath) {
-        if (isRemote) {
-          // Download remote file first, then open
-          const result = await window.api.sshDownloadFile(filePath);
-          if (result.success && result.localPath) {
-            await loadFile(result.localPath);
-          } else {
-            alert(`Failed to download: ${result.error}`);
-          }
-        } else {
-          await loadFile(filePath);
-        }
-        renderFolderTree(); // Update active state
+  // Subfolder toggle events
+  elements.foldersList.querySelectorAll('.folder-subdir-header').forEach((header) => {
+    header.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const subdirEl = header.closest('.folder-subdir') as HTMLElement;
+      const subdirPath = subdirEl?.dataset.subdirPath;
+      const folderGroupPath = (subdirEl?.closest('.folder-group') as HTMLElement)?.dataset.path;
+      if (!subdirPath || !folderGroupPath) return;
+      const folder = state.folders.find(f => f.path === folderGroupPath);
+      if (!folder) return;
+      const node = findSubfolder(folder.files, subdirPath);
+      if (node) {
+        node.collapsed = !node.collapsed;
+        renderFolderTree();
       }
     });
-    // Right-click context menu on folder tree files
+  });
+
+  // File double-click to open (dispatched by type)
+  elements.foldersList.querySelectorAll('.folder-file').forEach((fileEl) => {
+    fileEl.addEventListener('dblclick', async () => {
+      const filePath = (fileEl as HTMLElement).dataset.path;
+      const fileType = (fileEl as HTMLElement).dataset.filetype;
+      const isRemote = (fileEl as HTMLElement).dataset.remote === 'true';
+      if (!filePath) return;
+
+      if (isRemote) {
+        const result = await window.api.sshDownloadFile(filePath);
+        if (result.success && result.localPath) {
+          await loadFile(result.localPath);
+        } else {
+          alert(`Failed to download: ${result.error}`);
+        }
+      } else if (fileType === 'video') {
+        loadVideoFromPath(filePath);
+        toggleBottomTab('video');
+      } else if (fileType === 'image') {
+        openImageInPanel(filePath);
+      } else {
+        await loadFile(filePath);
+      }
+      renderFolderTree();
+    });
+
+    // Right-click context menu
     fileEl.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       e.stopPropagation();
       const filePath = (fileEl as HTMLElement).dataset.path;
-      if (filePath) {
-        showFileContextMenu(e as MouseEvent, filePath);
-      }
+      if (filePath) showFileContextMenu(e as MouseEvent, filePath);
     });
   });
 }
@@ -4680,6 +4775,11 @@ function openBottomTab(tabId: string): void {
   if (tabId === 'contexts') {
     loadContextDefinitions();
   }
+  if (tabId === 'time-align') {
+    if (state.timeAlignTimestamps.size === 0 && state.searchConfigResults.size > 0) {
+      buildTimeAlignData();
+    }
+  }
 
   saveBottomPanelState();
 }
@@ -4710,6 +4810,310 @@ function toggleBottomTab(tabId: string): void {
     closeBottomPanel();
   } else {
     openBottomTab(tabId);
+  }
+}
+
+// ─── Time Align ──────────────────────────────────────────────────────
+
+async function buildTimeAlignData(): Promise<void> {
+  const enabledConfigs = state.searchConfigs.filter(c => c.enabled);
+  if (enabledConfigs.length === 0) {
+    state.timeAlignTimestamps.clear();
+    renderTimeAlignLanes();
+    return;
+  }
+
+  // Collect all unique line numbers from search config results
+  const allLineNumbers = new Set<number>();
+  for (const config of enabledConfigs) {
+    const results = state.searchConfigResults.get(config.id);
+    if (results) {
+      for (const r of results) allLineNumbers.add(r.lineNumber);
+    }
+  }
+
+  if (allLineNumbers.size === 0) {
+    state.timeAlignTimestamps.clear();
+    renderTimeAlignLanes();
+    return;
+  }
+
+  // Single batch IPC call for all line timestamps
+  const timestamps = await window.api.getLineTimestamps(Array.from(allLineNumbers));
+  const tsMap = new Map<number, number>();
+  for (const t of timestamps) tsMap.set(t.lineNumber, t.epochMs);
+
+  // Distribute to per-config maps
+  state.timeAlignTimestamps.clear();
+  let globalMin = Infinity;
+  let globalMax = -Infinity;
+
+  for (const config of enabledConfigs) {
+    const results = state.searchConfigResults.get(config.id);
+    if (!results) continue;
+    const entries: Array<{ lineNumber: number; epochMs: number }> = [];
+    for (const r of results) {
+      const ep = tsMap.get(r.lineNumber);
+      if (ep !== undefined) {
+        entries.push({ lineNumber: r.lineNumber, epochMs: ep });
+        if (ep < globalMin) globalMin = ep;
+        if (ep > globalMax) globalMax = ep;
+      }
+    }
+    if (entries.length > 0) {
+      state.timeAlignTimestamps.set(config.id, entries);
+    }
+  }
+
+  state.timeAlignMinTime = globalMin === Infinity ? 0 : globalMin;
+  state.timeAlignMaxTime = globalMax === -Infinity ? 0 : globalMax;
+
+  renderTimeAlignLanes();
+}
+
+function formatOffsetMs(ms: number): string {
+  const abs = Math.abs(ms);
+  const sign = ms >= 0 ? '+' : '-';
+  if (abs < 1000) return `${sign}${abs}ms`;
+  if (abs < 60000) return `${sign}${(abs / 1000).toFixed(1)}s`;
+  return `${sign}${(abs / 60000).toFixed(1)}m`;
+}
+
+function formatTimestamp(epochMs: number): string {
+  const d = new Date(epochMs);
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  const s = String(d.getSeconds()).padStart(2, '0');
+  const ms = String(d.getMilliseconds()).padStart(3, '0');
+  return `${h}:${m}:${s}.${ms}`;
+}
+
+function renderTimeAlignAxis(): void {
+  const axis = elements.taAxis;
+  axis.innerHTML = '';
+
+  const range = state.timeAlignMaxTime - state.timeAlignMinTime;
+  if (range <= 0) return;
+
+  // Adaptive tick count based on width
+  const axisWidth = axis.offsetWidth - 100; // subtract label area
+  if (axisWidth <= 0) return;
+  const tickCount = Math.min(10, Math.max(3, Math.floor(axisWidth / 80)));
+
+  for (let i = 0; i <= tickCount; i++) {
+    const frac = i / tickCount;
+    const pct = frac * 100;
+    const epochMs = state.timeAlignMinTime + frac * range;
+
+    const tick = document.createElement('div');
+    tick.className = 'ta-axis-tick';
+    tick.style.left = `calc(${pct}%)`;
+    axis.appendChild(tick);
+
+    const label = document.createElement('div');
+    label.className = 'ta-axis-label';
+    label.style.left = `calc(${pct}%)`;
+    label.textContent = formatTimestamp(epochMs);
+    axis.appendChild(label);
+  }
+}
+
+function renderTimeAlignLanes(): void {
+  const lanesEl = elements.taLanes;
+  lanesEl.innerHTML = '';
+
+  const enabledConfigs = state.searchConfigs.filter(c => c.enabled);
+  const hasData = enabledConfigs.some(c => state.timeAlignTimestamps.has(c.id));
+
+  elements.taPlaceholder.style.display = hasData ? 'none' : '';
+  if (!hasData) {
+    elements.taAxis.innerHTML = '';
+    elements.taSummary.textContent = '';
+    return;
+  }
+
+  const range = state.timeAlignMaxTime - state.timeAlignMinTime;
+  const safeRange = range > 0 ? range : 1;
+
+  let totalMarks = 0;
+
+  for (const config of enabledConfigs) {
+    const entries = state.timeAlignTimestamps.get(config.id);
+    if (!entries || entries.length === 0) continue;
+
+    const offsetMs = state.timeAlignOffsets.get(config.id) || 0;
+
+    const lane = document.createElement('div');
+    lane.className = 'ta-lane';
+    lane.dataset.configId = config.id;
+
+    // Label
+    const label = document.createElement('div');
+    label.className = 'ta-lane-label';
+    const swatch = document.createElement('span');
+    swatch.className = 'ta-lane-color';
+    swatch.style.background = config.color;
+    swatch.style.color = config.color;
+    label.appendChild(swatch);
+    label.appendChild(document.createTextNode(config.pattern));
+    label.title = config.pattern;
+
+    // Offset badge
+    if (offsetMs !== 0) {
+      const badge = document.createElement('span');
+      badge.className = 'ta-offset-badge';
+      badge.textContent = formatOffsetMs(offsetMs);
+      label.appendChild(badge);
+    }
+
+    lane.appendChild(label);
+
+    // Track
+    const track = document.createElement('div');
+    track.className = 'ta-lane-track';
+    track.style.background = `linear-gradient(to right, ${config.color}15, ${config.color}08)`;
+
+    for (const entry of entries) {
+      const adjustedMs = entry.epochMs + offsetMs;
+      const pct = ((adjustedMs - state.timeAlignMinTime) / safeRange) * 100;
+      if (pct < -5 || pct > 105) continue; // skip far-out marks
+
+      const mark = document.createElement('div');
+      mark.className = 'ta-lane-mark';
+      mark.style.left = `${Math.max(0, Math.min(100, pct))}%`;
+      mark.style.background = config.color;
+      mark.style.color = config.color;
+      mark.dataset.lineNumber = String(entry.lineNumber);
+      mark.dataset.epochMs = String(entry.epochMs);
+
+      // Click to navigate
+      mark.addEventListener('click', (e) => {
+        e.stopPropagation();
+        goToLine(entry.lineNumber);
+      });
+
+      // Hover tooltip
+      mark.addEventListener('mouseenter', (e) => {
+        const origStr = formatTimestamp(entry.epochMs);
+        let tipText = `${origStr} | L${entry.lineNumber + 1}`;
+        if (offsetMs !== 0) {
+          const adjStr = formatTimestamp(adjustedMs);
+          tipText = `Original: ${origStr} → Adjusted: ${adjStr} | L${entry.lineNumber + 1}`;
+        }
+        showTimeAlignTooltip(e as MouseEvent, tipText);
+      });
+      mark.addEventListener('mouseleave', hideTimeAlignTooltip);
+
+      track.appendChild(mark);
+      totalMarks++;
+    }
+
+    lane.appendChild(track);
+    lanesEl.appendChild(lane);
+
+    // Setup drag interaction for this lane
+    setupTimeAlignDrag(lane, track, config.id, safeRange);
+  }
+
+  elements.taSummary.textContent = `${enabledConfigs.length} lane${enabledConfigs.length !== 1 ? 's' : ''}, ${totalMarks} mark${totalMarks !== 1 ? 's' : ''}`;
+  renderTimeAlignAxis();
+}
+
+let taTooltipEl: HTMLDivElement | null = null;
+
+function showTimeAlignTooltip(e: MouseEvent, text: string): void {
+  if (!taTooltipEl) {
+    taTooltipEl = document.createElement('div');
+    taTooltipEl.className = 'ta-mark-tooltip';
+    document.body.appendChild(taTooltipEl);
+  }
+  taTooltipEl.textContent = text;
+  taTooltipEl.style.display = 'block';
+  taTooltipEl.style.left = `${e.clientX + 10}px`;
+  taTooltipEl.style.top = `${e.clientY - 30}px`;
+}
+
+function hideTimeAlignTooltip(): void {
+  if (taTooltipEl) taTooltipEl.style.display = 'none';
+}
+
+function setupTimeAlignDrag(lane: HTMLElement, track: HTMLElement, configId: string, rangeMs: number): void {
+  let isDragging = false;
+  let startX = 0;
+  let startOffset = 0;
+
+  track.addEventListener('mousedown', (e: MouseEvent) => {
+    // Don't start drag if clicking on a mark
+    if ((e.target as HTMLElement).classList.contains('ta-lane-mark')) return;
+    e.preventDefault();
+    isDragging = true;
+    startX = e.clientX;
+    startOffset = state.timeAlignOffsets.get(configId) || 0;
+    track.classList.add('dragging');
+    document.body.style.cursor = 'grabbing';
+    document.body.style.userSelect = 'none';
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  });
+
+  function onMouseMove(e: MouseEvent): void {
+    if (!isDragging) return;
+    const dx = e.clientX - startX;
+    const trackWidth = track.offsetWidth;
+    if (trackWidth <= 0) return;
+    const dMs = (dx / trackWidth) * rangeMs;
+    const newOffset = startOffset + dMs;
+    state.timeAlignOffsets.set(configId, newOffset);
+
+    // Update mark positions without full re-render
+    const marks = track.querySelectorAll('.ta-lane-mark');
+    const safeRange = rangeMs > 0 ? rangeMs : 1;
+    marks.forEach(m => {
+      const mark = m as HTMLElement;
+      const epochMs = Number(mark.dataset.epochMs);
+      const adjusted = epochMs + newOffset;
+      const pct = ((adjusted - state.timeAlignMinTime) / safeRange) * 100;
+      mark.style.left = `${Math.max(0, Math.min(100, pct))}%`;
+    });
+
+    // Update offset badge
+    updateLaneOffsetBadge(lane, configId);
+  }
+
+  function onMouseUp(): void {
+    isDragging = false;
+    track.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  }
+}
+
+function updateLaneOffsetBadge(lane: HTMLElement, configId: string): void {
+  const label = lane.querySelector('.ta-lane-label');
+  if (!label) return;
+  let badge = label.querySelector('.ta-offset-badge') as HTMLElement | null;
+  const offset = state.timeAlignOffsets.get(configId) || 0;
+  if (Math.abs(offset) < 1) {
+    if (badge) badge.remove();
+    return;
+  }
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'ta-offset-badge';
+    label.appendChild(badge);
+  }
+  badge.textContent = formatOffsetMs(offset);
+}
+
+function invalidateTimeAlignTimestamps(): void {
+  state.timeAlignTimestamps.clear();
+  state.timeAlignMinTime = 0;
+  state.timeAlignMaxTime = 0;
+  // If Time Align tab is currently active, auto-rebuild
+  if (state.activeBottomTab === 'time-align') {
+    buildTimeAlignData();
   }
 }
 
@@ -6470,6 +6874,7 @@ async function runSearchConfigsBatch(): Promise<void> {
   await yieldToUI();
   renderVisibleLines();
   renderMinimapMarkers();
+  invalidateTimeAlignTimestamps();
 }
 
 function renderSearchConfigsChips(): void {
@@ -6560,7 +6965,7 @@ async function renderSearchConfigsResults(): Promise<void> {
   }
 
   // Merge all results sorted by line number
-  const allResults: Array<{ lineNumber: number; column: number; length: number; lineText: string; configId: string; color: string }> = [];
+  const allResults: Array<{ lineNumber: number; column: number; length: number; lineText: string; displayIndex?: number; configId: string; color: string }> = [];
   for (const config of enabledConfigs) {
     const matches = state.searchConfigResults.get(config.id) || [];
     for (const m of matches) {
@@ -6615,7 +7020,10 @@ async function renderSearchConfigsResults(): Promise<void> {
       item.appendChild(lineNum);
       item.appendChild(text);
       item.addEventListener('click', () => {
-        goToLine(r.lineNumber);
+        const scrollTarget = state.isFiltered && r.displayIndex != null
+          ? r.displayIndex : r.lineNumber;
+        goToLine(scrollTarget, r.lineNumber);
+        renderVisibleLines();
       });
       fragment.appendChild(item);
     }
@@ -8246,23 +8654,24 @@ function goToSearchResult(index: number): void {
 
   state.currentSearchIndex = index;
   const result = state.searchResults[index];
-  // When filtered, scroll to display index but select by original line number
   const scrollTarget = state.isFiltered && result.displayIndex != null
     ? result.displayIndex : result.lineNumber;
-  goToLine(scrollTarget);
-  state.selectedLine = result.lineNumber; // original line number for highlight matching
+  goToLine(scrollTarget, result.lineNumber);
   updateSearchUI();
-  renderVisibleLines(); // Update current match highlight
+  renderVisibleLines();
   updateSearchResultsCurrent();
   scrollSearchResultIntoView();
 }
 
-function goToLine(lineNumber: number): void {
+// Navigate to a line. displayIndex is the position in the current view (filtered or not).
+// originalLineNumber overrides which line gets highlighted/selected — use when the
+// display index differs from the real line number (e.g. filtered search results).
+function goToLine(displayIndex: number, originalLineNumber?: number): void {
   if (!logViewerElement) return;
 
+  const lineNumber = originalLineNumber ?? displayIndex;
   state.selectedLine = lineNumber;
-  // Use scroll mapping for large files
-  const targetScrollTop = lineToScrollTop(lineNumber);
+  const targetScrollTop = lineToScrollTop(displayIndex);
   logViewerElement.scrollTop = Math.max(0, targetScrollTop);
   updateCursorStatus(lineNumber);
 }
@@ -11624,6 +12033,13 @@ function init(): void {
   elements.ctxViewLanes.addEventListener('click', () => toggleContextView('lanes'));
   elements.ctxGroupSeparate.addEventListener('click', () => toggleContextGroupMode('separate'));
   elements.ctxGroupCombined.addEventListener('click', () => toggleContextGroupMode('combined'));
+
+  // Time Align events (inside bottom panel)
+  elements.taRefreshBtn.addEventListener('click', () => buildTimeAlignData());
+  elements.taResetBtn.addEventListener('click', () => {
+    state.timeAlignOffsets.clear();
+    renderTimeAlignLanes();
+  });
 
   // Video player events (inside bottom panel)
   elements.btnVideoOpen.addEventListener('click', openVideoFile);

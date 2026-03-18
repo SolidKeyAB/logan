@@ -356,4 +356,6 @@ export const IPC = {
   CONTEXT_SEARCH_PROGRESS: 'context-search-progress',
   // Traceback
   TRACEBACK: 'traceback',
+  // Time Align (batch timestamp fetch)
+  GET_LINE_TIMESTAMPS: 'get-line-timestamps',
 } as const;
