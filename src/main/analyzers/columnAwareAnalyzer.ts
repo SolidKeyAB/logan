@@ -10,6 +10,8 @@ import {
   AnalysisInsights
 } from './types';
 
+const yieldToEventLoop = () => new Promise<void>(resolve => setImmediate(resolve));
+
 const KNOWN_COLUMNS = {
   channel: ['channel', 'component', 'module', 'category', 'logger'],
   source: ['source', 'process', 'thread', 'origin', 'class'],
@@ -200,6 +202,11 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
                 lineBufferFull = true;
               }
             }
+          }
+
+          // Yield to event loop every chunk so Electron UI stays responsive
+          if (filePos < fileSize) {
+            await yieldToEventLoop();
           }
         }
 

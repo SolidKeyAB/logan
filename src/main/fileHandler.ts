@@ -2,6 +2,9 @@ import * as fs from 'fs';
 import { spawn } from 'child_process';
 import { FileInfo, LineData, SearchMatch, SearchOptions } from '../shared/types';
 
+// Yield control to the event loop so Electron's UI stays responsive
+const yieldToEventLoop = () => new Promise<void>(resolve => setImmediate(resolve));
+
 // Convert wildcard pattern to regex string: * = .*, ? = ., rest escaped
 function wildcardToRegex(pattern: string): string {
   return pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&')
@@ -187,6 +190,11 @@ export class FileHandler {
         }
 
         fileOffset += bytesRead;
+
+        // Yield to event loop every chunk so Electron UI stays responsive
+        if (fileOffset < fileSize) {
+          await yieldToEventLoop();
+        }
       }
 
       // Handle last line if file doesn't end with newline
@@ -730,6 +738,11 @@ export class FileHandler {
               lineBufferFull = true;
             }
           }
+        }
+
+        // Yield to event loop every chunk so UI stays responsive
+        if (filePos < fileSize && !done) {
+          await yieldToEventLoop();
         }
       }
 
