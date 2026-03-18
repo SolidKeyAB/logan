@@ -145,6 +145,10 @@ interface LocalFolderFile {
   name: string;
   path: string;
   size?: number;
+  fileType?: 'text' | 'image' | 'video';
+  isDirectory?: boolean;
+  children?: LocalFolderFile[];
+  collapsed?: boolean;
 }
 
 interface FolderState {
@@ -3914,14 +3918,23 @@ async function openFile(): Promise<void> {
 
 // === Folder Operations ===
 
+function mapFolderEntries(entries: any[]): LocalFolderFile[] {
+  return entries.map(e => ({
+    name: e.name,
+    path: e.path,
+    size: e.size,
+    fileType: e.fileType,
+    isDirectory: e.isDirectory || false,
+    collapsed: true, // subdirs start collapsed
+    children: e.children ? mapFolderEntries(e.children) : undefined,
+  }));
+}
+
 async function openFolder(): Promise<void> {
   const folderPath = await window.api.openFolderDialog();
   if (!folderPath) return;
 
-  // Check if folder already open
-  if (state.folders.some((f) => f.path === folderPath)) {
-    return;
-  }
+  if (state.folders.some((f) => f.path === folderPath)) return;
 
   const result = await window.api.readFolder(folderPath);
   if (result.success && result.files) {
@@ -3929,7 +3942,7 @@ async function openFolder(): Promise<void> {
     state.folders.push({
       path: folderPath,
       name: folderName,
-      files: result.files.map((f) => ({ name: f.name, path: f.path, size: f.size })),
+      files: mapFolderEntries(result.files),
       collapsed: false,
     });
     renderFolderTree();
@@ -3954,23 +3967,39 @@ function toggleFolder(folderPath: string): void {
   }
 }
 
+// Carry over collapsed state from old tree to new tree by path matching
+function preserveCollapseState(newEntries: LocalFolderFile[], oldEntries: LocalFolderFile[]): void {
+  const oldMap = new Map<string, LocalFolderFile>();
+  (function walk(entries: LocalFolderFile[]) {
+    for (const e of entries) {
+      oldMap.set(e.path, e);
+      if (e.children) walk(e.children);
+    }
+  })(oldEntries);
+
+  (function apply(entries: LocalFolderFile[]) {
+    for (const e of entries) {
+      const old = oldMap.get(e.path);
+      if (old && e.isDirectory) e.collapsed = old.collapsed;
+      if (e.children) apply(e.children);
+    }
+  })(newEntries);
+}
+
 async function refreshFolders(): Promise<void> {
   if (state.folders.length === 0) return;
 
-  // Show refreshing state
   elements.btnRefreshFolders.disabled = true;
-  elements.btnRefreshFolders.textContent = '⟳';
+  elements.btnRefreshFolders.textContent = '\u27F3';
 
   try {
-    // Re-read each folder while preserving collapsed state
     for (const folder of state.folders) {
+      if (folder.isRemote) continue; // SSH folders don't recurse
       const result = await window.api.readFolder(folder.path);
       if (result.success && result.files) {
-        folder.files = result.files.map((f) => ({
-          name: f.name,
-          path: f.path,
-          size: f.size,
-        }));
+        const newFiles = mapFolderEntries(result.files);
+        preserveCollapseState(newFiles, folder.files);
+        folder.files = newFiles;
       }
     }
     renderFolderTree();
@@ -3986,6 +4015,46 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function renderFolderEntries(entries: LocalFolderFile[], depth: number, isRemote: boolean): string {
+  return entries.map(entry => {
+    if (entry.isDirectory && entry.children) {
+      return `
+        <div class="folder-subdir ${entry.collapsed ? 'collapsed' : ''}" data-subdir-path="${escapeHtml(entry.path)}">
+          <div class="folder-subdir-header" style="padding-left: ${8 + depth * 14}px">
+            <span class="folder-toggle">&#9660;</span>
+            <span class="folder-subdir-name" title="${escapeHtml(entry.path)}">${escapeHtml(entry.name)}</span>
+          </div>
+          <div class="folder-subdir-files">
+            ${renderFolderEntries(entry.children, depth + 1, isRemote)}
+          </div>
+        </div>`;
+    }
+    const icon = entry.fileType === 'image' ? '\uD83D\uDDBC' : entry.fileType === 'video' ? '\u25B6' : '';
+    return `
+      <div class="folder-file ${entry.path === state.filePath ? 'active' : ''}"
+           data-path="${escapeHtml(entry.path)}"
+           data-filetype="${entry.fileType || 'text'}"
+           ${isRemote ? 'data-remote="true"' : ''}
+           style="padding-left: ${8 + depth * 14}px">
+        ${icon ? `<span class="folder-file-icon">${icon}</span>` : ''}
+        <span class="folder-file-name" title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</span>
+        ${entry.size ? `<span class="folder-file-size">${formatFileSize(entry.size)}</span>` : ''}
+      </div>`;
+  }).join('');
+}
+
+// Find a subfolder node by path in a recursive tree
+function findSubfolder(entries: LocalFolderFile[], subdirPath: string): LocalFolderFile | null {
+  for (const e of entries) {
+    if (e.path === subdirPath && e.isDirectory) return e;
+    if (e.children) {
+      const found = findSubfolder(e.children, subdirPath);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 function renderFolderTree(): void {
   if (state.folders.length === 0) {
     elements.foldersList.innerHTML = '<p class="placeholder">No folders open</p>';
@@ -3995,26 +4064,17 @@ function renderFolderTree(): void {
   elements.foldersList.innerHTML = state.folders
     .map(
       (folder) => `
-      <div class="folder-group ${folder.collapsed ? 'collapsed' : ''}${folder.isRemote ? ' remote' : ''}" data-path="${folder.path}" ${folder.isRemote ? 'data-remote="true"' : ''}>
+      <div class="folder-group ${folder.collapsed ? 'collapsed' : ''}${folder.isRemote ? ' remote' : ''}" data-path="${escapeHtml(folder.path)}" ${folder.isRemote ? 'data-remote="true"' : ''}>
         <div class="folder-header">
           <span class="folder-toggle">&#9660;</span>
-          <span class="folder-name" title="${folder.path}">${folder.isRemote ? '<span class="ssh-badge">SSH</span> ' : ''}${escapeHtml(folder.name)}</span>
+          <span class="folder-name" title="${escapeHtml(folder.path)}">${folder.isRemote ? '<span class="ssh-badge">SSH</span> ' : ''}${escapeHtml(folder.name)}</span>
           <button class="folder-close" title="Remove folder">&times;</button>
         </div>
         <div class="folder-files">
           ${
             folder.files.length === 0
-              ? '<div class="placeholder" style="padding: 4px 0; font-size: 11px;">No files</div>'
-              : folder.files
-                  .map(
-                    (file) => `
-              <div class="folder-file ${file.path === state.filePath ? 'active' : ''}" data-path="${escapeHtml(file.path)}" ${folder.isRemote ? 'data-remote="true"' : ''}>
-                <span class="folder-file-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
-                ${file.size ? `<span class="folder-file-size">${formatFileSize(file.size)}</span>` : ''}
-              </div>
-            `
-                  )
-                  .join('')
+              ? '<div class="placeholder" style="padding: 4px 0; font-size: 11px;">No supported files</div>'
+              : renderFolderEntries(folder.files, 1, !!folder.isRemote)
           }
         </div>
       </div>
@@ -4022,12 +4082,11 @@ function renderFolderTree(): void {
     )
     .join('');
 
-  // Add event listeners
+  // Top-level folder header events
   elements.foldersList.querySelectorAll('.folder-header').forEach((header) => {
     const folderPath = (header.closest('.folder-group') as HTMLElement)?.dataset.path;
     if (!folderPath) return;
 
-    // Toggle collapse
     header.querySelector('.folder-toggle')?.addEventListener('click', (e) => {
       e.stopPropagation();
       toggleFolder(folderPath);
@@ -4036,42 +4095,62 @@ function renderFolderTree(): void {
       e.stopPropagation();
       toggleFolder(folderPath);
     });
-
-    // Remove folder
     header.querySelector('.folder-close')?.addEventListener('click', (e) => {
       e.stopPropagation();
       removeFolder(folderPath);
     });
   });
 
-  // File click to open
-  elements.foldersList.querySelectorAll('.folder-file').forEach((fileEl) => {
-    fileEl.addEventListener('click', async () => {
-      const filePath = (fileEl as HTMLElement).dataset.path;
-      const isRemote = (fileEl as HTMLElement).dataset.remote === 'true';
-      if (filePath) {
-        if (isRemote) {
-          // Download remote file first, then open
-          const result = await window.api.sshDownloadFile(filePath);
-          if (result.success && result.localPath) {
-            await loadFile(result.localPath);
-          } else {
-            alert(`Failed to download: ${result.error}`);
-          }
-        } else {
-          await loadFile(filePath);
-        }
-        renderFolderTree(); // Update active state
+  // Subfolder toggle events
+  elements.foldersList.querySelectorAll('.folder-subdir-header').forEach((header) => {
+    header.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const subdirEl = header.closest('.folder-subdir') as HTMLElement;
+      const subdirPath = subdirEl?.dataset.subdirPath;
+      const folderGroupPath = (subdirEl?.closest('.folder-group') as HTMLElement)?.dataset.path;
+      if (!subdirPath || !folderGroupPath) return;
+      const folder = state.folders.find(f => f.path === folderGroupPath);
+      if (!folder) return;
+      const node = findSubfolder(folder.files, subdirPath);
+      if (node) {
+        node.collapsed = !node.collapsed;
+        renderFolderTree();
       }
     });
-    // Right-click context menu on folder tree files
+  });
+
+  // File double-click to open (dispatched by type)
+  elements.foldersList.querySelectorAll('.folder-file').forEach((fileEl) => {
+    fileEl.addEventListener('dblclick', async () => {
+      const filePath = (fileEl as HTMLElement).dataset.path;
+      const fileType = (fileEl as HTMLElement).dataset.filetype;
+      const isRemote = (fileEl as HTMLElement).dataset.remote === 'true';
+      if (!filePath) return;
+
+      if (isRemote) {
+        const result = await window.api.sshDownloadFile(filePath);
+        if (result.success && result.localPath) {
+          await loadFile(result.localPath);
+        } else {
+          alert(`Failed to download: ${result.error}`);
+        }
+      } else if (fileType === 'video') {
+        loadVideoFromPath(filePath);
+        toggleBottomTab('video');
+      } else if (fileType === 'image') {
+        openImageInPanel(filePath);
+      } else {
+        await loadFile(filePath);
+      }
+      renderFolderTree();
+    });
+
+    // Right-click context menu
     fileEl.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       e.stopPropagation();
       const filePath = (fileEl as HTMLElement).dataset.path;
-      if (filePath) {
-        showFileContextMenu(e as MouseEvent, filePath);
-      }
+      if (filePath) showFileContextMenu(e as MouseEvent, filePath);
     });
   });
 }

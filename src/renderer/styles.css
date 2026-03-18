@@ -1065,8 +1065,31 @@ body.platform-darwin .titlebar {
 }
 
 .folder-files {
-  padding-left: 16px;
+  padding-left: 0;
 }
+
+/* Subdirectory nodes in folder tree */
+.folder-subdir-header {
+  display: flex;
+  align-items: center;
+  padding: 3px 4px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text-secondary);
+  gap: 4px;
+  border-radius: 3px;
+}
+.folder-subdir-header:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+.folder-subdir-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-subdir.collapsed .folder-subdir-files { display: none; }
+.folder-subdir.collapsed > .folder-subdir-header .folder-toggle { transform: rotate(-90deg); }
 
 .folder-file {
   display: flex;
@@ -1076,7 +1099,7 @@ body.platform-darwin .titlebar {
   color: var(--text-secondary);
   cursor: pointer;
   border-radius: 3px;
-  gap: 6px;
+  gap: 4px;
 }
 
 .folder-file:hover {
@@ -1087,6 +1110,13 @@ body.platform-darwin .titlebar {
 .folder-file.active {
   background: var(--accent-color);
   color: white;
+}
+
+.folder-file-icon {
+  font-size: 10px;
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
 }
 
 .folder-file-name {
@@ -3774,6 +3804,8 @@ kbd {
   padding: 3px 12px;
   cursor: pointer;
   transition: background-color 0.1s;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .search-result-item:hover {

@@ -98,7 +98,7 @@ const api = {
   openFolderDialog: (): Promise<string | null> =>
     ipcRenderer.invoke(IPC.OPEN_FOLDER_DIALOG),
 
-  readFolder: (folderPath: string): Promise<{ success: boolean; files?: Array<{ name: string; path: string; isDirectory: boolean; size?: number }>; folderPath?: string; error?: string }> =>
+  readFolder: (folderPath: string): Promise<{ success: boolean; files?: Array<{ name: string; path: string; isDirectory: boolean; size?: number; fileType?: string; children?: any[] }>; folderPath?: string; error?: string }> =>
     ipcRenderer.invoke(IPC.READ_FOLDER, folderPath),
 
   // Folder search
