@@ -13,7 +13,7 @@ jobs:
     strategy:
       matrix:
         os: [macos-latest, ubuntu-latest, windows-latest]
-        node-version: [20]
+        node-version: [24]
 
     steps:
       - name: Checkout code
@@ -34,9 +34,6 @@ jobs:
 
       - name: Type check
         run: npm run typecheck
-
-      - name: Rebuild native modules for Node.js (tests run on Node, not Electron)
-        run: npm rebuild better-sqlite3
 
       - name: Run tests
         run: npm test
