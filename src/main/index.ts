@@ -3,12 +3,16 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { spawn } from 'child_process';
-// Lazy-loaded: node-pty may not be available on all platforms
+// Lazy-loaded: node-pty causes SIGSEGV on Linux when bindings mismatch
 let pty: typeof import('node-pty') | null = null;
-try {
-  pty = require('node-pty');
-} catch {
-  console.warn('node-pty not available — terminal feature disabled');
+if (process.platform !== 'linux') {
+  try {
+    pty = require('node-pty');
+  } catch {
+    console.warn('node-pty not available — terminal feature disabled');
+  }
+} else {
+  console.warn('node-pty disabled on Linux — terminal feature unavailable');
 }
 import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
 import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, LiveConnectionInfo, ContextDefinition, ContextPattern, ContextMatchGroup } from '../shared/types';
@@ -22,7 +26,11 @@ let SerialHandler: any = null;
 let LogcatHandler: any = null;
 let SshHandler: any = null;
 let SshClient: any = null;
-try { SerialHandler = require('./serialHandler').SerialHandler; } catch { console.warn('serialport not available — serial feature disabled'); }
+if (process.platform !== 'linux') {
+  try { SerialHandler = require('./serialHandler').SerialHandler; } catch { console.warn('serialport not available — serial feature disabled'); }
+} else {
+  console.warn('serialport disabled on Linux — serial feature unavailable');
+}
 try { LogcatHandler = require('./logcatHandler').LogcatHandler; } catch { console.warn('logcatHandler not available'); }
 try { SshHandler = require('./sshHandler').SshHandler; } catch { console.warn('ssh2 not available — SSH feature disabled'); }
 try { SshClient = require('ssh2').Client; } catch {}
