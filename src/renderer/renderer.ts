@@ -6962,11 +6962,11 @@ const SC_OVERSCAN = 10;
 function renderScResultsViewport(): void {
   const list = elements.searchConfigsResults;
   const viewport = list.querySelector('.sc-virtual-viewport') as HTMLDivElement;
-  const spacer = list.querySelector('.sc-virtual-spacer') as HTMLDivElement;
-  if (!viewport || !spacer) return;
+  if (!viewport || scResultsData.length === 0) return;
 
   const scrollTop = list.scrollTop;
-  const viewHeight = list.clientHeight;
+  // Use a fallback height when panel is hidden or not yet laid out
+  const viewHeight = list.clientHeight || 600;
   const totalCount = scResultsData.length;
 
   const startIdx = Math.max(0, Math.floor(scrollTop / SC_ROW_HEIGHT) - SC_OVERSCAN);
@@ -7017,7 +7017,7 @@ async function renderSearchConfigsResults(): Promise<void> {
   const list = elements.searchConfigsResults;
   const enabledConfigs = state.searchConfigs.filter(c => c.enabled);
 
-  // Clean up previous scroll listener
+  // Clean up previous scroll/resize listeners
   if (scResultsScrollCleanup) {
     scResultsScrollCleanup();
     scResultsScrollCleanup = null;
@@ -7047,6 +7047,8 @@ async function renderSearchConfigsResults(): Promise<void> {
 
   // Set up virtual scroll container
   list.innerHTML = '';
+  list.style.position = 'relative';
+
   const spacer = document.createElement('div');
   spacer.className = 'sc-virtual-spacer';
   spacer.style.height = `${scResultsData.length * SC_ROW_HEIGHT}px`;
@@ -7059,7 +7061,6 @@ async function renderSearchConfigsResults(): Promise<void> {
   viewport.style.right = '0';
   viewport.style.willChange = 'transform';
 
-  list.style.position = 'relative';
   list.appendChild(spacer);
   list.appendChild(viewport);
 
@@ -7086,8 +7087,16 @@ async function renderSearchConfigsResults(): Promise<void> {
     });
   };
   list.addEventListener('scroll', onScroll);
+
+  // Re-render when container becomes visible or resizes
+  const resizeObserver = new ResizeObserver(() => {
+    renderScResultsViewport();
+  });
+  resizeObserver.observe(list);
+
   scResultsScrollCleanup = () => {
     list.removeEventListener('scroll', onScroll);
+    resizeObserver.disconnect();
     if (rafId) cancelAnimationFrame(rafId);
   };
 
