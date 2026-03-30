@@ -28,12 +28,12 @@ let SshHandler: any = null;
 let SshClient: any = null;
 if (process.platform !== 'linux') {
   try { SerialHandler = require('./serialHandler').SerialHandler; } catch { console.warn('serialport not available — serial feature disabled'); }
+  try { SshHandler = require('./sshHandler').SshHandler; } catch { console.warn('ssh2 not available — SSH feature disabled'); }
+  try { SshClient = require('ssh2').Client; } catch {}
 } else {
-  console.warn('serialport disabled on Linux — serial feature unavailable');
+  console.warn('Native modules disabled on Linux (serialport, ssh2) — serial/SSH features unavailable');
 }
 try { LogcatHandler = require('./logcatHandler').LogcatHandler; } catch { console.warn('logcatHandler not available'); }
-try { SshHandler = require('./sshHandler').SshHandler; } catch { console.warn('ssh2 not available — SSH feature disabled'); }
-try { SshClient = require('ssh2').Client; } catch {}
 import { SshProfile, SavedConnection } from '../shared/types';
 
 let mainWindow: BrowserWindow | null = null;
