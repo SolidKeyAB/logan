@@ -6953,91 +6953,145 @@ function renderSearchConfigsChips(): void {
   }
 }
 
-const SC_RESULTS_LIST_CAP = 1000;
+// Virtualized search config results list
+let scResultsData: Array<{ lineNumber: number; column: number; length: number; lineText: string; displayIndex?: number; configId: string; color: string }> = [];
+let scResultsScrollCleanup: (() => void) | null = null;
+const SC_ROW_HEIGHT = 24;
+const SC_OVERSCAN = 10;
+
+function renderScResultsViewport(): void {
+  const list = elements.searchConfigsResults;
+  const viewport = list.querySelector('.sc-virtual-viewport') as HTMLDivElement;
+  const spacer = list.querySelector('.sc-virtual-spacer') as HTMLDivElement;
+  if (!viewport || !spacer) return;
+
+  const scrollTop = list.scrollTop;
+  const viewHeight = list.clientHeight;
+  const totalCount = scResultsData.length;
+
+  const startIdx = Math.max(0, Math.floor(scrollTop / SC_ROW_HEIGHT) - SC_OVERSCAN);
+  const endIdx = Math.min(totalCount, Math.ceil((scrollTop + viewHeight) / SC_ROW_HEIGHT) + SC_OVERSCAN);
+
+  viewport.style.transform = `translateY(${startIdx * SC_ROW_HEIGHT}px)`;
+  viewport.innerHTML = '';
+
+  const fragment = document.createDocumentFragment();
+  for (let i = startIdx; i < endIdx; i++) {
+    const r = scResultsData[i];
+    const item = document.createElement('div');
+    item.className = 'sc-result-item';
+    item.style.height = `${SC_ROW_HEIGHT}px`;
+    item.style.boxSizing = 'border-box';
+
+    const dot = document.createElement('span');
+    dot.className = 'sc-result-dot';
+    dot.style.backgroundColor = r.color;
+
+    const lineNum = document.createElement('span');
+    lineNum.className = 'sc-result-line-num';
+    lineNum.textContent = `${r.lineNumber + 1}`;
+
+    const text = document.createElement('span');
+    text.className = 'sc-result-text';
+    const lineText = r.lineText || '';
+    const truncated = lineText.length > 300 ? lineText.substring(0, 300) + '...' : lineText;
+    if (r.column >= 0 && r.length > 0) {
+      const before = escapeHtml(truncated.substring(0, r.column));
+      const match = escapeHtml(truncated.substring(r.column, r.column + r.length));
+      const after = escapeHtml(truncated.substring(r.column + r.length));
+      text.innerHTML = `${before}<mark style="background:${r.color};color:#000">${match}</mark>${after}`;
+    } else {
+      text.textContent = truncated;
+    }
+
+    item.appendChild(dot);
+    item.appendChild(lineNum);
+    item.appendChild(text);
+    item.dataset.idx = String(i);
+    fragment.appendChild(item);
+  }
+  viewport.appendChild(fragment);
+}
 
 async function renderSearchConfigsResults(): Promise<void> {
   const list = elements.searchConfigsResults;
   const enabledConfigs = state.searchConfigs.filter(c => c.enabled);
 
+  // Clean up previous scroll listener
+  if (scResultsScrollCleanup) {
+    scResultsScrollCleanup();
+    scResultsScrollCleanup = null;
+  }
+
   if (enabledConfigs.length === 0) {
+    scResultsData = [];
     list.innerHTML = '<div class="sc-results-cap-notice">No active search configs</div>';
     return;
   }
 
   // Merge all results sorted by line number
-  const allResults: Array<{ lineNumber: number; column: number; length: number; lineText: string; displayIndex?: number; configId: string; color: string }> = [];
+  scResultsData = [];
   for (const config of enabledConfigs) {
     const matches = state.searchConfigResults.get(config.id) || [];
     for (const m of matches) {
-      allResults.push({ ...m, configId: config.id, color: config.color });
+      scResultsData.push({ ...m, configId: config.id, color: config.color });
     }
   }
 
-  allResults.sort((a, b) => a.lineNumber - b.lineNumber);
+  scResultsData.sort((a, b) => a.lineNumber - b.lineNumber);
 
-  if (allResults.length === 0) {
+  if (scResultsData.length === 0) {
     list.innerHTML = '<div class="sc-results-cap-notice">No matches found</div>';
     return;
   }
 
-  const displayCount = Math.min(allResults.length, SC_RESULTS_LIST_CAP);
-  // Summary text removed (was in overlay header, now tab handles it)
-
+  // Set up virtual scroll container
   list.innerHTML = '';
-  const CHUNK_SIZE = 200;
+  const spacer = document.createElement('div');
+  spacer.className = 'sc-virtual-spacer';
+  spacer.style.height = `${scResultsData.length * SC_ROW_HEIGHT}px`;
+  spacer.style.pointerEvents = 'none';
 
-  for (let chunkStart = 0; chunkStart < displayCount; chunkStart += CHUNK_SIZE) {
-    const chunkEnd = Math.min(chunkStart + CHUNK_SIZE, displayCount);
-    const fragment = document.createDocumentFragment();
+  const viewport = document.createElement('div');
+  viewport.className = 'sc-virtual-viewport';
+  viewport.style.position = 'absolute';
+  viewport.style.left = '0';
+  viewport.style.right = '0';
+  viewport.style.willChange = 'transform';
 
-    for (let i = chunkStart; i < chunkEnd; i++) {
-      const r = allResults[i];
-      const item = document.createElement('div');
-      item.className = 'sc-result-item';
+  list.style.position = 'relative';
+  list.appendChild(spacer);
+  list.appendChild(viewport);
 
-      const dot = document.createElement('span');
-      dot.className = 'sc-result-dot';
-      dot.style.backgroundColor = r.color;
+  // Click delegation on viewport
+  viewport.addEventListener('click', (e) => {
+    const item = (e.target as HTMLElement).closest('.sc-result-item') as HTMLElement;
+    if (!item) return;
+    const idx = Number(item.dataset.idx);
+    const r = scResultsData[idx];
+    if (!r) return;
+    const scrollTarget = state.isFiltered && r.displayIndex != null
+      ? r.displayIndex : r.lineNumber;
+    goToLine(scrollTarget, r.lineNumber);
+    renderVisibleLines();
+  });
 
-      const lineNum = document.createElement('span');
-      lineNum.className = 'sc-result-line-num';
-      lineNum.textContent = `${r.lineNumber + 1}`;
+  // Scroll handler with RAF throttle
+  let rafId = 0;
+  const onScroll = () => {
+    if (rafId) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = 0;
+      renderScResultsViewport();
+    });
+  };
+  list.addEventListener('scroll', onScroll);
+  scResultsScrollCleanup = () => {
+    list.removeEventListener('scroll', onScroll);
+    if (rafId) cancelAnimationFrame(rafId);
+  };
 
-      const text = document.createElement('span');
-      text.className = 'sc-result-text';
-      const lineText = r.lineText || '';
-      const truncated = lineText.length > 300 ? lineText.substring(0, 300) + '...' : lineText;
-      if (r.column >= 0 && r.length > 0) {
-        const before = escapeHtml(truncated.substring(0, r.column));
-        const match = escapeHtml(truncated.substring(r.column, r.column + r.length));
-        const after = escapeHtml(truncated.substring(r.column + r.length));
-        text.innerHTML = `${before}<mark style="background:${r.color};color:#000">${match}</mark>${after}`;
-      } else {
-        text.textContent = truncated;
-      }
-
-      item.appendChild(dot);
-      item.appendChild(lineNum);
-      item.appendChild(text);
-      item.addEventListener('click', () => {
-        const scrollTarget = state.isFiltered && r.displayIndex != null
-          ? r.displayIndex : r.lineNumber;
-        goToLine(scrollTarget, r.lineNumber);
-        renderVisibleLines();
-      });
-      fragment.appendChild(item);
-    }
-
-    list.appendChild(fragment);
-    if (chunkEnd < displayCount) await yieldToUI();
-  }
-
-  if (allResults.length > SC_RESULTS_LIST_CAP) {
-    const notice = document.createElement('div');
-    notice.className = 'sc-results-cap-notice';
-    notice.textContent = `Showing first ${SC_RESULTS_LIST_CAP} of ${allResults.length} matches`;
-    list.appendChild(notice);
-  }
+  renderScResultsViewport();
 }
 
 function showSearchConfigContextMenu(e: MouseEvent, config: SearchConfigDef): void {
