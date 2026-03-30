@@ -12,7 +12,7 @@ if (process.platform !== 'linux') {
     console.warn('node-pty not available — terminal feature disabled');
   }
 } else {
-  console.warn('node-pty disabled on Linux — terminal feature unavailable');
+  console.warn('node-pty not available on Linux — using child_process fallback for terminal');
 }
 import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
 import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, LiveConnectionInfo, ContextDefinition, ContextPattern, ContextMatchGroup } from '../shared/types';
@@ -31,7 +31,18 @@ if (process.platform !== 'linux') {
   try { SshHandler = require('./sshHandler').SshHandler; } catch { console.warn('ssh2 not available — SSH feature disabled'); }
   try { SshClient = require('ssh2').Client; } catch {}
 } else {
-  console.warn('Native modules disabled on Linux (serialport, ssh2) — serial/SSH features unavailable');
+  console.warn('serialport not available on Linux — serial feature disabled');
+  // ssh2 bundles native .node addons (sshcrypto, cpu-features) that SIGSEGV on Linux
+  // due to Electron ABI mismatch. Block .node loading so ssh2 uses pure JS fallbacks.
+  const Module = require('module');
+  const origNodeExt = Module._extensions['.node'];
+  Module._extensions['.node'] = function(_mod: any, filename: string) {
+    throw new Error(`Native module blocked on Linux: ${filename}`);
+  };
+  try { SshHandler = require('./sshHandler').SshHandler; } catch { console.warn('ssh2 not available — SSH feature disabled'); }
+  try { SshClient = require('ssh2').Client; } catch {}
+  Module._extensions['.node'] = origNodeExt;
+  console.log('ssh2 loaded with pure JS crypto fallback');
 }
 try { LogcatHandler = require('./logcatHandler').LogcatHandler; } catch { console.warn('logcatHandler not available'); }
 import { SshProfile, SavedConnection } from '../shared/types';
@@ -4724,36 +4735,72 @@ function getDefaultShell(): string {
 
 ipcMain.handle(IPC.TERMINAL_CREATE_LOCAL, async (_, sessionId: string, options?: { cwd?: string; cols?: number; rows?: number }) => {
   try {
-    if (!pty) return { success: false, error: 'Terminal not available (node-pty not installed)' };
-    const shell = getDefaultShell();
+    const shellPath = getDefaultShell();
     const cwd = options?.cwd || os.homedir();
     const cols = options?.cols || 80;
     const rows = options?.rows || 24;
 
-    const proc = pty.spawn(shell, [], {
-      name: 'xterm-256color',
-      cols,
-      rows,
-      cwd,
-      env: process.env as { [key: string]: string },
-    });
+    if (pty) {
+      // Full PTY via node-pty (macOS/Windows)
+      const proc = pty.spawn(shellPath, [], {
+        name: 'xterm-256color',
+        cols,
+        rows,
+        cwd,
+        env: process.env as { [key: string]: string },
+      });
+
+      const session: TerminalSession = {
+        id: sessionId,
+        type: 'local',
+        label: 'Local',
+        ptyProcess: proc,
+        cols,
+        rows,
+      };
+      terminalSessions.set(sessionId, session);
+
+      proc.onData((data: string) => {
+        mainWindow?.webContents.send(IPC.TERMINAL_DATA, sessionId, data);
+      });
+
+      proc.onExit(({ exitCode }) => {
+        mainWindow?.webContents.send(IPC.TERMINAL_EXIT, sessionId, exitCode);
+        terminalSessions.delete(sessionId);
+      });
+
+      return { success: true, label: 'Local' };
+    }
+
+    // Fallback: child_process.spawn with piped stdio (Linux)
+    const env = { ...process.env, TERM: 'xterm-256color', COLUMNS: String(cols), LINES: String(rows) };
+    const child = spawn(shellPath, ['-i'], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+
+    // Wrap child process to match pty interface used by session handlers
+    const procShim = {
+      write: (data: string) => child.stdin?.write(data),
+      resize: (_c: number, _r: number) => { /* no-op for pipe-based shell */ },
+      kill: () => child.kill(),
+    };
 
     const session: TerminalSession = {
       id: sessionId,
       type: 'local',
       label: 'Local',
-      ptyProcess: proc,
+      ptyProcess: procShim,
       cols,
       rows,
     };
     terminalSessions.set(sessionId, session);
 
-    proc.onData((data: string) => {
-      mainWindow?.webContents.send(IPC.TERMINAL_DATA, sessionId, data);
+    child.stdout?.on('data', (data: Buffer) => {
+      mainWindow?.webContents.send(IPC.TERMINAL_DATA, sessionId, data.toString());
     });
-
-    proc.onExit(({ exitCode }) => {
-      mainWindow?.webContents.send(IPC.TERMINAL_EXIT, sessionId, exitCode);
+    child.stderr?.on('data', (data: Buffer) => {
+      mainWindow?.webContents.send(IPC.TERMINAL_DATA, sessionId, data.toString());
+    });
+    child.on('exit', (exitCode) => {
+      mainWindow?.webContents.send(IPC.TERMINAL_EXIT, sessionId, exitCode ?? 0);
       terminalSessions.delete(sessionId);
     });
 
