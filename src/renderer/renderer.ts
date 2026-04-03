@@ -7477,17 +7477,31 @@ function showContextForm(existingDef?: ContextDefinitionDef): void {
   patSection.textContent = 'PATTERNS';
   form.appendChild(patSection);
 
+  const patHelp = document.createElement('div');
+  patHelp.className = 'ctx-pattern-help';
+  patHelp.innerHTML = '<b>Required</b> = line must match this pattern &nbsp;|&nbsp; <b>Nearby</b> = also include matching lines within proximity';
+  form.appendChild(patHelp);
+
   const patternsContainer = document.createElement('div');
   patternsContainer.id = 'ctx-patterns-container';
 
   function addPatternRow(pat: ContextPatternDef): void {
     const row = document.createElement('div');
-    row.className = 'ctx-pattern-row';
+    row.className = `ctx-pattern-row ctx-role-${pat.role}`;
 
     const roleSelect = document.createElement('select');
     roleSelect.className = 'ctx-pattern-role';
-    roleSelect.innerHTML = `<option value="must">must</option><option value="clue">clue</option>`;
+    roleSelect.innerHTML = `<option value="must">Required</option><option value="clue">Nearby</option>`;
     roleSelect.value = pat.role;
+    roleSelect.title = pat.role === 'must'
+      ? 'Required: lines must match this pattern to be included'
+      : 'Nearby: include matching lines found within the proximity distance';
+    roleSelect.addEventListener('change', () => {
+      roleSelect.title = roleSelect.value === 'must'
+        ? 'Required: lines must match this pattern to be included'
+        : 'Nearby: include matching lines found within the proximity distance';
+      row.className = `ctx-pattern-row ctx-role-${roleSelect.value}`;
+    });
 
     const patternInput = document.createElement('input');
     patternInput.className = 'ctx-pattern-input';
@@ -7514,8 +7528,8 @@ function showContextForm(existingDef?: ContextDefinitionDef): void {
     distInput.type = 'number';
     distInput.className = 'ctx-pattern-dist';
     distInput.value = pat.distance !== undefined ? String(pat.distance) : '';
-    distInput.placeholder = '±N';
-    distInput.title = 'Override distance for this pattern';
+    distInput.placeholder = '±';
+    distInput.title = 'Proximity distance (lines before/after) — leave empty to use default';
 
     const removeBtn = document.createElement('button');
     removeBtn.className = 'ctx-pattern-remove';
