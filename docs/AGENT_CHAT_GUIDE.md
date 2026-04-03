@@ -1,6 +1,6 @@
 # LOGAN Agent Chat Integration Guide
 
-LOGAN supports real-time bidirectional chat between AI agents and the user through its built-in Chat panel. This guide covers three integration methods.
+LOGAN supports real-time bidirectional chat between AI agents and the user through its built-in Chat panel. This guide covers integration methods from simplest to most flexible.
 
 ## See Also
 
@@ -15,6 +15,32 @@ LOGAN supports real-time bidirectional chat between AI agents and the user throu
 
 - LOGAN must be running with a file open
 - API server listens on `127.0.0.1:19532` (port written to `~/.logan/mcp-port`)
+
+---
+
+## Quick Start: Setup Wizard
+
+The easiest way to connect an AI agent is through the built-in Setup Wizard:
+
+1. Open the **Chat tab** (bottom panel)
+2. Click **Launch Agent** or the **gear icon** next to it
+3. The wizard auto-detects available tools:
+   - **Claude Code CLI** — full AI with MCP tool access (recommended)
+   - **Built-in Agent** — basic keyword-based command handler
+   - **Custom Script** — your own agent script (Node.js, Python, Bash)
+4. Choose your agent type, configure if needed, and click **Save & Launch**
+
+Configuration is saved to `~/.logan/agent-config.json`:
+```json
+{
+  "type": "claude-code",
+  "model": ""
+}
+```
+
+Supported `type` values: `"claude-code"`, `"builtin"`, `"custom"` (requires `"scriptPath"`).
+
+For Claude Code, LOGAN automatically generates an MCP config and launches Claude with `--print --permission-mode bypassPermissions --strict-mcp-config` for seamless non-interactive operation.
 
 ---
 

@@ -38,6 +38,14 @@ Use this pattern for interactive conversations with the LOGAN user:
 | `logan_baseline_save` / `logan_baseline_compare` | Save and compare baselines |
 | `logan_get_notes` / `logan_save_notes` | Read/write freeform notes |
 
+### Agent Setup Wizard
+
+LOGAN includes a setup wizard (gear icon in Chat tab) that:
+- Auto-detects Claude Code CLI, existing config, and built-in agent
+- Supports three agent types: Claude Code (AI), Built-in, Custom Script
+- Saves config to `~/.logan/agent-config.json`
+- Launches the agent immediately after setup
+
 ### Important
 
 - Always call `logan_status` first to check if a file is open

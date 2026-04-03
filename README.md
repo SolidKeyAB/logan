@@ -14,8 +14,10 @@ A fast, AI-ready log file viewer built with Electron. Handles **14 million+ line
 - **JSON auto-format** — Pretty-print JSON files on open
 
 ### AI Agent Integration
+- **Setup Wizard** — Guided setup: auto-detects Claude Code CLI and configures the agent connection
 - **MCP support** — 30+ tools auto-discovered by Claude Code, Cursor, and other MCP clients via `.mcp.json`
 - **Agent Chat tab** — Bidirectional messaging between LOGAN and AI agents with SSE real-time bridge
+- **Claude Code integration** — Launch Claude Code directly from LOGAN with full MCP tool access
 - **Built-in agent** — One-click launch from the Chat tab, handles triage/search/crash analysis/bookmarking
 - **HTTP API** — Full REST API for custom agents (bash, Node.js, Python) — see [LOGAN-AGENT.md](LOGAN-AGENT.md)
 - **Connection indicator** — Shows agent name and status, enforces single-agent connection
@@ -158,13 +160,23 @@ If LOGAN is already running, the file opens in the existing window. If not, a ne
 
 ## AI Agent Integration
 
-LOGAN exposes a full log-analysis API that AI agents can use. Three integration paths:
+LOGAN exposes a full log-analysis API that AI agents can use. Four integration paths:
 
 | Method | How |
 |--------|-----|
-| **MCP clients** (Claude Code, Cursor) | Tools auto-discovered via `.mcp.json` — just open the project |
+| **Claude Code** (recommended) | Click "Launch Agent" → Setup Wizard auto-detects CLI and configures MCP |
+| **MCP clients** (Cursor, Windsurf) | Tools auto-discovered via `.mcp.json` — just open the project |
 | **Custom scripts** | Hit the HTTP API directly or use the `logan-listen` CLI helper |
-| **Built-in agent** | Click "Launch Agent" in the Chat tab — no setup needed |
+| **Built-in agent** | Click "Launch Agent" → select "Built-in Agent" — no setup needed |
+
+### Quick Start: Agent Setup Wizard
+
+1. Open the **Chat tab** (bottom panel, chat icon)
+2. Click **Launch Agent** (or the gear icon next to it)
+3. The wizard auto-detects available tools (Claude Code CLI, etc.)
+4. Choose your agent type and click **Save & Launch**
+
+The wizard saves configuration to `~/.logan/agent-config.json`. Subsequent launches skip the wizard.
 
 See [LOGAN-AGENT.md](LOGAN-AGENT.md) for the full API reference, example scripts, and integration guide.
 
