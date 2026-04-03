@@ -3752,8 +3752,35 @@ ipcMain.handle('save-to-notes', async (
       content += newEntry;
       fs.writeFileSync(notesFilePath, content, 'utf-8');
     } else {
-      // Simple append to existing file
-      fs.appendFileSync(notesFilePath, newEntry, 'utf-8');
+      // Insert in line-number order among existing snippets
+      const existing = fs.readFileSync(notesFilePath, 'utf-8');
+      const entryPattern = /\n--- \[.*?\] Lines (\d+)-/g;
+      // Collect positions and start-line numbers of existing entries
+      const entries: { pos: number; line: number }[] = [];
+      let match;
+      while ((match = entryPattern.exec(existing)) !== null) {
+        entries.push({ pos: match.index, line: parseInt(match[1], 10) });
+      }
+
+      // Find insertion point: before the first entry whose start line > our start line
+      const newStartLine1 = startLine + 1; // 1-indexed as in the header
+      let insertPos = -1;
+      for (const e of entries) {
+        if (e.line > newStartLine1) {
+          insertPos = e.pos;
+          break;
+        }
+      }
+
+      if (insertPos === -1) {
+        // All existing entries have smaller line numbers — append at end
+        fs.appendFileSync(notesFilePath, newEntry, 'utf-8');
+      } else {
+        // Insert before the entry with larger line number
+        const before = existing.substring(0, insertPos);
+        const after = existing.substring(insertPos);
+        fs.writeFileSync(notesFilePath, before + newEntry + after, 'utf-8');
+      }
     }
 
     // Invalidate cache for this file so it gets re-indexed with new content
