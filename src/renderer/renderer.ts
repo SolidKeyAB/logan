@@ -711,10 +711,11 @@ const elements = {
   markdownPreview: document.getElementById('markdown-preview') as HTMLDivElement,
   foldersList: document.getElementById('folders-list') as HTMLDivElement,
   btnAddFolder: document.getElementById('btn-add-folder') as HTMLButtonElement,
-  btnRefreshFolders: document.getElementById('btn-refresh-folders') as HTMLButtonElement,
+  btnRefreshFolders: document.getElementById('btn-refresh-folders') as HTMLButtonElement, // May be null — per-folder refresh buttons used instead
   folderSearchInput: document.getElementById('folder-search-input') as HTMLInputElement,
   btnFolderSearch: document.getElementById('btn-folder-search') as HTMLButtonElement,
   btnFolderSearchCancel: document.getElementById('btn-folder-search-cancel') as HTMLButtonElement,
+  btnFolderSearchClear: document.getElementById('btn-folder-search-clear') as HTMLButtonElement,
   folderSearchResults: document.getElementById('folder-search-results') as HTMLDivElement,
   fileStats: document.getElementById('file-stats') as HTMLDivElement,
   analysisResults: document.getElementById('analysis-results') as HTMLDivElement,
@@ -3989,9 +3990,6 @@ function preserveCollapseState(newEntries: LocalFolderFile[], oldEntries: LocalF
 async function refreshFolders(): Promise<void> {
   if (state.folders.length === 0) return;
 
-  elements.btnRefreshFolders.disabled = true;
-  elements.btnRefreshFolders.textContent = '\u27F3';
-
   try {
     for (const folder of state.folders) {
       if (folder.isRemote) continue; // SSH folders don't recurse
@@ -4004,8 +4002,29 @@ async function refreshFolders(): Promise<void> {
     }
     renderFolderTree();
   } finally {
-    elements.btnRefreshFolders.disabled = false;
-    elements.btnRefreshFolders.innerHTML = '&#8635;';
+    // Buttons are re-created by renderFolderTree
+  }
+}
+
+async function refreshSingleFolder(folderPath: string): Promise<void> {
+  const folder = state.folders.find(f => f.path === folderPath);
+  if (!folder || folder.isRemote) return;
+
+  // Find the refresh button in the DOM and show spinning state
+  const groupEl = elements.foldersList.querySelector(`.folder-group[data-path="${CSS.escape(folderPath)}"]`);
+  const btn = groupEl?.querySelector('.folder-refresh') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = true; btn.textContent = '\u27F3'; }
+
+  try {
+    const result = await window.api.readFolder(folder.path);
+    if (result.success && result.files) {
+      const newFiles = mapFolderEntries(result.files);
+      preserveCollapseState(newFiles, folder.files);
+      folder.files = newFiles;
+    }
+    renderFolderTree();
+  } finally {
+    // Button is re-created by renderFolderTree, no need to restore
   }
 }
 
@@ -4068,6 +4087,7 @@ function renderFolderTree(): void {
         <div class="folder-header">
           <span class="folder-toggle">&#9660;</span>
           <span class="folder-name" title="${escapeHtml(folder.path)}">${folder.isRemote ? '<span class="ssh-badge">SSH</span> ' : ''}${escapeHtml(folder.name)}</span>
+          ${!folder.isRemote ? '<button class="folder-refresh" title="Refresh folder">&#8635;</button>' : ''}
           <button class="folder-close" title="Remove folder">&times;</button>
         </div>
         <div class="folder-files">
@@ -4094,6 +4114,10 @@ function renderFolderTree(): void {
     header.querySelector('.folder-name')?.addEventListener('click', (e) => {
       e.stopPropagation();
       toggleFolder(folderPath);
+    });
+    header.querySelector('.folder-refresh')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      refreshSingleFolder(folderPath);
     });
     header.querySelector('.folder-close')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -4198,6 +4222,10 @@ async function performFolderSearch(): Promise<void> {
     state.isFolderSearching = false;
     elements.btnFolderSearch.classList.remove('hidden');
     elements.btnFolderSearchCancel.classList.add('hidden');
+    // Show clear button if we have results or input text
+    if (state.folderSearchResults.length > 0 || elements.folderSearchInput.value.trim()) {
+      elements.btnFolderSearchClear.classList.remove('hidden');
+    }
   }
 }
 
@@ -4211,6 +4239,8 @@ function closeFolderSearchResults(): void {
   state.folderSearchResults = [];
   elements.folderSearchResults.classList.add('hidden');
   elements.folderSearchResults.innerHTML = '';
+  elements.folderSearchInput.value = '';
+  elements.btnFolderSearchClear.classList.add('hidden');
 }
 
 function highlightMatch(text: string, pattern: string): string {
@@ -11871,11 +11901,12 @@ function init(): void {
 
   // Folder operations
   elements.btnAddFolder.addEventListener('click', openFolder);
-  elements.btnRefreshFolders.addEventListener('click', refreshFolders);
+  elements.btnRefreshFolders?.addEventListener('click', refreshFolders);
 
   // Folder search
   elements.btnFolderSearch.addEventListener('click', performFolderSearch);
   elements.btnFolderSearchCancel.addEventListener('click', cancelFolderSearch);
+  elements.btnFolderSearchClear.addEventListener('click', closeFolderSearchResults);
   elements.folderSearchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       performFolderSearch();

@@ -1042,6 +1042,25 @@ body.platform-darwin .titlebar {
   font-weight: 500;
 }
 
+.folder-refresh {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0 2px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.folder-header:hover .folder-refresh {
+  opacity: 1;
+}
+
+.folder-refresh:hover {
+  color: var(--accent-color);
+}
+
 .folder-close {
   background: none;
   border: none;
