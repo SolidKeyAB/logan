@@ -575,6 +575,7 @@
               <span id="chat-agent-status-text">No agent connected</span>
               <span class="chat-agent-status-hint">Type "stop" to end the session</span>
               <button id="chat-launch-agent" class="chat-launch-btn">Launch Agent</button>
+              <button id="chat-agent-setup" class="chat-setup-btn" title="Agent Setup">&#9881;</button>
             </div>
             <div id="chat-messages" class="chat-messages"></div>
             <div class="chat-input-bar">
@@ -1158,6 +1159,24 @@
         <div class="modal-footer">
           <button id="btn-ssh-passphrase-cancel" class="secondary-btn">Cancel</button>
           <button id="btn-ssh-passphrase-ok" class="primary-btn">Connect</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Agent Setup Wizard Modal -->
+    <div id="agent-wizard-modal" class="modal hidden">
+      <div class="modal-content" style="width: 500px;">
+        <div class="modal-header">
+          <h3 id="agent-wizard-title">Agent Setup</h3>
+          <button class="modal-close" data-modal="agent-wizard-modal">&times;</button>
+        </div>
+        <div id="agent-wizard-body" class="modal-body">
+          <!-- Populated dynamically per step -->
+        </div>
+        <div class="modal-footer">
+          <button id="agent-wizard-back" class="secondary-btn" style="display:none">Back</button>
+          <button id="agent-wizard-cancel" class="secondary-btn">Cancel</button>
+          <button id="agent-wizard-next" class="primary-btn">Next</button>
         </div>
       </div>
     </div>

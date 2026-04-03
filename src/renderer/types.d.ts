@@ -446,6 +446,16 @@ interface Api {
   launchAgent: () => Promise<{ success: boolean; error?: string }>;
   stopAgent: () => Promise<{ success: boolean }>;
   getAgentRunning: () => Promise<{ running: boolean }>;
+  detectAgentEnvironment: () => Promise<{
+    hasClaudeCli: boolean;
+    claudeVersion: string;
+    hasConfig: boolean;
+    existingConfig: any;
+    hasBuiltin: boolean;
+    builtinPath: string;
+  }>;
+  saveAgentConfig: (config: { type: 'claude-code' | 'builtin' | 'custom'; scriptPath?: string; model?: string }) => Promise<{ success: boolean }>;
+  browseAgentScript: () => Promise<string | null>;
 
   // Device discovery
   serialListPorts: () => Promise<{ success: boolean; ports?: Array<{ path: string; manufacturer?: string; vendorId?: string; productId?: string }>; error?: string }>;

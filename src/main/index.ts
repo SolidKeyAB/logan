@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 // Lazy-loaded: node-pty causes SIGSEGV on Linux when bindings mismatch
 let pty: typeof import('node-pty') | null = null;
 if (process.platform !== 'linux') {
@@ -5151,40 +5151,115 @@ ipcMain.handle('agent-get-status', async () => {
 
 // --- Built-in agent launch/stop ---
 
-function getAgentScriptPath(): string {
-  // Check for user-configured agent script
+interface AgentConfig {
+  type?: 'claude-code' | 'builtin' | 'custom';
+  scriptPath?: string;
+  model?: string;
+}
+
+function getAgentConfig(): AgentConfig {
   const configPath = path.join(os.homedir(), '.logan', 'agent-config.json');
   try {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    if (config.scriptPath && fs.existsSync(config.scriptPath)) {
-      return config.scriptPath;
-    }
-  } catch { /* use default */ }
+    // Backwards compatibility: old configs only have scriptPath
+    if (!config.type && config.scriptPath) config.type = 'custom';
+    return config;
+  } catch { /* no config */ }
+  return { type: 'builtin' };
+}
 
-  // Default: examples/agent-node.mjs relative to app root
+function getBuiltinScriptPath(): string {
   const devPath = path.join(app.getAppPath(), 'examples', 'agent-node.mjs');
   if (fs.existsSync(devPath)) return devPath;
-
-  // Fallback for packaged app
   const pkgPath = path.join(path.dirname(app.getAppPath()), 'examples', 'agent-node.mjs');
   if (fs.existsSync(pkgPath)) return pkgPath;
-
-  return devPath; // will fail with a clear error
+  return devPath;
 }
+
+function findClaudeCli(): string | null {
+  // Try PATH first
+  try {
+    const result = execSync('which claude', { timeout: 3000, encoding: 'utf-8' }).trim();
+    if (result) return result;
+  } catch { /* not in PATH */ }
+  // Common install locations
+  const candidates = [
+    path.join(os.homedir(), '.claude', 'bin', 'claude'),
+    '/usr/local/bin/claude',
+    '/opt/homebrew/bin/claude',
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+const CLAUDE_CHAT_LOOP_PROMPT = `You are connected to LOGAN, a log analysis tool, via MCP.
+Use logan_status to check the current state, then greet the user with logan_send_message.
+Then enter a chat loop: call logan_wait_for_message to receive user messages, process them
+using LOGAN's MCP tools (logan_search, logan_analyze, logan_filter, logan_get_lines, etc.),
+and reply with logan_send_message. Continue until the user says goodbye or stop.`;
 
 ipcMain.handle('agent-launch', async () => {
   if (agentProcess) {
     return { success: false, error: 'Agent is already running' };
   }
-  const scriptPath = getAgentScriptPath();
-  if (!fs.existsSync(scriptPath)) {
-    return { success: false, error: `Agent script not found: ${scriptPath}` };
-  }
+
+  const config = getAgentConfig();
+
   try {
-    agentProcess = spawn(process.execPath, [scriptPath], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env },
-    });
+    if (config.type === 'claude-code') {
+      // Launch Claude Code CLI with MCP config
+      const claudePath = findClaudeCli();
+      if (!claudePath) {
+        return { success: false, error: 'Claude Code CLI not found. Please install it or reconfigure.' };
+      }
+
+      // Generate temp MCP config for Claude Code
+      const mcpConfig = {
+        mcpServers: {
+          logan: {
+            command: 'node',
+            args: [path.join(app.getAppPath(), 'dist', 'mcp-server', 'index.js')],
+            cwd: app.getAppPath(),
+          },
+        },
+      };
+      const tmpMcpPath = path.join(os.tmpdir(), 'logan-claude-mcp.json');
+      fs.writeFileSync(tmpMcpPath, JSON.stringify(mcpConfig));
+
+      const args = [
+        '--print',
+        '--mcp-config', tmpMcpPath,
+        '--permission-mode', 'bypassPermissions',
+        '--strict-mcp-config',
+      ];
+      if (config.model) args.push('--model', config.model);
+      args.push(CLAUDE_CHAT_LOOP_PROMPT);
+
+      agentProcess = spawn(claudePath, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env },
+      });
+    } else if (config.type === 'custom' && config.scriptPath) {
+      if (!fs.existsSync(config.scriptPath)) {
+        return { success: false, error: `Agent script not found: ${config.scriptPath}` };
+      }
+      agentProcess = spawn(process.execPath, [config.scriptPath], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env },
+      });
+    } else {
+      // Built-in agent
+      const scriptPath = getBuiltinScriptPath();
+      if (!fs.existsSync(scriptPath)) {
+        return { success: false, error: `Built-in agent script not found: ${scriptPath}` };
+      }
+      agentProcess = spawn(process.execPath, [scriptPath], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env },
+      });
+    }
 
     agentProcess.stdout?.on('data', (data: Buffer) => {
       const text = data.toString().trim();
@@ -5199,6 +5274,7 @@ ipcMain.handle('agent-launch', async () => {
     agentProcess.on('exit', (code) => {
       console.log(`[agent] exited with code ${code}`);
       agentProcess = null;
+      mainWindow?.webContents.send('agent-connection-changed', { connected: false, count: 0 });
     });
 
     return { success: true };
@@ -5239,4 +5315,73 @@ ipcMain.handle('agent-stop', async () => {
 
 ipcMain.handle('agent-get-running', async () => {
   return { running: agentProcess !== null };
+});
+
+// --- Agent Setup Wizard ---
+
+ipcMain.handle('agent-detect-environment', async () => {
+  const configPath = path.join(os.homedir(), '.logan', 'agent-config.json');
+  let hasConfig = false;
+  let existingConfig: any = null;
+  try {
+    existingConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    hasConfig = true;
+  } catch { /* no config */ }
+
+  // Check if 'claude' CLI is in PATH (GUI apps may not inherit shell PATH)
+  let hasClaudeCli = false;
+  let claudeVersion = '';
+  try {
+    const shell = process.platform === 'win32' ? undefined : '/bin/bash';
+    const shellArgs = process.platform === 'win32' ? undefined : ['-lc'];
+    const cmd = process.platform === 'win32' ? 'claude --version' : 'claude --version';
+    claudeVersion = execSync(cmd, {
+      timeout: 5000,
+      encoding: 'utf-8',
+      shell: shell ? `${shell} -lc` : undefined,
+      env: { ...process.env },
+    }).trim();
+    hasClaudeCli = true;
+  } catch {
+    // Try common install locations
+    const commonPaths = [
+      path.join(os.homedir(), '.claude', 'bin', 'claude'),
+      '/usr/local/bin/claude',
+      '/opt/homebrew/bin/claude',
+    ];
+    for (const p of commonPaths) {
+      try {
+        if (fs.existsSync(p)) {
+          claudeVersion = execSync(`"${p}" --version`, { timeout: 5000, encoding: 'utf-8' }).trim();
+          hasClaudeCli = true;
+          break;
+        }
+      } catch { /* try next */ }
+    }
+  }
+
+  const builtinPath = path.join(app.getAppPath(), 'examples', 'agent-node.mjs');
+  const hasBuiltin = fs.existsSync(builtinPath);
+
+  return { hasClaudeCli, claudeVersion, hasConfig, existingConfig, hasBuiltin, builtinPath };
+});
+
+ipcMain.handle('agent-save-config', async (_event, config: any) => {
+  const configDir = path.join(os.homedir(), '.logan');
+  if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
+  const configPath = path.join(configDir, 'agent-config.json');
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  return { success: true };
+});
+
+ipcMain.handle('agent-browse-script', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Select Agent Script',
+    filters: [
+      { name: 'Scripts', extensions: ['mjs', 'js', 'ts', 'sh', 'py'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+    properties: ['openFile'],
+  });
+  return result.canceled ? null : result.filePaths[0];
 });

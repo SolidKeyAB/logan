@@ -482,6 +482,18 @@ const api = {
   getAgentRunning: (): Promise<{ running: boolean }> =>
     ipcRenderer.invoke('agent-get-running'),
 
+  detectAgentEnvironment: (): Promise<{
+    hasClaudeCli: boolean; claudeVersion: string;
+    hasConfig: boolean; existingConfig: any;
+    hasBuiltin: boolean; builtinPath: string;
+  }> => ipcRenderer.invoke('agent-detect-environment'),
+
+  saveAgentConfig: (config: any): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('agent-save-config', config),
+
+  browseAgentScript: (): Promise<string | null> =>
+    ipcRenderer.invoke('agent-browse-script'),
+
   // Device discovery
   serialListPorts: (): Promise<{ success: boolean; ports?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.SERIAL_LIST_PORTS),

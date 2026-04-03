@@ -848,6 +848,13 @@ const elements = {
   chatAgentDot: document.getElementById('chat-agent-dot') as HTMLSpanElement,
   chatAgentStatusText: document.getElementById('chat-agent-status-text') as HTMLSpanElement,
   chatLaunchAgent: document.getElementById('chat-launch-agent') as HTMLButtonElement,
+  chatAgentSetup: document.getElementById('chat-agent-setup') as HTMLButtonElement,
+  agentWizardModal: document.getElementById('agent-wizard-modal') as HTMLDivElement,
+  agentWizardBody: document.getElementById('agent-wizard-body') as HTMLDivElement,
+  agentWizardTitle: document.getElementById('agent-wizard-title') as HTMLHeadingElement,
+  agentWizardBack: document.getElementById('agent-wizard-back') as HTMLButtonElement,
+  agentWizardCancel: document.getElementById('agent-wizard-cancel') as HTMLButtonElement,
+  agentWizardNext: document.getElementById('agent-wizard-next') as HTMLButtonElement,
   // Traceback
   tracebackTargetInfo: document.getElementById('traceback-target-info') as HTMLDivElement,
   tracebackSort: document.getElementById('traceback-sort') as HTMLSelectElement,
@@ -5344,6 +5351,14 @@ async function toggleAgent(): Promise<void> {
       await window.api.stopAgent();
       agentRunning = false;
     } else {
+      // Check if setup is needed
+      const env = await window.api.detectAgentEnvironment();
+      if (!env.hasConfig) {
+        btn.disabled = false;
+        const result = await showAgentWizard();
+        if (!result) return; // cancelled
+        btn.disabled = true;
+      }
       const res = await window.api.launchAgent();
       if (res.success) {
         agentRunning = true;
@@ -5355,6 +5370,279 @@ async function toggleAgent(): Promise<void> {
   } finally {
     btn.disabled = false;
   }
+}
+
+// ─── Agent Setup Wizard ──────────────────────────────────────────────
+
+interface AgentWizardState {
+  step: 'detect' | 'choose' | 'configure' | 'save';
+  env: {
+    hasClaudeCli: boolean; claudeVersion: string;
+    hasConfig: boolean; existingConfig: any;
+    hasBuiltin: boolean; builtinPath: string;
+  } | null;
+  selectedType: 'claude-code' | 'builtin' | 'custom';
+  customPath: string;
+  claudeModel: string;
+}
+
+let wizardState: AgentWizardState = {
+  step: 'detect', env: null,
+  selectedType: 'builtin', customPath: '', claudeModel: '',
+};
+let pendingWizardResolve: ((result: boolean) => void) | null = null;
+
+function showAgentWizard(): Promise<boolean> {
+  wizardState = {
+    step: 'detect', env: null,
+    selectedType: 'builtin', customPath: '', claudeModel: '',
+  };
+
+  return new Promise((resolve) => {
+    pendingWizardResolve = resolve;
+    elements.agentWizardModal.classList.remove('hidden');
+    renderWizardStep();
+  });
+}
+
+async function closeAgentWizard(result: boolean): Promise<void> {
+  elements.agentWizardModal.classList.add('hidden');
+  if (pendingWizardResolve) {
+    pendingWizardResolve(result);
+    pendingWizardResolve = null;
+  }
+}
+
+async function renderWizardStep(): Promise<void> {
+  const body = elements.agentWizardBody;
+  const backBtn = elements.agentWizardBack;
+  const nextBtn = elements.agentWizardNext;
+
+  switch (wizardState.step) {
+    case 'detect': {
+      elements.agentWizardTitle.textContent = 'Agent Setup';
+      backBtn.style.display = 'none';
+      nextBtn.textContent = 'Detecting...';
+      nextBtn.disabled = true;
+
+      body.innerHTML = `
+        <div class="wizard-step-title">Detecting available tools...</div>
+        <div id="wizard-detect-list"></div>
+      `;
+
+      // Run detection
+      const env = await window.api.detectAgentEnvironment();
+      wizardState.env = env;
+
+      // Pre-select best option
+      if (env.existingConfig?.type) {
+        wizardState.selectedType = env.existingConfig.type;
+        wizardState.customPath = env.existingConfig.scriptPath || '';
+        wizardState.claudeModel = env.existingConfig.model || '';
+      } else if (env.hasClaudeCli) {
+        wizardState.selectedType = 'claude-code';
+      }
+
+      const list = document.getElementById('wizard-detect-list')!;
+      list.innerHTML = `
+        <div class="wizard-detect-item">
+          <span class="wizard-detect-icon ${env.hasClaudeCli ? 'found' : 'missing'}">${env.hasClaudeCli ? '\u2713' : '\u2717'}</span>
+          <span class="wizard-detect-label">Claude Code CLI</span>
+          <span class="wizard-detect-version">${env.hasClaudeCli ? env.claudeVersion : 'Not installed'}</span>
+        </div>
+        <div class="wizard-detect-item">
+          <span class="wizard-detect-icon ${env.hasBuiltin ? 'found' : 'missing'}">${env.hasBuiltin ? '\u2713' : '\u2717'}</span>
+          <span class="wizard-detect-label">Built-in Agent</span>
+          <span class="wizard-detect-version">${env.hasBuiltin ? 'Available' : 'Not found'}</span>
+        </div>
+        <div class="wizard-detect-item">
+          <span class="wizard-detect-icon ${env.hasConfig ? 'found' : 'missing'}">${env.hasConfig ? '\u2713' : '\u2717'}</span>
+          <span class="wizard-detect-label">Existing Configuration</span>
+          <span class="wizard-detect-version">${env.hasConfig ? env.existingConfig?.type || 'custom' : 'Not configured'}</span>
+        </div>
+      `;
+
+      nextBtn.textContent = 'Next';
+      nextBtn.disabled = false;
+      break;
+    }
+
+    case 'choose': {
+      elements.agentWizardTitle.textContent = 'Choose Agent Type';
+      backBtn.style.display = '';
+      nextBtn.textContent = 'Next';
+      nextBtn.disabled = false;
+
+      const env = wizardState.env!;
+      const claudeDisabled = !env.hasClaudeCli;
+
+      body.innerHTML = `
+        <div class="wizard-step-title">Select which agent to use</div>
+        <label class="wizard-option ${wizardState.selectedType === 'claude-code' ? 'selected' : ''} ${claudeDisabled ? 'disabled' : ''}" data-type="claude-code">
+          <input type="radio" name="agent-type" value="claude-code" ${wizardState.selectedType === 'claude-code' ? 'checked' : ''} ${claudeDisabled ? 'disabled' : ''}>
+          <div class="wizard-option-body">
+            <div class="wizard-option-name">Claude Code${env.hasClaudeCli ? '<span class="wizard-badge">Recommended</span>' : ''}</div>
+            <div class="wizard-option-desc">${claudeDisabled ? 'Not installed \u2014 install Claude Code CLI to enable' : 'Full AI assistant with access to all LOGAN tools via MCP'}</div>
+          </div>
+        </label>
+        <label class="wizard-option ${wizardState.selectedType === 'builtin' ? 'selected' : ''}" data-type="builtin">
+          <input type="radio" name="agent-type" value="builtin" ${wizardState.selectedType === 'builtin' ? 'checked' : ''}>
+          <div class="wizard-option-body">
+            <div class="wizard-option-name">Built-in Agent</div>
+            <div class="wizard-option-desc">Basic command handler \u2014 responds to keywords like "analyze", "search", "triage"</div>
+          </div>
+        </label>
+        <label class="wizard-option ${wizardState.selectedType === 'custom' ? 'selected' : ''}" data-type="custom">
+          <input type="radio" name="agent-type" value="custom" ${wizardState.selectedType === 'custom' ? 'checked' : ''}>
+          <div class="wizard-option-body">
+            <div class="wizard-option-name">Custom Script</div>
+            <div class="wizard-option-desc">Run your own agent script (Node.js, Python, Bash)</div>
+          </div>
+        </label>
+      `;
+
+      // Wire up radio selection with visual feedback
+      body.querySelectorAll('.wizard-option').forEach(opt => {
+        if ((opt as HTMLElement).classList.contains('disabled')) return;
+        opt.addEventListener('click', () => {
+          const radio = opt.querySelector('input[type="radio"]') as HTMLInputElement;
+          if (radio.disabled) return;
+          radio.checked = true;
+          wizardState.selectedType = radio.value as any;
+          body.querySelectorAll('.wizard-option').forEach(o => o.classList.remove('selected'));
+          opt.classList.add('selected');
+        });
+      });
+      break;
+    }
+
+    case 'configure': {
+      elements.agentWizardTitle.textContent = 'Configure';
+      backBtn.style.display = '';
+
+      if (wizardState.selectedType === 'claude-code') {
+        nextBtn.textContent = 'Save & Launch';
+        body.innerHTML = `
+          <div class="wizard-step-title">Claude Code Settings</div>
+          <div class="wizard-config-section">
+            <div class="wizard-config-row">
+              <label>Model</label>
+              <input type="text" id="wizard-claude-model" placeholder="default (leave empty)" value="${escapeHtml(wizardState.claudeModel)}">
+            </div>
+          </div>
+          <div class="wizard-info">
+            LOGAN will generate an MCP configuration and launch Claude Code with access to all LOGAN tools
+            (search, analyze, filter, navigate, bookmarks, etc.).
+          </div>
+        `;
+        const modelInput = document.getElementById('wizard-claude-model') as HTMLInputElement;
+        modelInput?.addEventListener('input', () => { wizardState.claudeModel = modelInput.value.trim(); });
+      } else if (wizardState.selectedType === 'custom') {
+        nextBtn.textContent = 'Save & Launch';
+        body.innerHTML = `
+          <div class="wizard-step-title">Custom Agent Script</div>
+          <div class="wizard-config-section">
+            <div class="wizard-config-row">
+              <label>Script</label>
+              <input type="text" id="wizard-custom-path" placeholder="/path/to/agent-script.mjs" value="${escapeHtml(wizardState.customPath)}">
+              <button id="wizard-browse-btn">Browse</button>
+            </div>
+          </div>
+          <div class="wizard-info">
+            The script will be spawned as a child process. It should connect to LOGAN's HTTP API
+            (port written to ~/.logan/mcp-port) and use the agent message endpoints for chat.
+          </div>
+        `;
+        const pathInput = document.getElementById('wizard-custom-path') as HTMLInputElement;
+        pathInput?.addEventListener('input', () => { wizardState.customPath = pathInput.value.trim(); });
+        document.getElementById('wizard-browse-btn')?.addEventListener('click', async () => {
+          const filePath = await window.api.browseAgentScript();
+          if (filePath) {
+            wizardState.customPath = filePath;
+            pathInput.value = filePath;
+          }
+        });
+      } else {
+        // Built-in
+        nextBtn.textContent = 'Save & Launch';
+        body.innerHTML = `
+          <div class="wizard-step-title">Built-in Agent</div>
+          <div class="wizard-info" style="text-align:center; padding: 20px 0;">
+            No configuration needed.<br><br>
+            The built-in agent handles basic commands like
+            <b>analyze</b>, <b>search</b>, <b>triage</b>, and <b>crashes</b>.
+          </div>
+        `;
+      }
+      break;
+    }
+
+    case 'save': {
+      elements.agentWizardTitle.textContent = 'Agent Setup';
+      backBtn.style.display = 'none';
+      nextBtn.textContent = 'Launch';
+
+      // Save config
+      const config: any = { type: wizardState.selectedType };
+      if (wizardState.selectedType === 'custom') config.scriptPath = wizardState.customPath;
+      if (wizardState.selectedType === 'claude-code' && wizardState.claudeModel) config.model = wizardState.claudeModel;
+
+      await window.api.saveAgentConfig(config);
+
+      const typeLabel = wizardState.selectedType === 'claude-code' ? 'Claude Code'
+        : wizardState.selectedType === 'custom' ? 'Custom Script' : 'Built-in Agent';
+
+      body.innerHTML = `
+        <div class="wizard-success">
+          <div class="wizard-success-icon">\u2705</div>
+          <div class="wizard-success-text">Configuration saved!</div>
+          <div class="wizard-info" style="margin-top: 12px;">
+            Agent type: <b>${typeLabel}</b><br><br>
+            ${wizardState.selectedType === 'claude-code'
+              ? 'Click <b>Launch</b> to start Claude Code with LOGAN\'s MCP tools. Claude will connect to the chat automatically.'
+              : wizardState.selectedType === 'custom'
+              ? 'Click <b>Launch</b> to start your script. It should connect to LOGAN\'s HTTP API for chat.'
+              : 'Click <b>Launch</b> to start the built-in agent. It will respond to commands in the chat.'}
+          </div>
+        </div>
+      `;
+      break;
+    }
+  }
+}
+
+function wizardNext(): void {
+  switch (wizardState.step) {
+    case 'detect':
+      wizardState.step = 'choose';
+      break;
+    case 'choose':
+      wizardState.step = 'configure';
+      break;
+    case 'configure':
+      // Validate custom path
+      if (wizardState.selectedType === 'custom' && !wizardState.customPath) {
+        const input = document.getElementById('wizard-custom-path') as HTMLInputElement;
+        input?.focus();
+        return;
+      }
+      wizardState.step = 'save';
+      break;
+    case 'save':
+      closeAgentWizard(true);
+      return;
+  }
+  renderWizardStep();
+}
+
+function wizardBack(): void {
+  switch (wizardState.step) {
+    case 'choose': wizardState.step = 'detect'; break;
+    case 'configure': wizardState.step = 'choose'; break;
+    case 'save': wizardState.step = 'configure'; break;
+    default: return;
+  }
+  renderWizardStep();
 }
 
 let chatHistoryLoaded = false;
@@ -12005,6 +12293,23 @@ function init(): void {
   });
   // Launch/Stop agent button
   elements.chatLaunchAgent.addEventListener('click', toggleAgent);
+  // Agent setup wizard
+  elements.chatAgentSetup.addEventListener('click', async () => {
+    const result = await showAgentWizard();
+    if (result && !agentRunning) {
+      const res = await window.api.launchAgent();
+      if (res.success) {
+        agentRunning = true;
+        updateLaunchButton();
+      } else {
+        addChatMessage({ from: 'agent', text: `Failed to launch agent: ${res.error || 'unknown error'}`, timestamp: Date.now() });
+      }
+    }
+  });
+  elements.agentWizardNext.addEventListener('click', wizardNext);
+  elements.agentWizardBack.addEventListener('click', wizardBack);
+  elements.agentWizardCancel.addEventListener('click', () => closeAgentWizard(false));
+  elements.agentWizardModal.querySelector('.modal-close')?.addEventListener('click', () => closeAgentWizard(false));
   // Sync initial agent running state
   window.api.getAgentRunning().then((r) => {
     agentRunning = r.running;
