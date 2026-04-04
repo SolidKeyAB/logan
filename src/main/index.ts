@@ -4660,23 +4660,19 @@ ipcMain.handle('split-file', async (_, options: SplitOptions) => {
 // === Format JSON File (streaming - handles any file size) ===
 
 function streamFormatJson(inputPath: string, outputPath: string, onProgress?: (percent: number) => void): Promise<void> {
+  const isJsonl = /\.jsonl$|\.ndjson$/i.test(inputPath);
+
   return new Promise((resolve, reject) => {
     const stats = fs.statSync(inputPath);
     const fileSize = stats.size;
 
-    const readStream = fs.createReadStream(inputPath, { encoding: 'utf-8', highWaterMark: 1024 * 1024 }); // 1MB chunks
+    const readStream = fs.createReadStream(inputPath, { encoding: 'utf-8', highWaterMark: 1024 * 1024 });
     const writeStream = fs.createWriteStream(outputPath, { encoding: 'utf-8' });
 
-    let inString = false;
-    let escaped = false;
-    let depth = 0;
-    let afterOpenOrComma = false;
     let bytesRead = 0;
     let lastProgressPercent = 0;
     let outputBuffer = '';
-    const FLUSH_SIZE = 256 * 1024; // Flush every 256KB
-
-    const indent = (d: number) => '  '.repeat(d);
+    const FLUSH_SIZE = 256 * 1024;
 
     const flush = () => {
       if (outputBuffer.length > 0) {
@@ -4690,83 +4686,135 @@ function streamFormatJson(inputPath: string, outputPath: string, onProgress?: (p
       if (outputBuffer.length >= FLUSH_SIZE) flush();
     };
 
-    readStream.on('data', (rawChunk: string | Buffer) => {
-      const chunk = typeof rawChunk === 'string' ? rawChunk : rawChunk.toString('utf-8');
-      bytesRead += Buffer.byteLength(chunk, 'utf-8');
-
-      for (let i = 0; i < chunk.length; i++) {
-        const char = chunk[i];
-
-        if (escaped) {
-          write(char);
-          escaped = false;
-          continue;
-        }
-
-        if (inString) {
-          if (char === '\\') { escaped = true; }
-          else if (char === '"') { inString = false; }
-          write(char);
-          continue;
-        }
-
-        // Outside string - skip existing whitespace
-        if (char === ' ' || char === '\t' || char === '\n' || char === '\r') continue;
-
-        if (char === '"') {
-          if (afterOpenOrComma) { write('\n' + indent(depth)); afterOpenOrComma = false; }
-          write(char);
-          inString = true;
-          continue;
-        }
-
-        if (char === '{' || char === '[') {
-          if (afterOpenOrComma) { write('\n' + indent(depth)); afterOpenOrComma = false; }
-          write(char);
-          depth++;
-          afterOpenOrComma = true;
-          continue;
-        }
-
-        if (char === '}' || char === ']') {
-          afterOpenOrComma = false;
-          depth--;
-          write('\n' + indent(depth) + char);
-          continue;
-        }
-
-        if (char === ',') {
-          write(char);
-          afterOpenOrComma = true;
-          continue;
-        }
-
-        if (char === ':') {
-          write(': ');
-          continue;
-        }
-
-        // Literal characters (digits, -, t, r, u, e, f, a, l, s, n)
-        if (afterOpenOrComma) { write('\n' + indent(depth)); afterOpenOrComma = false; }
-        write(char);
-      }
-
-      // Report progress
+    const reportProgress = (bytes: number) => {
+      bytesRead += bytes;
       const percent = Math.min(99, Math.round((bytesRead / fileSize) * 100));
       if (percent > lastProgressPercent) {
         lastProgressPercent = percent;
         if (onProgress) onProgress(percent);
       }
-    });
+    };
 
-    readStream.on('end', () => {
-      write('\n');
-      flush();
-      writeStream.end(() => {
-        if (onProgress) onProgress(100);
-        resolve();
+    if (isJsonl) {
+      // JSONL: format each line independently
+      let lineBuffer = '';
+
+      readStream.on('data', (rawChunk: string | Buffer) => {
+        const chunk = typeof rawChunk === 'string' ? rawChunk : rawChunk.toString('utf-8');
+        reportProgress(Buffer.byteLength(chunk, 'utf-8'));
+
+        lineBuffer += chunk;
+        const lines = lineBuffer.split('\n');
+        lineBuffer = lines.pop() || ''; // Keep incomplete last line
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) { write('\n'); continue; }
+          try {
+            const obj = JSON.parse(trimmed);
+            write(JSON.stringify(obj, null, 2) + '\n');
+          } catch {
+            // Not valid JSON — write as-is
+            write(trimmed + '\n');
+          }
+        }
       });
-    });
+
+      readStream.on('end', () => {
+        // Process remaining buffer
+        const trimmed = lineBuffer.trim();
+        if (trimmed) {
+          try {
+            const obj = JSON.parse(trimmed);
+            write(JSON.stringify(obj, null, 2) + '\n');
+          } catch {
+            write(trimmed + '\n');
+          }
+        }
+        flush();
+        writeStream.end(() => {
+          if (onProgress) onProgress(100);
+          resolve();
+        });
+      });
+    } else {
+      // Single JSON document — streaming character-by-character formatter
+      let inString = false;
+      let escaped = false;
+      let depth = 0;
+      let afterOpenOrComma = false;
+
+      const indent = (d: number) => '  '.repeat(d);
+
+      readStream.on('data', (rawChunk: string | Buffer) => {
+        const chunk = typeof rawChunk === 'string' ? rawChunk : rawChunk.toString('utf-8');
+        reportProgress(Buffer.byteLength(chunk, 'utf-8'));
+
+        for (let i = 0; i < chunk.length; i++) {
+          const char = chunk[i];
+
+          if (escaped) {
+            write(char);
+            escaped = false;
+            continue;
+          }
+
+          if (inString) {
+            if (char === '\\') { escaped = true; }
+            else if (char === '"') { inString = false; }
+            write(char);
+            continue;
+          }
+
+          if (char === ' ' || char === '\t' || char === '\n' || char === '\r') continue;
+
+          if (char === '"') {
+            if (afterOpenOrComma) { write('\n' + indent(depth)); afterOpenOrComma = false; }
+            write(char);
+            inString = true;
+            continue;
+          }
+
+          if (char === '{' || char === '[') {
+            if (afterOpenOrComma) { write('\n' + indent(depth)); afterOpenOrComma = false; }
+            write(char);
+            depth++;
+            afterOpenOrComma = true;
+            continue;
+          }
+
+          if (char === '}' || char === ']') {
+            afterOpenOrComma = false;
+            depth = Math.max(0, depth - 1);
+            write('\n' + indent(depth) + char);
+            continue;
+          }
+
+          if (char === ',') {
+            write(char);
+            afterOpenOrComma = true;
+            continue;
+          }
+
+          if (char === ':') {
+            write(': ');
+            continue;
+          }
+
+          if (afterOpenOrComma) { write('\n' + indent(depth)); afterOpenOrComma = false; }
+          write(char);
+        }
+      });
+
+      readStream.on('end', () => {
+        write('\n');
+        flush();
+        writeStream.end(() => {
+          if (onProgress) onProgress(100);
+          resolve();
+        });
+      });
+    }
 
     readStream.on('error', (err) => {
       writeStream.destroy();
