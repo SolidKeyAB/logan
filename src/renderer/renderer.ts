@@ -2534,7 +2534,8 @@ function createLineElementPooled(line: LogLine): HTMLDivElement {
   let displayText = applyColumnFilter(line.text);
 
   // Truncate very long lines to prevent DOM/rendering slowness
-  const MAX_RENDER_LENGTH = 5000;
+  // Use a lower limit for unformatted JSON since those lines can be huge
+  const MAX_RENDER_LENGTH = displayText.length > 10000 ? 2000 : 5000;
   let truncated = false;
   if (displayText.length > MAX_RENDER_LENGTH) {
     displayText = displayText.substring(0, MAX_RENDER_LENGTH);
@@ -2546,14 +2547,21 @@ function createLineElementPooled(line: LogLine): HTMLDivElement {
 
   let formattedContent: string;
   if (jsonFormattingEnabled && containsJson(displayText)) {
-    if (hasActiveHighlights) {
-      // Pretty-print JSON first, then apply highlights to the formatted text
+    // Skip JSON.parse/stringify on already-formatted files (lines are already short)
+    const isAlreadyFormatted = state.filePath?.includes('.formatted.');
+    if (isAlreadyFormatted) {
+      // Already formatted — just apply syntax highlighting, no re-parsing
+      if (hasActiveHighlights) {
+        const searchResult = applySearchHighlightsRaw(displayText, line.lineNumber);
+        formattedContent = applyHighlightsWithSearchJson(displayText, searchResult.searchRanges);
+      } else {
+        formattedContent = syntaxHighlightJson(displayText);
+      }
+    } else if (hasActiveHighlights) {
       const prettyText = formatJsonContent(displayText, true);
       const searchResult = applySearchHighlightsRaw(prettyText, line.lineNumber);
-      // Use simple escaping for JSON - no truncation since JSON.parse validated the content
       formattedContent = applyHighlightsWithSearchJson(prettyText, searchResult.searchRanges);
     } else {
-      // Full JSON formatting with syntax highlighting (already escaped internally)
       formattedContent = formatJsonContent(displayText);
     }
   } else {
@@ -8669,7 +8677,8 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
         elements.btnJsonFormat.classList.remove('active');
 
         // Auto-activate JSON formatting for .json files
-        if (isJsonLike) {
+        if (isJsonLike && result.hasLongLines) {
+          // Don't render the raw long-lined file — go straight to formatting
           formatAndLoadJson();
         }
       }
