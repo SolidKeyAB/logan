@@ -5152,9 +5152,12 @@ ipcMain.handle('agent-get-status', async () => {
 // --- Built-in agent launch/stop ---
 
 interface AgentConfig {
-  type?: 'claude-code' | 'builtin' | 'custom';
+  type?: 'claude-code' | 'builtin' | 'custom' | 'local-llm';
   scriptPath?: string;
   model?: string;
+  llmEndpoint?: string;
+  llmModel?: string;
+  agentName?: string;
 }
 
 function getAgentConfig(): AgentConfig {
@@ -5241,6 +5244,21 @@ ipcMain.handle('agent-launch', async () => {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: { ...process.env },
       });
+    } else if (config.type === 'local-llm') {
+      // Launch local LLM bridge agent
+      const llmScriptPath = path.join(app.getAppPath(), 'examples', 'agent-local-llm.mjs');
+      if (!fs.existsSync(llmScriptPath)) {
+        return { success: false, error: `Local LLM agent script not found: ${llmScriptPath}` };
+      }
+      agentProcess = spawn(process.execPath, [llmScriptPath], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          LLM_ENDPOINT: config.llmEndpoint || 'http://localhost:11434/v1',
+          LLM_MODEL: config.llmModel || 'llama3',
+          AGENT_NAME: config.agentName || 'wolvie',
+        },
+      });
     } else if (config.type === 'custom' && config.scriptPath) {
       if (!fs.existsSync(config.scriptPath)) {
         return { success: false, error: `Agent script not found: ${config.scriptPath}` };
@@ -5277,7 +5295,15 @@ ipcMain.handle('agent-launch', async () => {
       mainWindow?.webContents.send('agent-connection-changed', { connected: false, count: 0 });
     });
 
-    return { success: true };
+    // Build display name
+    const agentName = config.agentName || (
+      config.type === 'claude-code' ? `Claude${config.model ? ` (${config.model})` : ''}`
+      : config.type === 'local-llm' ? `${config.agentName || 'wolvie'} (${config.llmModel || 'local'})`
+      : config.type === 'custom' ? 'Custom Agent'
+      : 'Built-in Agent'
+    );
+
+    return { success: true, agentName };
   } catch (err: any) {
     agentProcess = null;
     return { success: false, error: err.message || String(err) };
@@ -5363,7 +5389,31 @@ ipcMain.handle('agent-detect-environment', async () => {
   const builtinPath = path.join(app.getAppPath(), 'examples', 'agent-node.mjs');
   const hasBuiltin = fs.existsSync(builtinPath);
 
-  return { hasClaudeCli, claudeVersion, hasConfig, existingConfig, hasBuiltin, builtinPath };
+  // Detect local LLM services
+  let hasOllama = false;
+  let ollamaModels: string[] = [];
+  let hasLmStudio = false;
+
+  // Check Ollama (port 11434)
+  try {
+    const ollamaResp = execSync('curl -sf http://localhost:11434/api/tags 2>/dev/null', { timeout: 3000, encoding: 'utf-8' });
+    const data = JSON.parse(ollamaResp);
+    if (data.models?.length > 0) {
+      hasOllama = true;
+      ollamaModels = data.models.map((m: any) => m.name);
+    }
+  } catch { /* not running */ }
+
+  // Check LM Studio (port 1234)
+  try {
+    const lmsResp = execSync('curl -sf http://localhost:1234/v1/models 2>/dev/null', { timeout: 3000, encoding: 'utf-8' });
+    const data = JSON.parse(lmsResp);
+    if (data.data?.length > 0) {
+      hasLmStudio = true;
+    }
+  } catch { /* not running */ }
+
+  return { hasClaudeCli, claudeVersion, hasConfig, existingConfig, hasBuiltin, builtinPath, hasOllama, ollamaModels, hasLmStudio };
 });
 
 ipcMain.handle('agent-save-config', async (_event, config: any) => {

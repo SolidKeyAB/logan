@@ -345,6 +345,13 @@ export function startApiServer(ctx: ApiContext): void {
           return;
         }
 
+        if (url === '/api/shutdown') {
+          sendJson(res, { success: true });
+          // Give response time to flush, then stop
+          setTimeout(() => stopApiServer(), 100);
+          return;
+        }
+
         if (url === '/api/bookmark') {
           const bookmark: Bookmark = {
             id: body.id || `bm-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
@@ -564,9 +571,10 @@ export function startApiServer(ctx: ApiContext): void {
     }
   });
 
-  server.listen(API_PORT, '127.0.0.1', () => {
-    console.log(`LOGAN API server listening on http://127.0.0.1:${API_PORT}`);
-    // Write port file for MCP server discovery
+  // Save request handler for potential retry
+  const requestHandler = server.listeners('request')[0] as (...args: any[]) => void;
+
+  const writePortFile = () => {
     try {
       const configDir = path.join(os.homedir(), '.logan');
       if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
@@ -574,14 +582,58 @@ export function startApiServer(ctx: ApiContext): void {
     } catch (err) {
       console.error('Failed to write MCP port file:', err);
     }
-  });
+  };
 
-  server.on('error', (err: NodeJS.ErrnoException) => {
-    if (err.code === 'EADDRINUSE') {
-      console.error(`LOGAN API port ${API_PORT} already in use — MCP bridge disabled`);
-    } else {
-      console.error('LOGAN API server error:', err);
-    }
+  const listenWithRetry = (srv: http.Server, isRetry: boolean) => {
+    srv.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE' && !isRetry) {
+        console.log(`Port ${API_PORT} in use — requesting old instance to shut down...`);
+        // Try graceful shutdown of old instance
+        const shutdownReq = http.request(
+          { hostname: '127.0.0.1', port: API_PORT, path: '/api/shutdown', method: 'POST', timeout: 2000 },
+          () => {
+            setTimeout(() => {
+              server = http.createServer(requestHandler);
+              listenWithRetry(server!, true);
+              server!.listen(API_PORT, '127.0.0.1', () => {
+                console.log(`LOGAN API server listening on http://127.0.0.1:${API_PORT}`);
+                writePortFile();
+              });
+            }, 500);
+          }
+        );
+        shutdownReq.on('error', () => {
+          // Old instance not responding — force kill via lsof
+          try {
+            const { execSync } = require('child_process');
+            const pid = execSync(`lsof -ti:${API_PORT} 2>/dev/null`, { encoding: 'utf-8' }).trim();
+            if (pid) {
+              console.log(`Killing old process ${pid} on port ${API_PORT}`);
+              process.kill(parseInt(pid), 'SIGTERM');
+              setTimeout(() => {
+                server = http.createServer(requestHandler);
+                listenWithRetry(server!, true);
+                server!.listen(API_PORT, '127.0.0.1', () => {
+                  console.log(`LOGAN API server listening on http://127.0.0.1:${API_PORT}`);
+                  writePortFile();
+                });
+              }, 500);
+            }
+          } catch {
+            console.error(`LOGAN API port ${API_PORT} already in use — MCP bridge disabled`);
+          }
+        });
+        shutdownReq.end();
+      } else {
+        console.error(`LOGAN API server error: ${err.message}`);
+      }
+    });
+  };
+
+  listenWithRetry(server, false);
+  server.listen(API_PORT, '127.0.0.1', () => {
+    console.log(`LOGAN API server listening on http://127.0.0.1:${API_PORT}`);
+    writePortFile();
   });
 }
 

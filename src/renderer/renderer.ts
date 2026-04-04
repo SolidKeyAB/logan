@@ -5359,9 +5359,10 @@ async function toggleAgent(): Promise<void> {
         if (!result) return; // cancelled
         btn.disabled = true;
       }
-      const res = await window.api.launchAgent();
+      const res = await window.api.launchAgent() as any;
       if (res.success) {
         agentRunning = true;
+        if (res.agentName) updateAgentConnectionStatus(true, 1, res.agentName);
       } else {
         addChatMessage({ from: 'agent', text: `Failed to launch agent: ${res.error || 'unknown error'}`, timestamp: Date.now() });
       }
@@ -5380,15 +5381,21 @@ interface AgentWizardState {
     hasClaudeCli: boolean; claudeVersion: string;
     hasConfig: boolean; existingConfig: any;
     hasBuiltin: boolean; builtinPath: string;
+    hasOllama: boolean; ollamaModels: string[];
+    hasLmStudio: boolean;
   } | null;
-  selectedType: 'claude-code' | 'builtin' | 'custom';
+  selectedType: 'claude-code' | 'builtin' | 'custom' | 'local-llm';
   customPath: string;
   claudeModel: string;
+  llmEndpoint: string;
+  llmModel: string;
+  agentName: string;
 }
 
 let wizardState: AgentWizardState = {
   step: 'detect', env: null,
   selectedType: 'builtin', customPath: '', claudeModel: '',
+  llmEndpoint: '', llmModel: '', agentName: '',
 };
 let pendingWizardResolve: ((result: boolean) => void) | null = null;
 
@@ -5396,6 +5403,7 @@ function showAgentWizard(): Promise<boolean> {
   wizardState = {
     step: 'detect', env: null,
     selectedType: 'builtin', customPath: '', claudeModel: '',
+    llmEndpoint: '', llmModel: '', agentName: '',
   };
 
   return new Promise((resolve) => {
@@ -5434,14 +5442,30 @@ async function renderWizardStep(): Promise<void> {
       const env = await window.api.detectAgentEnvironment();
       wizardState.env = env;
 
-      // Pre-select best option
+      // Pre-select best option and restore existing config values
       if (env.existingConfig?.type) {
         wizardState.selectedType = env.existingConfig.type;
         wizardState.customPath = env.existingConfig.scriptPath || '';
         wizardState.claudeModel = env.existingConfig.model || '';
+        wizardState.llmEndpoint = env.existingConfig.llmEndpoint || '';
+        wizardState.llmModel = env.existingConfig.llmModel || '';
+        wizardState.agentName = env.existingConfig.agentName || '';
       } else if (env.hasClaudeCli) {
         wizardState.selectedType = 'claude-code';
+      } else if (env.hasOllama || env.hasLmStudio) {
+        wizardState.selectedType = 'local-llm';
+        if (env.hasOllama) {
+          wizardState.llmEndpoint = 'http://localhost:11434/v1';
+          wizardState.llmModel = env.ollamaModels[0] || 'llama3';
+        } else {
+          wizardState.llmEndpoint = 'http://localhost:1234/v1';
+        }
       }
+
+      const hasLocalLlm = env.hasOllama || env.hasLmStudio;
+      const localLlmLabel = env.hasOllama && env.hasLmStudio ? 'Ollama + LM Studio'
+        : env.hasOllama ? `Ollama (${env.ollamaModels.length} model${env.ollamaModels.length !== 1 ? 's' : ''})`
+        : env.hasLmStudio ? 'LM Studio' : 'Not detected';
 
       const list = document.getElementById('wizard-detect-list')!;
       list.innerHTML = `
@@ -5449,6 +5473,11 @@ async function renderWizardStep(): Promise<void> {
           <span class="wizard-detect-icon ${env.hasClaudeCli ? 'found' : 'missing'}">${env.hasClaudeCli ? '\u2713' : '\u2717'}</span>
           <span class="wizard-detect-label">Claude Code CLI</span>
           <span class="wizard-detect-version">${env.hasClaudeCli ? env.claudeVersion : 'Not installed'}</span>
+        </div>
+        <div class="wizard-detect-item">
+          <span class="wizard-detect-icon ${hasLocalLlm ? 'found' : 'missing'}">${hasLocalLlm ? '\u2713' : '\u2717'}</span>
+          <span class="wizard-detect-label">Local LLM</span>
+          <span class="wizard-detect-version">${localLlmLabel}</span>
         </div>
         <div class="wizard-detect-item">
           <span class="wizard-detect-icon ${env.hasBuiltin ? 'found' : 'missing'}">${env.hasBuiltin ? '\u2713' : '\u2717'}</span>
@@ -5485,6 +5514,13 @@ async function renderWizardStep(): Promise<void> {
             <div class="wizard-option-desc">${claudeDisabled ? 'Not installed \u2014 install Claude Code CLI to enable' : 'Full AI assistant with access to all LOGAN tools via MCP'}</div>
           </div>
         </label>
+        <label class="wizard-option ${wizardState.selectedType === 'local-llm' ? 'selected' : ''}" data-type="local-llm">
+          <input type="radio" name="agent-type" value="local-llm" ${wizardState.selectedType === 'local-llm' ? 'checked' : ''}>
+          <div class="wizard-option-body">
+            <div class="wizard-option-name">Local LLM${(env.hasOllama || env.hasLmStudio) ? '<span class="wizard-badge" style="background:#4caf50">Detected</span>' : ''}</div>
+            <div class="wizard-option-desc">Connect to Ollama, LM Studio, or any OpenAI-compatible local model</div>
+          </div>
+        </label>
         <label class="wizard-option ${wizardState.selectedType === 'builtin' ? 'selected' : ''}" data-type="builtin">
           <input type="radio" name="agent-type" value="builtin" ${wizardState.selectedType === 'builtin' ? 'checked' : ''}>
           <div class="wizard-option-body">
@@ -5519,12 +5555,21 @@ async function renderWizardStep(): Promise<void> {
     case 'configure': {
       elements.agentWizardTitle.textContent = 'Configure';
       backBtn.style.display = '';
+      nextBtn.textContent = 'Save & Launch';
+
+      // Common name field (rendered first, then type-specific config appended)
+      const nameFieldHtml = `
+        <div class="wizard-config-row" style="margin-bottom: 12px;">
+          <label>Name</label>
+          <input type="text" id="wizard-agent-name" placeholder="wolvie" value="${escapeHtml(wizardState.agentName)}">
+        </div>
+      `;
 
       if (wizardState.selectedType === 'claude-code') {
-        nextBtn.textContent = 'Save & Launch';
         body.innerHTML = `
           <div class="wizard-step-title">Claude Code Settings</div>
           <div class="wizard-config-section">
+            ${nameFieldHtml}
             <div class="wizard-config-row">
               <label>Model</label>
               <input type="text" id="wizard-claude-model" placeholder="default (leave empty)" value="${escapeHtml(wizardState.claudeModel)}">
@@ -5537,11 +5582,65 @@ async function renderWizardStep(): Promise<void> {
         `;
         const modelInput = document.getElementById('wizard-claude-model') as HTMLInputElement;
         modelInput?.addEventListener('input', () => { wizardState.claudeModel = modelInput.value.trim(); });
+      } else if (wizardState.selectedType === 'local-llm') {
+        nextBtn.textContent = 'Save & Launch';
+        const env = wizardState.env!;
+        // Build model options from detected Ollama models
+        const modelOptions = env.ollamaModels.length > 0
+          ? env.ollamaModels.map(m => `<option value="${escapeHtml(m)}" ${m === wizardState.llmModel ? 'selected' : ''}>${escapeHtml(m)}</option>`).join('')
+          : '';
+
+        body.innerHTML = `
+          <div class="wizard-step-title">Local LLM Settings</div>
+          <div class="wizard-config-section">
+            ${nameFieldHtml}
+            <div class="wizard-config-row">
+              <label>Endpoint</label>
+              <input type="text" id="wizard-llm-endpoint" placeholder="http://localhost:11434/v1" value="${escapeHtml(wizardState.llmEndpoint || (env.hasOllama ? 'http://localhost:11434/v1' : env.hasLmStudio ? 'http://localhost:1234/v1' : 'http://localhost:11434/v1'))}">
+            </div>
+            <div class="wizard-config-row">
+              <label>Model</label>
+              ${modelOptions
+                ? `<select id="wizard-llm-model-select" style="flex:1;padding:5px 8px;background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:4px;color:var(--text-primary);font-size:12px;">${modelOptions}<option value="">Custom...</option></select>
+                   <input type="text" id="wizard-llm-model" placeholder="model name" value="${escapeHtml(wizardState.llmModel)}" style="display:none">`
+                : `<input type="text" id="wizard-llm-model" placeholder="e.g. llama3, mistral, codellama" value="${escapeHtml(wizardState.llmModel)}">`}
+            </div>
+          </div>
+          <div class="wizard-info">
+            ${env.hasOllama ? '<b>Ollama detected</b> at localhost:11434<br>' : ''}
+            ${env.hasLmStudio ? '<b>LM Studio detected</b> at localhost:1234<br>' : ''}
+            ${!env.hasOllama && !env.hasLmStudio ? 'No local LLM detected \u2014 make sure Ollama or LM Studio is running.<br>' : ''}
+            The LLM will assist with log analysis using LOGAN's tools (search, analyze, filter, etc.).
+            Any OpenAI-compatible API endpoint works.
+          </div>
+        `;
+        const endpointInput = document.getElementById('wizard-llm-endpoint') as HTMLInputElement;
+        const modelInput = document.getElementById('wizard-llm-model') as HTMLInputElement;
+        const modelSelect = document.getElementById('wizard-llm-model-select') as HTMLSelectElement | null;
+
+        endpointInput?.addEventListener('input', () => { wizardState.llmEndpoint = endpointInput.value.trim(); });
+        modelInput?.addEventListener('input', () => { wizardState.llmModel = modelInput.value.trim(); });
+
+        if (modelSelect) {
+          // Show/hide custom input based on select
+          modelSelect.addEventListener('change', () => {
+            if (modelSelect.value === '') {
+              modelInput.style.display = '';
+              modelInput.focus();
+            } else {
+              modelInput.style.display = 'none';
+              wizardState.llmModel = modelSelect.value;
+            }
+          });
+          wizardState.llmModel = modelSelect.value || wizardState.llmModel;
+        }
+        wizardState.llmEndpoint = endpointInput?.value.trim() || wizardState.llmEndpoint;
       } else if (wizardState.selectedType === 'custom') {
         nextBtn.textContent = 'Save & Launch';
         body.innerHTML = `
           <div class="wizard-step-title">Custom Agent Script</div>
           <div class="wizard-config-section">
+            ${nameFieldHtml}
             <div class="wizard-config-row">
               <label>Script</label>
               <input type="text" id="wizard-custom-path" placeholder="/path/to/agent-script.mjs" value="${escapeHtml(wizardState.customPath)}">
@@ -5567,13 +5666,20 @@ async function renderWizardStep(): Promise<void> {
         nextBtn.textContent = 'Save & Launch';
         body.innerHTML = `
           <div class="wizard-step-title">Built-in Agent</div>
-          <div class="wizard-info" style="text-align:center; padding: 20px 0;">
-            No configuration needed.<br><br>
+          <div class="wizard-config-section">
+            ${nameFieldHtml}
+          </div>
+          <div class="wizard-info" style="text-align:center; padding: 10px 0;">
             The built-in agent handles basic commands like
             <b>analyze</b>, <b>search</b>, <b>triage</b>, and <b>crashes</b>.
           </div>
         `;
       }
+
+      // Common: wire up agent name input
+      const nameInput = document.getElementById('wizard-agent-name') as HTMLInputElement | null;
+      nameInput?.addEventListener('input', () => { wizardState.agentName = nameInput.value.trim(); });
+
       break;
     }
 
@@ -5586,10 +5692,16 @@ async function renderWizardStep(): Promise<void> {
       const config: any = { type: wizardState.selectedType };
       if (wizardState.selectedType === 'custom') config.scriptPath = wizardState.customPath;
       if (wizardState.selectedType === 'claude-code' && wizardState.claudeModel) config.model = wizardState.claudeModel;
+      if (wizardState.selectedType === 'local-llm') {
+        config.llmEndpoint = wizardState.llmEndpoint;
+        config.llmModel = wizardState.llmModel;
+      }
+      if (wizardState.agentName) config.agentName = wizardState.agentName;
 
       await window.api.saveAgentConfig(config);
 
       const typeLabel = wizardState.selectedType === 'claude-code' ? 'Claude Code'
+        : wizardState.selectedType === 'local-llm' ? `Local LLM (${wizardState.llmModel})`
         : wizardState.selectedType === 'custom' ? 'Custom Script' : 'Built-in Agent';
 
       body.innerHTML = `
@@ -5600,6 +5712,8 @@ async function renderWizardStep(): Promise<void> {
             Agent type: <b>${typeLabel}</b><br><br>
             ${wizardState.selectedType === 'claude-code'
               ? 'Click <b>Launch</b> to start Claude Code with LOGAN\'s MCP tools. Claude will connect to the chat automatically.'
+              : wizardState.selectedType === 'local-llm'
+              ? `Click <b>Launch</b> to connect to your local LLM at <b>${escapeHtml(wizardState.llmEndpoint)}</b>. It will analyze logs using LOGAN's tools.`
               : wizardState.selectedType === 'custom'
               ? 'Click <b>Launch</b> to start your script. It should connect to LOGAN\'s HTTP API for chat.'
               : 'Click <b>Launch</b> to start the built-in agent. It will respond to commands in the chat.'}
@@ -5620,9 +5734,14 @@ function wizardNext(): void {
       wizardState.step = 'configure';
       break;
     case 'configure':
-      // Validate custom path
+      // Validate inputs
       if (wizardState.selectedType === 'custom' && !wizardState.customPath) {
         const input = document.getElementById('wizard-custom-path') as HTMLInputElement;
+        input?.focus();
+        return;
+      }
+      if (wizardState.selectedType === 'local-llm' && !wizardState.llmModel) {
+        const input = document.getElementById('wizard-llm-model') as HTMLInputElement;
         input?.focus();
         return;
       }
@@ -12297,10 +12416,11 @@ function init(): void {
   elements.chatAgentSetup.addEventListener('click', async () => {
     const result = await showAgentWizard();
     if (result && !agentRunning) {
-      const res = await window.api.launchAgent();
+      const res = await window.api.launchAgent() as any;
       if (res.success) {
         agentRunning = true;
         updateLaunchButton();
+        if (res.agentName) updateAgentConnectionStatus(true, 1, res.agentName);
       } else {
         addChatMessage({ from: 'agent', text: `Failed to launch agent: ${res.error || 'unknown error'}`, timestamp: Date.now() });
       }

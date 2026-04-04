@@ -453,8 +453,11 @@ interface Api {
     existingConfig: any;
     hasBuiltin: boolean;
     builtinPath: string;
+    hasOllama: boolean;
+    ollamaModels: string[];
+    hasLmStudio: boolean;
   }>;
-  saveAgentConfig: (config: { type: 'claude-code' | 'builtin' | 'custom'; scriptPath?: string; model?: string }) => Promise<{ success: boolean }>;
+  saveAgentConfig: (config: { type: 'claude-code' | 'builtin' | 'custom' | 'local-llm'; scriptPath?: string; model?: string; llmEndpoint?: string; llmModel?: string }) => Promise<{ success: boolean }>;
   browseAgentScript: () => Promise<string | null>;
 
   // Device discovery
