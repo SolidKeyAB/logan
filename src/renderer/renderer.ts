@@ -3690,6 +3690,32 @@ function handleContextMenu(event: MouseEvent): void {
   });
   menu.appendChild(tracebackItem);
 
+  // Ask Agent about selected lines
+  const askLineCount = saveEndLine - saveStartLine + 1;
+  const askAgentItem = menuItem('\u{1F4AC}', askLineCount === 1 ? 'Ask Agent about this line' : `Ask Agent about ${askLineCount} lines`);
+  askAgentItem.addEventListener('click', async () => {
+    menu.remove();
+    // Fetch the lines
+    const linesResult = await window.api.getLines(saveStartLine, askLineCount);
+    if (!linesResult.success || !linesResult.lines?.length) return;
+    const lineTexts = linesResult.lines.map((l: any) => `${l.lineNumber + 1}: ${l.text}`).join('\n');
+
+    // Switch to chat tab
+    openBottomTab('chat');
+
+    // Show context in chat as a system-style message
+    addChatMessage({
+      from: 'user',
+      text: `[Context: Lines ${saveStartLine + 1}-${saveEndLine + 1}]\n${lineTexts}`,
+      timestamp: Date.now(),
+    });
+
+    // Pre-fill input with prompt
+    elements.chatInput.value = `What can you tell me about lines ${saveStartLine + 1}-${saveEndLine + 1}? `;
+    elements.chatInput.focus();
+  });
+  menu.appendChild(askAgentItem);
+
   // Filter from selection — add to include/exclude patterns
   if (selectedText.trim()) {
     menu.appendChild(menuSeparator());
