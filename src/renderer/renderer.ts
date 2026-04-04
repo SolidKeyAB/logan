@@ -8462,12 +8462,18 @@ function toggleContextGroupMode(mode: 'separate' | 'combined'): void {
   }
 }
 
+let jsonFormatInProgress = false;
+
 async function formatAndLoadJson(): Promise<void> {
   if (!state.filePath) return;
+  if (jsonFormatInProgress) return; // Prevent double-click
 
   if (!jsonFormattingEnabled) {
     // Enable JSON mode - format and open formatted file
+    jsonFormatInProgress = true;
     elements.btnJsonFormat.classList.add('active');
+    elements.btnJsonFormat.disabled = true;
+    elements.btnFormatWarning.disabled = true;
     const originalPath = state.filePath;
 
     showProgress('Formatting JSON... 0%');
@@ -8498,6 +8504,10 @@ async function formatAndLoadJson(): Promise<void> {
       if (unsubFormatProgress) unsubFormatProgress();
       elements.btnJsonFormat.classList.remove('active');
       hideProgress();
+    } finally {
+      jsonFormatInProgress = false;
+      elements.btnJsonFormat.disabled = false;
+      elements.btnFormatWarning.disabled = false;
     }
   } else {
     // Disable JSON mode - go back to original file

@@ -5371,13 +5371,12 @@ ipcMain.handle('agent-launch', async () => {
       mainWindow?.webContents.send('agent-connection-changed', { connected: false, count: 0 });
     });
 
-    // Build display name
-    const agentName = config.agentName || (
-      config.type === 'claude-code' ? `Claude${config.model ? ` (${config.model})` : ''}`
-      : config.type === 'local-llm' ? `${config.agentName || 'wolvie'} (${config.llmModel || 'local'})`
-      : config.type === 'custom' ? 'Custom Agent'
-      : 'Built-in Agent'
-    );
+    // Build display name — default is "wolvie" for all types
+    const baseName = config.agentName || 'wolvie';
+    const agentName = config.type === 'claude-code' ? `${baseName} (Claude${config.model ? ' ' + config.model : ''})`
+      : config.type === 'local-llm' ? `${baseName} (${config.llmModel || 'local'})`
+      : config.type === 'custom' ? baseName
+      : baseName;
 
     return { success: true, agentName };
   } catch (err: any) {
