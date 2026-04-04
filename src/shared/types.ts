@@ -43,6 +43,15 @@ export interface Bookmark {
   lineText?: string;
 }
 
+export interface Annotation {
+  id: string;
+  lineNumber: number;
+  text: string;
+  agentName: string;
+  timestamp: number;
+  severity?: 'info' | 'warning' | 'error';
+}
+
 export interface BookmarkSet {
   id: string;
   name: string;
@@ -110,7 +119,8 @@ export interface ActivityEntry {
     | 'time_gap_analysis'
     | 'analysis_run'
     | 'notes_saved'
-    | 'lines_saved';
+    | 'lines_saved'
+    | 'annotation_added';
   details: Record<string, unknown>;
 }
 
@@ -122,6 +132,7 @@ export interface LocalFileData {
   bookmarks: Bookmark[];
   highlights: Highlight[]; // file-specific only (non-global)
   activityHistory: ActivityEntry[]; // capped at 500
+  annotations?: Annotation[]; // agent annotations
   videoFilePath?: string;
   videoSyncOffsetMs?: number;
 }

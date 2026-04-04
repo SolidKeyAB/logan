@@ -894,6 +894,61 @@ server.tool(
   }
 );
 
+// === Tool: logan_annotate ===
+server.tool(
+  'logan_annotate',
+  'Add an inline annotation/comment to a specific log line. The annotation appears as an overlay comment in the log viewer when annotations are toggled on.',
+  {
+    lineNumber: z.number().int().min(0).describe('0-based line number to annotate'),
+    text: z.string().describe('Annotation text (the comment to display)'),
+    severity: z.enum(['info', 'warning', 'error']).default('info').describe('Severity level'),
+  },
+  async (params) => {
+    try {
+      const result = await apiCall('POST', '/api/annotate', {
+        lineNumber: params.lineNumber,
+        text: params.text,
+        severity: params.severity || 'info',
+      });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_annotations ===
+server.tool(
+  'logan_annotations',
+  'List all agent annotations on the currently open file',
+  {},
+  async () => {
+    try {
+      const result = await apiCall('GET', '/api/annotations');
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_remove_annotation ===
+server.tool(
+  'logan_remove_annotation',
+  'Remove an agent annotation by ID',
+  {
+    id: z.string().describe('Annotation ID to remove'),
+  },
+  async (params) => {
+    try {
+      const result = await apiCall('POST', '/api/annotation-remove', { id: params.id });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_send_message ===
 server.tool(
   'logan_send_message',

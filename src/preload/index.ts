@@ -494,6 +494,21 @@ const api = {
   browseAgentScript: (): Promise<string | null> =>
     ipcRenderer.invoke('agent-browse-script'),
 
+  // Agent annotations
+  addAnnotation: (annotation: any): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('annotation-add', annotation),
+  removeAnnotation: (id: string): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('annotation-remove', id),
+  listAnnotations: (): Promise<{ success: boolean; annotations?: any[] }> =>
+    ipcRenderer.invoke('annotation-list'),
+  clearAnnotations: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('annotation-clear'),
+  onAnnotationsChanged: (callback: (annotations: any[]) => void): (() => void) => {
+    const handler = (_: any, anns: any[]) => callback(anns);
+    ipcRenderer.on('annotations-changed', handler);
+    return () => ipcRenderer.removeListener('annotations-changed', handler);
+  },
+
   // Device discovery
   serialListPorts: (): Promise<{ success: boolean; ports?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.SERIAL_LIST_PORTS),

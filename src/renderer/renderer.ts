@@ -240,6 +240,9 @@ interface AppState {
   hiddenSearchMatches: HiddenMatch[];
   bookmarks: Bookmark[];
   highlights: HighlightConfig[];
+  annotations: any[];
+  annotationsByLine: Map<number, any[]>;
+  showAnnotations: boolean;
   visibleStartLine: number;
   visibleEndLine: number;
   selectedLine: number | null;
@@ -313,6 +316,9 @@ const state: AppState = {
   hiddenSearchMatches: [],
   bookmarks: [],
   highlights: [],
+  annotations: [],
+  annotationsByLine: new Map(),
+  showAnnotations: true,
   visibleStartLine: 0,
   visibleEndLine: 100,
   selectedLine: null,
@@ -840,6 +846,7 @@ const elements = {
   // Notes content (in bottom panel)
   notesTextarea: document.getElementById('notes-textarea') as HTMLTextAreaElement,
   notesSaveStatus: document.getElementById('notes-save-status') as HTMLSpanElement,
+  btnAnnotationsToggle: document.getElementById('btn-annotations-toggle') as HTMLButtonElement,
   btnNotesToggle: document.getElementById('btn-notes-toggle') as HTMLButtonElement,
   // Agent Chat (in bottom panel)
   chatMessages: document.getElementById('chat-messages') as HTMLDivElement,
@@ -2446,6 +2453,21 @@ function renderVisibleLines(): void {
 
       fragment.appendChild(lineElement);
 
+      // Agent annotation overlay (only when visible and annotations exist for this line)
+      if (state.showAnnotations && state.annotationsByLine.size > 0) {
+        const lineAnns = state.annotationsByLine.get(line.lineNumber);
+        if (lineAnns) {
+          for (const ann of lineAnns) {
+            const annEl = document.createElement('div');
+            annEl.className = `annotation-row severity-${ann.severity || 'info'}`;
+            annEl.style.cssText = `position:absolute;left:0;right:0;transform:translateY(${top + getLineHeight()}px);z-index:2;pointer-events:auto;`;
+            annEl.innerHTML = `<span class="annotation-agent">${escapeHtml(ann.agentName)}</span> <span class="annotation-text">${escapeHtml(ann.text)}</span>`;
+            annEl.title = `${ann.agentName} — ${new Date(ann.timestamp).toLocaleTimeString()}`;
+            fragment.appendChild(annEl);
+          }
+        }
+      }
+
       const estimatedWidth = LINE_NUMBER_GUTTER_EXTRA + (line.text.length * getCharWidth());
       if (estimatedWidth > maxContentWidth) {
         maxContentWidth = estimatedWidth;
@@ -3359,7 +3381,7 @@ function renderMinimapMarkers(): void {
   if (!minimapElement) return;
 
   // Remove existing markers
-  minimapElement.querySelectorAll('.minimap-bookmark, .minimap-search-marker, .minimap-notes-marker, .minimap-sc-marker').forEach(el => el.remove());
+  minimapElement.querySelectorAll('.minimap-bookmark, .minimap-search-marker, .minimap-notes-marker, .minimap-sc-marker, .minimap-annotation-marker').forEach(el => el.remove());
 
   const totalLines = getTotalLines();
   if (totalLines === 0) return;
@@ -3421,6 +3443,20 @@ function renderMinimapMarkers(): void {
         ? r.displayIndex : r.lineNumber;
       marker.style.top = `${(scMarkerPos / totalLines) * minimapHeight}px`;
       marker.style.backgroundColor = config.color;
+      fragment.appendChild(marker);
+    }
+  }
+
+  // Add annotation markers (only when annotations visible)
+  if (state.showAnnotations && state.annotations.length > 0) {
+    const maxAnnMarkers = 200;
+    const annStep = Math.max(1, Math.floor(state.annotations.length / maxAnnMarkers));
+    for (let i = 0; i < state.annotations.length; i += annStep) {
+      const ann = state.annotations[i];
+      const marker = document.createElement('div');
+      marker.className = 'minimap-annotation-marker';
+      marker.style.top = `${(ann.lineNumber / totalLines) * minimapHeight}px`;
+      marker.title = `${ann.agentName}: ${ann.text.substring(0, 50)}`;
       fragment.appendChild(marker);
     }
   }
@@ -5762,6 +5798,23 @@ function wizardBack(): void {
     default: return;
   }
   renderWizardStep();
+}
+
+// ─── Agent Annotations ──────────────────────────────────────────────
+
+function rebuildAnnotationIndex(): void {
+  state.annotationsByLine.clear();
+  for (const ann of state.annotations) {
+    const list = state.annotationsByLine.get(ann.lineNumber);
+    if (list) list.push(ann);
+    else state.annotationsByLine.set(ann.lineNumber, [ann]);
+  }
+}
+
+function toggleAnnotations(): void {
+  state.showAnnotations = !state.showAnnotations;
+  renderVisibleLines();
+  renderMinimapMarkers();
 }
 
 let chatHistoryLoaded = false;
@@ -11860,6 +11913,12 @@ function setupKeyboardShortcuts(): void {
       toggleBottomTab('notes');
     }
 
+    // Ctrl/Cmd + Shift + A: Toggle agent annotations
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'A') {
+      e.preventDefault();
+      toggleAnnotations();
+    }
+
     // Ctrl/Cmd + Shift + R: Toggle search results tab
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'R') {
       e.preventDefault();
@@ -12381,6 +12440,7 @@ function init(): void {
 
   // Bottom panel (tabbed) events
   elements.btnBottomPanelClose.addEventListener('click', closeBottomPanel);
+  elements.btnAnnotationsToggle.addEventListener('click', toggleAnnotations);
   elements.btnNotesToggle.addEventListener('click', () => toggleBottomTab('notes'));
   elements.notesTextarea.addEventListener('input', saveNotesDebounced);
 
@@ -12409,6 +12469,13 @@ function init(): void {
       agentRunning = false;
       updateLaunchButton();
     }
+  });
+  // Agent annotations push listener
+  window.api.onAnnotationsChanged((anns: any[]) => {
+    state.annotations = anns;
+    rebuildAnnotationIndex();
+    renderVisibleLines();
+    renderMinimapMarkers();
   });
   // Launch/Stop agent button
   elements.chatLaunchAgent.addEventListener('click', toggleAgent);
@@ -12926,6 +12993,7 @@ function init(): void {
   loadBookmarks();
   loadHighlights();
   loadHighlightGroups();
+  loadAnnotations();
 }
 
 async function loadBookmarks(): Promise<void> {
@@ -12933,6 +13001,14 @@ async function loadBookmarks(): Promise<void> {
   if (result.success && result.bookmarks) {
     state.bookmarks = result.bookmarks;
     updateBookmarksUI();
+  }
+}
+
+async function loadAnnotations(): Promise<void> {
+  const result = await window.api.listAnnotations();
+  if (result.success && result.annotations) {
+    state.annotations = result.annotations;
+    rebuildAnnotationIndex();
   }
 }
 

@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { BrowserWindow } from 'electron';
-import { SearchOptions, Bookmark, Highlight } from '../shared/types';
+import { SearchOptions, Bookmark, Highlight, Annotation } from '../shared/types';
 import { FileHandler } from './fileHandler';
 import { type BaselineStore, buildFingerprint } from './baselineStore';
 import { AnalysisResult } from './analyzers/types';
@@ -132,6 +132,10 @@ export interface ApiContext {
   investigateCrashes(options: { contextLines?: number; maxCrashes?: number; autoBookmark?: boolean; autoHighlight?: boolean }): Promise<any>;
   investigateComponent(options: { component: string; maxSamplesPerLevel?: number; includeErrorContext?: boolean; contextLines?: number }): Promise<any>;
   investigateTimerange(options: { startTime: string; endTime: string; maxSamples?: number }): Promise<any>;
+  getAnnotations(): Map<string, Annotation>;
+  addAnnotation(annotation: Annotation): any;
+  removeAnnotation(id: string): any;
+  clearAnnotations(): any;
 }
 
 let server: http.Server | null = null;
@@ -217,6 +221,13 @@ export function startApiServer(ctx: ApiContext): void {
           const bms = Array.from(ctx.getBookmarks().values())
             .sort((a, b) => a.lineNumber - b.lineNumber);
           sendJson(res, { success: true, bookmarks: bms });
+          return;
+        }
+
+        if (url === '/api/annotations') {
+          const anns = Array.from(ctx.getAnnotations().values())
+            .sort((a, b) => a.lineNumber - b.lineNumber);
+          sendJson(res, { success: true, annotations: anns });
           return;
         }
 
@@ -433,6 +444,35 @@ export function startApiServer(ctx: ApiContext): void {
 
         if (url === '/api/highlight-clear') {
           const result = ctx.clearHighlights();
+          sendJson(res, result);
+          return;
+        }
+
+        // --- Agent Annotations ---
+        if (url === '/api/annotate') {
+          if (body.lineNumber === undefined || !body.text) return sendError(res, 'lineNumber and text required');
+          const annotation: Annotation = {
+            id: `ann-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+            lineNumber: body.lineNumber,
+            text: body.text,
+            agentName: body.agentName || activeAgent?.name || 'Agent',
+            timestamp: Date.now(),
+            severity: body.severity || 'info',
+          };
+          const result = ctx.addAnnotation(annotation);
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/annotation-remove') {
+          if (!body.id) return sendError(res, 'id required');
+          const result = ctx.removeAnnotation(body.id);
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/annotation-clear') {
+          const result = ctx.clearAnnotations();
           sendJson(res, result);
           return;
         }

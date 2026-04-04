@@ -460,6 +460,13 @@ interface Api {
   saveAgentConfig: (config: { type: 'claude-code' | 'builtin' | 'custom' | 'local-llm'; scriptPath?: string; model?: string; llmEndpoint?: string; llmModel?: string }) => Promise<{ success: boolean }>;
   browseAgentScript: () => Promise<string | null>;
 
+  // Agent annotations
+  addAnnotation: (annotation: { id: string; lineNumber: number; text: string; agentName: string; timestamp: number; severity?: 'info' | 'warning' | 'error' }) => Promise<{ success: boolean }>;
+  removeAnnotation: (id: string) => Promise<{ success: boolean }>;
+  listAnnotations: () => Promise<{ success: boolean; annotations?: Array<{ id: string; lineNumber: number; text: string; agentName: string; timestamp: number; severity?: string }> }>;
+  clearAnnotations: () => Promise<{ success: boolean }>;
+  onAnnotationsChanged: (callback: (annotations: any[]) => void) => () => void;
+
   // Device discovery
   serialListPorts: () => Promise<{ success: boolean; ports?: Array<{ path: string; manufacturer?: string; vendorId?: string; productId?: string }>; error?: string }>;
   logcatListDevices: () => Promise<{ success: boolean; devices?: Array<{ id: string; state: string; model?: string }>; error?: string }>;

@@ -2844,6 +2844,51 @@ body.platform-darwin .titlebar {
   opacity: 0.7;
 }
 
+.minimap-annotation-marker {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background-color: rgba(180, 120, 255, 0.8);
+}
+
+/* Agent Annotations */
+.annotation-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 20px;
+  padding: 0 8px 0 60px;
+  font-size: 11px;
+  line-height: 20px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  border-left: 2px solid rgba(180, 120, 255, 0.6);
+  background: rgba(180, 120, 255, 0.08);
+}
+.annotation-row.severity-warning {
+  border-left-color: rgba(255, 180, 40, 0.7);
+  background: rgba(255, 180, 40, 0.08);
+}
+.annotation-row.severity-error {
+  border-left-color: rgba(255, 80, 80, 0.7);
+  background: rgba(255, 80, 80, 0.08);
+}
+.annotation-agent {
+  color: rgba(180, 120, 255, 0.7);
+  font-weight: 600;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.severity-warning .annotation-agent { color: rgba(255, 180, 40, 0.8); }
+.severity-error .annotation-agent { color: rgba(255, 80, 80, 0.8); }
+.annotation-text {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Tab Bar */
 .tab-bar {
   display: flex;

@@ -15,7 +15,7 @@ if (process.platform !== 'linux') {
   console.warn('node-pty not available on Linux — using child_process fallback for terminal');
 }
 import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
-import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, LiveConnectionInfo, ContextDefinition, ContextPattern, ContextMatchGroup } from '../shared/types';
+import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, LiveConnectionInfo, ContextDefinition, ContextPattern, ContextMatchGroup, Annotation } from '../shared/types';
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
@@ -136,6 +136,7 @@ function addToCache(filePath: string, handler: FileHandler): void {
 // In-memory storage
 const bookmarks = new Map<string, Bookmark>();
 const highlights = new Map<string, Highlight>();
+const annotations = new Map<string, Annotation>();
 
 // Config folder path (~/.logan/)
 const getConfigDir = () => path.join(os.homedir(), '.logan');
@@ -535,6 +536,31 @@ function saveBookmarksForCurrentFile(): void {
   }
 }
 
+// --- Agent Annotations ---
+
+function loadAnnotationsForFile(filePath: string): void {
+  annotations.clear();
+  if (canWriteLocal(filePath)) {
+    const localData = loadLocalFileData(filePath);
+    for (const a of localData.annotations || []) {
+      annotations.set(a.id, a);
+    }
+  }
+}
+
+function saveAnnotationsForCurrentFile(): void {
+  if (!currentFilePath || !currentFileUsesLocalStorage) return;
+  const localData = loadLocalFileData(currentFilePath);
+  localData.annotations = Array.from(annotations.values())
+    .sort((a, b) => a.lineNumber - b.lineNumber);
+  saveLocalFileData(currentFilePath, localData);
+}
+
+function pushAnnotationsToRenderer(): void {
+  const list = Array.from(annotations.values()).sort((a, b) => a.lineNumber - b.lineNumber);
+  mainWindow?.webContents.send('annotations-changed', list);
+}
+
 function createWindow() {
   const isMac = process.platform === 'darwin';
 
@@ -646,6 +672,7 @@ app.whenReady().then(() => {
       }
       loadBookmarksForFile(filePath);
       loadHighlightsForFile(filePath);
+      loadAnnotationsForFile(filePath);
       if (canWriteLocal(filePath)) {
         const localData = loadLocalFileData(filePath);
         localData.lastOpened = new Date().toISOString();
@@ -801,6 +828,26 @@ app.whenReady().then(() => {
         localData.highlights = [];
         saveLocalFileData(currentFilePath, localData);
       }
+      return { success: true };
+    },
+    getAnnotations: () => annotations,
+    addAnnotation: (annotation: Annotation) => {
+      annotations.set(annotation.id, annotation);
+      saveAnnotationsForCurrentFile();
+      if (currentFilePath) logActivity(currentFilePath, 'annotation_added', { lineNumber: annotation.lineNumber, agentName: annotation.agentName });
+      pushAnnotationsToRenderer();
+      return { success: true };
+    },
+    removeAnnotation: (id: string) => {
+      annotations.delete(id);
+      saveAnnotationsForCurrentFile();
+      pushAnnotationsToRenderer();
+      return { success: true };
+    },
+    clearAnnotations: () => {
+      annotations.clear();
+      saveAnnotationsForCurrentFile();
+      pushAnnotationsToRenderer();
       return { success: true };
     },
     loadNotes: async () => {
@@ -2213,6 +2260,7 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
     const persistPath = filePath;
     loadBookmarksForFile(persistPath);
     loadHighlightsForFile(persistPath);
+    loadAnnotationsForFile(persistPath);
 
     // Update lastOpened in local sidecar
     if (canWriteLocal(persistPath)) {
@@ -2810,6 +2858,34 @@ ipcMain.handle('highlight-clear-all', async () => {
 
 ipcMain.handle('highlight-get-next-color', async () => {
   return { success: true, color: getNextColor() };
+});
+
+// === Agent Annotations IPC ===
+
+ipcMain.handle('annotation-add', async (_, annotation: Annotation) => {
+  annotations.set(annotation.id, annotation);
+  saveAnnotationsForCurrentFile();
+  if (currentFilePath) logActivity(currentFilePath, 'annotation_added', { lineNumber: annotation.lineNumber, agentName: annotation.agentName });
+  pushAnnotationsToRenderer();
+  return { success: true };
+});
+
+ipcMain.handle('annotation-remove', async (_, id: string) => {
+  annotations.delete(id);
+  saveAnnotationsForCurrentFile();
+  pushAnnotationsToRenderer();
+  return { success: true };
+});
+
+ipcMain.handle('annotation-list', async () => {
+  return { success: true, annotations: Array.from(annotations.values()).sort((a, b) => a.lineNumber - b.lineNumber) };
+});
+
+ipcMain.handle('annotation-clear', async () => {
+  annotations.clear();
+  saveAnnotationsForCurrentFile();
+  pushAnnotationsToRenderer();
+  return { success: true };
 });
 
 // === Highlight Groups ===
