@@ -7307,22 +7307,25 @@ function tryParseTimestamp(text: string): number | null {
 
 function setVideoSyncFromCurrentLine(): void {
   if (state.selectedLine === null) {
-    elements.videoSyncStatus.textContent = 'No line selected';
-    setTimeout(() => { elements.videoSyncStatus.textContent = ''; }, 3000);
+    elements.videoSyncStatus.textContent = '⚠ Click a log line first, then click this button';
+    elements.videoSyncStatus.style.color = '#ffb840';
+    setTimeout(() => { elements.videoSyncStatus.textContent = ''; elements.videoSyncStatus.style.color = ''; }, 5000);
     return;
   }
   window.api.getLineTimestamp(state.selectedLine).then((result) => {
     if (result.epochMs === null) {
-      elements.videoSyncStatus.textContent = 'No timestamp found';
-      setTimeout(() => { elements.videoSyncStatus.textContent = ''; }, 3000);
+      elements.videoSyncStatus.textContent = '⚠ No timestamp found in selected line';
+      elements.videoSyncStatus.style.color = '#ffb840';
+      setTimeout(() => { elements.videoSyncStatus.textContent = ''; elements.videoSyncStatus.style.color = ''; }, 5000);
       return;
     }
     const currentVideoTimeMs = (elements.videoElement.currentTime || 0) * 1000;
     state.videoSyncOffsetMs = result.epochMs - currentVideoTimeMs;
     elements.videoSyncInput.value = result.timestampStr || '';
     const videoTimeStr = formatVideoTime(elements.videoElement.currentTime || 0);
-    elements.videoSyncStatus.textContent = 'Sync set: line ' + (state.selectedLine! + 1) + ' → ' + videoTimeStr;
-    setTimeout(() => { elements.videoSyncStatus.textContent = ''; }, 3000);
+    elements.videoSyncStatus.textContent = '✓ Synced (line ' + (state.selectedLine! + 1) + ' = ' + videoTimeStr + '). Click any line to seek.';
+    elements.videoSyncStatus.style.color = '#4caf50';
+    setTimeout(() => { elements.videoSyncStatus.textContent = ''; elements.videoSyncStatus.style.color = ''; }, 6000);
     saveVideoState();
   });
 }

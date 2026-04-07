@@ -5675,6 +5675,33 @@ kbd {
   color: #fff;
 }
 
+.video-sync-btn.primary {
+  background: var(--accent-color, #007acc);
+  color: #fff;
+  border-color: var(--accent-color, #007acc);
+}
+.video-sync-btn.primary:hover {
+  opacity: 0.9;
+  background: var(--accent-color, #007acc);
+}
+
+.video-sync-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: help;
+}
+.video-sync-help:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--text-primary);
+}
+
 .video-sync-status {
   font-size: 11px;
   color: #888;

@@ -442,11 +442,11 @@
               </div>
             </div>
             <div class="video-sync-bar">
-              <label class="video-sync-label">Sync:</label>
-              <input type="text" id="video-sync-input" class="video-sync-input" placeholder="Log timestamp at video start" title="Enter the log timestamp that corresponds to video start (0:00)">
-              <button id="btn-video-sync-from-line" class="video-sync-btn" title="Sync selected line to current video time">Set from line</button>
-              <span id="video-file-name" class="video-file-name"></span>
+              <span class="video-sync-help" title="How to sync video and logs:&#10;1. Pause the video at a moment you can identify in the logs&#10;2. Click that line in the log viewer&#10;3. Click the 'Sync to video time' button below&#10;4. Now clicking any log line jumps the video to that moment">&#9432;</span>
+              <button id="btn-video-sync-from-line" class="video-sync-btn primary" title="Pair the currently selected log line with the current video time">&#128279; Sync line ↔ video time</button>
+              <input type="text" id="video-sync-input" class="video-sync-input" placeholder="or paste timestamp here" title="Enter the log timestamp that corresponds to video start (0:00)">
               <span id="video-sync-status" class="video-sync-status"></span>
+              <span id="video-file-name" class="video-file-name"></span>
             </div>
           </div>
         </div>

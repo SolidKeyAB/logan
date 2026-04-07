@@ -17,3 +17,12 @@ test-data/
 # IDE
 .idea/
 .vscode/
+
+# Local LOGAN sidecar / agent state
+.logan/
+nohup.out
+firebase-service-account.json
+scripts/__pycache__/
+scripts/*.pyc
+scripts/logan-agent.py
+scripts/poll_chat.py
