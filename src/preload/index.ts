@@ -494,6 +494,12 @@ const api = {
   browseAgentScript: (): Promise<string | null> =>
     ipcRenderer.invoke('agent-browse-script'),
 
+  // Recent files
+  listRecentFiles: (): Promise<{ success: boolean; files?: Array<{ path: string; lastOpened: number }> }> =>
+    ipcRenderer.invoke('recent-files-list'),
+  clearRecentFiles: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('recent-files-clear'),
+
   // Agent annotations
   addAnnotation: (annotation: any): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('annotation-add', annotation),

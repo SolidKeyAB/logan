@@ -459,6 +459,8 @@ interface Api {
   }>;
   saveAgentConfig: (config: { type: 'claude-code' | 'builtin' | 'custom' | 'local-llm'; scriptPath?: string; model?: string; llmEndpoint?: string; llmModel?: string }) => Promise<{ success: boolean }>;
   browseAgentScript: () => Promise<string | null>;
+  listRecentFiles: () => Promise<{ success: boolean; files?: Array<{ path: string; lastOpened: number }> }>;
+  clearRecentFiles: () => Promise<{ success: boolean }>;
 
   // Agent annotations
   addAnnotation: (annotation: { id: string; lineNumber: number; text: string; agentName: string; timestamp: number; severity?: 'info' | 'warning' | 'error' }) => Promise<{ success: boolean }>;

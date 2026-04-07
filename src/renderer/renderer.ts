@@ -684,6 +684,8 @@ const SLOW_SCROLL_FRAME_COUNT = 10; // Number of slow frames before warning
 const elements = {
   logo: document.getElementById('logo') as HTMLImageElement,
   btnOpenFile: document.getElementById('btn-open-file') as HTMLButtonElement,
+  btnRecentFiles: document.getElementById('btn-recent-files') as HTMLButtonElement,
+  recentFilesPopup: document.getElementById('recent-files-popup') as HTMLDivElement,
   btnOpenWelcome: document.getElementById('btn-open-welcome') as HTMLButtonElement,
   btnSearch: document.getElementById('btn-search') as HTMLButtonElement,
   btnPrevResult: document.getElementById('btn-prev-result') as HTMLButtonElement,
@@ -4059,6 +4061,61 @@ async function saveToNotes(): Promise<void> {
 }
 
 // File Operations
+// ─── Recent Files Dropdown ──────────────────────────────────────────────
+
+async function toggleRecentFilesPopup(): Promise<void> {
+  const popup = elements.recentFilesPopup;
+  if (!popup.classList.contains('hidden')) {
+    popup.classList.add('hidden');
+    return;
+  }
+
+  const result = await window.api.listRecentFiles();
+  const files = result.files || [];
+
+  let html = `<div class="recent-files-header">Recent Files</div>`;
+  if (files.length === 0) {
+    html += `<div class="recent-files-empty">No recent files</div>`;
+  } else {
+    html += `<div class="recent-files-list">`;
+    for (const f of files) {
+      const name = f.path.split('/').pop() || f.path;
+      const dir = f.path.substring(0, f.path.length - name.length - 1);
+      const ageMs = Date.now() - f.lastOpened;
+      let ageText: string;
+      if (ageMs < 60000) ageText = 'just now';
+      else if (ageMs < 3600000) ageText = `${Math.floor(ageMs / 60000)}m ago`;
+      else if (ageMs < 86400000) ageText = `${Math.floor(ageMs / 3600000)}h ago`;
+      else ageText = `${Math.floor(ageMs / 86400000)}d ago`;
+      html += `
+        <div class="recent-file-item" data-path="${escapeHtml(f.path)}" title="${escapeHtml(f.path)}">
+          <span class="recent-file-name">${escapeHtml(name)}</span>
+          <span class="recent-file-meta">${escapeHtml(dir)} · ${ageText}</span>
+        </div>`;
+    }
+    html += `</div>`;
+    html += `<div class="recent-files-footer"><button class="recent-files-clear-btn">Clear history</button></div>`;
+  }
+
+  popup.innerHTML = html;
+  popup.classList.remove('hidden');
+
+  // Wire up clicks
+  popup.querySelectorAll('.recent-file-item').forEach(item => {
+    item.addEventListener('click', async () => {
+      const filePath = (item as HTMLElement).dataset.path;
+      if (filePath) {
+        popup.classList.add('hidden');
+        await loadFile(filePath);
+      }
+    });
+  });
+  popup.querySelector('.recent-files-clear-btn')?.addEventListener('click', async () => {
+    await window.api.clearRecentFiles();
+    popup.classList.add('hidden');
+  });
+}
+
 async function openFile(): Promise<void> {
   const filePath = await window.api.openFileDialog();
   if (!filePath) return;
@@ -12548,6 +12605,17 @@ function init(): void {
 
   // File operations
   elements.btnOpenFile.addEventListener('click', openFile);
+  elements.btnRecentFiles.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleRecentFilesPopup();
+  });
+  document.addEventListener('click', (e) => {
+    if (!elements.recentFilesPopup.classList.contains('hidden') &&
+        !elements.recentFilesPopup.contains(e.target as Node) &&
+        !elements.btnRecentFiles.contains(e.target as Node)) {
+      elements.recentFilesPopup.classList.add('hidden');
+    }
+  });
   elements.btnOpenWelcome.addEventListener('click', openFile);
 
   // Folder operations

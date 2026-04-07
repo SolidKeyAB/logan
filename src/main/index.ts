@@ -226,6 +226,37 @@ function saveLocalFileData(filePath: string, data: LocalFileData): void {
 // Track whether current file uses local storage or fallback
 let currentFileUsesLocalStorage = false;
 
+// Recent files (global, for quick re-open)
+const RECENT_FILES_CAP = 20;
+
+function getRecentFilesPath(): string {
+  return path.join(os.homedir(), '.logan', 'recent-files.json');
+}
+
+function loadRecentFiles(): Array<{ path: string; lastOpened: number }> {
+  try {
+    const data = fs.readFileSync(getRecentFilesPath(), 'utf-8');
+    const parsed = JSON.parse(data);
+    if (Array.isArray(parsed)) return parsed;
+  } catch { /* missing or invalid */ }
+  return [];
+}
+
+function saveRecentFiles(list: Array<{ path: string; lastOpened: number }>): void {
+  try {
+    const dir = path.join(os.homedir(), '.logan');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(getRecentFilesPath(), JSON.stringify(list, null, 2));
+  } catch { /* ignore */ }
+}
+
+function addToRecentFiles(filePath: string): void {
+  const list = loadRecentFiles().filter(e => e.path !== filePath);
+  list.unshift({ path: filePath, lastOpened: Date.now() });
+  if (list.length > RECENT_FILES_CAP) list.length = RECENT_FILES_CAP;
+  saveRecentFiles(list);
+}
+
 // Activity history logging
 const ACTIVITY_HISTORY_CAP = 500;
 const ACTIVITY_HISTORY_TRIM_TO = 400;
@@ -2269,6 +2300,7 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
       saveLocalFileData(persistPath, localData);
     }
     logActivity(persistPath, 'file_opened', { filePath: persistPath });
+    addToRecentFiles(persistPath);
 
     // Check for split metadata in file header (preferred)
     const splitMeta = fileHandler.getSplitMetadata();
@@ -5560,6 +5592,21 @@ ipcMain.handle('agent-save-config', async (_event, config: any) => {
   if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
   const configPath = path.join(configDir, 'agent-config.json');
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  return { success: true };
+});
+
+// === Recent Files ===
+
+ipcMain.handle('recent-files-list', async () => {
+  // Filter out files that no longer exist
+  const list = loadRecentFiles().filter(e => {
+    try { return fs.existsSync(e.path); } catch { return false; }
+  });
+  return { success: true, files: list };
+});
+
+ipcMain.handle('recent-files-clear', async () => {
+  saveRecentFiles([]);
   return { success: true };
 });
 
