@@ -3239,9 +3239,36 @@ function handleMinimapClick(event: MouseEvent): void {
 
   // Map click position to line number
   const totalLines = getTotalLines();
-  const targetLine = Math.floor((clickY / minimapHeight) * totalLines);
-  const targetScrollTop = lineToScrollTop(targetLine);
+  const proportionalLine = Math.floor((clickY / minimapHeight) * totalLines);
 
+  // Snap to nearest search result if clicking near one (within ~3 buckets / ~6px)
+  let targetLine = proportionalLine;
+  if (state.searchResults.length > 0) {
+    const SNAP_RADIUS_LINES = Math.max(50, Math.floor((6 / minimapHeight) * totalLines));
+    let nearestResult: typeof state.searchResults[0] | null = null;
+    let nearestDist = Infinity;
+    for (const r of state.searchResults) {
+      const pos = state.isFiltered && r.displayIndex != null ? r.displayIndex : r.lineNumber;
+      const dist = Math.abs(pos - proportionalLine);
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearestResult = r;
+      }
+    }
+    if (nearestResult && nearestDist <= SNAP_RADIUS_LINES) {
+      targetLine = state.isFiltered && nearestResult.displayIndex != null
+        ? nearestResult.displayIndex : nearestResult.lineNumber;
+      // Update current search index too
+      const idx = state.searchResults.indexOf(nearestResult);
+      if (idx >= 0) {
+        state.currentSearchIndex = idx;
+        updateSearchUI();
+        updateSearchResultsCurrent();
+      }
+    }
+  }
+
+  const targetScrollTop = lineToScrollTop(targetLine);
   logViewerElement.scrollTop = Math.max(0, targetScrollTop);
 }
 
@@ -3458,17 +3485,28 @@ function renderMinimapMarkers(): void {
     fragment.appendChild(marker);
   }
 
-  // Add search result markers (limit to prevent performance issues)
-  const maxSearchMarkers = 100;
-  const searchStep = Math.max(1, Math.floor(state.searchResults.length / maxSearchMarkers));
-  for (let i = 0; i < state.searchResults.length; i += searchStep) {
-    const result = state.searchResults[i];
-    const marker = document.createElement('div');
-    marker.className = 'minimap-search-marker';
-    const markerPos = state.isFiltered && result.displayIndex != null
-      ? result.displayIndex : result.lineNumber;
-    marker.style.top = `${(markerPos / totalLines) * minimapHeight}px`;
-    fragment.appendChild(marker);
+  // Add search result markers — bucket aggregation to show ALL matches accurately
+  if (state.searchResults.length > 0) {
+    const SEARCH_BUCKETS = Math.max(50, Math.floor(minimapHeight / 2));
+    const buckets = new Uint32Array(SEARCH_BUCKETS);
+    let maxBucket = 0;
+    for (const result of state.searchResults) {
+      const markerPos = state.isFiltered && result.displayIndex != null
+        ? result.displayIndex : result.lineNumber;
+      const idx = Math.min(SEARCH_BUCKETS - 1, Math.floor((markerPos / totalLines) * SEARCH_BUCKETS));
+      buckets[idx]++;
+      if (buckets[idx] > maxBucket) maxBucket = buckets[idx];
+    }
+    const bucketHeight = minimapHeight / SEARCH_BUCKETS;
+    for (let i = 0; i < SEARCH_BUCKETS; i++) {
+      if (buckets[i] === 0) continue;
+      const intensity = Math.min(1, 0.4 + (buckets[i] / maxBucket) * 0.6);
+      const marker = document.createElement('div');
+      marker.className = 'minimap-search-marker';
+      marker.style.cssText = `position:absolute;left:0;right:0;top:${i * bucketHeight}px;height:${Math.max(2, Math.ceil(bucketHeight))}px;background-color:rgba(255,255,0,${intensity});`;
+      marker.title = `${buckets[i]} match${buckets[i] !== 1 ? 'es' : ''}`;
+      fragment.appendChild(marker);
+    }
   }
 
   // Add search config markers (colored by config)
