@@ -59,6 +59,13 @@ export interface AnalysisResult {
   analyzerName: string;
   analyzedAt: number;
   insights: AnalysisInsights;
+  // Density buckets for minimap heat map (indexed by file byte position)
+  density?: {
+    buckets: number;
+    error: number[];
+    warning: number[];
+    info: number[];
+  };
 }
 
 // Base interface - all analyzers must implement this

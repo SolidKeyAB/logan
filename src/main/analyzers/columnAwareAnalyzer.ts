@@ -62,6 +62,13 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
         error: 0, warning: 0, info: 0, debug: 0, trace: 0
       };
 
+      // Density buckets — 200 buckets keyed by byte position
+      // Used by the minimap to draw a heat map by log level
+      const DENSITY_BUCKETS = 200;
+      const densityError = new Uint32Array(DENSITY_BUCKETS);
+      const densityWarning = new Uint32Array(DENSITY_BUCKETS);
+      const densityInfo = new Uint32Array(DENSITY_BUCKETS);
+
       // Crash tracking
       const crashes: CrashEntry[] = [];
 
@@ -116,7 +123,14 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
         } else {
           level = this.detectLevelFromText(line) || undefined;
         }
-        if (level) levelCounts[level]++;
+        if (level) {
+          levelCounts[level]++;
+          // Update density bucket based on byte position
+          const bucket = Math.min(DENSITY_BUCKETS - 1, Math.floor((bytesRead / fileSize) * DENSITY_BUCKETS));
+          if (level === 'error') densityError[bucket]++;
+          else if (level === 'warning') densityWarning[bucket]++;
+          else if (level === 'info') densityInfo[bucket]++;
+        }
 
         // Extract message text
         let message = '';
@@ -239,7 +253,13 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
           : undefined,
         analyzerName: this.name,
         analyzedAt: Date.now(),
-        insights
+        insights,
+        density: {
+          buckets: DENSITY_BUCKETS,
+          error: Array.from(densityError),
+          warning: Array.from(densityWarning),
+          info: Array.from(densityInfo),
+        }
       };
 
     } catch (error) {

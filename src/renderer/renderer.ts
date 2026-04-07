@@ -3389,13 +3389,47 @@ function renderMinimapMarkers(): void {
   if (!minimapElement) return;
 
   // Remove existing markers
-  minimapElement.querySelectorAll('.minimap-bookmark, .minimap-search-marker, .minimap-notes-marker, .minimap-sc-marker, .minimap-annotation-marker').forEach(el => el.remove());
+  minimapElement.querySelectorAll('.minimap-bookmark, .minimap-search-marker, .minimap-notes-marker, .minimap-sc-marker, .minimap-annotation-marker, .minimap-density-bucket').forEach(el => el.remove());
 
   const totalLines = getTotalLines();
   if (totalLines === 0) return;
 
   const minimapHeight = minimapElement.clientHeight;
   const fragment = document.createDocumentFragment();
+
+  // Density heat map (background layer) — render first so markers appear on top
+  const density = (state.analysisResult as any)?.density;
+  if (density && density.buckets > 0) {
+    const buckets = density.buckets;
+    const bucketHeight = minimapHeight / buckets;
+    // Find max for normalization (to prevent over-saturation)
+    let maxVal = 1;
+    for (let i = 0; i < buckets; i++) {
+      const total = density.error[i] + density.warning[i] + density.info[i];
+      if (total > maxVal) maxVal = total;
+    }
+    for (let i = 0; i < buckets; i++) {
+      const errCount = density.error[i] || 0;
+      const warnCount = density.warning[i] || 0;
+      const infoCount = density.info[i] || 0;
+      const total = errCount + warnCount + infoCount;
+      if (total === 0) continue;
+      // Mix color based on dominant level
+      const intensity = Math.min(1, total / maxVal);
+      let color: string;
+      if (errCount > warnCount && errCount > infoCount) {
+        color = `rgba(255, 80, 80, ${intensity * 0.6})`;
+      } else if (warnCount > infoCount) {
+        color = `rgba(255, 180, 40, ${intensity * 0.5})`;
+      } else {
+        color = `rgba(100, 150, 255, ${intensity * 0.35})`;
+      }
+      const marker = document.createElement('div');
+      marker.className = 'minimap-density-bucket';
+      marker.style.cssText = `position:absolute;left:0;right:0;top:${i * bucketHeight}px;height:${Math.ceil(bucketHeight) + 1}px;background-color:${color};pointer-events:none;`;
+      fragment.appendChild(marker);
+    }
+  }
 
   // Add saved notes range markers (drawn first, behind other markers)
   for (const range of state.savedRanges) {
