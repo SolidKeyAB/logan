@@ -8942,9 +8942,57 @@ function applyColumnFilter(text: string): string {
 }
 
 // Search
+// ─── Search History ──────────────────────────────────────────────
+const SEARCH_HISTORY_KEY = 'logan-search-history';
+const SEARCH_HISTORY_MAX = 50;
+let searchHistory: string[] = (() => {
+  try { return JSON.parse(localStorage.getItem(SEARCH_HISTORY_KEY) || '[]'); }
+  catch { return []; }
+})();
+let searchHistoryIndex = -1; // -1 means "not navigating, showing current input"
+let searchHistoryStash = ''; // What user typed before starting to navigate history
+
+function addToSearchHistory(pattern: string): void {
+  if (!pattern.trim()) return;
+  // Remove existing duplicate, then add to top
+  searchHistory = searchHistory.filter(p => p !== pattern);
+  searchHistory.unshift(pattern);
+  if (searchHistory.length > SEARCH_HISTORY_MAX) {
+    searchHistory = searchHistory.slice(0, SEARCH_HISTORY_MAX);
+  }
+  try { localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(searchHistory)); } catch {}
+  searchHistoryIndex = -1;
+}
+
+function navigateSearchHistory(direction: 'up' | 'down'): void {
+  if (searchHistory.length === 0) return;
+  if (direction === 'up') {
+    if (searchHistoryIndex === -1) {
+      searchHistoryStash = elements.searchInput.value;
+      searchHistoryIndex = 0;
+    } else if (searchHistoryIndex < searchHistory.length - 1) {
+      searchHistoryIndex++;
+    }
+    elements.searchInput.value = searchHistory[searchHistoryIndex];
+  } else {
+    if (searchHistoryIndex === -1) return;
+    if (searchHistoryIndex === 0) {
+      searchHistoryIndex = -1;
+      elements.searchInput.value = searchHistoryStash;
+    } else {
+      searchHistoryIndex--;
+      elements.searchInput.value = searchHistory[searchHistoryIndex];
+    }
+  }
+  // Move cursor to end
+  const len = elements.searchInput.value.length;
+  elements.searchInput.setSelectionRange(len, len);
+}
+
 async function performSearch(): Promise<void> {
   const pattern = elements.searchInput.value;
   if (!pattern || !state.filePath) return;
+  addToSearchHistory(pattern);
 
   showProgress('Searching...');
 
@@ -11889,6 +11937,12 @@ function setupKeyboardShortcuts(): void {
     // Enter in search: Search
     if (e.key === 'Enter' && document.activeElement === elements.searchInput) {
       performSearch();
+    }
+
+    // Up/Down arrows in search input: navigate history
+    if (document.activeElement === elements.searchInput && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      navigateSearchHistory(e.key === 'ArrowUp' ? 'up' : 'down');
     }
 
     // F3 or Ctrl/Cmd + G: Next search result (respects direction)

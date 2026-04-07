@@ -4695,8 +4695,27 @@ function streamFormatJson(inputPath: string, outputPath: string, onProgress?: (p
       }
     };
 
+    // Shallow JSON formatter: expands only top-level keys to one line each,
+    // keeping nested values compact. Limits line explosion for large JSONL files.
+    const shallowFormat = (obj: any): string => {
+      if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) {
+        return JSON.stringify(obj);
+      }
+      const keys = Object.keys(obj);
+      if (keys.length === 0) return '{}';
+      const lines = ['{'];
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        const val = JSON.stringify(obj[k]);
+        const comma = i < keys.length - 1 ? ',' : '';
+        lines.push(`  ${JSON.stringify(k)}: ${val}${comma}`);
+      }
+      lines.push('}');
+      return lines.join('\n');
+    };
+
     if (isJsonl) {
-      // JSONL: format each line independently
+      // JSONL: format each line with shallow expansion (top-level keys only)
       let lineBuffer = '';
 
       readStream.on('data', (rawChunk: string | Buffer) => {
@@ -4705,28 +4724,26 @@ function streamFormatJson(inputPath: string, outputPath: string, onProgress?: (p
 
         lineBuffer += chunk;
         const lines = lineBuffer.split('\n');
-        lineBuffer = lines.pop() || ''; // Keep incomplete last line
+        lineBuffer = lines.pop() || '';
 
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed) { write('\n'); continue; }
           try {
             const obj = JSON.parse(trimmed);
-            write(JSON.stringify(obj, null, 2) + '\n');
+            write(shallowFormat(obj) + '\n');
           } catch {
-            // Not valid JSON — write as-is
             write(trimmed + '\n');
           }
         }
       });
 
       readStream.on('end', () => {
-        // Process remaining buffer
         const trimmed = lineBuffer.trim();
         if (trimmed) {
           try {
             const obj = JSON.parse(trimmed);
-            write(JSON.stringify(obj, null, 2) + '\n');
+            write(shallowFormat(obj) + '\n');
           } catch {
             write(trimmed + '\n');
           }
@@ -4846,7 +4863,6 @@ ipcMain.handle('format-json-file', async (_, filePath: string) => {
     });
 
     const writtenStats = fs.statSync(formattedPath);
-    console.log(`[JSON Format] Done. Output: ${writtenStats.size} bytes`);
 
     if (writtenStats.size > MAX_FORMATTED_SIZE) {
       // Clean up - file too large to index efficiently
