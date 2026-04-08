@@ -4971,9 +4971,23 @@ ipcMain.handle(IPC.TERMINAL_CREATE_LOCAL, async (_, sessionId: string, options?:
       return { success: true, label: 'Local' };
     }
 
-    // Fallback: child_process.spawn with piped stdio (Linux)
+    // Fallback for Linux (no node-pty): use `script` to wrap the shell
+    // in a real PTY. `script -qfc <cmd> /dev/null` is portable across
+    // util-linux and BSD `script` implementations.
     const env = { ...process.env, TERM: 'xterm-256color', COLUMNS: String(cols), LINES: String(rows) };
-    const child = spawn(shellPath, ['-i'], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    let scriptCmd: string;
+    let scriptArgs: string[];
+    try {
+      execSync('which script', { timeout: 1000 });
+      // util-linux script: -q quiet, -f flush, -c command, /dev/null = no typescript file
+      scriptCmd = 'script';
+      scriptArgs = ['-qfc', shellPath, '/dev/null'];
+    } catch {
+      // No `script` available — fall back to direct bash (will have echo issues but works)
+      scriptCmd = shellPath;
+      scriptArgs = ['-i'];
+    }
+    const child = spawn(scriptCmd, scriptArgs, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
 
     // Wrap child process to match pty interface used by session handlers
     const procShim = {
