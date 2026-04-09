@@ -290,7 +290,13 @@ body.platform-darwin .titlebar {
 
 /* Recent Files dropdown */
 .open-file-wrapper { position: relative; display: inline-flex; align-items: center; }
-.recent-files-chevron { padding: 4px 6px; margin-left: -2px; font-size: 10px; }
+.open-file-chevron {
+  margin-left: 4px;
+  font-size: 10px;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.open-file-chevron:hover { opacity: 1; }
 
 .recent-files-popup {
   position: absolute;

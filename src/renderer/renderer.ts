@@ -688,7 +688,7 @@ const SLOW_SCROLL_FRAME_COUNT = 10; // Number of slow frames before warning
 const elements = {
   logo: document.getElementById('logo') as HTMLImageElement,
   btnOpenFile: document.getElementById('btn-open-file') as HTMLButtonElement,
-  btnRecentFiles: document.getElementById('btn-recent-files') as HTMLButtonElement,
+  btnRecentFiles: document.getElementById('btn-recent-files') as HTMLSpanElement,
   recentFilesPopup: document.getElementById('recent-files-popup') as HTMLDivElement,
   btnOpenWelcome: document.getElementById('btn-open-welcome') as HTMLButtonElement,
   btnSearch: document.getElementById('btn-search') as HTMLButtonElement,
@@ -1963,6 +1963,7 @@ function createLogViewer(): void {
   previewEl.className = 'minimap-preview hidden';
   previewEl.id = 'minimap-preview';
   minimapElement.appendChild(previewEl);
+  setupMinimapPreviewListeners(previewEl);
 
   // Add to wrapper
   logViewerWrapper.appendChild(logViewerElement);
@@ -3291,14 +3292,28 @@ function handleMinimapClick(event: MouseEvent): void {
 // ─── Minimap Hover Preview ──────────────────────────────────────────────
 
 let minimapPreviewTimer: ReturnType<typeof setTimeout> | null = null;
+let minimapPreviewHideTimer: ReturnType<typeof setTimeout> | null = null;
 let minimapPreviewLine = -1;
 
 function isMinimapPreviewEnabled(): boolean {
   return userSettings.minimapPreview;
 }
 
+function setupMinimapPreviewListeners(previewEl: HTMLElement): void {
+  previewEl.addEventListener('mouseenter', () => {
+    // Cancel any pending hide when mouse enters preview
+    if (minimapPreviewHideTimer) { clearTimeout(minimapPreviewHideTimer); minimapPreviewHideTimer = null; }
+  });
+  previewEl.addEventListener('mouseleave', () => {
+    // Hide after a short delay when mouse leaves preview
+    minimapPreviewHideTimer = setTimeout(() => hideMinimapPreviewNow(), 200);
+  });
+}
+
 function handleMinimapHover(event: MouseEvent): void {
   if (!minimapElement || isDraggingMinimap || !isMinimapPreviewEnabled()) return;
+  // Cancel any pending hide
+  if (minimapPreviewHideTimer) { clearTimeout(minimapPreviewHideTimer); minimapPreviewHideTimer = null; }
 
   const rect = minimapElement.getBoundingClientRect();
   const hoverY = event.clientY - rect.top;
@@ -3307,10 +3322,9 @@ function handleMinimapHover(event: MouseEvent): void {
   if (totalLines === 0) return;
 
   const targetLine = Math.floor((hoverY / minimapHeight) * totalLines);
-  if (targetLine === minimapPreviewLine) return; // Same line, skip
+  if (targetLine === minimapPreviewLine) return;
   minimapPreviewLine = targetLine;
 
-  // Debounce to avoid hammering getLines
   if (minimapPreviewTimer) clearTimeout(minimapPreviewTimer);
   minimapPreviewTimer = setTimeout(async () => {
     const preview = document.getElementById('minimap-preview');
@@ -3333,7 +3347,6 @@ function handleMinimapHover(event: MouseEvent): void {
     html += `</div>`;
     preview.innerHTML = html;
 
-    // Position: vertically centered on hover Y, to the left of the minimap
     const previewHeight = Math.max(120, (PREVIEW_LINES + 1) * 16 + 8);
     const top = Math.max(0, Math.min(hoverY - previewHeight / 2, minimapHeight - previewHeight));
     preview.style.top = `${top}px`;
@@ -3342,7 +3355,14 @@ function handleMinimapHover(event: MouseEvent): void {
 }
 
 function hideMinimapPreview(): void {
+  // Delay hide to allow mouse to move into the preview box
+  if (minimapPreviewHideTimer) clearTimeout(minimapPreviewHideTimer);
+  minimapPreviewHideTimer = setTimeout(() => hideMinimapPreviewNow(), 200);
+}
+
+function hideMinimapPreviewNow(): void {
   if (minimapPreviewTimer) { clearTimeout(minimapPreviewTimer); minimapPreviewTimer = null; }
+  if (minimapPreviewHideTimer) { clearTimeout(minimapPreviewHideTimer); minimapPreviewHideTimer = null; }
   minimapPreviewLine = -1;
   const preview = document.getElementById('minimap-preview');
   if (preview) preview.classList.add('hidden');
@@ -12687,6 +12707,11 @@ function init(): void {
   elements.btnOpenFile.addEventListener('click', openFile);
   elements.btnRecentFiles.addEventListener('click', (e) => {
     e.stopPropagation();
+    e.preventDefault();
+    toggleRecentFilesPopup();
+  });
+  elements.btnOpenFile.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
     toggleRecentFilesPopup();
   });
   document.addEventListener('click', (e) => {

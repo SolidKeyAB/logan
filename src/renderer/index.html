@@ -28,10 +28,9 @@
     <div class="toolbar">
       <div class="toolbar-left">
         <div class="open-file-wrapper">
-          <button id="btn-open-file" class="toolbar-btn" title="Open file" data-help="Open a log file for analysis.&#10;Supports text logs, JSON logs, CSV, and large files (100K+ lines).&#10;Drag & drop also works.">
-            <span class="icon">&#128194;</span> Open File
+          <button id="btn-open-file" class="toolbar-btn" title="Open file (click) | Recent files (right-click)" data-help="Open a log file for analysis.&#10;Right-click or use the dropdown for recent files.&#10;Supports text logs, JSON logs, CSV, and large files (100K+ lines).&#10;Drag & drop also works.">
+            <span class="icon">&#128194;</span> Open File <span id="btn-recent-files" class="open-file-chevron" title="Recent files">&#9662;</span>
           </button>
-          <button id="btn-recent-files" class="toolbar-btn small recent-files-chevron" title="Recent files">&#9662;</button>
           <div id="recent-files-popup" class="recent-files-popup hidden"></div>
         </div>
         <div class="separator"></div>
