@@ -3324,12 +3324,13 @@ function handleMinimapHover(event: MouseEvent): void {
       return;
     }
 
-    let html = `<div class="minimap-preview-header">Line ${targetLine + 1}</div>`;
+    let html = `<div class="minimap-preview-header">Line ${targetLine + 1}</div><div class="minimap-preview-lines">`;
     for (const line of result.lines) {
       const isCurrent = line.lineNumber === targetLine;
-      const text = line.text.length > 120 ? line.text.substring(0, 120) + '...' : line.text;
+      const text = line.text.length > 500 ? line.text.substring(0, 500) + '...' : line.text;
       html += `<div class="minimap-preview-line${isCurrent ? ' current' : ''}"><span class="minimap-preview-num">${line.lineNumber + 1}</span>${escapeHtml(text)}</div>`;
     }
+    html += `</div>`;
     preview.innerHTML = html;
 
     // Position: vertically centered on hover Y, to the left of the minimap
