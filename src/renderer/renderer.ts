@@ -3294,6 +3294,8 @@ function handleMinimapClick(event: MouseEvent): void {
 let minimapPreviewTimer: ReturnType<typeof setTimeout> | null = null;
 let minimapPreviewHideTimer: ReturnType<typeof setTimeout> | null = null;
 let minimapPreviewLine = -1;
+let minimapPreviewLastY = -1; // Last Y that triggered a preview render
+let minimapPreviewLocked = false; // True when user is interacting with preview
 
 function isMinimapPreviewEnabled(): boolean {
   return userSettings.minimapPreview;
@@ -3301,17 +3303,20 @@ function isMinimapPreviewEnabled(): boolean {
 
 function setupMinimapPreviewListeners(previewEl: HTMLElement): void {
   previewEl.addEventListener('mouseenter', () => {
-    // Cancel any pending hide when mouse enters preview
+    // Lock preview in place while user is inside it
+    minimapPreviewLocked = true;
     if (minimapPreviewHideTimer) { clearTimeout(minimapPreviewHideTimer); minimapPreviewHideTimer = null; }
   });
   previewEl.addEventListener('mouseleave', () => {
-    // Hide after a short delay when mouse leaves preview
-    minimapPreviewHideTimer = setTimeout(() => hideMinimapPreviewNow(), 200);
+    minimapPreviewLocked = false;
+    minimapPreviewHideTimer = setTimeout(() => hideMinimapPreviewNow(), 300);
   });
 }
 
 function handleMinimapHover(event: MouseEvent): void {
   if (!minimapElement || isDraggingMinimap || !isMinimapPreviewEnabled()) return;
+  // Don't reposition if the user is interacting with the preview
+  if (minimapPreviewLocked) return;
   // Cancel any pending hide
   if (minimapPreviewHideTimer) { clearTimeout(minimapPreviewHideTimer); minimapPreviewHideTimer = null; }
 
@@ -3321,9 +3326,13 @@ function handleMinimapHover(event: MouseEvent): void {
   const totalLines = getTotalLines();
   if (totalLines === 0) return;
 
+  // Require at least 15px vertical movement before repositioning the preview
+  if (minimapPreviewLastY >= 0 && Math.abs(hoverY - minimapPreviewLastY) < 15) return;
+
   const targetLine = Math.floor((hoverY / minimapHeight) * totalLines);
   if (targetLine === minimapPreviewLine) return;
   minimapPreviewLine = targetLine;
+  minimapPreviewLastY = hoverY;
 
   if (minimapPreviewTimer) clearTimeout(minimapPreviewTimer);
   minimapPreviewTimer = setTimeout(async () => {
@@ -3364,6 +3373,8 @@ function hideMinimapPreviewNow(): void {
   if (minimapPreviewTimer) { clearTimeout(minimapPreviewTimer); minimapPreviewTimer = null; }
   if (minimapPreviewHideTimer) { clearTimeout(minimapPreviewHideTimer); minimapPreviewHideTimer = null; }
   minimapPreviewLine = -1;
+  minimapPreviewLastY = -1;
+  minimapPreviewLocked = false;
   const preview = document.getElementById('minimap-preview');
   if (preview) preview.classList.add('hidden');
 }
@@ -4192,6 +4203,11 @@ async function toggleRecentFilesPopup(): Promise<void> {
   }
 
   popup.innerHTML = html;
+
+  // Position below the Open File button using fixed positioning
+  const btnRect = elements.btnOpenFile.getBoundingClientRect();
+  popup.style.top = `${btnRect.bottom + 4}px`;
+  popup.style.left = `${btnRect.left}px`;
   popup.classList.remove('hidden');
 
   // Wire up clicks
@@ -12704,7 +12720,11 @@ function init(): void {
   elements.logo.style.cursor = 'pointer';
 
   // File operations
-  elements.btnOpenFile.addEventListener('click', openFile);
+  elements.btnOpenFile.addEventListener('click', (e) => {
+    // Don't open file dialog if the recent files chevron was clicked
+    if ((e.target as HTMLElement).id === 'btn-recent-files') return;
+    openFile();
+  });
   elements.btnRecentFiles.addEventListener('click', (e) => {
     e.stopPropagation();
     e.preventDefault();

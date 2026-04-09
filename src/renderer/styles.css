@@ -299,9 +299,7 @@ body.platform-darwin .titlebar {
 .open-file-chevron:hover { opacity: 1; }
 
 .recent-files-popup {
-  position: absolute;
-  top: 100%;
-  left: 0;
+  position: fixed;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 4px;
@@ -312,7 +310,6 @@ body.platform-darwin .titlebar {
   max-height: 400px;
   display: flex;
   flex-direction: column;
-  margin-top: 4px;
 }
 .recent-files-popup.hidden { display: none; }
 
