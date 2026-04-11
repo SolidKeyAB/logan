@@ -854,6 +854,10 @@ const elements = {
   // Notes content (in bottom panel)
   notesTextarea: document.getElementById('notes-textarea') as HTMLTextAreaElement,
   notesSaveStatus: document.getElementById('notes-save-status') as HTMLSpanElement,
+  btnSearchToggle: document.getElementById('btn-search-toggle') as HTMLButtonElement,
+  searchPanel: document.getElementById('search-panel') as HTMLDivElement,
+  btnSearchPanelClose: document.getElementById('btn-search-panel-close') as HTMLButtonElement,
+  btnMinimapToggle: document.getElementById('btn-minimap-toggle') as HTMLButtonElement,
   btnAnnotationsToggle: document.getElementById('btn-annotations-toggle') as HTMLButtonElement,
   btnNotesToggle: document.getElementById('btn-notes-toggle') as HTMLButtonElement,
   // Agent Chat (in bottom panel)
@@ -6086,6 +6090,7 @@ function rebuildAnnotationIndex(): void {
 
 function toggleAnnotations(): void {
   state.showAnnotations = !state.showAnnotations;
+  elements.btnAnnotationsToggle.classList.toggle('active', state.showAnnotations);
   renderVisibleLines();
   renderMinimapMarkers();
 }
@@ -9184,6 +9189,23 @@ function applyColumnFilter(text: string): string {
 }
 
 // Search
+// ─── Search Panel Toggle ──────────────────────────────────────────────
+
+function toggleSearchPanel(): void {
+  const panel = elements.searchPanel;
+  if (panel.classList.contains('hidden')) {
+    panel.classList.remove('hidden');
+    elements.searchInput.focus();
+    elements.searchInput.select();
+  } else {
+    panel.classList.add('hidden');
+  }
+}
+
+function hideSearchPanel(): void {
+  elements.searchPanel.classList.add('hidden');
+}
+
 // ─── Search History ──────────────────────────────────────────────
 const SEARCH_HISTORY_KEY = 'logan-search-history';
 const SEARCH_HISTORY_MAX = 50;
@@ -12176,7 +12198,7 @@ function setupKeyboardShortcuts(): void {
     // Ctrl/Cmd + F: Focus search
     if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
       e.preventDefault();
-      elements.searchInput.focus();
+      toggleSearchPanel();
     }
 
     // Enter in search: Search
@@ -12227,6 +12249,11 @@ function setupKeyboardShortcuts(): void {
 
     // Escape: Cancel range selection, close split/diff, close bottom panel, terminal, or modals
     if (e.key === 'Escape') {
+      // Close search panel first if it's open
+      if (!elements.searchPanel.classList.contains('hidden')) {
+        hideSearchPanel();
+        return;
+      }
       if (viewMode !== 'single') {
         deactivateSplitView();
         return;
@@ -12804,8 +12831,17 @@ function init(): void {
 
   // Bottom panel (tabbed) events
   elements.btnBottomPanelClose.addEventListener('click', closeBottomPanel);
+  // Right sidebar buttons
   elements.btnAnnotationsToggle.addEventListener('click', toggleAnnotations);
   elements.btnNotesToggle.addEventListener('click', () => toggleBottomTab('notes'));
+  elements.btnMinimapToggle?.addEventListener('click', () => {
+    userSettings.minimapVisible = !userSettings.minimapVisible;
+    if (minimapElement) minimapElement.style.display = userSettings.minimapVisible ? '' : 'none';
+    saveSettings();
+  });
+  // Search panel
+  elements.btnSearchToggle?.addEventListener('click', toggleSearchPanel);
+  elements.btnSearchPanelClose?.addEventListener('click', hideSearchPanel);
   elements.notesTextarea.addEventListener('input', saveNotesDebounced);
 
   // Agent Chat event listeners
@@ -13031,20 +13067,13 @@ function init(): void {
     }
   });
 
-  // Search options popup
-  elements.btnSearchOptions.addEventListener('click', (e) => {
+  // Search options popup (removed from toolbar — now inline in search panel)
+  elements.btnSearchOptions?.addEventListener('click', (e) => {
     e.stopPropagation();
-    elements.searchOptionsPopup.classList.toggle('hidden');
-    if (!elements.searchOptionsPopup.classList.contains('hidden')) {
-      const rect = elements.btnSearchOptions.getBoundingClientRect();
-      elements.searchOptionsPopup.style.top = (rect.bottom + 4) + 'px';
-      elements.searchOptionsPopup.style.left = rect.left + 'px';
-    }
+    elements.searchOptionsPopup?.classList.toggle('hidden');
   });
-
-  // Close search options popup on outside click
   document.addEventListener('click', (e) => {
-    if (!elements.searchOptionsPopup.classList.contains('hidden') &&
+    if (elements.searchOptionsPopup && !elements.searchOptionsPopup.classList.contains('hidden') &&
         !elements.searchOptionsPopup.contains(e.target as Node) &&
         e.target !== elements.btnSearchOptions) {
       elements.searchOptionsPopup.classList.add('hidden');
@@ -13063,7 +13092,7 @@ function init(): void {
   // Start line input — Enter triggers search
   elements.searchStartLine.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
-      elements.searchOptionsPopup.classList.add('hidden');
+      elements.searchOptionsPopup?.classList.add('hidden');
       performSearch();
     }
   });
@@ -13843,7 +13872,6 @@ function closeTab(tabId: string): void {
         logContentElement = null;
       }
       elements.welcomeMessage.classList.remove('hidden');
-      elements.tabBar.classList.add('hidden');
       closeBottomPanel();
       updateStatusBar();
       updateFileStatsUI();
@@ -13857,13 +13885,10 @@ function closeTab(tabId: string): void {
 }
 
 function renderTabBar(): void {
+  elements.tabsContainer.innerHTML = '';
   if (state.tabs.length === 0) {
-    elements.tabBar.classList.add('hidden');
     return;
   }
-
-  elements.tabBar.classList.remove('hidden');
-  elements.tabsContainer.innerHTML = '';
 
   for (const tab of state.tabs) {
     const tabElement = document.createElement('div');
