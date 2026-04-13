@@ -12907,7 +12907,7 @@ function init(): void {
   // Launch/Stop agent button
   elements.chatLaunchAgent.addEventListener('click', toggleAgent);
   // Agent setup wizard
-  elements.chatAgentSetup.addEventListener('click', async () => {
+  elements.chatAgentSetup?.addEventListener('click', async () => {
     const result = await showAgentWizard();
     if (result && !agentRunning) {
       const res = await window.api.launchAgent() as any;
