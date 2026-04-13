@@ -5682,14 +5682,11 @@ async function toggleAgent(): Promise<void> {
       await window.api.stopAgent();
       agentRunning = false;
     } else {
-      // Check if setup is needed
-      const env = await window.api.detectAgentEnvironment();
-      if (!env.hasConfig) {
-        btn.disabled = false;
-        const result = await showAgentWizard();
-        if (!result) return; // cancelled
-        btn.disabled = true;
-      }
+      // Always show wizard so user knows what they're launching
+      btn.disabled = false;
+      const result = await showAgentWizard();
+      if (!result) return; // cancelled
+      btn.disabled = true;
       const res = await window.api.launchAgent() as any;
       if (res.success) {
         agentRunning = true;
