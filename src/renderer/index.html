@@ -1212,6 +1212,53 @@
       </div>
     </div>
 
+    <!-- SSH Connect & Browse Modal -->
+    <div id="ssh-connect-modal" class="modal hidden">
+      <div class="modal-content" style="width: 480px;">
+        <div class="modal-header">
+          <h3>SSH Remote Browse</h3>
+          <button class="modal-close" data-modal="ssh-connect-modal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div id="ssh-connect-hosts" class="ssh-connect-hosts">
+            <!-- Populated dynamically: saved profiles + SSH config hosts -->
+          </div>
+          <div class="ssh-connect-divider"><span>or enter manually</span></div>
+          <div class="ssh-connect-form">
+            <div style="display:flex;gap:8px;">
+              <div class="filter-group" style="flex:3;">
+                <label>Host</label>
+                <input type="text" id="ssh-connect-host" class="modal-input" placeholder="hostname or IP">
+              </div>
+              <div class="filter-group" style="flex:1;">
+                <label>Port</label>
+                <input type="number" id="ssh-connect-port" class="modal-input" value="22" min="1" max="65535">
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <div class="filter-group" style="flex:1;">
+                <label>Username</label>
+                <input type="text" id="ssh-connect-username" class="modal-input" placeholder="root">
+              </div>
+              <div class="filter-group" style="flex:1;">
+                <label>Identity File</label>
+                <input type="text" id="ssh-connect-identity" class="modal-input" placeholder="~/.ssh/id_ed25519">
+              </div>
+            </div>
+            <div class="filter-group">
+              <label>Remote Path</label>
+              <input type="text" id="ssh-connect-path" class="modal-input" placeholder="/var/log">
+            </div>
+          </div>
+          <div id="ssh-connect-status" class="ssh-connect-status"></div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-ssh-connect-cancel" class="secondary-btn">Cancel</button>
+          <button id="btn-ssh-connect-go" class="primary-btn">Connect & Browse</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Agent Setup Wizard Modal -->
     <div id="agent-wizard-modal" class="modal hidden">
       <div class="modal-content" style="width: 500px;">

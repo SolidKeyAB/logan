@@ -6776,35 +6776,208 @@ function showSshProfileManager(): void {
 // === SSH Folder Browsing ===
 
 async function openSshFolder(): Promise<void> {
-  // First, refresh hosts so we have an up-to-date list
-  await refreshSshHosts();
+  // Show the SSH Connect & Browse modal
+  await showSshConnectModal();
+}
 
-  // Find an active SSH connection for SFTP browsing
+async function showSshConnectModal(): Promise<void> {
+  const modal = document.getElementById('ssh-connect-modal')!;
+  const hostsList = document.getElementById('ssh-connect-hosts')!;
+  const statusEl = document.getElementById('ssh-connect-status')!;
+  const btnGo = document.getElementById('btn-ssh-connect-go') as HTMLButtonElement;
+  const btnCancel = document.getElementById('btn-ssh-connect-cancel') as HTMLButtonElement;
+  const hostInput = document.getElementById('ssh-connect-host') as HTMLInputElement;
+  const portInput = document.getElementById('ssh-connect-port') as HTMLInputElement;
+  const userInput = document.getElementById('ssh-connect-username') as HTMLInputElement;
+  const identInput = document.getElementById('ssh-connect-identity') as HTMLInputElement;
+  const pathInput = document.getElementById('ssh-connect-path') as HTMLInputElement;
+
+  statusEl.textContent = '';
+  statusEl.style.color = '';
+
+  // Load available hosts
+  const [configResult, profilesResult] = await Promise.all([
+    window.api.sshParseConfig(),
+    window.api.sshListProfiles(),
+  ]);
+
+  const hosts: Array<{ name: string; host: string; port: number; username: string; identityFile?: string; source: string }> = [];
+
+  // Add saved profiles
+  if (profilesResult.success && profilesResult.profiles) {
+    for (const p of profilesResult.profiles) {
+      hosts.push({ name: p.name, host: p.host, port: p.port || 22, username: p.username || '', identityFile: p.identityFile, source: 'profile' });
+    }
+  }
+  // Add SSH config hosts (avoid duplicates)
+  if (configResult.success && configResult.hosts) {
+    for (const h of configResult.hosts) {
+      if (!hosts.some(e => e.host === (h.hostName || h.host))) {
+        hosts.push({ name: h.host, host: h.hostName || h.host, port: h.port || 22, username: h.user || '', identityFile: h.identityFile, source: 'config' });
+      }
+    }
+  }
+
+  // Also check for active SSH connections
+  let activeConn: LiveConnectionState | undefined;
+  for (const conn of state.liveConnections.values()) {
+    if (conn.source === 'ssh' && conn.connected) { activeConn = conn; break; }
+  }
+
+  // Render hosts list
+  if (hosts.length === 0 && !activeConn) {
+    hostsList.innerHTML = '<div class="ssh-connect-empty">No saved SSH profiles or config hosts found.<br>Enter connection details below.</div>';
+  } else {
+    let html = '';
+    if (activeConn) {
+      html += `<div class="ssh-connect-host-item active-conn" data-active="true">
+        <span class="ssh-host-icon">&#9889;</span>
+        <div><div class="ssh-host-name">${escapeHtml(activeConn.displayName)}</div><div class="ssh-host-detail">Active connection</div></div>
+        <span class="ssh-host-badge" style="background:#4caf50;color:#fff;">Connected</span>
+      </div>`;
+    }
+    for (const h of hosts) {
+      html += `<div class="ssh-connect-host-item" data-host="${escapeHtml(h.host)}" data-port="${h.port}" data-user="${escapeHtml(h.username)}" data-identity="${escapeHtml(h.identityFile || '')}">
+        <span class="ssh-host-icon">&#128421;</span>
+        <div><div class="ssh-host-name">${escapeHtml(h.name)}</div><div class="ssh-host-detail">${escapeHtml(h.username || 'user')}@${escapeHtml(h.host)}:${h.port}</div></div>
+        <span class="ssh-host-badge">${h.source}</span>
+      </div>`;
+    }
+    hostsList.innerHTML = html;
+
+    // Click to select and fill form
+    hostsList.querySelectorAll('.ssh-connect-host-item').forEach(item => {
+      item.addEventListener('click', () => {
+        hostsList.querySelectorAll('.ssh-connect-host-item').forEach(i => i.classList.remove('selected'));
+        item.classList.add('selected');
+        const el = item as HTMLElement;
+        if (el.dataset.active) {
+          // Active connection — just set path
+          hostInput.value = '';
+          userInput.value = '';
+          statusEl.textContent = 'Will use active SSH connection';
+          statusEl.style.color = '#4caf50';
+        } else {
+          hostInput.value = el.dataset.host || '';
+          portInput.value = el.dataset.port || '22';
+          userInput.value = el.dataset.user || '';
+          identInput.value = el.dataset.identity || '';
+        }
+      });
+    });
+  }
+
+  modal.classList.remove('hidden');
+  pathInput.focus();
+
+  // Handle Connect & Browse
+  return new Promise<void>((resolve) => {
+    const cleanup = () => {
+      modal.classList.add('hidden');
+      btnGo.removeEventListener('click', onConnect);
+      btnCancel.removeEventListener('click', onCancel);
+      resolve();
+    };
+
+    const onCancel = () => cleanup();
+
+    const onConnect = async () => {
+      const selectedActive = hostsList.querySelector('.ssh-connect-host-item.selected.active-conn');
+      const remotePath = pathInput.value.trim() || '/var/log';
+
+      btnGo.disabled = true;
+      statusEl.textContent = 'Connecting...';
+      statusEl.style.color = '#ffb840';
+
+      try {
+        if (selectedActive || activeConn) {
+          // Use existing connection
+          const result = await window.api.sshListRemoteDir(remotePath);
+          if (!result.success) {
+            statusEl.textContent = `Failed: ${result.error}`;
+            statusEl.style.color = '#ff5050';
+            btnGo.disabled = false;
+            return;
+          }
+          const files = result.files || [];
+          const connLabel = activeConn?.displayName || 'SSH';
+          addSshFolderToPanel(connLabel, remotePath, files);
+          cleanup();
+        } else {
+          // Need to create a new SSH connection via Live panel
+          const host = hostInput.value.trim();
+          const port = parseInt(portInput.value) || 22;
+          const username = userInput.value.trim();
+          const identityFile = identInput.value.trim();
+
+          if (!host) { statusEl.textContent = 'Host is required'; statusEl.style.color = '#ff5050'; btnGo.disabled = false; return; }
+
+          // Connect via the live SSH mechanism
+          const displayName = `${username || 'user'}@${host}`;
+          const connResult = await window.api.liveConnect('ssh', {
+            host, port, username: username || undefined,
+            identityFile: identityFile || undefined,
+          }, displayName, `SFTP browse ${host}`);
+
+          if (!connResult.success) {
+            statusEl.textContent = `Connection failed: ${connResult.error}`;
+            statusEl.style.color = '#ff5050';
+            btnGo.disabled = false;
+            return;
+          }
+
+          statusEl.textContent = 'Connected! Browsing...';
+          // Small delay for connection to establish
+          await new Promise(r => setTimeout(r, 500));
+
+          const result = await window.api.sshListRemoteDir(remotePath);
+          if (!result.success) {
+            statusEl.textContent = `Browse failed: ${result.error}`;
+            statusEl.style.color = '#ff5050';
+            btnGo.disabled = false;
+            return;
+          }
+          const files = result.files || [];
+          addSshFolderToPanel(`${username || 'user'}@${host}`, remotePath, files);
+          cleanup();
+        }
+      } catch (err) {
+        statusEl.textContent = `Error: ${err}`;
+        statusEl.style.color = '#ff5050';
+        btnGo.disabled = false;
+      }
+    };
+
+    btnGo.addEventListener('click', onConnect);
+    btnCancel.addEventListener('click', onCancel);
+    modal.querySelector('.modal-close')?.addEventListener('click', onCancel);
+  });
+}
+
+function addSshFolderToPanel(hostLabel: string, remotePath: string, files: any[]): void {
+  const folderName = `${hostLabel}:${remotePath}`;
+
+  // Reuse existing openSshFolder logic for adding to state
+  state.folders.push({
+    name: folderName,
+    path: remotePath,
+    files: mapFolderEntries(files),
+    collapsed: false,
+    isRemote: true,
+  });
+  renderFolderTree();
+  // Open folders panel if not already open
+  if (activePanel !== 'folders') openPanel('folders');
+}
+
+async function _openSshFolderLegacy(): Promise<void> {
+  // Legacy path — used when there's already an active connection
   let sshConn: LiveConnectionState | undefined;
   for (const conn of state.liveConnections.values()) {
-    if (conn.source === 'ssh' && conn.connected) {
-      sshConn = conn;
-      break;
-    }
+    if (conn.source === 'ssh' && conn.connected) { sshConn = conn; break; }
   }
-  if (!sshConn) {
-    // No active SSH connection — prompt user to connect
-    // Show the SSH section in the Live panel and auto-focus the host selector
-    openBottomTab('live');
-    // Focus on the SSH connect section
-    const sshSection = document.querySelector('.live-ssh-section') as HTMLElement;
-    if (sshSection) sshSection.scrollIntoView({ behavior: 'smooth' });
-    // Show hint
-    const statusEl = document.getElementById('live-ssh-status');
-    if (statusEl) {
-      statusEl.textContent = 'Connect to an SSH host below, then click the SSH browse button in the Folders panel';
-      statusEl.style.color = '#ffb840';
-      setTimeout(() => { statusEl.textContent = ''; statusEl.style.color = ''; }, 8000);
-    }
-    return;
-  }
+  if (!sshConn) return;
 
-  // Prompt for remote path
   const remotePath = prompt('Enter remote directory path:', '/var/log');
   if (!remotePath) return;
 

@@ -536,6 +536,80 @@ body.platform-darwin .titlebar {
   margin: 4px 0;
 }
 
+/* SSH Connect Modal */
+.ssh-connect-hosts {
+  max-height: 200px;
+  overflow-y: auto;
+  margin-bottom: 8px;
+}
+.ssh-connect-host-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  transition: all 0.1s;
+}
+.ssh-connect-host-item:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--border-color);
+}
+.ssh-connect-host-item.selected {
+  background: rgba(0,122,204,0.1);
+  border-color: var(--accent-color);
+}
+.ssh-host-icon { color: var(--text-muted); font-size: 14px; flex-shrink: 0; }
+.ssh-host-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.ssh-host-detail { font-size: 11px; color: var(--text-muted); }
+.ssh-host-badge {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.ssh-connect-divider {
+  text-align: center;
+  margin: 12px 0;
+  position: relative;
+}
+.ssh-connect-divider::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+  background: var(--border-color);
+}
+.ssh-connect-divider span {
+  position: relative;
+  background: var(--bg-secondary);
+  padding: 0 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.ssh-connect-form .filter-group { margin-bottom: 8px; }
+.ssh-connect-form label { font-size: 11px; color: var(--text-secondary); margin-bottom: 3px; display: block; }
+
+.ssh-connect-status {
+  font-size: 11px;
+  margin-top: 8px;
+  min-height: 16px;
+}
+
+.ssh-connect-empty {
+  text-align: center;
+  padding: 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .search-options-popup {
   position: fixed;
   background-color: var(--bg-secondary);
