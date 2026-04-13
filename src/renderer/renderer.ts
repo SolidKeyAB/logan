@@ -4346,7 +4346,7 @@ async function refreshFolders(): Promise<void> {
 
 async function refreshSingleFolder(folderPath: string): Promise<void> {
   const folder = state.folders.find(f => f.path === folderPath);
-  if (!folder || folder.isRemote) return;
+  if (!folder) return;
 
   // Find the refresh button in the DOM and show spinning state
   const groupEl = elements.foldersList.querySelector(`.folder-group[data-path="${CSS.escape(folderPath)}"]`);
@@ -4354,11 +4354,21 @@ async function refreshSingleFolder(folderPath: string): Promise<void> {
   if (btn) { btn.disabled = true; btn.textContent = '\u27F3'; }
 
   try {
-    const result = await window.api.readFolder(folder.path);
-    if (result.success && result.files) {
-      const newFiles = mapFolderEntries(result.files);
-      preserveCollapseState(newFiles, folder.files);
-      folder.files = newFiles;
+    if (folder.isRemote) {
+      // Remote folder — re-list via SFTP
+      const result = await window.api.sshListRemoteDir(folder.path);
+      if (result.success && result.files) {
+        const newFiles = mapFolderEntries(result.files);
+        preserveCollapseState(newFiles, folder.files);
+        folder.files = newFiles;
+      }
+    } else {
+      const result = await window.api.readFolder(folder.path);
+      if (result.success && result.files) {
+        const newFiles = mapFolderEntries(result.files);
+        preserveCollapseState(newFiles, folder.files);
+        folder.files = newFiles;
+      }
     }
     renderFolderTree();
   } finally {
@@ -4374,15 +4384,17 @@ function formatFileSize(bytes: number): string {
 
 function renderFolderEntries(entries: LocalFolderFile[], depth: number, isRemote: boolean): string {
   return entries.map(entry => {
-    if (entry.isDirectory && entry.children) {
+    if (entry.isDirectory) {
+      const hasChildren = entry.children && entry.children.length > 0;
+      const isLoading = (entry as any)._loading;
       return `
-        <div class="folder-subdir ${entry.collapsed ? 'collapsed' : ''}" data-subdir-path="${escapeHtml(entry.path)}">
+        <div class="folder-subdir ${entry.collapsed ? 'collapsed' : ''}" data-subdir-path="${escapeHtml(entry.path)}" ${isRemote ? 'data-remote-dir="true"' : ''}>
           <div class="folder-subdir-header" style="padding-left: ${8 + depth * 14}px">
-            <span class="folder-toggle">&#9660;</span>
+            <span class="folder-toggle">${isLoading ? '&#8987;' : '&#9660;'}</span>
             <span class="folder-subdir-name" title="${escapeHtml(entry.path)}">${escapeHtml(entry.name)}</span>
           </div>
           <div class="folder-subdir-files">
-            ${renderFolderEntries(entry.children, depth + 1, isRemote)}
+            ${hasChildren ? renderFolderEntries(entry.children!, depth + 1, isRemote) : (!entry.collapsed && isRemote && !isLoading ? '<div class="folder-loading" style="padding-left:' + (8 + (depth+1) * 14) + 'px;font-size:11px;color:var(--text-muted);">Loading...</div>' : '')}
           </div>
         </div>`;
     }
@@ -4425,7 +4437,7 @@ function renderFolderTree(): void {
         <div class="folder-header">
           <span class="folder-toggle">&#9660;</span>
           <span class="folder-name" title="${escapeHtml(folder.path)}">${folder.isRemote ? '<span class="ssh-badge">SSH</span> ' : ''}${escapeHtml(folder.name)}</span>
-          ${!folder.isRemote ? '<button class="folder-refresh" title="Refresh folder">&#8635;</button>' : ''}
+          <button class="folder-refresh" title="Refresh folder">&#8635;</button>
           <button class="folder-close" title="Remove folder">&times;</button>
         </div>
         <div class="folder-files">
@@ -4463,21 +4475,37 @@ function renderFolderTree(): void {
     });
   });
 
-  // Subfolder toggle events
+  // Subfolder toggle events (with lazy remote loading)
   elements.foldersList.querySelectorAll('.folder-subdir-header').forEach((header) => {
-    header.addEventListener('click', (e) => {
+    header.addEventListener('click', async (e) => {
       e.stopPropagation();
       const subdirEl = header.closest('.folder-subdir') as HTMLElement;
       const subdirPath = subdirEl?.dataset.subdirPath;
+      const isRemoteDir = subdirEl?.dataset.remoteDir === 'true';
       const folderGroupPath = (subdirEl?.closest('.folder-group') as HTMLElement)?.dataset.path;
       if (!subdirPath || !folderGroupPath) return;
       const folder = state.folders.find(f => f.path === folderGroupPath);
       if (!folder) return;
       const node = findSubfolder(folder.files, subdirPath);
-      if (node) {
-        node.collapsed = !node.collapsed;
+      if (!node) return;
+
+      // Toggle collapse
+      node.collapsed = !node.collapsed;
+
+      // Lazy-load remote subdirectory contents if expanding and no children yet
+      if (!node.collapsed && isRemoteDir && (!node.children || node.children.length === 0)) {
+        (node as any)._loading = true;
         renderFolderTree();
+        try {
+          const result = await window.api.sshListRemoteDir(subdirPath);
+          if (result.success && result.files) {
+            node.children = mapFolderEntries(result.files);
+          }
+        } catch { /* ignore */ }
+        (node as any)._loading = false;
       }
+
+      renderFolderTree();
     });
   });
 
