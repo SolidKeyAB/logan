@@ -6788,9 +6788,19 @@ async function openSshFolder(): Promise<void> {
     }
   }
   if (!sshConn) {
-    // No active SSH — open Live panel so user can connect
+    // No active SSH connection — prompt user to connect
+    // Show the SSH section in the Live panel and auto-focus the host selector
     openBottomTab('live');
-    addChatMessage({ from: 'agent', text: 'To browse SSH files, first connect to a host in the Live panel, then click the SSH browse button again.', timestamp: Date.now() });
+    // Focus on the SSH connect section
+    const sshSection = document.querySelector('.live-ssh-section') as HTMLElement;
+    if (sshSection) sshSection.scrollIntoView({ behavior: 'smooth' });
+    // Show hint
+    const statusEl = document.getElementById('live-ssh-status');
+    if (statusEl) {
+      statusEl.textContent = 'Connect to an SSH host below, then click the SSH browse button in the Folders panel';
+      statusEl.style.color = '#ffb840';
+      setTimeout(() => { statusEl.textContent = ''; statusEl.style.color = ''; }, 8000);
+    }
     return;
   }
 
