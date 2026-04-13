@@ -2474,18 +2474,36 @@ function renderVisibleLines(): void {
 
       fragment.appendChild(lineElement);
 
-      // Agent annotation overlay (only when visible and annotations exist for this line)
+      // Agent annotation balloon (only when visible and annotations exist for this line)
       if (state.showAnnotations && state.annotationsByLine.size > 0) {
         const lineAnns = state.annotationsByLine.get(line.lineNumber);
         if (lineAnns) {
+          // Show a small indicator dot on the line + balloon on hover/always
+          const indicator = document.createElement('div');
+          indicator.className = 'annotation-indicator';
+          indicator.style.cssText = `position:absolute;right:44px;transform:translateY(${top}px);z-index:3;`;
+          indicator.dataset.lineNumber = String(line.lineNumber);
+
+          // Build balloon content (stacked if multiple)
+          let balloonHtml = '';
           for (const ann of lineAnns) {
-            const annEl = document.createElement('div');
-            annEl.className = `annotation-row severity-${ann.severity || 'info'}`;
-            annEl.style.cssText = `position:absolute;left:0;right:0;transform:translateY(${top + getLineHeight()}px);z-index:2;pointer-events:auto;`;
-            annEl.innerHTML = `<span class="annotation-agent">${escapeHtml(ann.agentName)}</span> <span class="annotation-text">${escapeHtml(ann.text)}</span>`;
-            annEl.title = `${ann.agentName} — ${new Date(ann.timestamp).toLocaleTimeString()}`;
-            fragment.appendChild(annEl);
+            const sevClass = `severity-${ann.severity || 'info'}`;
+            balloonHtml += `<div class="annotation-balloon ${sevClass}">` +
+              `<span class="annotation-agent">${escapeHtml(ann.agentName)}</span>` +
+              `<span class="annotation-text">${escapeHtml(ann.text)}</span>` +
+              `</div>`;
           }
+
+          const balloon = document.createElement('div');
+          balloon.className = 'annotation-balloon-container';
+          balloon.style.cssText = `position:absolute;right:48px;transform:translateY(${top - 4}px);z-index:10;`;
+          balloon.innerHTML = balloonHtml;
+
+          indicator.innerHTML = `<span class="annotation-dot severity-${lineAnns[0].severity || 'info'}">${lineAnns.length > 1 ? lineAnns.length : ''}</span>`;
+          indicator.title = lineAnns.map(a => `${a.agentName}: ${a.text}`).join('\n');
+
+          fragment.appendChild(indicator);
+          fragment.appendChild(balloon);
         }
       }
 
@@ -6773,7 +6791,9 @@ async function openSshFolder(): Promise<void> {
     }
   }
   if (!sshConn) {
-    alert('Connect to an SSH host first via the Live panel, then use this button to browse its files.');
+    // No active SSH — open Live panel so user can connect
+    openBottomTab('live');
+    addChatMessage({ from: 'agent', text: 'To browse SSH files, first connect to a host in the Live panel, then click the SSH browse button again.', timestamp: Date.now() });
     return;
   }
 
