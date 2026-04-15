@@ -162,6 +162,9 @@ export class SshHandler extends EventEmitter {
 
     return new Promise((resolve, reject) => {
       const client = this.client!;
+      // Track whether the promise has settled so we know whether to reject
+      // (connection phase) or emit (post-connection phase) on errors.
+      let settled = false;
 
       client.on('ready', () => {
         if (config.remotePath) {
@@ -196,6 +199,7 @@ export class SshHandler extends EventEmitter {
               }
             });
 
+            settled = true;
             resolve(this.tempFilePath!);
           });
         } else {
@@ -207,6 +211,7 @@ export class SshHandler extends EventEmitter {
               return;
             }
             this.sftp = sftp;
+            settled = true;
             resolve(this.tempFilePath!);
           });
         }
@@ -220,9 +225,15 @@ export class SshHandler extends EventEmitter {
           reject(new Error('PASSPHRASE_NEEDED'));
           return;
         }
-        this.emit('error', msg);
+        if (settled) {
+          // Post-connection error — the listener from wireConnectionEvents is in place
+          this.emit('error', msg);
+        }
         this.cleanup();
-        reject(err);
+        if (!settled) {
+          // Connection phase — surface via rejection, not event (no listener yet)
+          reject(err);
+        }
       });
 
       client.on('close', () => {
