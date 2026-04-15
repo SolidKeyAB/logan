@@ -116,7 +116,7 @@ export class SshHandler extends EventEmitter {
     this.connectedSince = Date.now();
     this.currentHost = config.host;
     this.currentUsername = config.username;
-    this.currentRemotePath = config.remotePath;
+    this.currentRemotePath = config.remotePath ?? null;
 
     // Resolve auth
     const connectConfig: any = {
