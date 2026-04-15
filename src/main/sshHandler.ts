@@ -91,7 +91,7 @@ export class SshHandler extends EventEmitter {
     port: number;
     username: string;
     identityFile?: string;
-    remotePath: string;
+    remotePath?: string;
     passphrase?: string;
   }): Promise<string> {
     if (this.client) {
@@ -164,39 +164,52 @@ export class SshHandler extends EventEmitter {
       const client = this.client!;
 
       client.on('ready', () => {
-        // Start tail -f on the remote path
-        client.exec(`tail -f ${this.shellEscape(config.remotePath)}`, (err, stream) => {
-          if (err) {
-            this.cleanup();
-            reject(err);
-            return;
-          }
-
-          this.stream = stream;
-
-          stream.on('data', (chunk: Buffer) => {
-            this.handleData(chunk);
-          });
-
-          stream.stderr.on('data', (chunk: Buffer) => {
-            const msg = chunk.toString('utf-8').trim();
-            if (msg) this.emit('error', msg);
-          });
-
-          stream.on('close', () => {
-            this.emit('disconnected');
-            this.stream = null;
-          });
-
-          // Also open SFTP for browsing
-          client.sftp((err, sftp) => {
-            if (!err) {
-              this.sftp = sftp;
+        if (config.remotePath) {
+          // Start tail -f on the remote path
+          client.exec(`tail -f ${this.shellEscape(config.remotePath)}`, (err, stream) => {
+            if (err) {
+              this.cleanup();
+              reject(err);
+              return;
             }
-          });
 
-          resolve(this.tempFilePath!);
-        });
+            this.stream = stream;
+
+            stream.on('data', (chunk: Buffer) => {
+              this.handleData(chunk);
+            });
+
+            stream.stderr.on('data', (chunk: Buffer) => {
+              const msg = chunk.toString('utf-8').trim();
+              if (msg) this.emit('error', msg);
+            });
+
+            stream.on('close', () => {
+              this.emit('disconnected');
+              this.stream = null;
+            });
+
+            // Also open SFTP for browsing
+            client.sftp((err, sftp) => {
+              if (!err) {
+                this.sftp = sftp;
+              }
+            });
+
+            resolve(this.tempFilePath!);
+          });
+        } else {
+          // SFTP-only connection (no tail) — used by the SSH browse modal
+          client.sftp((err, sftp) => {
+            if (err) {
+              this.cleanup();
+              reject(err);
+              return;
+            }
+            this.sftp = sftp;
+            resolve(this.tempFilePath!);
+          });
+        }
       });
 
       client.on('error', (err) => {

@@ -1670,7 +1670,7 @@ function saveSshProfiles(profiles: SshProfile[]): void {
 
 ipcMain.handle(IPC.SSH_PARSE_CONFIG, async () => {
   try {
-    const hosts = sshUtilHandler.parseSSHConfig();
+    const hosts = sshUtilHandler ? sshUtilHandler.parseSSHConfig() : [];
     return { success: true, hosts };
   } catch (error) {
     return { success: false, error: String(error) };
