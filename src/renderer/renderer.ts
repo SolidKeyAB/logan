@@ -158,6 +158,7 @@ interface FolderState {
   collapsed: boolean;
   isRemote?: boolean;
   sshHost?: string;
+  connectionId?: string; // live connection ID to disconnect when folder is removed
 }
 
 // Column visibility state
@@ -4290,6 +4291,12 @@ async function openFolder(): Promise<void> {
 }
 
 function removeFolder(folderPath: string): void {
+  const folder = state.folders.find((f) => f.path === folderPath);
+  // Disconnect the SSH connection if one was created exclusively for this folder
+  if (folder?.connectionId) {
+    window.api.liveDisconnect(folder.connectionId).catch(() => {});
+    window.api.liveRemove(folder.connectionId).catch(() => {});
+  }
   state.folders = state.folders.filter((f) => f.path !== folderPath);
   renderFolderTree();
   updateFolderSearchState();
@@ -6972,7 +6979,7 @@ async function showSshConnectModal(): Promise<void> {
             return;
           }
           const files = result.files || [];
-          addSshFolderToPanel(`${username || 'user'}@${host}`, remotePath, files);
+          addSshFolderToPanel(`${username || 'user'}@${host}`, remotePath, files, connResult.connectionId);
           cleanup();
         }
       } catch (err) {
@@ -6988,16 +6995,16 @@ async function showSshConnectModal(): Promise<void> {
   });
 }
 
-function addSshFolderToPanel(hostLabel: string, remotePath: string, files: any[]): void {
+function addSshFolderToPanel(hostLabel: string, remotePath: string, files: any[], connectionId?: string): void {
   const folderName = `${hostLabel}:${remotePath}`;
 
-  // Reuse existing openSshFolder logic for adding to state
   state.folders.push({
     name: folderName,
     path: remotePath,
     files: mapFolderEntries(files),
     collapsed: false,
     isRemote: true,
+    connectionId, // stored so removeFolder can disconnect it
   });
   renderFolderTree();
   // Open folders panel if not already open
