@@ -4653,7 +4653,13 @@ function renderFolderSearchResults(pattern: string, cancelled?: boolean): void {
       const match = state.folderSearchResults[index];
       if (match) {
         await loadFile(match.filePath);
-        goToLine(match.lineNumber - 1); // Convert to 0-based
+        // If a filter is active (restored from tab state), clear it so the
+        // absolute line number from ripgrep maps correctly to a display index.
+        if (state.isFiltered) {
+          await clearFilter();
+        }
+        goToLine(match.lineNumber - 1); // match.lineNumber is 1-based from ripgrep
+        renderVisibleLines();
       }
     });
   });

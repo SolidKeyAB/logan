@@ -4269,6 +4269,8 @@ kbd {
 
 .chat-message .chat-text {
   white-space: pre-wrap;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .chat-message .chat-time {
@@ -4381,6 +4383,8 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .search-result-text mark {
