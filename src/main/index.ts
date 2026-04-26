@@ -580,7 +580,18 @@ function loadAnnotationsForFile(filePath: string): void {
 }
 
 function saveAnnotationsForCurrentFile(): void {
-  if (!currentFilePath || !currentFileUsesLocalStorage) return;
+  if (!currentFilePath) return;
+  // Try local storage first, fall back to global ~/.logan storage
+  if (!currentFileUsesLocalStorage) {
+    // Still attempt to save using the fallback path so clears persist
+    try {
+      const localData = loadLocalFileData(currentFilePath);
+      localData.annotations = Array.from(annotations.values())
+        .sort((a, b) => a.lineNumber - b.lineNumber);
+      saveLocalFileData(currentFilePath, localData);
+    } catch { /* read-only fs — annotations not persisted */ }
+    return;
+  }
   const localData = loadLocalFileData(currentFilePath);
   localData.annotations = Array.from(annotations.values())
     .sort((a, b) => a.lineNumber - b.lineNumber);
