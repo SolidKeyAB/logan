@@ -3054,7 +3054,7 @@ body.platform-darwin .titlebar {
 }
 
 .minimap {
-  width: 100px;
+  width: 110px;
   background-color: var(--bg-secondary);
   border-left: 1px solid var(--border-color);
   position: relative;
@@ -3071,108 +3071,124 @@ body.platform-darwin .titlebar {
   overflow: hidden;
 }
 
+/* ── Density strip: left 6px, colour-coded severity overview per zone ─── */
+.minimap-density-strip-seg {
+  position: absolute;
+  left: 0;
+  width: 6px;
+  pointer-events: none;
+}
+
+/* ── Level bars: variable width — errors full-width, noise narrow ──────── */
+/* Bar zone: x=8 to x=108 (right=2px). Full zone = 100px.                  */
+/* Each level's left margin = 8 + 100 × (1 − relative_width).              */
 .minimap-line {
-  height: 2px;
-  margin: 0 4px;
-  border-radius: 1px;
-  opacity: 0.6;
+  margin-right: 2px;
+  border-radius: 0 1px 1px 0;
 }
-
-.minimap-line.level-error {
-  background-color: var(--error-color);
-  opacity: 1;
-}
-
-.minimap-line.level-warning {
-  background-color: var(--warning-color);
-  opacity: 0.9;
-}
-
-.minimap-line.level-info {
-  background-color: var(--info-color);
-  opacity: 0.5;
-}
-
-.minimap-line.level-debug {
-  background-color: var(--debug-color);
-  opacity: 0.4;
-}
-
-.minimap-line.level-trace {
-  background-color: var(--text-muted);
-  opacity: 0.3;
-}
-
-.minimap-line.level-default {
-  background-color: var(--text-muted);
-  opacity: 0.2;
-}
+.minimap-line.level-fatal,
+.minimap-line.level-error   { background-color: var(--error-color);   margin-left: 8px;  opacity: 1.0; }
+.minimap-line.level-warning,
+.minimap-line.level-warn    { background-color: var(--warning-color); margin-left: 26px; opacity: 0.95; }
+.minimap-line.level-info    { background-color: var(--info-color);    margin-left: 53px; opacity: 0.7; }
+.minimap-line.level-debug   { background-color: var(--debug-color);   margin-left: 73px; opacity: 0.4; }
+.minimap-line.level-trace   { background-color: var(--text-muted);    margin-left: 87px; opacity: 0.28; }
+.minimap-line.level-default { background-color: var(--text-muted);    margin-left: 98px; opacity: 0.18; }
 
 .minimap-viewport {
   position: absolute;
   left: 0;
   right: 0;
-  background-color: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  background-color: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: 2px;
   pointer-events: none;
   min-height: 20px;
 }
-
-.minimap-viewport:hover {
-  background-color: rgba(255, 255, 255, 0.15);
-}
-
 .minimap:hover .minimap-viewport {
-  background-color: rgba(255, 255, 255, 0.2);
-  border-color: rgba(255, 255, 255, 0.5);
+  background-color: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.45);
 }
 
-/* Minimap hover preview */
-/* Bookmark markers in minimap */
-.minimap-bookmark {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 3px;
-  background-color: var(--accent-color);
-  opacity: 0.8;
-}
-
-/* Search result markers in minimap */
-.minimap-search-marker {
+/* Current selected-line crosshair */
+.minimap-current-line {
   position: absolute;
   left: 0;
   right: 0;
   height: 2px;
-  background-color: rgba(255, 255, 0, 0.8);
+  background-color: rgba(255, 255, 255, 0.75);
+  pointer-events: none;
+  z-index: 10;
 }
 
-/* Saved notes range markers in minimap */
+/* Line-number tooltip */
+.minimap-tooltip {
+  position: absolute;
+  left: 8px;
+  right: 2px;
+  height: 16px;
+  line-height: 16px;
+  text-align: center;
+  background: rgba(10, 14, 20, 0.82);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 10px;
+  font-family: var(--font-mono, monospace);
+  pointer-events: none;
+  z-index: 20;
+  border-radius: 2px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.minimap-tooltip.hidden { display: none; }
+.minimap-tooltip.level-error,
+.minimap-tooltip.level-fatal   { background: rgba(140, 20, 20, 0.88); }
+.minimap-tooltip.level-warning,
+.minimap-tooltip.level-warn    { background: rgba(110, 70, 0, 0.88); }
+
+/* Bookmark markers */
+.minimap-bookmark {
+  position: absolute;
+  left: 8px;
+  right: 0;
+  height: 3px;
+  background-color: var(--accent-color);
+  opacity: 0.85;
+}
+
+/* Search result markers */
+.minimap-search-marker {
+  position: absolute;
+  left: 8px;
+  right: 0;
+  height: 2px;
+  background-color: rgba(255, 255, 0, 0.85);
+}
+
+/* Saved notes range markers */
 .minimap-notes-marker {
   position: absolute;
-  left: 2px;
+  left: 8px;
   right: 2px;
-  background-color: rgba(255, 193, 7, 0.3);
+  background-color: rgba(255, 193, 7, 0.25);
   border-left: 2px solid rgba(255, 193, 7, 0.8);
   pointer-events: auto;
 }
 
-/* Search config markers in minimap */
+/* Search config markers */
 .minimap-sc-marker {
   position: absolute;
-  left: 0;
+  left: 8px;
   right: 0;
   height: 2px;
-  opacity: 0.7;
+  opacity: 0.8;
 }
 
 .minimap-annotation-marker {
   position: absolute;
-  left: 0;
+  left: 8px;
   right: 0;
   height: 2px;
-  background-color: rgba(180, 120, 255, 0.8);
+  background-color: rgba(180, 120, 255, 0.85);
 }
 
 /* Agent Annotations — Speech Balloon Style */

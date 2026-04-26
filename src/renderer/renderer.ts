@@ -1964,6 +1964,12 @@ function createLogViewer(): void {
   minimapElement.appendChild(minimapContentElement);
   minimapElement.appendChild(minimapViewportElement);
 
+  // Line-number tooltip for minimap hover
+  const minimapTooltip = document.createElement('div');
+  minimapTooltip.className = 'minimap-tooltip hidden';
+  minimapTooltip.id = 'minimap-tooltip';
+  minimapElement.appendChild(minimapTooltip);
+
   // Add to wrapper
   logViewerWrapper.appendChild(logViewerElement);
   logViewerWrapper.appendChild(minimapElement);
@@ -2028,6 +2034,11 @@ function createLogViewer(): void {
   }, { passive: false });
   minimapElement.addEventListener('click', handleMinimapClick);
   minimapElement.addEventListener('mousedown', handleMinimapDrag);
+  minimapElement.addEventListener('mousemove', handleMinimapTooltip);
+  minimapElement.addEventListener('mouseleave', () => {
+    const t = document.getElementById('minimap-tooltip');
+    if (t) t.classList.add('hidden');
+  });
 
   // Use ResizeObserver for responsive updates
   const resizeObserver = new ResizeObserver(() => {
@@ -3237,7 +3248,13 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Minimap functions
+// ─── Minimap ─────────────────────────────────────────────────────────────
+
+// Severity rank used for worst-case sampling and density strip coloring.
+const LEVEL_SEVERITY: Record<string, number> = {
+  fatal: 6, error: 5, warning: 4, warn: 4, info: 3, debug: 2, trace: 1,
+};
+
 function updateMinimapViewport(): void {
   if (!logViewerElement || !minimapViewportElement || !minimapElement) return;
 
@@ -3304,6 +3321,27 @@ function handleMinimapClick(event: MouseEvent): void {
   logViewerElement.scrollTop = Math.max(0, targetScrollTop);
 }
 
+function handleMinimapTooltip(event: MouseEvent): void {
+  const tooltip = document.getElementById('minimap-tooltip');
+  if (!tooltip || !minimapElement || minimapData.length === 0) return;
+
+  const rect = minimapElement.getBoundingClientRect();
+  const hoverY = Math.max(0, event.clientY - rect.top);
+  const minimapHeight = minimapElement.clientHeight;
+  const totalLines = getTotalLines();
+  if (totalLines === 0) { tooltip.classList.add('hidden'); return; }
+
+  const targetLine = Math.min(totalLines - 1, Math.floor((hoverY / minimapHeight) * totalLines));
+  const sampleIdx = Math.min(minimapData.length - 1, Math.floor((hoverY / minimapHeight) * minimapData.length));
+  const level = minimapData[sampleIdx]?.level;
+
+  tooltip.textContent = `Line ${(targetLine + 1).toLocaleString()}`;
+  tooltip.className = `minimap-tooltip${level ? ` level-${level}` : ''}`;
+
+  const tipH = 16;
+  tooltip.style.top = `${Math.max(0, Math.min(hoverY - tipH / 2, minimapHeight - tipH))}px`;
+}
+
 let isDraggingMinimap = false;
 
 function handleMinimapDrag(_event: MouseEvent): void {
@@ -3346,69 +3384,62 @@ async function buildMinimap(onProgress?: (percent: number) => void): Promise<voi
   minimapContentElement.innerHTML = '';
 
   const minimapHeight = minimapElement.clientHeight;
-  // Limit to reasonable number of samples for performance
-  const maxSamples = Math.min(300, minimapHeight);
+  const maxSamples = Math.min(400, minimapHeight);
   const sampleRate = Math.max(1, Math.floor(totalLines / maxSamples));
+  // Scan a window of lines per slot so errors aren't missed by unlucky sampling
+  const WINDOW = Math.min(sampleRate, 10);
 
-  // Sample lines for minimap
   const samplesToFetch: number[] = [];
   for (let i = 0; i < totalLines; i += sampleRate) {
     samplesToFetch.push(i);
     if (samplesToFetch.length >= maxSamples) break;
   }
+  minimapData = samplesToFetch.map(() => ({ level: undefined as string | undefined }));
 
-  // First, check what we already have in cache
-  for (const lineNum of samplesToFetch) {
-    const cached = cachedLines.get(lineNum);
-    if (cached) {
-      minimapData.push({ level: cached.level });
-    } else {
-      minimapData.push({ level: undefined });
-    }
-  }
-
-  // Report initial progress
   if (onProgress) onProgress(30);
 
-  // Fetch missing samples in small batches (fetch only 1 line per sample)
-  const missingIndices: number[] = [];
-  for (let i = 0; i < samplesToFetch.length; i++) {
-    if (minimapData[i].level === undefined) {
-      missingIndices.push(i);
-    }
-  }
+  const FETCH_BATCH = 40;
+  const totalBatches = Math.ceil(samplesToFetch.length / FETCH_BATCH);
 
-  if (missingIndices.length > 0) {
-    // Batch fetch: group consecutive or nearby samples
-    const FETCH_BATCH = 50; // Fetch this many individual lines at a time
-    const totalMissingBatches = Math.ceil(missingIndices.length / FETCH_BATCH);
+  for (let b = 0; b < samplesToFetch.length; b += FETCH_BATCH) {
+    const slice = samplesToFetch.slice(b, b + FETCH_BATCH);
 
-    for (let b = 0; b < missingIndices.length; b += FETCH_BATCH) {
-      const batchIndices = missingIndices.slice(b, b + FETCH_BATCH);
+    await Promise.all(slice.map(async (lineNum, bi) => {
+      const idx = b + bi;
+      let worstLvl: string | undefined;
+      let worstSev = -1;
+      let fullycached = true;
 
-      // Fetch each sampled line individually (just 1 line each)
-      const fetchPromises = batchIndices.map(async (idx) => {
-        const lineNum = samplesToFetch[idx];
-        try {
-          const result = await window.api.getLines(lineNum, 1);
-          if (result.success && result.lines && result.lines.length > 0) {
-            const line = result.lines[0];
-            minimapData[idx] = { level: line.level };
-            cachedLines.set(lineNum, line);
-          }
-        } catch (e) {
-          console.warn('Minimap: failed to fetch line', samplesToFetch[idx], e);
+      // Check cache first for the whole window
+      for (let j = 0; j < WINDOW; j++) {
+        const cached = cachedLines.get(lineNum + j);
+        if (cached) {
+          const sev = LEVEL_SEVERITY[cached.level || ''] ?? 0;
+          if (sev > worstSev) { worstSev = sev; worstLvl = cached.level; }
+        } else {
+          fullycached = false;
         }
-      });
-
-      await Promise.all(fetchPromises);
-
-      // Report progress
-      if (onProgress) {
-        const batchNum = Math.floor(b / FETCH_BATCH) + 1;
-        const percent = 30 + Math.round((batchNum / totalMissingBatches) * 70);
-        onProgress(Math.min(percent, 100));
       }
+
+      if (!fullycached) {
+        try {
+          const result = await window.api.getLines(lineNum, WINDOW);
+          if (result.success && result.lines) {
+            for (const line of result.lines) {
+              cachedLines.set(line.lineNumber, line);
+              const sev = LEVEL_SEVERITY[line.level || ''] ?? 0;
+              if (sev > worstSev) { worstSev = sev; worstLvl = line.level; }
+            }
+          }
+        } catch (_) { /* keep whatever came from cache */ }
+      }
+
+      minimapData[idx] = { level: worstLvl };
+    }));
+
+    if (onProgress) {
+      const batchNum = Math.floor(b / FETCH_BATCH) + 1;
+      onProgress(Math.min(30 + Math.round((batchNum / totalBatches) * 70), 100));
     }
   }
 
@@ -3423,72 +3454,74 @@ function renderMinimap(): void {
   if (totalLines === 0 || minimapData.length === 0) return;
 
   const minimapHeight = minimapElement.clientHeight;
-  // Calculate how many actual lines each sample represents
-  const linesPerSample = totalLines / minimapData.length;
-  // Each minimap line should take proportional height
   const lineHeight = minimapHeight / minimapData.length;
 
   minimapContentElement.innerHTML = '';
-
+  const frag = document.createDocumentFragment();
   for (let i = 0; i < minimapData.length; i++) {
-    const data = minimapData[i];
     const line = document.createElement('div');
-    line.className = `minimap-line level-${data.level || 'default'}`;
-    // Use exact height without margin to ensure proper alignment with markers
+    line.className = `minimap-line level-${minimapData[i].level || 'default'}`;
     line.style.height = `${Math.max(1, lineHeight)}px`;
-    minimapContentElement.appendChild(line);
+    frag.appendChild(line);
   }
+  minimapContentElement.appendChild(frag);
 
-  // Add bookmark markers
+  renderMinimapDensityStrip();
   renderMinimapMarkers();
   updateMinimapViewport();
+}
+
+function renderMinimapDensityStrip(): void {
+  if (!minimapElement || minimapData.length === 0) return;
+
+  minimapElement.querySelectorAll('.minimap-density-strip-seg').forEach(el => el.remove());
+
+  const minimapHeight = minimapElement.clientHeight;
+  const SEGMENTS = Math.min(60, minimapData.length);
+  const segSize = minimapData.length / SEGMENTS;
+  const segHeight = minimapHeight / SEGMENTS;
+  const frag = document.createDocumentFragment();
+
+  for (let s = 0; s < SEGMENTS; s++) {
+    const start = Math.floor(s * segSize);
+    const end = Math.min(minimapData.length - 1, Math.floor((s + 1) * segSize) - 1);
+
+    let worstSev = 0;
+    for (let i = start; i <= end; i++) {
+      const sev = LEVEL_SEVERITY[minimapData[i].level || ''] ?? 0;
+      if (sev > worstSev) worstSev = sev;
+    }
+
+    if (worstSev < 2) continue; // skip trace/default — too noisy
+
+    let color: string;
+    if (worstSev >= 5)      color = `rgba(255,55,55,${0.5 + (worstSev - 5) * 0.3})`;  // error/fatal
+    else if (worstSev === 4) color = 'rgba(255,150,30,0.75)';  // warning
+    else if (worstSev === 3) color = 'rgba(80,140,255,0.55)';  // info
+    else                     color = 'rgba(130,130,130,0.3)';  // debug
+
+    const el = document.createElement('div');
+    el.className = 'minimap-density-strip-seg';
+    el.style.top = `${s * segHeight}px`;
+    el.style.height = `${Math.ceil(segHeight) + 1}px`;
+    el.style.backgroundColor = color;
+    frag.appendChild(el);
+  }
+
+  minimapElement.appendChild(frag);
 }
 
 function renderMinimapMarkers(): void {
   if (!minimapElement) return;
 
-  // Remove existing markers
-  minimapElement.querySelectorAll('.minimap-bookmark, .minimap-search-marker, .minimap-notes-marker, .minimap-sc-marker, .minimap-annotation-marker, .minimap-density-bucket').forEach(el => el.remove());
+  // Remove existing markers (density strip is handled separately in renderMinimapDensityStrip)
+  minimapElement.querySelectorAll('.minimap-bookmark, .minimap-search-marker, .minimap-notes-marker, .minimap-sc-marker, .minimap-annotation-marker, .minimap-density-bucket, .minimap-current-line').forEach(el => el.remove());
 
   const totalLines = getTotalLines();
   if (totalLines === 0) return;
 
   const minimapHeight = minimapElement.clientHeight;
   const fragment = document.createDocumentFragment();
-
-  // Density heat map (background layer) — render first so markers appear on top
-  const density = (state.analysisResult as any)?.density;
-  if (density && density.buckets > 0) {
-    const buckets = density.buckets;
-    const bucketHeight = minimapHeight / buckets;
-    // Find max for normalization (to prevent over-saturation)
-    let maxVal = 1;
-    for (let i = 0; i < buckets; i++) {
-      const total = density.error[i] + density.warning[i] + density.info[i];
-      if (total > maxVal) maxVal = total;
-    }
-    for (let i = 0; i < buckets; i++) {
-      const errCount = density.error[i] || 0;
-      const warnCount = density.warning[i] || 0;
-      const infoCount = density.info[i] || 0;
-      const total = errCount + warnCount + infoCount;
-      if (total === 0) continue;
-      // Mix color based on dominant level
-      const intensity = Math.min(1, total / maxVal);
-      let color: string;
-      if (errCount > warnCount && errCount > infoCount) {
-        color = `rgba(255, 80, 80, ${intensity * 0.6})`;
-      } else if (warnCount > infoCount) {
-        color = `rgba(255, 180, 40, ${intensity * 0.5})`;
-      } else {
-        color = `rgba(100, 150, 255, ${intensity * 0.35})`;
-      }
-      const marker = document.createElement('div');
-      marker.className = 'minimap-density-bucket';
-      marker.style.cssText = `position:absolute;left:0;right:0;top:${i * bucketHeight}px;height:${Math.ceil(bucketHeight) + 1}px;background-color:${color};pointer-events:none;`;
-      fragment.appendChild(marker);
-    }
-  }
 
   // Add saved notes range markers (drawn first, behind other markers)
   for (const range of state.savedRanges) {
@@ -3571,6 +3604,14 @@ function renderMinimapMarkers(): void {
       marker.title = `${ann.agentName}: ${ann.text.substring(0, 50)}`;
       fragment.appendChild(marker);
     }
+  }
+
+  // Current selected-line indicator
+  if (state.selectedLine !== null) {
+    const marker = document.createElement('div');
+    marker.className = 'minimap-current-line';
+    marker.style.top = `${(state.selectedLine / totalLines) * minimapHeight}px`;
+    fragment.appendChild(marker);
   }
 
   minimapElement.appendChild(fragment);
