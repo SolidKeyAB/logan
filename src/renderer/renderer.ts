@@ -1021,7 +1021,7 @@ let minimapElement: HTMLDivElement | null = null;
 let minimapContentElement: HTMLDivElement | null = null;
 let minimapViewportElement: HTMLDivElement | null = null;
 let annotationBarElement: HTMLDivElement | null = null;
-let minimapData: Array<{ level: string | undefined }> = [];
+let minimapData: Array<{ level: string | undefined; lineNumber?: number }> = [];
 const MINIMAP_SAMPLE_RATE = 1000; // Sample every N lines for minimap
 
 // Range selection (context menu)
@@ -3279,8 +3279,31 @@ function handleMinimapClick(event: MouseEvent): void {
   const totalLines = getTotalLines();
   const proportionalLine = Math.floor((clickY / minimapHeight) * totalLines);
 
-  // Snap to nearest search result if clicking near one (within ~3 buckets / ~6px)
   let targetLine = proportionalLine;
+
+  // Snap to the actual worst-severity line stored in the nearest minimap sample.
+  // This ensures clicking a red/orange heatmap zone lands on the real error line,
+  // not an adjacent info/debug line that happened to be the proportional position.
+  if (minimapData.length > 0) {
+    const sampleIdx = Math.min(minimapData.length - 1, Math.floor((clickY / minimapHeight) * minimapData.length));
+    const SNAP_RANGE = 3; // samples either side to scan
+    let bestSev = -1;
+    let bestLine: number | undefined;
+    for (let si = Math.max(0, sampleIdx - SNAP_RANGE); si <= Math.min(minimapData.length - 1, sampleIdx + SNAP_RANGE); si++) {
+      const sev = LEVEL_SEVERITY[minimapData[si].level || ''] ?? 0;
+      if (sev > bestSev) {
+        bestSev = sev;
+        bestLine = minimapData[si].lineNumber;
+      }
+    }
+    if (bestSev >= 3 && bestLine !== undefined) {
+      // Snap to the actual error/warning/info line from the sample window
+      targetLine = getFilteredDisplayIndex(bestLine);
+      if (targetLine < 0) targetLine = bestLine;
+    }
+  }
+
+  // Also snap to nearest search result if one is very close (within ~6px)
   if (state.searchResults.length > 0) {
     const SNAP_RADIUS_LINES = Math.max(50, Math.floor((6 / minimapHeight) * totalLines));
     let nearestResult: typeof state.searchResults[0] | null = null;
@@ -3288,21 +3311,13 @@ function handleMinimapClick(event: MouseEvent): void {
     for (const r of state.searchResults) {
       const pos = getFilteredDisplayIndex(r.lineNumber);
       const dist = Math.abs((pos < 0 ? r.lineNumber : pos) - proportionalLine);
-      if (dist < nearestDist) {
-        nearestDist = dist;
-        nearestResult = r;
-      }
+      if (dist < nearestDist) { nearestDist = dist; nearestResult = r; }
     }
     if (nearestResult && nearestDist <= SNAP_RADIUS_LINES) {
       const nearestDisplayIdx = getFilteredDisplayIndex(nearestResult.lineNumber);
       targetLine = nearestDisplayIdx >= 0 ? nearestDisplayIdx : nearestResult.lineNumber;
-      // Update current search index too
       const idx = state.searchResults.indexOf(nearestResult);
-      if (idx >= 0) {
-        state.currentSearchIndex = idx;
-        updateSearchUI();
-        updateSearchResultsCurrent();
-      }
+      if (idx >= 0) { state.currentSearchIndex = idx; updateSearchUI(); updateSearchResultsCurrent(); }
     }
   }
 
@@ -3400,6 +3415,7 @@ async function buildMinimap(onProgress?: (percent: number) => void): Promise<voi
       const idx = b + bi;
       let worstLvl: string | undefined;
       let worstSev = -1;
+      let worstLineNum: number | undefined;
       let fullycached = true;
 
       // Check cache first for the whole window
@@ -3407,7 +3423,7 @@ async function buildMinimap(onProgress?: (percent: number) => void): Promise<voi
         const cached = cachedLines.get(lineNum + j);
         if (cached) {
           const sev = LEVEL_SEVERITY[cached.level || ''] ?? 0;
-          if (sev > worstSev) { worstSev = sev; worstLvl = cached.level; }
+          if (sev > worstSev) { worstSev = sev; worstLvl = cached.level; worstLineNum = cached.lineNumber; }
         } else {
           fullycached = false;
         }
@@ -3420,13 +3436,13 @@ async function buildMinimap(onProgress?: (percent: number) => void): Promise<voi
             for (const line of result.lines) {
               cachedLines.set(line.lineNumber, line);
               const sev = LEVEL_SEVERITY[line.level || ''] ?? 0;
-              if (sev > worstSev) { worstSev = sev; worstLvl = line.level; }
+              if (sev > worstSev) { worstSev = sev; worstLvl = line.level; worstLineNum = line.lineNumber; }
             }
           }
         } catch (_) { /* keep whatever came from cache */ }
       }
 
-      minimapData[idx] = { level: worstLvl };
+      minimapData[idx] = { level: worstLvl, lineNumber: worstLineNum };
     }));
 
     if (onProgress) {
