@@ -401,7 +401,7 @@ server.tool(
   'logan_navigate',
   'Scroll the LOGAN UI to a specific line number',
   {
-    lineNumber: z.number().int().min(0).describe('0-based line number to scroll to'),
+    lineNumber: z.number().int().min(1).describe('1-based line number as shown in the LOGAN viewer (use viewerLine from search/get-lines)'),
   },
   async ({ lineNumber }) => {
     try {
@@ -1013,8 +1013,8 @@ server.tool(
   'logan_annotate',
   'Add an annotation/comment to a specific log line or range of lines. Use this during analysis to mark important findings — crashes, errors, anomalies, patterns — so the user can see them highlighted in the annotation bar and panel.',
   {
-    lineNumber: z.number().int().min(0).describe('0-based start line number to annotate'),
-    endLine: z.number().int().min(0).optional().describe('0-based end line number for a range annotation (inclusive). Omit for single-line.'),
+    lineNumber: z.number().int().min(1).describe('1-based line number as shown in the LOGAN viewer (same as viewerLine from search/get-lines results)'),
+    endLine: z.number().int().min(1).optional().describe('1-based end line number for a range annotation (inclusive). Omit for single-line.'),
     text: z.string().describe('Annotation text — the finding or comment to display'),
     severity: z.enum(['info', 'warning', 'error']).default('info').describe('Severity: use "error" for crashes/critical issues, "warning" for anomalies, "info" for general findings'),
   },
@@ -1143,8 +1143,8 @@ server.tool(
   'logan_report_finding',
   'Surface a specific finding to the user: annotates the line/range in the viewer, navigates to it, and sends a chat message — all in one call. Use this whenever you identify a critical point, anomaly, or root cause so it is immediately visible in the log viewer.',
   {
-    lineNumber: z.number().int().min(0).describe('0-based line number of the finding'),
-    endLine: z.number().int().min(0).optional().describe('0-based end line for a range finding (inclusive). Use when the issue spans multiple lines.'),
+    lineNumber: z.number().int().min(1).describe('1-based line number as shown in the LOGAN viewer — use viewerLine from search/get-lines results'),
+    endLine: z.number().int().min(1).optional().describe('1-based end line for a range finding (inclusive). Use viewerLine value from search results.'),
     title: z.string().describe('Short title for the annotation (shown in the bar), e.g. "Auth abort race condition"'),
     detail: z.string().describe('Detailed explanation sent as a chat message to the user'),
     severity: z.enum(['info', 'warning', 'error']).default('error').describe('Severity: "error" for critical issues, "warning" for anomalies, "info" for observations'),

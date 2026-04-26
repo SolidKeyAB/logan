@@ -374,6 +374,10 @@ export function startApiServer(ctx: ApiContext): void {
           const startLine = body.startLine ?? 0;
           const count = body.count ?? 100;
           const result = ctx.getLines(startLine, count);
+          // Add viewerLine (1-based) so agents can use it in annotation/navigate calls
+          if (result?.lines) {
+            result.lines = result.lines.map((l: any) => ({ ...l, viewerLine: l.lineNumber + 1 }));
+          }
           sendJson(res, result);
           return;
         }
@@ -388,6 +392,10 @@ export function startApiServer(ctx: ApiContext): void {
             wholeWord: body.wholeWord ?? false,
           };
           const result = await ctx.search(options);
+          // Add viewerLine (1-based) to each match so agents use the right number
+          if (result?.matches) {
+            result.matches = result.matches.map((m: any) => ({ ...m, viewerLine: m.lineNumber + 1 }));
+          }
           sendJson(res, result);
           return;
         }
@@ -511,10 +519,13 @@ export function startApiServer(ctx: ApiContext): void {
         // --- Agent Annotations ---
         if (url === '/api/annotate') {
           if (body.lineNumber === undefined || !body.text) return sendError(res, 'lineNumber and text required');
+          // Accept 1-based viewerLine numbers (as displayed in LOGAN) — convert to 0-based internally
+          const ln0 = Math.max(0, body.lineNumber - 1);
+          const el0 = body.endLine !== undefined ? Math.max(0, body.endLine - 1) : undefined;
           const annotation: Annotation = {
             id: `ann-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-            lineNumber: body.lineNumber,
-            ...(body.endLine !== undefined ? { endLine: body.endLine } : {}),
+            lineNumber: ln0,
+            ...(el0 !== undefined ? { endLine: el0 } : {}),
             text: body.text,
             agentName: body.agentName || activeAgent?.name || 'Agent',
             timestamp: Date.now(),
@@ -569,7 +580,8 @@ export function startApiServer(ctx: ApiContext): void {
         }
 
         if (url === '/api/navigate') {
-          const lineNumber = body.lineNumber ?? 0;
+          // Accept 1-based viewerLine — convert to 0-based for internal use
+          const lineNumber = Math.max(0, (body.lineNumber ?? 1) - 1);
           ctx.navigateToLine(lineNumber);
           sendJson(res, { success: true });
           return;

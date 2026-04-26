@@ -24,15 +24,24 @@ Use this pattern for interactive conversations with the LOGAN user:
 ```
 # Every finding = one logan_report_finding call
 # ALWAYS set clearPrevious=True on the FIRST finding of a new analysis
+# Line numbers are 1-based (as displayed in viewer) — use viewerLine from search/get-lines
 logan_report_finding(
-  lineNumber=8045,          # 0-based line of the issue
-  endLine=20600,            # optional: use for multi-line ranges
+  lineNumber=8047,          # 1-based viewer line (= viewerLine from search result)
+  endLine=9252,             # optional: 1-based end line for ranges
   title="Auth abort race",  # short label shown in annotation bar
   detail="Full explanation sent to chat...",
   severity="error",         # error | warning | info
   clearPrevious=True        # set True on first finding to clear stale annotations
 )
 ```
+
+### Line Number Convention
+
+**All line numbers in LOGAN tools are 1-based (same as displayed in the viewer).**
+
+- `logan_search` and `logan_get_lines` return both `lineNumber` (0-based, internal) and `viewerLine` (1-based, as shown in viewer)
+- **Always use `viewerLine`** when passing to `logan_report_finding`, `logan_annotate`, `logan_navigate`
+- Example: if search returns `viewerLine: 8047`, pass `lineNumber: 8047` to the annotation tools
 
 Use `logan_report_finding` for each distinct finding, then send a summary via `logan_send_message` if needed.
 

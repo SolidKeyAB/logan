@@ -2500,11 +2500,14 @@ function renderVisibleLines(): void {
         if (matchAnn) {
           const isActive = matchAnn.id === activeAnnotationId;
           const colors = getAnnColor(matchAnn.severity);
-          const bg = isActive ? colors.active : colors.stripe;
-          const border = colors.tick;
+          const isStart = lineNum === matchAnn.lineNumber;
+          // Active: colored bg + thick border. Inactive: thin gutter line only (non-intrusive)
+          const bg = isActive ? colors.active : (isStart ? colors.stripe : 'transparent');
+          const borderW = isActive || isStart ? 3 : 2;
+          const borderOpacity = isActive ? 1 : isStart ? 0.8 : 0.3;
+          const baseColor = colors.tick.replace(/[\d.]+\)$/, `${borderOpacity})`);
           const hl = document.createElement('div');
-          hl.style.cssText = `position:absolute;left:0;right:0;top:${top}px;height:${getLineHeight()}px;background:${bg};border-left:3px solid ${border};pointer-events:none;z-index:1;`;
-          hl.title = `${matchAnn.agentName}: ${matchAnn.text}`;
+          hl.style.cssText = `position:absolute;left:0;right:0;top:${top}px;height:${getLineHeight()}px;background:${bg};border-left:${borderW}px solid ${baseColor};pointer-events:none;z-index:1;`;
           fragment.appendChild(hl);
         }
       }
