@@ -2488,15 +2488,24 @@ function renderVisibleLines(): void {
 
       fragment.appendChild(lineElement);
 
-      // Lightweight annotation gutter dot — annotation detail lives in the bar and panel
-      if (state.showAnnotations && state.annotationsByLine.size > 0) {
-        const lineAnns = state.annotationsByLine.get(line.lineNumber);
-        if (lineAnns) {
-          const dot = document.createElement('div');
-          dot.className = `annotation-gutter-dot severity-${lineAnns[0].severity || 'info'}`;
-          dot.style.cssText = `position:absolute;right:6px;transform:translateY(${top + (getLineHeight() - 8) / 2}px);z-index:3;`;
-          dot.title = lineAnns.map(a => `${a.agentName}: ${a.text}`).join('\n');
-          fragment.appendChild(dot);
+      // Annotation highlight — colored left border + background stripe on annotated lines
+      if (state.showAnnotations && state.annotations.length > 0) {
+        const lineNum = line.lineNumber;
+        let matchAnn: any = null;
+        for (const ann of state.annotations) {
+          const start = ann.lineNumber;
+          const end = ann.endLine !== undefined ? ann.endLine : start;
+          if (lineNum >= start && lineNum <= end) { matchAnn = ann; break; }
+        }
+        if (matchAnn) {
+          const isActive = matchAnn.id === activeAnnotationId;
+          const colors = getAnnColor(matchAnn.severity);
+          const bg = isActive ? colors.active : colors.stripe;
+          const border = colors.tick;
+          const hl = document.createElement('div');
+          hl.style.cssText = `position:absolute;left:0;right:0;top:${top}px;height:${getLineHeight()}px;background:${bg};border-left:3px solid ${border};pointer-events:none;z-index:1;`;
+          hl.title = `${matchAnn.agentName}: ${matchAnn.text}`;
+          fragment.appendChild(hl);
         }
       }
 
@@ -6151,28 +6160,27 @@ function rebuildAnnotationIndex(): void {
 }
 
 function navigateToAnnotation(ann: any): void {
-  const di = getFilteredDisplayIndex(ann.lineNumber);
-  if (di >= 0) {
-    // Found in current view (unfiltered: di === lineNumber; filtered: di = filtered position)
-    goToLine(di, ann.lineNumber);
+  if (!logViewerElement) return;
+  const lineNum = ann.lineNumber;
+  const lineH = getLineHeight();
+
+  if (!state.isFiltered || !state.filteredLineNumbers) {
+    // No filter: scroll directly to the line's pixel position
+    logViewerElement.scrollTop = Math.max(0, lineNum * lineH);
   } else {
-    // Line is filtered out — scroll proportionally using raw file total so position is accurate
-    const rawTotal = state.totalLines;
-    if (logViewerElement && rawTotal > 0) {
-      const lineH = getLineHeight();
-      const naturalScrollTop = ann.lineNumber * lineH;
-      if (naturalScrollTop <= MAX_SCROLL_HEIGHT) {
-        logViewerElement.scrollTop = naturalScrollTop;
-      } else {
-        const clientH = logViewerElement.clientHeight;
-        const maxLine = rawTotal - Math.ceil(clientH / lineH);
-        logViewerElement.scrollTop = (ann.lineNumber / maxLine) * (MAX_SCROLL_HEIGHT - clientH);
-      }
-      state.selectedLine = ann.lineNumber;
-      updateCursorStatus(ann.lineNumber);
+    const di = getFilteredDisplayIndex(lineNum);
+    if (di >= 0) {
+      logViewerElement.scrollTop = Math.max(0, di * lineH);
+    } else {
+      // Line filtered out — proportional position using raw total
+      const maxScroll = logViewerElement.scrollHeight - logViewerElement.clientHeight;
+      logViewerElement.scrollTop = Math.max(0, (lineNum / state.totalLines) * maxScroll);
     }
   }
-  renderVisibleLines();
+
+  state.selectedLine = lineNum;
+  updateCursorStatus(lineNum);
+  requestAnimationFrame(() => { renderVisibleLines(); });
   setActiveAnnotation(ann.id);
 }
 
@@ -6180,20 +6188,35 @@ let activeAnnotationId: string | null = null;
 
 function setActiveAnnotation(id: string): void {
   activeAnnotationId = id;
-  // Highlight bar card
-  annotationBarElement?.querySelectorAll('.ann-bar-card').forEach((el) => {
+  // Highlight bar ticks
+  annotationBarElement?.querySelectorAll('.ann-bar-tick').forEach((el) => {
     (el as HTMLElement).classList.toggle('active', (el as HTMLElement).dataset.annId === id);
   });
+  // Re-render bar to update stripe opacity
+  renderAnnotationBar();
   // Highlight panel item
   document.getElementById('annotations-list')?.querySelectorAll('.ann-panel-item').forEach((el) => {
     (el as HTMLElement).classList.toggle('active', (el as HTMLElement).dataset.annId === id);
   });
+  // Re-render log lines to update highlight color
+  renderVisibleLines();
+}
+
+// Severity colors shared between bar ticks and log-line highlights
+const ANN_COLORS: Record<string, { tick: string; stripe: string; active: string }> = {
+  error:   { tick: 'rgba(255,80,80,0.9)',   stripe: 'rgba(255,80,80,0.10)',  active: 'rgba(255,80,80,0.22)'  },
+  warning: { tick: 'rgba(255,180,40,0.9)',  stripe: 'rgba(255,180,40,0.10)', active: 'rgba(255,180,40,0.22)' },
+  info:    { tick: 'rgba(130,160,255,0.9)', stripe: 'rgba(130,160,255,0.10)',active: 'rgba(130,160,255,0.22)'},
+};
+
+function getAnnColor(sev: string | undefined) {
+  return ANN_COLORS[sev || 'info'] || ANN_COLORS.info;
 }
 
 function renderAnnotationBar(): void {
   if (!annotationBarElement) return;
 
-  const totalLines = state.totalLines; // always use raw total — never filtered count
+  const totalLines = state.totalLines;
   const hasAnns = state.showAnnotations && state.annotations.length > 0 && totalLines > 0;
 
   if (!hasAnns) {
@@ -6206,53 +6229,55 @@ function renderAnnotationBar(): void {
 
   const sorted = [...state.annotations].sort((a, b) => a.lineNumber - b.lineNumber);
 
-  // Assign positions in % — each card gets its proportional spot, but spaced at
-  // least MIN_GAP_PCT apart so overlapping cards don't swallow each other's clicks.
-  const MIN_GAP_PCT = 3;
-  const positions: number[] = [];
-  let prevTopPct = -MIN_GAP_PCT;
+  // Compact tick height: 14px fixed. MIN_GAP ensures no two ticks overlap.
+  // We work in px against the bar's clientHeight; fall back to 600 if not yet laid out.
+  const barH = annotationBarElement.clientHeight || 600;
+  const TICK_H = 14;
+  const MIN_GAP = TICK_H + 2; // px between tick tops
+
+  const posPx: number[] = [];
+  let prevBottom = -MIN_GAP;
   for (const ann of sorted) {
-    const idealPct = (ann.lineNumber / totalLines) * 100;
-    const topPct = Math.max(idealPct, prevTopPct + MIN_GAP_PCT);
-    positions.push(topPct);
-    prevTopPct = topPct;
+    const ideal = (ann.lineNumber / totalLines) * barH;
+    const top = Math.max(ideal, prevBottom + MIN_GAP);
+    posPx.push(top);
+    prevBottom = top + TICK_H;
   }
 
   const frag = document.createDocumentFragment();
 
   sorted.forEach((ann, i) => {
-    const card = document.createElement('div');
     const sev = ann.severity || 'info';
-    card.className = `ann-bar-card severity-${sev}`;
-    card.dataset.annId = ann.id;
-    card.style.top = `${positions[i].toFixed(3)}%`;
+    const colors = getAnnColor(sev);
+    const isActive = ann.id === activeAnnotationId;
 
-    // Range annotation: span from card top to proportional end position,
-    // at least MIN_CARD_HEIGHT_PCT tall so it stays clickable
+    // Range stripe (thin color band showing the span)
     if (ann.endLine !== undefined && ann.endLine > ann.lineNumber) {
-      const endPct = (ann.endLine / totalLines) * 100;
-      const spanPct = Math.max(1.5, endPct - (ann.lineNumber / totalLines) * 100);
-      card.style.minHeight = `${spanPct.toFixed(3)}%`;
-      card.classList.add('ann-bar-range');
+      const stripeTop = (ann.lineNumber / totalLines) * barH;
+      const stripeBot = (ann.endLine / totalLines) * barH;
+      const stripe = document.createElement('div');
+      stripe.className = 'ann-bar-stripe';
+      stripe.style.cssText = `top:${stripeTop.toFixed(1)}px;height:${Math.max(3, stripeBot - stripeTop).toFixed(1)}px;background:${isActive ? colors.active : colors.stripe};border-left:2px solid ${colors.tick};`;
+      stripe.style.pointerEvents = 'none';
+      frag.appendChild(stripe);
     }
 
-    if (ann.id === activeAnnotationId) card.classList.add('active');
+    // Tick label — compact single-line chip
+    const tick = document.createElement('div');
+    tick.className = `ann-bar-tick severity-${sev}${isActive ? ' active' : ''}`;
+    tick.dataset.annId = ann.id;
+    tick.style.top = `${posPx[i].toFixed(1)}px`;
 
     const lineLabel = ann.endLine !== undefined && ann.endLine > ann.lineNumber
-      ? `Lines ${ann.lineNumber + 1}–${ann.endLine + 1}`
-      : `Line ${ann.lineNumber + 1}`;
-    card.title = `${lineLabel} — ${ann.agentName}: ${ann.text}`;
-
+      ? `L${ann.lineNumber + 1}–${ann.endLine + 1}`
+      : `L${ann.lineNumber + 1}`;
     const firstLine = ann.text.split('\n')[0];
-    const truncated = firstLine.length > 60 ? firstLine.slice(0, 58) + '…' : firstLine;
+    const truncated = firstLine.length > 52 ? firstLine.slice(0, 50) + '…' : firstLine;
+    tick.title = `${lineLabel} — ${ann.agentName}: ${ann.text}`;
+    tick.innerHTML = `<span class="ann-tick-dot"></span><span class="ann-tick-text">${escapeHtml(truncated)}</span>`;
 
-    card.innerHTML =
-      `<div class="ann-bar-agent">${escapeHtml(ann.agentName)}</div>` +
-      `<div class="ann-bar-text">${escapeHtml(truncated)}</div>`;
-
-    card.addEventListener('click', () => navigateToAnnotation(ann));
-
-    frag.appendChild(card);
+    tick.addEventListener('click', (e) => { e.stopPropagation(); navigateToAnnotation(ann); });
+    frag.appendChild(tick);
   });
 
   annotationBarElement.innerHTML = '';
