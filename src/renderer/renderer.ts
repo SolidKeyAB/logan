@@ -4434,6 +4434,12 @@ function renderFolderTree(): void {
     const folderPath = (header.closest('.folder-group') as HTMLElement)?.dataset.path;
     if (!folderPath) return;
 
+    header.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showFolderContextMenu(e as MouseEvent, folderPath);
+    });
+
     header.querySelector('.folder-toggle')?.addEventListener('click', (e) => {
       e.stopPropagation();
       toggleFolder(folderPath);
@@ -4454,6 +4460,12 @@ function renderFolderTree(): void {
 
   // Subfolder toggle events (with lazy remote loading)
   elements.foldersList.querySelectorAll('.folder-subdir-header').forEach((header) => {
+    header.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const subdirPath = (header.closest('.folder-subdir') as HTMLElement)?.dataset.subdirPath;
+      if (subdirPath) showFolderContextMenu(e as MouseEvent, subdirPath);
+    });
     header.addEventListener('click', async (e) => {
       e.stopPropagation();
       const subdirEl = header.closest('.folder-subdir') as HTMLElement;
@@ -5807,28 +5819,23 @@ async function renderWizardStep(): Promise<void> {
         : env.hasLmStudio ? 'LM Studio' : 'Not detected';
 
       const list = document.getElementById('wizard-detect-list')!;
-      list.innerHTML = `
-        <div class="wizard-detect-item">
-          <span class="wizard-detect-icon ${env.hasClaudeCli ? 'found' : 'missing'}">${env.hasClaudeCli ? '\u2713' : '\u2717'}</span>
-          <span class="wizard-detect-label">Claude Code CLI</span>
-          <span class="wizard-detect-version">${env.hasClaudeCli ? env.claudeVersion : 'Not installed'}</span>
-        </div>
-        <div class="wizard-detect-item">
-          <span class="wizard-detect-icon ${hasLocalLlm ? 'found' : 'missing'}">${hasLocalLlm ? '\u2713' : '\u2717'}</span>
-          <span class="wizard-detect-label">Local LLM</span>
-          <span class="wizard-detect-version">${localLlmLabel}</span>
-        </div>
-        <div class="wizard-detect-item">
-          <span class="wizard-detect-icon ${env.hasBuiltin ? 'found' : 'missing'}">${env.hasBuiltin ? '\u2713' : '\u2717'}</span>
-          <span class="wizard-detect-label">Built-in Agent</span>
-          <span class="wizard-detect-version">${env.hasBuiltin ? 'Available' : 'Not found'}</span>
-        </div>
-        <div class="wizard-detect-item">
+      const cliRow = (label: string, found: boolean, version: string) =>
+        `<div class="wizard-detect-item">
+          <span class="wizard-detect-icon ${found ? 'found' : 'missing'}">${found ? '\u2713' : '\u2717'}</span>
+          <span class="wizard-detect-label">${label}</span>
+          <span class="wizard-detect-version">${found ? version : 'Not found'}</span>
+        </div>`;
+      list.innerHTML =
+        cliRow('Claude Code CLI', env.hasClaudeCli, env.claudeVersion) +
+        cliRow('Aider', (env as any).hasAider, (env as any).aiderVersion) +
+        cliRow('Gemini CLI', (env as any).hasGemini, (env as any).geminiVersion) +
+        cliRow('Local LLM (Ollama / LM Studio)', hasLocalLlm, localLlmLabel) +
+        cliRow('Built-in Agent', env.hasBuiltin, 'Available') +
+        `<div class="wizard-detect-item">
           <span class="wizard-detect-icon ${env.hasConfig ? 'found' : 'missing'}">${env.hasConfig ? '\u2713' : '\u2717'}</span>
           <span class="wizard-detect-label">Existing Configuration</span>
           <span class="wizard-detect-version">${env.hasConfig ? env.existingConfig?.type || 'custom' : 'Not configured'}</span>
-        </div>
-      `;
+        </div>`;
 
       nextBtn.textContent = 'Next';
       nextBtn.disabled = false;
@@ -14284,6 +14291,21 @@ function renderTabBar(): void {
 
     elements.tabsContainer.appendChild(tabElement);
   }
+}
+
+function showFolderContextMenu(e: MouseEvent, folderPath: string): void {
+  document.querySelector('.tab-context-menu')?.remove();
+  const menu = document.createElement('div');
+  menu.className = 'tab-context-menu';
+  menu.innerHTML = `<div class="tab-context-item" data-action="copy-path">Copy Path</div>`;
+  menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;`;
+  document.body.appendChild(menu);
+  menu.querySelector('[data-action="copy-path"]')?.addEventListener('click', () => {
+    navigator.clipboard.writeText(folderPath);
+    menu.remove();
+  });
+  const close = () => { menu.remove(); document.removeEventListener('mousedown', close); };
+  setTimeout(() => document.addEventListener('mousedown', close), 0);
 }
 
 function showFileContextMenu(e: MouseEvent, filePath: string, tabId?: string): void {

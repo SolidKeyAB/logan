@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import { spawn, execSync } from 'child_process';
+import { spawn, execSync, spawnSync } from 'child_process';
 // Lazy-loaded: node-pty causes SIGSEGV on Linux when bindings mismatch
 let pty: typeof import('node-pty') | null = null;
 if (process.platform !== 'linux') {
@@ -19,7 +19,7 @@ import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, 
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
-import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount } from './api-server';
+import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName } from './api-server';
 import { BaselineStore, buildFingerprint } from './baselineStore';
 // Native-dependent modules — lazy-loaded to prevent SIGSEGV if bindings aren't built
 let SerialHandler: any = null;
@@ -5352,7 +5352,7 @@ ipcMain.handle('agent-get-messages', async () => {
 
 // Agent connection status
 ipcMain.handle('agent-get-status', async () => {
-  return { connected: getSseClientCount() > 0, count: getSseClientCount() };
+  return { connected: getSseClientCount() > 0, count: getSseClientCount(), name: getAgentName() };
 });
 
 // --- Built-in agent launch/stop ---
@@ -5559,37 +5559,47 @@ ipcMain.handle('agent-detect-environment', async () => {
     hasConfig = true;
   } catch { /* no config */ }
 
-  // Check if 'claude' CLI is in PATH (GUI apps may not inherit shell PATH)
-  let hasClaudeCli = false;
-  let claudeVersion = '';
-  try {
-    const shell = process.platform === 'win32' ? undefined : '/bin/bash';
-    const shellArgs = process.platform === 'win32' ? undefined : ['-lc'];
-    const cmd = process.platform === 'win32' ? 'claude --version' : 'claude --version';
-    claudeVersion = execSync(cmd, {
-      timeout: 5000,
-      encoding: 'utf-8',
-      shell: shell ? `${shell} -lc` : undefined,
-      env: { ...process.env },
-    }).trim();
-    hasClaudeCli = true;
-  } catch {
-    // Try common install locations
-    const commonPaths = [
-      path.join(os.homedir(), '.claude', 'bin', 'claude'),
-      '/usr/local/bin/claude',
-      '/opt/homebrew/bin/claude',
-    ];
-    for (const p of commonPaths) {
-      try {
-        if (fs.existsSync(p)) {
-          claudeVersion = execSync(`"${p}" --version`, { timeout: 5000, encoding: 'utf-8' }).trim();
-          hasClaudeCli = true;
-          break;
-        }
-      } catch { /* try next */ }
+  // Detect AI CLI tools. GUI apps on macOS/Linux don't inherit the user's shell
+  // PATH, so we spawn a login shell to load ~/.bashrc / ~/.zshrc / nvm etc.
+  function detectCli(bin: string): { found: boolean; version: string } {
+    // 1. Try via login shell (loads user PATH — handles nvm, homebrew, pyenv…)
+    const shells = process.platform === 'win32'
+      ? []
+      : ['/bin/bash', '/bin/zsh', '/bin/sh'].filter(s => { try { return fs.existsSync(s); } catch { return false; } });
+    for (const sh of shells) {
+      const r = spawnSync(sh, ['-lc', `${bin} --version`], { timeout: 4000, encoding: 'utf-8' });
+      if (r.status === 0 && r.stdout) return { found: true, version: r.stdout.trim().split('\n')[0] };
     }
+    // 2. Windows fallback
+    if (process.platform === 'win32') {
+      const r = spawnSync('cmd', ['/c', `${bin} --version`], { timeout: 4000, encoding: 'utf-8' });
+      if (r.status === 0 && r.stdout) return { found: true, version: r.stdout.trim().split('\n')[0] };
+    }
+    // 3. Common install paths as last resort
+    const extra: string[] = {
+      claude: [
+        path.join(os.homedir(), '.claude', 'bin', 'claude'),
+        '/usr/local/bin/claude',
+        '/opt/homebrew/bin/claude',
+        path.join(os.homedir(), '.nvm', 'versions', 'node', 'current', 'bin', 'claude'),
+      ],
+      aider: ['/usr/local/bin/aider', path.join(os.homedir(), '.local', 'bin', 'aider')],
+    }[bin] ?? [];
+    for (const p of extra) {
+      if (!fs.existsSync(p)) continue;
+      const r = spawnSync(p, ['--version'], { timeout: 4000, encoding: 'utf-8' });
+      if (r.status === 0 && r.stdout) return { found: true, version: r.stdout.trim().split('\n')[0] };
+    }
+    return { found: false, version: '' };
   }
+
+  const claudeResult  = detectCli('claude');
+  const aiderResult   = detectCli('aider');
+  const geminiResult  = detectCli('gemini');
+
+  // Backward-compat fields used by the existing wizard UI
+  const hasClaudeCli  = claudeResult.found;
+  const claudeVersion = claudeResult.version;
 
   const builtinPath = path.join(app.getAppPath(), 'examples', 'agent-node.mjs');
   const hasBuiltin = fs.existsSync(builtinPath);
@@ -5618,7 +5628,13 @@ ipcMain.handle('agent-detect-environment', async () => {
     }
   } catch { /* not running */ }
 
-  return { hasClaudeCli, claudeVersion, hasConfig, existingConfig, hasBuiltin, builtinPath, hasOllama, ollamaModels, hasLmStudio };
+  return {
+    hasClaudeCli, claudeVersion,
+    hasAider: aiderResult.found, aiderVersion: aiderResult.version,
+    hasGemini: geminiResult.found, geminiVersion: geminiResult.version,
+    hasConfig, existingConfig, hasBuiltin, builtinPath,
+    hasOllama, ollamaModels, hasLmStudio,
+  };
 });
 
 ipcMain.handle('agent-save-config', async (_event, config: any) => {

@@ -21,8 +21,12 @@ export interface ChatMessage {
 
 const chatMessages: ChatMessage[] = [];
 
-// Single-agent connection: one SSE client at a time
+// Single-agent connection: one SSE client at a time (must supply a name)
 let activeAgent: { res: http.ServerResponse; name: string } | null = null;
+
+// Passive listeners (e.g. the MCP server) that receive chat events but do NOT
+// count as a connected agent and do NOT affect the green-bulb status.
+const chatListeners: Set<http.ServerResponse> = new Set();
 
 // Polling agent heartbeat: tracks agents that call the API without SSE
 let pollingAgent: { name: string; lastSeen: number } | null = null;
@@ -78,9 +82,13 @@ function notifyAgentConnectionChanged(ctx: ApiContext): void {
 }
 
 function broadcastSSE(msg: ChatMessage): void {
-  if (!activeAgent) return;
   const data = `event: message\ndata: ${JSON.stringify(msg)}\n\n`;
-  try { activeAgent.res.write(data); } catch { activeAgent = null; }
+  if (activeAgent) {
+    try { activeAgent.res.write(data); } catch { activeAgent = null; }
+  }
+  for (const res of chatListeners) {
+    try { res.write(data); } catch { chatListeners.delete(res); }
+  }
 }
 
 export function addChatMessage(from: 'user' | 'agent', text: string): ChatMessage {
@@ -260,28 +268,33 @@ export function startApiServer(ctx: ApiContext): void {
         }
 
         if (url === '/api/events' || (req.url || '').startsWith('/api/events?')) {
-          // Enforce single agent connection
-          if (activeAgent) {
-            sendJson(res, { success: false, error: 'Another agent is already connected', connectedAgent: activeAgent.name }, 409);
-            return;
-          }
-
-          // Parse agent name from query string
           const fullUrl = new URL(req.url || '/api/events', `http://${req.headers.host || 'localhost'}`);
-          const agentName = fullUrl.searchParams.get('name') || 'Unknown Agent';
+          const agentName = fullUrl.searchParams.get('name') || '';
 
           res.writeHead(200, {
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
           });
-          res.write(`event: connected\ndata: ${JSON.stringify({ name: agentName })}\n\n`);
-          activeAgent = { res, name: agentName };
-          notifyAgentConnectionChanged(ctx);
-          req.on('close', () => {
-            if (activeAgent?.res === res) activeAgent = null;
+
+          if (agentName) {
+            // Real agent connection — shows green bulb, one at a time
+            if (activeAgent) {
+              sendJson(res, { success: false, error: 'Another agent is already connected', connectedAgent: activeAgent.name }, 409);
+              return;
+            }
+            res.write(`event: connected\ndata: ${JSON.stringify({ name: agentName })}\n\n`);
+            activeAgent = { res, name: agentName };
             notifyAgentConnectionChanged(ctx);
-          });
+            req.on('close', () => {
+              if (activeAgent?.res === res) { activeAgent = null; notifyAgentConnectionChanged(ctx); }
+            });
+          } else {
+            // Passive listener (e.g. MCP server) — receives events, no bulb effect
+            chatListeners.add(res);
+            res.write(`event: connected\ndata: ${JSON.stringify({ name: 'listener' })}\n\n`);
+            req.on('close', () => { chatListeners.delete(res); });
+          }
           return; // keep connection open
         }
 
