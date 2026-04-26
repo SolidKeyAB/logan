@@ -46,6 +46,7 @@ export interface Bookmark {
 export interface Annotation {
   id: string;
   lineNumber: number;
+  endLine?: number;        // optional range end (inclusive, 0-based)
   text: string;
   agentName: string;
   timestamp: number;

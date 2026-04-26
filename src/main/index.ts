@@ -704,6 +704,7 @@ app.whenReady().then(() => {
       loadBookmarksForFile(filePath);
       loadHighlightsForFile(filePath);
       loadAnnotationsForFile(filePath);
+      pushAnnotationsToRenderer();
       if (canWriteLocal(filePath)) {
         const localData = loadLocalFileData(filePath);
         localData.lastOpened = new Date().toISOString();
@@ -2311,6 +2312,7 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
     loadBookmarksForFile(persistPath);
     loadHighlightsForFile(persistPath);
     loadAnnotationsForFile(persistPath);
+    pushAnnotationsToRenderer();
 
     // Update lastOpened in local sidecar
     if (canWriteLocal(persistPath)) {

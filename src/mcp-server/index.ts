@@ -474,12 +474,13 @@ server.tool(
 // === Tool: logan_triage ===
 server.tool(
   'logan_triage',
-  'Quick triage: "What\'s wrong with this log?" — returns severity, summary, crashes, failing components, time gaps, and filter suggestions in a single call',
+  'Quick triage: "What\'s wrong with this log?" — returns severity, summary, crashes, failing components, time gaps, and filter suggestions in a single call. Automatically annotates crash sites and top failing components in the viewer.',
   {
     redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
     timeGapThreshold: z.number().min(1).default(60).describe('Minimum time gap in seconds to report'),
+    autoAnnotate: z.boolean().default(true).describe('Automatically annotate crash sites and top failing components in the LOGAN viewer'),
   },
-  async ({ redact, timeGapThreshold }) => {
+  async ({ redact, timeGapThreshold, autoAnnotate }) => {
     try {
       // 1. Status
       const status = await apiCall('GET', '/api/status');
@@ -557,6 +558,45 @@ server.tool(
         existingBookmarks: bms.success ? (bms.bookmarks?.length || 0) : 0,
       };
 
+      // Auto-annotate key findings in the viewer
+      if (autoAnnotate) {
+        const annotated: number[] = [];
+        // Annotate up to 8 unique crash sites
+        const crashGroups = Object.values(crashesByKeyword).slice(0, 8);
+        for (const cg of crashGroups) {
+          if (!annotated.includes(cg.firstLineNumber)) {
+            annotated.push(cg.firstLineNumber);
+            await apiCall('POST', '/api/annotate', {
+              lineNumber: cg.firstLineNumber,
+              text: `${cg.keyword} crash (×${cg.count}) — ${cg.sampleText.slice(0, 120)}`,
+              severity: 'error',
+            }).catch(() => {});
+          }
+        }
+        // Annotate up to 5 top failing components (first occurrence via search)
+        const topComponents = topFailingComponents.slice(0, 5);
+        for (const comp of topComponents) {
+          const compName: string = typeof comp === 'string' ? comp : (comp.component || comp.name || String(comp));
+          if (!compName) continue;
+          try {
+            const searchRes = await apiCall('POST', '/api/search', {
+              pattern: compName, isRegex: false, matchCase: false, wholeWord: false,
+            });
+            if (searchRes.success && searchRes.matches?.length > 0) {
+              const firstErrorMatch = searchRes.matches.find((m: any) => /error|fatal/i.test(m.lineText)) || searchRes.matches[0];
+              if (firstErrorMatch && !annotated.includes(firstErrorMatch.lineNumber)) {
+                annotated.push(firstErrorMatch.lineNumber);
+                await apiCall('POST', '/api/annotate', {
+                  lineNumber: firstErrorMatch.lineNumber,
+                  text: `Failing component: ${compName}`,
+                  severity: 'warning',
+                }).catch(() => {});
+              }
+            }
+          } catch { /* annotation is best-effort */ }
+        }
+      }
+
       const output = redact ? maybeRedact(triage, true) : triage;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
     } catch (err: any) {
@@ -568,19 +608,35 @@ server.tool(
 // === Tool: logan_investigate_crashes ===
 server.tool(
   'logan_investigate_crashes',
-  'Deep-dive on crashes: returns every crash site with surrounding context lines so the AI can reason about root causes',
+  'Deep-dive on crashes: returns every crash site with surrounding context lines so the AI can reason about root causes. Automatically annotates each crash site in the viewer.',
   {
     contextLines: z.number().int().min(1).max(50).default(10).describe('Number of context lines before and after each crash'),
     maxCrashes: z.number().int().min(1).max(100).default(20).describe('Maximum number of crash sites to return'),
     redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
     autoBookmark: z.boolean().default(false).describe('Automatically bookmark crash sites in LOGAN'),
     autoHighlight: z.boolean().default(false).describe('Automatically highlight crash keywords in LOGAN'),
+    autoAnnotate: z.boolean().default(true).describe('Automatically annotate each crash site in the LOGAN viewer'),
   },
-  async ({ contextLines, maxCrashes, redact, autoBookmark, autoHighlight }) => {
+  async ({ contextLines, maxCrashes, redact, autoBookmark, autoHighlight, autoAnnotate }) => {
     try {
       const result = await apiCall('POST', '/api/investigate-crashes', {
         contextLines, maxCrashes, autoBookmark, autoHighlight,
       });
+
+      // Auto-annotate crash sites
+      if (autoAnnotate && result.success && result.crashes?.length > 0) {
+        for (const crash of result.crashes.slice(0, 20)) {
+          const lineNum = crash.lineNumber ?? crash.crashLineNumber;
+          if (lineNum === undefined) continue;
+          const label = crash.keyword ? `${crash.keyword} crash — ${(crash.text || crash.crashLine || '').slice(0, 120)}` : (crash.text || crash.crashLine || 'Crash site').slice(0, 120);
+          await apiCall('POST', '/api/annotate', {
+            lineNumber: lineNum,
+            text: label,
+            severity: 'error',
+          }).catch(() => {});
+        }
+      }
+
       const output = redact ? maybeRedact(result, true) : result;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
     } catch (err: any) {
@@ -592,19 +648,38 @@ server.tool(
 // === Tool: logan_investigate_component ===
 server.tool(
   'logan_investigate_component',
-  'Focus on one component\'s health: shows error/warning/info breakdown, sample lines per level, and error sites with context',
+  'Focus on one component\'s health: shows error/warning/info breakdown, sample lines per level, and error sites with context. Automatically annotates the first error site.',
   {
     component: z.string().describe('Component/channel name to investigate'),
     maxSamplesPerLevel: z.number().int().min(1).max(20).default(5).describe('Max sample lines per log level'),
     includeErrorContext: z.boolean().default(true).describe('Include context lines around error sites'),
     contextLines: z.number().int().min(1).max(20).default(5).describe('Context lines around error sites'),
     redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+    autoAnnotate: z.boolean().default(true).describe('Automatically annotate the first error site in the LOGAN viewer'),
   },
-  async ({ component, maxSamplesPerLevel, includeErrorContext, contextLines, redact }) => {
+  async ({ component, maxSamplesPerLevel, includeErrorContext, contextLines, redact, autoAnnotate }) => {
     try {
       const result = await apiCall('POST', '/api/investigate-component', {
         component, maxSamplesPerLevel, includeErrorContext, contextLines,
       });
+
+      // Auto-annotate first error site for this component
+      if (autoAnnotate && result.success) {
+        const errorSites: any[] = result.errorSites || result.result?.errorSites || [];
+        if (errorSites.length > 0) {
+          const first = errorSites[0];
+          const lineNum = first.lineNumber ?? first.line;
+          if (lineNum !== undefined) {
+            await apiCall('POST', '/api/annotate', {
+              lineNumber: lineNum,
+              ...(errorSites.length > 1 ? { endLine: errorSites[Math.min(errorSites.length - 1, 4)].lineNumber } : {}),
+              text: `${component}: ${errorSites.length} error site(s) — ${(first.text || first.line || '').slice(0, 120)}`,
+              severity: 'error',
+            }).catch(() => {});
+          }
+        }
+      }
+
       const output = redact ? maybeRedact(result, true) : result;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
     } catch (err: any) {
@@ -924,16 +999,18 @@ server.tool(
 // === Tool: logan_annotate ===
 server.tool(
   'logan_annotate',
-  'Add an inline annotation/comment to a specific log line. The annotation appears as an overlay comment in the log viewer when annotations are toggled on.',
+  'Add an annotation/comment to a specific log line or range of lines. Use this during analysis to mark important findings — crashes, errors, anomalies, patterns — so the user can see them highlighted in the annotation bar and panel.',
   {
-    lineNumber: z.number().int().min(0).describe('0-based line number to annotate'),
-    text: z.string().describe('Annotation text (the comment to display)'),
-    severity: z.enum(['info', 'warning', 'error']).default('info').describe('Severity level'),
+    lineNumber: z.number().int().min(0).describe('0-based start line number to annotate'),
+    endLine: z.number().int().min(0).optional().describe('0-based end line number for a range annotation (inclusive). Omit for single-line.'),
+    text: z.string().describe('Annotation text — the finding or comment to display'),
+    severity: z.enum(['info', 'warning', 'error']).default('info').describe('Severity: use "error" for crashes/critical issues, "warning" for anomalies, "info" for general findings'),
   },
   async (params) => {
     try {
       const result = await apiCall('POST', '/api/annotate', {
         lineNumber: params.lineNumber,
+        ...(params.endLine !== undefined ? { endLine: params.endLine } : {}),
         text: params.text,
         severity: params.severity || 'info',
       });

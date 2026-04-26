@@ -3228,6 +3228,15 @@ body.platform-darwin .titlebar {
 .ann-bar-card.severity-warning::before { color: rgba(255, 180, 40, 0.6); }
 .ann-bar-card.severity-error   { border-left-color: rgba(255, 80,  80, 0.85); }
 .ann-bar-card.severity-error::before   { color: rgba(255, 80, 80, 0.6); }
+/* Range annotation — tall card with a stripe on the right edge */
+.ann-bar-card.ann-bar-range {
+  border-right: 2px solid;
+  border-right-color: inherit;
+  background: rgba(180, 120, 255, 0.07);
+  min-height: 24px;
+}
+.ann-bar-card.ann-bar-range.severity-warning { background: rgba(255, 180, 40, 0.07); }
+.ann-bar-card.ann-bar-range.severity-error   { background: rgba(255, 80,  80, 0.07); }
 
 .ann-bar-agent {
   font-size: 9px;

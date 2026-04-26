@@ -485,6 +485,7 @@ export function startApiServer(ctx: ApiContext): void {
           const annotation: Annotation = {
             id: `ann-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
             lineNumber: body.lineNumber,
+            ...(body.endLine !== undefined ? { endLine: body.endLine } : {}),
             text: body.text,
             agentName: body.agentName || activeAgent?.name || 'Agent',
             timestamp: Date.now(),

@@ -6140,9 +6140,13 @@ function wizardBack(): void {
 function rebuildAnnotationIndex(): void {
   state.annotationsByLine.clear();
   for (const ann of state.annotations) {
-    const list = state.annotationsByLine.get(ann.lineNumber);
-    if (list) list.push(ann);
-    else state.annotationsByLine.set(ann.lineNumber, [ann]);
+    const start = ann.lineNumber;
+    const end = (ann.endLine !== undefined && ann.endLine > start) ? ann.endLine : start;
+    for (let ln = start; ln <= Math.min(end, start + 500); ln++) {
+      const list = state.annotationsByLine.get(ln);
+      if (list) list.push(ann);
+      else state.annotationsByLine.set(ln, [ann]);
+    }
   }
 }
 
@@ -6179,7 +6183,19 @@ function renderAnnotationBar(): void {
     const sev = ann.severity || 'info';
     card.className = `ann-bar-card severity-${sev}`;
     card.style.top = `${positions[i]}px`;
-    card.title = `Line ${ann.lineNumber + 1} — ${ann.agentName}: ${ann.text}`;
+
+    // If range annotation, also set height to span the range
+    if (ann.endLine !== undefined && ann.endLine > ann.lineNumber) {
+      const endTop = (ann.endLine / totalLines) * barHeight;
+      const spanHeight = Math.max(8, endTop - positions[i]);
+      card.style.height = `${spanHeight}px`;
+      card.classList.add('ann-bar-range');
+    }
+
+    const lineLabel = ann.endLine !== undefined && ann.endLine > ann.lineNumber
+      ? `Lines ${ann.lineNumber + 1}–${ann.endLine + 1}`
+      : `Line ${ann.lineNumber + 1}`;
+    card.title = `${lineLabel} — ${ann.agentName}: ${ann.text}`;
     card.dataset.lineNumber = String(ann.lineNumber);
 
     const firstLine = ann.text.split('\n')[0];
@@ -6225,8 +6241,11 @@ function renderAnnotationsPanel(): void {
     item.className = `ann-panel-item severity-${sev}`;
     item.dataset.lineNumber = String(ann.lineNumber);
 
+    const lineLabel = ann.endLine !== undefined && ann.endLine > ann.lineNumber
+      ? `L${ann.lineNumber + 1}–${ann.endLine + 1}`
+      : `L${ann.lineNumber + 1}`;
     item.innerHTML =
-      `<span class="ann-panel-line">L${ann.lineNumber + 1}</span>` +
+      `<span class="ann-panel-line">${lineLabel}</span>` +
       `<div class="ann-panel-body">` +
         `<span class="ann-panel-agent">${escapeHtml(ann.agentName)}</span>` +
         `<span class="ann-panel-text">${escapeHtml(ann.text)}</span>` +
