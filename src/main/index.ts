@@ -1625,7 +1625,7 @@ ipcMain.handle(IPC.LIVE_SAVE_SESSION, async (_, connectionId: string) => {
       return { success: false, error: 'No session data' };
     }
 
-    const result = await dialog.showSaveDialog(mainWindow!, {
+    const result = await showSaveDialog({
       title: `Save ${conn.displayName} Session`,
       defaultPath: path.basename(tempPath),
       filters: [
@@ -1822,8 +1822,23 @@ ipcMain.handle(IPC.SSH_DOWNLOAD_FILE, async (_, remotePath: string) => {
 
 // === File Operations ===
 
+// On Linux, passing a parent BrowserWindow to dialog.show*Dialog causes the
+// dialog to attach modally via XDG portal / GTK, which can deadlock and leave
+// the window unresponsive. Calling the parentless overload avoids this entirely.
+function showOpenDialog(options: Electron.OpenDialogOptions): Promise<Electron.OpenDialogReturnValue> {
+  return process.platform === 'linux' || !mainWindow
+    ? dialog.showOpenDialog(options)
+    : dialog.showOpenDialog(mainWindow, options);
+}
+
+function showSaveDialog(options: Electron.SaveDialogOptions): Promise<Electron.SaveDialogReturnValue> {
+  return process.platform === 'linux' || !mainWindow
+    ? dialog.showSaveDialog(options)
+    : dialog.showSaveDialog(mainWindow, options);
+}
+
 ipcMain.handle(IPC.OPEN_FILE_DIALOG, async () => {
-  const result = await dialog.showOpenDialog(mainWindow!, {
+  const result = await showOpenDialog({
     properties: ['openFile'],
     filters: [
       { name: 'All Files', extensions: ['*'] },
@@ -1838,7 +1853,7 @@ ipcMain.handle(IPC.OPEN_FILE_DIALOG, async () => {
 // === Folder Operations ===
 
 ipcMain.handle(IPC.OPEN_FOLDER_DIALOG, async () => {
-  const result = await dialog.showOpenDialog(mainWindow!, {
+  const result = await showOpenDialog({
     properties: ['openDirectory'],
   });
   return result.canceled ? null : result.filePaths[0];
@@ -5307,7 +5322,7 @@ ipcMain.handle('save-notes', async (_e: any, content: string) => {
 
 ipcMain.handle('save-notes-as', async (_e: any, content: string) => {
   if (!mainWindow) return { success: false, error: 'No window' };
-  const result = await dialog.showSaveDialog(mainWindow, {
+  const result = await showSaveDialog({
     title: 'Save Notes As',
     defaultPath: currentFilePath
       ? path.basename(currentFilePath) + '.notes.txt'
