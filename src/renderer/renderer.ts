@@ -1020,6 +1020,7 @@ let logViewerWrapper: HTMLDivElement | null = null;
 let minimapElement: HTMLDivElement | null = null;
 let minimapContentElement: HTMLDivElement | null = null;
 let minimapViewportElement: HTMLDivElement | null = null;
+let annotationBarElement: HTMLDivElement | null = null;
 let minimapData: Array<{ level: string | undefined }> = [];
 const MINIMAP_SAMPLE_RATE = 1000; // Sample every N lines for minimap
 
@@ -1970,9 +1971,18 @@ function createLogViewer(): void {
   minimapTooltip.id = 'minimap-tooltip';
   minimapElement.appendChild(minimapTooltip);
 
+  // Annotation bar — cards positioned proportionally, shown only when annotations exist
+  if (annotationBarElement) annotationBarElement.remove();
+  annotationBarElement = document.createElement('div');
+  annotationBarElement.className = 'annotation-bar';
+  if (!state.showAnnotations || state.annotations.length === 0) {
+    annotationBarElement.classList.add('hidden');
+  }
+
   // Add to wrapper
   logViewerWrapper.appendChild(logViewerElement);
   logViewerWrapper.appendChild(minimapElement);
+  logViewerWrapper.appendChild(annotationBarElement);
   elements.editorContainer.appendChild(logViewerWrapper);
 
   // Event listeners with passive flag for better scroll performance
@@ -2478,36 +2488,15 @@ function renderVisibleLines(): void {
 
       fragment.appendChild(lineElement);
 
-      // Agent annotation balloon (only when visible and annotations exist for this line)
+      // Lightweight annotation gutter dot — annotation detail lives in the bar and panel
       if (state.showAnnotations && state.annotationsByLine.size > 0) {
         const lineAnns = state.annotationsByLine.get(line.lineNumber);
         if (lineAnns) {
-          // Show a small indicator dot on the line + balloon on hover/always
-          const indicator = document.createElement('div');
-          indicator.className = 'annotation-indicator';
-          indicator.style.cssText = `position:absolute;right:44px;transform:translateY(${top}px);z-index:3;`;
-          indicator.dataset.lineNumber = String(line.lineNumber);
-
-          // Build balloon content (stacked if multiple)
-          let balloonHtml = '';
-          for (const ann of lineAnns) {
-            const sevClass = `severity-${ann.severity || 'info'}`;
-            balloonHtml += `<div class="annotation-balloon ${sevClass}">` +
-              `<span class="annotation-agent">${escapeHtml(ann.agentName)}</span>` +
-              `<span class="annotation-text">${escapeHtml(ann.text)}</span>` +
-              `</div>`;
-          }
-
-          const balloon = document.createElement('div');
-          balloon.className = 'annotation-balloon-container';
-          balloon.style.cssText = `position:absolute;right:48px;transform:translateY(${top - 4}px);z-index:10;`;
-          balloon.innerHTML = balloonHtml;
-
-          indicator.innerHTML = `<span class="annotation-dot severity-${lineAnns[0].severity || 'info'}">${lineAnns.length > 1 ? lineAnns.length : ''}</span>`;
-          indicator.title = lineAnns.map(a => `${a.agentName}: ${a.text}`).join('\n');
-
-          fragment.appendChild(indicator);
-          fragment.appendChild(balloon);
+          const dot = document.createElement('div');
+          dot.className = `annotation-gutter-dot severity-${lineAnns[0].severity || 'info'}`;
+          dot.style.cssText = `position:absolute;right:6px;transform:translateY(${top + (getLineHeight() - 8) / 2}px);z-index:3;`;
+          dot.title = lineAnns.map(a => `${a.agentName}: ${a.text}`).join('\n');
+          fragment.appendChild(dot);
         }
       }
 
@@ -6087,9 +6076,109 @@ function rebuildAnnotationIndex(): void {
   }
 }
 
+function renderAnnotationBar(): void {
+  if (!annotationBarElement) return;
+
+  const totalLines = getTotalLines();
+  const hasAnns = state.showAnnotations && state.annotations.length > 0 && totalLines > 0;
+
+  if (!hasAnns) {
+    annotationBarElement.classList.add('hidden');
+    annotationBarElement.innerHTML = '';
+    return;
+  }
+
+  annotationBarElement.classList.remove('hidden');
+  const barHeight = annotationBarElement.clientHeight || minimapElement?.clientHeight || 400;
+
+  // Sort by line number, then position with minimum spacing to avoid overlap
+  const sorted = [...state.annotations].sort((a, b) => a.lineNumber - b.lineNumber);
+  const MIN_GAP = 30;
+  const positions: number[] = [];
+  let prevBottom = -MIN_GAP;
+  for (const ann of sorted) {
+    const ideal = (ann.lineNumber / totalLines) * barHeight;
+    const top = Math.max(ideal, prevBottom + MIN_GAP);
+    positions.push(top);
+    prevBottom = top;
+  }
+
+  const frag = document.createDocumentFragment();
+  sorted.forEach((ann, i) => {
+    const card = document.createElement('div');
+    const sev = ann.severity || 'info';
+    card.className = `ann-bar-card severity-${sev}`;
+    card.style.top = `${positions[i]}px`;
+    card.title = `Line ${ann.lineNumber + 1} — ${ann.agentName}: ${ann.text}`;
+    card.dataset.lineNumber = String(ann.lineNumber);
+
+    const firstLine = ann.text.split('\n')[0];
+    const truncated = firstLine.length > 60 ? firstLine.slice(0, 58) + '…' : firstLine;
+
+    card.innerHTML =
+      `<div class="ann-bar-agent">${escapeHtml(ann.agentName)}</div>` +
+      `<div class="ann-bar-text">${escapeHtml(truncated)}</div>`;
+
+    card.addEventListener('click', () => {
+      const di = getFilteredDisplayIndex(ann.lineNumber);
+      goToLine(di >= 0 ? di : ann.lineNumber, ann.lineNumber);
+      renderVisibleLines();
+    });
+
+    frag.appendChild(card);
+  });
+
+  annotationBarElement.innerHTML = '';
+  annotationBarElement.appendChild(frag);
+}
+
+function renderAnnotationsPanel(): void {
+  const list = document.getElementById('annotations-list');
+  if (!list) return;
+
+  const badge = document.getElementById('badge-annotations');
+
+  if (state.annotations.length === 0) {
+    list.innerHTML = '<p class="placeholder">No annotations yet</p>';
+    if (badge) badge.textContent = '';
+    return;
+  }
+
+  if (badge) badge.textContent = String(state.annotations.length);
+
+  const sorted = [...state.annotations].sort((a, b) => a.lineNumber - b.lineNumber);
+  const frag = document.createDocumentFragment();
+
+  for (const ann of sorted) {
+    const sev = ann.severity || 'info';
+    const item = document.createElement('div');
+    item.className = `ann-panel-item severity-${sev}`;
+    item.dataset.lineNumber = String(ann.lineNumber);
+
+    item.innerHTML =
+      `<span class="ann-panel-line">L${ann.lineNumber + 1}</span>` +
+      `<div class="ann-panel-body">` +
+        `<span class="ann-panel-agent">${escapeHtml(ann.agentName)}</span>` +
+        `<span class="ann-panel-text">${escapeHtml(ann.text)}</span>` +
+      `</div>`;
+
+    item.addEventListener('click', () => {
+      const di = getFilteredDisplayIndex(ann.lineNumber);
+      goToLine(di >= 0 ? di : ann.lineNumber, ann.lineNumber);
+      renderVisibleLines();
+    });
+
+    frag.appendChild(item);
+  }
+
+  list.innerHTML = '';
+  list.appendChild(frag);
+}
+
 function toggleAnnotations(): void {
   state.showAnnotations = !state.showAnnotations;
   elements.btnAnnotationsToggle.classList.toggle('active', state.showAnnotations);
+  renderAnnotationBar();
   renderVisibleLines();
   renderMinimapMarkers();
 }
@@ -11915,13 +12004,14 @@ function formatBytes(bytes: number): string {
 
 // Sidebar toggle
 // Panel system
-const PANEL_IDS = ['folders', 'bookmarks', 'highlights', 'stats', 'history'];
+const PANEL_IDS = ['folders', 'bookmarks', 'highlights', 'stats', 'history', 'annotations'];
 const PANEL_NAMES: Record<string, string> = {
   'folders': 'Folders',
   'bookmarks': 'Bookmarks',
   'highlights': 'Highlights',
   'stats': 'Stats',
   'history': 'History',
+  'annotations': 'AI Annotations',
 };
 
 const BOTTOM_TAB_IDS = ['analysis', 'time-gaps', 'search-results', 'search-configs', 'video', 'live', 'notes'];
@@ -11968,6 +12058,11 @@ function openPanel(panelId: string): void {
   // Lazy-load history panel
   if (panelId === 'history') {
     loadAndRenderHistory();
+  }
+
+  // Render annotations panel on open
+  if (panelId === 'annotations') {
+    renderAnnotationsPanel();
   }
 
   savePanelState();
@@ -13075,8 +13170,15 @@ function init(): void {
   window.api.onAnnotationsChanged((anns: any[]) => {
     state.annotations = anns;
     rebuildAnnotationIndex();
+    renderAnnotationBar();
+    renderAnnotationsPanel();
     renderVisibleLines();
     renderMinimapMarkers();
+  });
+
+  // Clear all annotations button
+  document.getElementById('btn-clear-annotations')?.addEventListener('click', async () => {
+    await window.api.clearAnnotations();
   });
   // Launch/Stop agent button
   elements.chatLaunchAgent.addEventListener('click', toggleAgent);
