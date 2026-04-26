@@ -204,6 +204,7 @@ interface TabState {
   analysisResult: AnalysisResult | null;
   isFiltered: boolean;
   filteredLines: number | null;
+  filteredLineNumbers: number[] | null;
   activeLevelFilter: string | null;
   appliedFilterSuggestion: { id: string; title: string } | null;
 }
@@ -233,6 +234,7 @@ interface AppState {
   analysisResult: AnalysisResult | null;
   totalLines: number;
   filteredLines: number | null;
+  filteredLineNumbers: number[] | null;
   isFiltered: boolean;
   activeLevelFilter: string | null;
   appliedFilterSuggestion: { id: string; title: string } | null;
@@ -309,6 +311,7 @@ const state: AppState = {
   analysisResult: null,
   totalLines: 0,
   filteredLines: null,
+  filteredLineNumbers: null,
   isFiltered: false,
   activeLevelFilter: null,
   appliedFilterSuggestion: null,
@@ -3288,16 +3291,16 @@ function handleMinimapClick(event: MouseEvent): void {
     let nearestResult: typeof state.searchResults[0] | null = null;
     let nearestDist = Infinity;
     for (const r of state.searchResults) {
-      const pos = state.isFiltered && r.displayIndex != null ? r.displayIndex : r.lineNumber;
-      const dist = Math.abs(pos - proportionalLine);
+      const pos = getFilteredDisplayIndex(r.lineNumber);
+      const dist = Math.abs((pos < 0 ? r.lineNumber : pos) - proportionalLine);
       if (dist < nearestDist) {
         nearestDist = dist;
         nearestResult = r;
       }
     }
     if (nearestResult && nearestDist <= SNAP_RADIUS_LINES) {
-      targetLine = state.isFiltered && nearestResult.displayIndex != null
-        ? nearestResult.displayIndex : nearestResult.lineNumber;
+      const nearestDisplayIdx = getFilteredDisplayIndex(nearestResult.lineNumber);
+      targetLine = nearestDisplayIdx >= 0 ? nearestDisplayIdx : nearestResult.lineNumber;
       // Update current search index too
       const idx = state.searchResults.indexOf(nearestResult);
       if (idx >= 0) {
@@ -3621,8 +3624,8 @@ function renderMinimapMarkers(): void {
     const buckets = new Uint32Array(SEARCH_BUCKETS);
     let maxBucket = 0;
     for (const result of state.searchResults) {
-      const markerPos = state.isFiltered && result.displayIndex != null
-        ? result.displayIndex : result.lineNumber;
+      const di = getFilteredDisplayIndex(result.lineNumber);
+      const markerPos = di >= 0 ? di : result.lineNumber;
       const idx = Math.min(SEARCH_BUCKETS - 1, Math.floor((markerPos / totalLines) * SEARCH_BUCKETS));
       buckets[idx]++;
       if (buckets[idx] > maxBucket) maxBucket = buckets[idx];
@@ -3649,8 +3652,8 @@ function renderMinimapMarkers(): void {
       const r = results[i];
       const marker = document.createElement('div');
       marker.className = 'minimap-sc-marker';
-      const scMarkerPos = state.isFiltered && r.displayIndex != null
-        ? r.displayIndex : r.lineNumber;
+      const scDi = getFilteredDisplayIndex(r.lineNumber);
+      const scMarkerPos = scDi >= 0 ? scDi : r.lineNumber;
       marker.style.top = `${(scMarkerPos / totalLines) * minimapHeight}px`;
       marker.style.backgroundColor = config.color;
       fragment.appendChild(marker);
@@ -8027,8 +8030,8 @@ async function renderSearchConfigsResults(): Promise<void> {
       item.appendChild(lineNum);
       item.appendChild(text);
       item.addEventListener('click', () => {
-        const scrollTarget = state.isFiltered && r.displayIndex != null
-          ? r.displayIndex : r.lineNumber;
+        const di = getFilteredDisplayIndex(r.lineNumber);
+        const scrollTarget = di >= 0 ? di : r.lineNumber;
         goToLine(scrollTarget, r.lineNumber);
         renderVisibleLines();
       });
@@ -9124,6 +9127,18 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       }
 
       updateFileStatsUI();
+
+      // Reset markdown state before creating the log viewer so the preview
+      // doesn't remain visible while the new file's lines are loading.
+      isMarkdownFile = isMarkdownExtension(filePath);
+      if (!isMarkdownFile) {
+        markdownPreviewMode = false;
+        elements.markdownPreview.classList.add('hidden');
+        elements.markdownPreview.innerHTML = '';
+        elements.btnWordWrap.textContent = 'Wrap';
+        elements.btnWordWrap.title = 'Toggle word wrap (⌥Z)';
+      }
+
       createLogViewer();
       renderTabBar();
       renderFolderTree(); // Update active file highlight
@@ -9179,27 +9194,13 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       updateLocalStorageStatus();
       updateSplitNavigation();
 
-      // Check if this is a markdown file
-      isMarkdownFile = isMarkdownExtension(filePath);
+      // isMarkdownFile was already set above; show preview if needed
       if (isMarkdownFile) {
-        // Show markdown preview by default
         markdownPreviewMode = true;
         elements.btnWordWrap.textContent = 'Raw';
         elements.btnWordWrap.title = 'Show raw markdown';
         await renderMarkdownPreview();
         showMarkdownPreview();
-      } else {
-        // Reset for non-markdown files
-        markdownPreviewMode = false;
-        isMarkdownFile = false;
-        elements.markdownPreview.classList.add('hidden');
-        elements.markdownPreview.innerHTML = '';
-        elements.btnWordWrap.textContent = 'Wrap';
-        elements.btnWordWrap.title = 'Toggle word wrap (⌥Z)';
-        const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
-        if (wrapper) {
-          wrapper.style.display = '';
-        }
       }
 
       // Restore video player state for this file
@@ -9744,8 +9745,8 @@ function goToSearchResult(index: number): void {
 
   state.currentSearchIndex = index;
   const result = state.searchResults[index];
-  const scrollTarget = state.isFiltered && result.displayIndex != null
-    ? result.displayIndex : result.lineNumber;
+  const di = getFilteredDisplayIndex(result.lineNumber);
+  const scrollTarget = di >= 0 ? di : result.lineNumber;
   goToLine(scrollTarget, result.lineNumber);
   updateSearchUI();
   renderVisibleLines();
@@ -9829,6 +9830,22 @@ function hideFilterModal(): void {
   elements.filterModal.classList.add('hidden');
 }
 
+// Returns the position of lineNumber in the current filtered view via binary search.
+// Returns lineNumber unchanged when no filter is active.
+// Returns -1 if the line is not present in the current filter (filtered out).
+function getFilteredDisplayIndex(lineNumber: number): number {
+  if (!state.isFiltered || !state.filteredLineNumbers) return lineNumber;
+  let lo = 0, hi = state.filteredLineNumbers.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    const v = state.filteredLineNumbers[mid];
+    if (v === lineNumber) return mid;
+    if (v < lineNumber) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return -1;
+}
+
 async function applyFilter(providedConfig?: FilterConfig): Promise<void> {
   let config: FilterConfig;
 
@@ -9871,6 +9888,7 @@ async function applyFilter(providedConfig?: FilterConfig): Promise<void> {
     if (result.success && result.stats) {
       state.isFiltered = true;
       state.filteredLines = result.stats.filteredLines;
+      state.filteredLineNumbers = result.filteredLineNumbers ?? null;
       cachedLines.clear();
 
       // Reset scroll to top of filtered view
@@ -9895,6 +9913,7 @@ async function applyFilter(providedConfig?: FilterConfig): Promise<void> {
 async function clearFilter(): Promise<void> {
   state.isFiltered = false;
   state.filteredLines = null;
+  state.filteredLineNumbers = null;
   state.activeLevelFilter = null;
   state.appliedFilterSuggestion = null;
   cachedLines.clear();
@@ -9931,6 +9950,7 @@ async function applyQuickLevelFilter(level: string): Promise<void> {
     if (result.success && result.stats) {
       state.isFiltered = true;
       state.filteredLines = result.stats.filteredLines;
+      state.filteredLineNumbers = result.filteredLineNumbers ?? null;
       state.activeLevelFilter = level;
       cachedLines.clear();
 
@@ -10258,6 +10278,7 @@ async function applyAdvancedFilter(): Promise<void> {
     if (result.success && result.stats) {
       state.isFiltered = true;
       state.filteredLines = result.stats.filteredLines;
+      state.filteredLineNumbers = result.filteredLineNumbers ?? null;
       state.activeLevelFilter = null;
       cachedLines.clear();
 
@@ -13873,6 +13894,7 @@ function saveCurrentTabState(): void {
     analysisResult: state.analysisResult,
     isFiltered: state.isFiltered,
     filteredLines: state.filteredLines,
+    filteredLineNumbers: state.filteredLineNumbers,
     activeLevelFilter: state.activeLevelFilter,
     appliedFilterSuggestion: state.appliedFilterSuggestion,
   };
@@ -13898,6 +13920,7 @@ function restoreTabState(tab: TabState): void {
   state.analysisResult = tab.analysisResult;
   state.isFiltered = tab.isFiltered;
   state.filteredLines = tab.filteredLines;
+  state.filteredLineNumbers = tab.filteredLineNumbers;
   state.activeLevelFilter = tab.activeLevelFilter;
   state.appliedFilterSuggestion = tab.appliedFilterSuggestion;
 
@@ -13943,6 +13966,7 @@ function createTab(filePath: string): TabState {
     analysisResult: null,
     isFiltered: false,
     filteredLines: null,
+    filteredLineNumbers: null,
     activeLevelFilter: null,
     appliedFilterSuggestion: null,
   };
@@ -13979,6 +14003,11 @@ async function switchToTab(tabId: string): Promise<void> {
     if (result.success && result.info) {
       // Restore tab state
       restoreTabState(tab);
+
+      // If tab had an active filter but filteredLineNumbers weren't saved, fetch them from backend
+      if (state.isFiltered && !state.filteredLineNumbers) {
+        state.filteredLineNumbers = await window.api.getFilteredLineNumbers() ?? null;
+      }
 
       // Handle markdown preview state for the new tab
       isMarkdownFile = isMarkdownExtension(tab.filePath);

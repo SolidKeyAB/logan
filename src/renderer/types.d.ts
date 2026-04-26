@@ -349,10 +349,11 @@ interface Api {
   listAnalyzers: () => Promise<{ success: boolean; analyzers?: Array<{ name: string; description: string }> }>;
   analyzeFile: (analyzerName?: string, options?: AnalyzerOptions) => Promise<{ success: boolean; result?: AnalysisResult; error?: string }>;
   cancelAnalysis: () => Promise<{ success: boolean }>;
-  applyFilter: (config: any) => Promise<{ success: boolean; stats?: { filteredLines: number }; error?: string }>;
+  applyFilter: (config: any) => Promise<{ success: boolean; stats?: { filteredLines: number }; filteredLineNumbers?: number[]; error?: string }>;
   cancelFilter: () => Promise<{ success: boolean }>;
   onFilterProgress: (callback: (data: { percent: number }) => void) => () => void;
   clearFilter: () => Promise<{ success: boolean }>;
+  getFilteredLineNumbers: () => Promise<number[] | null>;
 
   // Time Gap Detection
   detectTimeGaps: (options: { thresholdSeconds: number; startLine?: number; endLine?: number; startPattern?: string; endPattern?: string }) => Promise<{ success: boolean; gaps?: Array<{ lineNumber: number; prevLineNumber: number; gapSeconds: number; prevTimestamp: string; currTimestamp: string; linePreview: string }>; totalLines?: number; error?: string }>;

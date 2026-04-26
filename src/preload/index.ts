@@ -237,8 +237,11 @@ const api = {
   cancelAnalysis: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('cancel-analysis'),
 
-  applyFilter: (config: any): Promise<{ success: boolean; stats?: { filteredLines: number }; error?: string }> =>
+  applyFilter: (config: any): Promise<{ success: boolean; stats?: { filteredLines: number }; filteredLineNumbers?: number[]; error?: string }> =>
     ipcRenderer.invoke('apply-filter', config),
+
+  getFilteredLineNumbers: (): Promise<number[] | null> =>
+    ipcRenderer.invoke('get-filtered-line-numbers'),
 
   cancelFilter: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('cancel-filter'),

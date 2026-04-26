@@ -4286,10 +4286,15 @@ ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
       stats: {
         filteredLines: sortedLines.length,
       },
+      filteredLineNumbers: sortedLines,
     };
   } catch (error) {
     return { success: false, error: String(error) };
   }
+});
+
+ipcMain.handle('get-filtered-line-numbers', () => {
+  return getFilteredLines();
 });
 
 ipcMain.handle('cancel-filter', async () => {
