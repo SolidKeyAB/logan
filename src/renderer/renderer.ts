@@ -6150,10 +6150,50 @@ function rebuildAnnotationIndex(): void {
   }
 }
 
+function navigateToAnnotation(ann: any): void {
+  const di = getFilteredDisplayIndex(ann.lineNumber);
+  if (di >= 0) {
+    // Found in current view (unfiltered: di === lineNumber; filtered: di = filtered position)
+    goToLine(di, ann.lineNumber);
+  } else {
+    // Line is filtered out — scroll proportionally using raw file total so position is accurate
+    const rawTotal = state.totalLines;
+    if (logViewerElement && rawTotal > 0) {
+      const lineH = getLineHeight();
+      const naturalScrollTop = ann.lineNumber * lineH;
+      if (naturalScrollTop <= MAX_SCROLL_HEIGHT) {
+        logViewerElement.scrollTop = naturalScrollTop;
+      } else {
+        const clientH = logViewerElement.clientHeight;
+        const maxLine = rawTotal - Math.ceil(clientH / lineH);
+        logViewerElement.scrollTop = (ann.lineNumber / maxLine) * (MAX_SCROLL_HEIGHT - clientH);
+      }
+      state.selectedLine = ann.lineNumber;
+      updateCursorStatus(ann.lineNumber);
+    }
+  }
+  renderVisibleLines();
+  setActiveAnnotation(ann.id);
+}
+
+let activeAnnotationId: string | null = null;
+
+function setActiveAnnotation(id: string): void {
+  activeAnnotationId = id;
+  // Highlight bar card
+  annotationBarElement?.querySelectorAll('.ann-bar-card').forEach((el) => {
+    (el as HTMLElement).classList.toggle('active', (el as HTMLElement).dataset.annId === id);
+  });
+  // Highlight panel item
+  document.getElementById('annotations-list')?.querySelectorAll('.ann-panel-item').forEach((el) => {
+    (el as HTMLElement).classList.toggle('active', (el as HTMLElement).dataset.annId === id);
+  });
+}
+
 function renderAnnotationBar(): void {
   if (!annotationBarElement) return;
 
-  const totalLines = getTotalLines();
+  const totalLines = state.totalLines; // always use raw total — never filtered count
   const hasAnns = state.showAnnotations && state.annotations.length > 0 && totalLines > 0;
 
   if (!hasAnns) {
@@ -6163,40 +6203,34 @@ function renderAnnotationBar(): void {
   }
 
   annotationBarElement.classList.remove('hidden');
-  const barHeight = annotationBarElement.clientHeight || minimapElement?.clientHeight || 400;
 
-  // Sort by line number, then position with minimum spacing to avoid overlap
   const sorted = [...state.annotations].sort((a, b) => a.lineNumber - b.lineNumber);
-  const MIN_GAP = 30;
-  const positions: number[] = [];
-  let prevBottom = -MIN_GAP;
-  for (const ann of sorted) {
-    const ideal = (ann.lineNumber / totalLines) * barHeight;
-    const top = Math.max(ideal, prevBottom + MIN_GAP);
-    positions.push(top);
-    prevBottom = top;
-  }
-
   const frag = document.createDocumentFragment();
-  sorted.forEach((ann, i) => {
+
+  sorted.forEach((ann) => {
     const card = document.createElement('div');
     const sev = ann.severity || 'info';
     card.className = `ann-bar-card severity-${sev}`;
-    card.style.top = `${positions[i]}px`;
+    card.dataset.annId = ann.id;
 
-    // If range annotation, also set height to span the range
+    // Use CSS percentage for top — immune to bar height measurement issues
+    const topPct = (ann.lineNumber / totalLines) * 100;
+    card.style.top = `${topPct.toFixed(3)}%`;
+
+    // Range annotation: span height as percentage
     if (ann.endLine !== undefined && ann.endLine > ann.lineNumber) {
-      const endTop = (ann.endLine / totalLines) * barHeight;
-      const spanHeight = Math.max(8, endTop - positions[i]);
-      card.style.height = `${spanHeight}px`;
+      const endPct = (ann.endLine / totalLines) * 100;
+      const spanPct = Math.max(0.5, endPct - topPct);
+      card.style.height = `${spanPct.toFixed(3)}%`;
       card.classList.add('ann-bar-range');
     }
+
+    if (ann.id === activeAnnotationId) card.classList.add('active');
 
     const lineLabel = ann.endLine !== undefined && ann.endLine > ann.lineNumber
       ? `Lines ${ann.lineNumber + 1}–${ann.endLine + 1}`
       : `Line ${ann.lineNumber + 1}`;
     card.title = `${lineLabel} — ${ann.agentName}: ${ann.text}`;
-    card.dataset.lineNumber = String(ann.lineNumber);
 
     const firstLine = ann.text.split('\n')[0];
     const truncated = firstLine.length > 60 ? firstLine.slice(0, 58) + '…' : firstLine;
@@ -6205,11 +6239,7 @@ function renderAnnotationBar(): void {
       `<div class="ann-bar-agent">${escapeHtml(ann.agentName)}</div>` +
       `<div class="ann-bar-text">${escapeHtml(truncated)}</div>`;
 
-    card.addEventListener('click', () => {
-      const di = getFilteredDisplayIndex(ann.lineNumber);
-      goToLine(di >= 0 ? di : ann.lineNumber, ann.lineNumber);
-      renderVisibleLines();
-    });
+    card.addEventListener('click', () => navigateToAnnotation(ann));
 
     frag.appendChild(card);
   });
@@ -6240,6 +6270,7 @@ function renderAnnotationsPanel(): void {
     const item = document.createElement('div');
     item.className = `ann-panel-item severity-${sev}`;
     item.dataset.lineNumber = String(ann.lineNumber);
+    item.dataset.annId = ann.id;
 
     const lineLabel = ann.endLine !== undefined && ann.endLine > ann.lineNumber
       ? `L${ann.lineNumber + 1}–${ann.endLine + 1}`
@@ -6251,11 +6282,8 @@ function renderAnnotationsPanel(): void {
         `<span class="ann-panel-text">${escapeHtml(ann.text)}</span>` +
       `</div>`;
 
-    item.addEventListener('click', () => {
-      const di = getFilteredDisplayIndex(ann.lineNumber);
-      goToLine(di >= 0 ? di : ann.lineNumber, ann.lineNumber);
-      renderVisibleLines();
-    });
+    if (ann.id === activeAnnotationId) item.classList.add('active');
+    item.addEventListener('click', () => navigateToAnnotation(ann));
 
     frag.appendChild(item);
   }

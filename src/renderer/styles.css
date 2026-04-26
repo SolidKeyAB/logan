@@ -3198,7 +3198,7 @@ body.platform-darwin .titlebar {
   position: relative;
   background: var(--bg-secondary);
   border-left: 1px solid var(--border-color);
-  overflow: hidden;
+  overflow: visible;
 }
 .annotation-bar.hidden { display: none; }
 
@@ -3224,6 +3224,9 @@ body.platform-darwin .titlebar {
   line-height: 1;
 }
 .ann-bar-card:hover { background: var(--bg-hover, rgba(255,255,255,0.07)); }
+.ann-bar-card.active { background: rgba(180, 120, 255, 0.18); outline: 1px solid rgba(180, 120, 255, 0.5); }
+.ann-bar-card.active.severity-warning { background: rgba(255, 180, 40, 0.18); outline-color: rgba(255, 180, 40, 0.5); }
+.ann-bar-card.active.severity-error   { background: rgba(255, 80,  80, 0.18); outline-color: rgba(255, 80,  80, 0.5); }
 .ann-bar-card.severity-warning { border-left-color: rgba(255, 180, 40, 0.85); }
 .ann-bar-card.severity-warning::before { color: rgba(255, 180, 40, 0.6); }
 .ann-bar-card.severity-error   { border-left-color: rgba(255, 80,  80, 0.85); }
@@ -3276,6 +3279,9 @@ body.platform-darwin .titlebar {
   transition: background 0.1s;
 }
 .ann-panel-item:hover { background: var(--bg-hover, rgba(255,255,255,0.05)); }
+.ann-panel-item.active { background: rgba(180, 120, 255, 0.12); border-left-color: rgba(180, 120, 255, 1); }
+.ann-panel-item.active.severity-warning { background: rgba(255, 180, 40, 0.12); border-left-color: rgba(255, 180, 40, 1); }
+.ann-panel-item.active.severity-error   { background: rgba(255, 80,  80, 0.12); border-left-color: rgba(255, 80,  80, 1); }
 .ann-panel-item.severity-info    { border-left-color: rgba(180, 120, 255, 0.8); }
 .ann-panel-item.severity-warning { border-left-color: rgba(255, 180,  40, 0.8); }
 .ann-panel-item.severity-error   { border-left-color: rgba(255,  80,  80, 0.8); }
