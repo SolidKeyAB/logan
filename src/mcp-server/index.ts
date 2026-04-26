@@ -94,6 +94,16 @@ let sseWaiters: Array<(msg: ChatMessage) => void> = [];
 let sseConnected = false;
 let sseReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
+let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+
+function startKeepAlive(_port: number): void {
+  if (keepAliveTimer) return;
+  keepAliveTimer = setInterval(() => {
+    // Touch the polling-agent heartbeat so the bulb stays green during idle waits
+    apiCall('GET', '/api/ping?name=Claude+Code').catch(() => {});
+  }, 60000); // every 60 seconds
+}
+
 function connectSSE(): void {
   const port = getApiPort();
   if (!port) {
@@ -101,6 +111,8 @@ function connectSSE(): void {
     sseReconnectTimer = setTimeout(connectSSE, 5000);
     return;
   }
+
+  startKeepAlive(port);
 
   const req = http.get(`http://127.0.0.1:${port}/api/events`, (res) => {
     sseConnected = true;

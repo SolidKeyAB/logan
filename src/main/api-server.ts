@@ -31,7 +31,7 @@ const chatListeners: Set<http.ServerResponse> = new Set();
 // Polling agent heartbeat: tracks agents that call the API without SSE
 let pollingAgent: { name: string; lastSeen: number } | null = null;
 let pollingAgentTimer: ReturnType<typeof setInterval> | null = null;
-const POLLING_AGENT_TIMEOUT = 30000; // 30s without activity = disconnected
+const POLLING_AGENT_TIMEOUT = 300000; // 5 min without activity = disconnected
 
 function touchPollingAgent(name: string, ctx: ApiContext): void {
   const wasConnected = isAgentConnected();
@@ -235,6 +235,13 @@ export function startApiServer(ctx: ApiContext): void {
     try {
       // --- GET endpoints ---
       if (req.method === 'GET') {
+        if (url?.startsWith('/api/ping')) {
+          const agentName = new URL(url, `http://127.0.0.1:${API_PORT}`).searchParams.get('name');
+          if (agentName) touchPollingAgent(agentName, ctx);
+          sendJson(res, { success: true });
+          return;
+        }
+
         if (url === '/api/status') {
           const filePath = ctx.getCurrentFilePath();
           const handler = ctx.getFileHandler();
