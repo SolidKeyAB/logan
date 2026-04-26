@@ -395,7 +395,6 @@ interface UserSettings {
   defaultGapThreshold: number; // 1-60, seconds
   autoAnalyze: boolean;
   minimapVisible: boolean;
-  minimapPreview: boolean;
   theme: 'dark' | 'paper';
   sidebarSections: Record<string, boolean>; // section-id → visible
 }
@@ -416,7 +415,6 @@ const DEFAULT_SETTINGS: UserSettings = {
   defaultGapThreshold: 5,
   autoAnalyze: false,
   minimapVisible: true,
-  minimapPreview: true,
   theme: 'dark',
   sidebarSections: { ...DEFAULT_SIDEBAR_SECTIONS },
 };
@@ -824,7 +822,7 @@ const elements = {
   defaultGapThresholdValue: document.getElementById('default-gap-threshold-value') as HTMLSpanElement,
   autoAnalyzeCheckbox: document.getElementById('auto-analyze') as HTMLInputElement,
   minimapVisibleCheckbox: document.getElementById('minimap-visible') as HTMLInputElement,
-  minimapPreviewCheckbox: document.getElementById('minimap-preview-enabled') as HTMLInputElement,
+
   themeSelect: document.getElementById('theme-select') as HTMLSelectElement,
   btnResetSettings: document.getElementById('btn-reset-settings') as HTMLButtonElement,
   btnCloseSettings: document.getElementById('btn-close-settings') as HTMLButtonElement,
@@ -1966,13 +1964,6 @@ function createLogViewer(): void {
   minimapElement.appendChild(minimapContentElement);
   minimapElement.appendChild(minimapViewportElement);
 
-  // Minimap hover preview box
-  const previewEl = document.createElement('div');
-  previewEl.className = 'minimap-preview hidden';
-  previewEl.id = 'minimap-preview';
-  minimapElement.appendChild(previewEl);
-  setupMinimapPreviewListeners(previewEl);
-
   // Add to wrapper
   logViewerWrapper.appendChild(logViewerElement);
   logViewerWrapper.appendChild(minimapElement);
@@ -2037,8 +2028,6 @@ function createLogViewer(): void {
   }, { passive: false });
   minimapElement.addEventListener('click', handleMinimapClick);
   minimapElement.addEventListener('mousedown', handleMinimapDrag);
-  minimapElement.addEventListener('mousemove', handleMinimapHover);
-  minimapElement.addEventListener('mouseleave', hideMinimapPreview);
 
   // Use ResizeObserver for responsive updates
   const resizeObserver = new ResizeObserver(() => {
@@ -3313,96 +3302,6 @@ function handleMinimapClick(event: MouseEvent): void {
 
   const targetScrollTop = lineToScrollTop(targetLine);
   logViewerElement.scrollTop = Math.max(0, targetScrollTop);
-}
-
-// ─── Minimap Hover Preview ──────────────────────────────────────────────
-
-let minimapPreviewTimer: ReturnType<typeof setTimeout> | null = null;
-let minimapPreviewHideTimer: ReturnType<typeof setTimeout> | null = null;
-let minimapPreviewLine = -1;
-let minimapPreviewLastY = -1; // Last Y that triggered a preview render
-let minimapPreviewLocked = false; // True when user is interacting with preview
-
-function isMinimapPreviewEnabled(): boolean {
-  return userSettings.minimapPreview;
-}
-
-function setupMinimapPreviewListeners(previewEl: HTMLElement): void {
-  previewEl.addEventListener('mouseenter', () => {
-    // Lock preview in place while user is inside it
-    minimapPreviewLocked = true;
-    if (minimapPreviewHideTimer) { clearTimeout(minimapPreviewHideTimer); minimapPreviewHideTimer = null; }
-  });
-  previewEl.addEventListener('mouseleave', () => {
-    minimapPreviewLocked = false;
-    minimapPreviewHideTimer = setTimeout(() => hideMinimapPreviewNow(), 300);
-  });
-}
-
-function handleMinimapHover(event: MouseEvent): void {
-  if (!minimapElement || isDraggingMinimap || !isMinimapPreviewEnabled()) return;
-  // Don't reposition if the user is interacting with the preview
-  if (minimapPreviewLocked) return;
-  // Cancel any pending hide
-  if (minimapPreviewHideTimer) { clearTimeout(minimapPreviewHideTimer); minimapPreviewHideTimer = null; }
-
-  const rect = minimapElement.getBoundingClientRect();
-  const hoverY = event.clientY - rect.top;
-  const minimapHeight = minimapElement.clientHeight;
-  const totalLines = getTotalLines();
-  if (totalLines === 0) return;
-
-  // Require at least 15px vertical movement before repositioning the preview
-  if (minimapPreviewLastY >= 0 && Math.abs(hoverY - minimapPreviewLastY) < 15) return;
-
-  const targetLine = Math.floor((hoverY / minimapHeight) * totalLines);
-  if (targetLine === minimapPreviewLine) return;
-  minimapPreviewLine = targetLine;
-  minimapPreviewLastY = hoverY;
-
-  if (minimapPreviewTimer) clearTimeout(minimapPreviewTimer);
-  minimapPreviewTimer = setTimeout(async () => {
-    const preview = document.getElementById('minimap-preview');
-    if (!preview) return;
-
-    const PREVIEW_LINES = 7;
-    const startLine = Math.max(0, targetLine - Math.floor(PREVIEW_LINES / 2));
-    const result = await window.api.getLines(startLine, PREVIEW_LINES);
-    if (!result.success || !result.lines?.length) {
-      preview.classList.add('hidden');
-      return;
-    }
-
-    let html = `<div class="minimap-preview-header">Line ${targetLine + 1}</div><div class="minimap-preview-lines">`;
-    for (const line of result.lines) {
-      const isCurrent = line.lineNumber === targetLine;
-      const text = line.text.length > 500 ? line.text.substring(0, 500) + '...' : line.text;
-      html += `<div class="minimap-preview-line${isCurrent ? ' current' : ''}"><span class="minimap-preview-num">${line.lineNumber + 1}</span>${escapeHtml(text)}</div>`;
-    }
-    html += `</div>`;
-    preview.innerHTML = html;
-
-    const previewHeight = Math.max(120, (PREVIEW_LINES + 1) * 16 + 8);
-    const top = Math.max(0, Math.min(hoverY - previewHeight / 2, minimapHeight - previewHeight));
-    preview.style.top = `${top}px`;
-    preview.classList.remove('hidden');
-  }, 80);
-}
-
-function hideMinimapPreview(): void {
-  // Delay hide to allow mouse to move into the preview box
-  if (minimapPreviewHideTimer) clearTimeout(minimapPreviewHideTimer);
-  minimapPreviewHideTimer = setTimeout(() => hideMinimapPreviewNow(), 200);
-}
-
-function hideMinimapPreviewNow(): void {
-  if (minimapPreviewTimer) { clearTimeout(minimapPreviewTimer); minimapPreviewTimer = null; }
-  if (minimapPreviewHideTimer) { clearTimeout(minimapPreviewHideTimer); minimapPreviewHideTimer = null; }
-  minimapPreviewLine = -1;
-  minimapPreviewLastY = -1;
-  minimapPreviewLocked = false;
-  const preview = document.getElementById('minimap-preview');
-  if (preview) preview.classList.add('hidden');
 }
 
 let isDraggingMinimap = false;
@@ -12324,7 +12223,6 @@ function setupActivityBar(): void {
     elements.defaultGapThresholdValue.textContent = `${userSettings.defaultGapThreshold}s`;
     elements.autoAnalyzeCheckbox.checked = userSettings.autoAnalyze;
     elements.minimapVisibleCheckbox.checked = userSettings.minimapVisible;
-    elements.minimapPreviewCheckbox.checked = userSettings.minimapPreview;
     if (minimapElement) minimapElement.style.display = userSettings.minimapVisible ? '' : 'none';
     elements.themeSelect.value = userSettings.theme;
     populateSidebarSectionToggles();
@@ -13572,13 +13470,6 @@ function init(): void {
     userSettings.minimapVisible = elements.minimapVisibleCheckbox.checked;
     saveSettings();
     if (minimapElement) minimapElement.style.display = userSettings.minimapVisible ? '' : 'none';
-    if (!userSettings.minimapVisible) hideMinimapPreview();
-  });
-
-  elements.minimapPreviewCheckbox.addEventListener('change', () => {
-    userSettings.minimapPreview = elements.minimapPreviewCheckbox.checked;
-    saveSettings();
-    if (!userSettings.minimapPreview) hideMinimapPreview();
   });
 
   elements.themeSelect.addEventListener('change', () => {
@@ -13599,7 +13490,6 @@ function init(): void {
     elements.defaultGapThresholdValue.textContent = `${userSettings.defaultGapThreshold}s`;
     elements.autoAnalyzeCheckbox.checked = userSettings.autoAnalyze;
     elements.minimapVisibleCheckbox.checked = userSettings.minimapVisible;
-    elements.minimapPreviewCheckbox.checked = userSettings.minimapPreview;
     if (minimapElement) minimapElement.style.display = userSettings.minimapVisible ? '' : 'none';
     elements.themeSelect.value = userSettings.theme;
     applyTheme(userSettings.theme);

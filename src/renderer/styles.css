@@ -3129,57 +3129,6 @@ body.platform-darwin .titlebar {
 }
 
 /* Minimap hover preview */
-.minimap-preview {
-  position: absolute;
-  right: 100%;
-  margin-right: 4px;
-  width: 600px;
-  max-width: 70vw;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
-  z-index: 100;
-  overflow: hidden;
-  pointer-events: auto;
-}
-.minimap-preview.hidden { display: none; }
-.minimap-preview-header {
-  padding: 4px 8px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-tertiary);
-}
-.minimap-preview-line {
-  padding: 1px 8px;
-  font-size: 11px;
-  font-family: var(--font-mono, monospace);
-  white-space: pre;
-  color: var(--text-secondary);
-  line-height: 16px;
-}
-
-.minimap-preview-lines {
-  overflow-x: auto;
-  overflow-y: hidden;
-  max-height: 130px;
-}
-.minimap-preview-line.current {
-  background: rgba(255, 255, 0, 0.1);
-  color: var(--text-primary);
-  border-left: 2px solid var(--accent-color);
-}
-.minimap-preview-num {
-  display: inline-block;
-  width: 50px;
-  text-align: right;
-  margin-right: 8px;
-  color: var(--text-muted);
-  font-size: 10px;
-}
-
 /* Bookmark markers in minimap */
 .minimap-bookmark {
   position: absolute;
