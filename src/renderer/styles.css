@@ -3071,43 +3071,29 @@ body.platform-darwin .titlebar {
   overflow: hidden;
 }
 
-/* ── Density strip: left 6px, colour-coded severity overview per zone ─── */
+/* ── Heatmap: full-width continuous severity zones ────────────────────── */
 .minimap-density-strip-seg {
   position: absolute;
   left: 0;
-  width: 6px;
+  right: 0;
   pointer-events: none;
+  z-index: 1;
 }
-
-/* ── Level bars: variable width — errors full-width, noise narrow ──────── */
-/* Bar zone: x=8 to x=108 (right=2px). Full zone = 100px.                  */
-/* Each level's left margin = 8 + 100 × (1 − relative_width).              */
-.minimap-line {
-  margin-right: 2px;
-  border-radius: 0 1px 1px 0;
-}
-.minimap-line.level-fatal,
-.minimap-line.level-error   { background-color: var(--error-color);   margin-left: 8px;  opacity: 1.0; }
-.minimap-line.level-warning,
-.minimap-line.level-warn    { background-color: var(--warning-color); margin-left: 62px; opacity: 0.38; }
-.minimap-line.level-info    { background-color: var(--info-color);    margin-left: 68px; opacity: 0.32; }
-.minimap-line.level-debug   { background-color: var(--debug-color);   margin-left: 80px; opacity: 0.22; }
-.minimap-line.level-trace   { background-color: var(--text-muted);    margin-left: 90px; opacity: 0.15; }
-.minimap-line.level-default { background-color: var(--text-muted);    margin-left: 98px; opacity: 0.10; }
 
 .minimap-viewport {
   position: absolute;
   left: 0;
   right: 0;
-  background-color: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  background-color: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: 2px;
   pointer-events: none;
   min-height: 20px;
+  z-index: 3;
 }
 .minimap:hover .minimap-viewport {
-  background-color: rgba(255, 255, 255, 0.14);
-  border-color: rgba(255, 255, 255, 0.45);
+  background-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.55);
 }
 
 /* Current selected-line crosshair */
@@ -3116,9 +3102,9 @@ body.platform-darwin .titlebar {
   left: 0;
   right: 0;
   height: 2px;
-  background-color: rgba(255, 255, 255, 0.75);
+  background-color: rgba(255, 255, 255, 0.85);
   pointer-events: none;
-  z-index: 10;
+  z-index: 8;
 }
 
 /* Line-number tooltip */
@@ -3148,20 +3134,22 @@ body.platform-darwin .titlebar {
 /* Bookmark markers */
 .minimap-bookmark {
   position: absolute;
-  left: 8px;
+  left: 0;
   right: 0;
   height: 3px;
   background-color: var(--accent-color);
-  opacity: 0.85;
+  opacity: 0.9;
+  z-index: 6;
 }
 
 /* Search result markers */
 .minimap-search-marker {
   position: absolute;
-  left: 8px;
+  left: 0;
   right: 0;
   height: 2px;
-  background-color: rgba(255, 255, 0, 0.85);
+  background-color: rgba(255, 255, 0, 0.9);
+  z-index: 5;
 }
 
 /* Saved notes range markers */
@@ -3177,18 +3165,19 @@ body.platform-darwin .titlebar {
 /* Search config markers */
 .minimap-sc-marker {
   position: absolute;
-  left: 8px;
+  left: 0;
   right: 0;
   height: 2px;
-  opacity: 0.8;
+  z-index: 5;
 }
 
 .minimap-annotation-marker {
   position: absolute;
-  left: 8px;
+  left: 0;
   right: 0;
   height: 2px;
-  background-color: rgba(180, 120, 255, 0.85);
+  background-color: rgba(180, 120, 255, 0.9);
+  z-index: 5;
 }
 
 /* ── Lightweight gutter dot (render loop) ─────────────────────────────── */

@@ -3445,18 +3445,8 @@ function renderMinimap(): void {
   const totalLines = getTotalLines();
   if (totalLines === 0 || minimapData.length === 0) return;
 
-  const minimapHeight = minimapElement.clientHeight;
-  const lineHeight = minimapHeight / minimapData.length;
-
+  // Per-line bars removed — the heatmap strip is the sole background layer.
   minimapContentElement.innerHTML = '';
-  const frag = document.createDocumentFragment();
-  for (let i = 0; i < minimapData.length; i++) {
-    const line = document.createElement('div');
-    line.className = `minimap-line level-${minimapData[i].level || 'default'}`;
-    line.style.height = `${Math.max(1, lineHeight)}px`;
-    frag.appendChild(line);
-  }
-  minimapContentElement.appendChild(frag);
 
   renderMinimapDensityStrip();
   renderMinimapMarkers();
@@ -3472,7 +3462,8 @@ function renderMinimapDensityStrip(): void {
     logViewerWrapper?.clientHeight ||
     logViewerElement?.clientHeight ||
     400;
-  const SEGMENTS = Math.min(60, minimapData.length);
+
+  const SEGMENTS = Math.min(120, minimapData.length);
   const segSize = minimapData.length / SEGMENTS;
   const segHeight = minimapHeight / SEGMENTS;
   const frag = document.createDocumentFragment();
@@ -3480,20 +3471,28 @@ function renderMinimapDensityStrip(): void {
   for (let s = 0; s < SEGMENTS; s++) {
     const start = Math.floor(s * segSize);
     const end = Math.min(minimapData.length - 1, Math.floor((s + 1) * segSize) - 1);
+    const total = end - start + 1;
 
-    let worstSev = 0;
+    let errorCount = 0, warnCount = 0, infoCount = 0;
     for (let i = start; i <= end; i++) {
       const sev = LEVEL_SEVERITY[minimapData[i].level || ''] ?? 0;
-      if (sev > worstSev) worstSev = sev;
+      if (sev >= 5) errorCount++;
+      else if (sev === 4) warnCount++;
+      else if (sev === 3) infoCount++;
     }
 
-    if (worstSev < 2) continue; // skip trace/default — too noisy
-
     let color: string;
-    if (worstSev >= 5)      color = `rgba(255,55,55,${0.5 + (worstSev - 5) * 0.3})`;  // error/fatal
-    else if (worstSev === 4) color = 'rgba(255,150,30,0.75)';  // warning
-    else if (worstSev === 3) color = 'rgba(80,140,255,0.55)';  // info
-    else                     color = 'rgba(130,130,130,0.3)';  // debug
+    if (errorCount > 0) {
+      const intensity = Math.min(0.92, 0.4 + (errorCount / total) * 0.52);
+      color = `rgba(210,50,50,${intensity})`;
+    } else if (warnCount > 0) {
+      const intensity = Math.min(0.65, 0.22 + (warnCount / total) * 0.43);
+      color = `rgba(200,140,30,${intensity})`;
+    } else if (infoCount > 0) {
+      color = `rgba(70,130,210,0.14)`;
+    } else {
+      continue; // debug/trace/default — transparent
+    }
 
     const el = document.createElement('div');
     el.className = 'minimap-density-strip-seg';
