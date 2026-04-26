@@ -3213,6 +3213,7 @@ body.platform-darwin .titlebar {
   cursor: pointer;
   transition: background 0.12s;
   overflow: hidden;
+  box-sizing: border-box;
 }
 .ann-bar-card::before {
   content: '◄';

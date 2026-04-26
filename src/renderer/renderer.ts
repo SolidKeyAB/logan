@@ -6205,23 +6205,34 @@ function renderAnnotationBar(): void {
   annotationBarElement.classList.remove('hidden');
 
   const sorted = [...state.annotations].sort((a, b) => a.lineNumber - b.lineNumber);
+
+  // Assign positions in % — each card gets its proportional spot, but spaced at
+  // least MIN_GAP_PCT apart so overlapping cards don't swallow each other's clicks.
+  const MIN_GAP_PCT = 3;
+  const positions: number[] = [];
+  let prevTopPct = -MIN_GAP_PCT;
+  for (const ann of sorted) {
+    const idealPct = (ann.lineNumber / totalLines) * 100;
+    const topPct = Math.max(idealPct, prevTopPct + MIN_GAP_PCT);
+    positions.push(topPct);
+    prevTopPct = topPct;
+  }
+
   const frag = document.createDocumentFragment();
 
-  sorted.forEach((ann) => {
+  sorted.forEach((ann, i) => {
     const card = document.createElement('div');
     const sev = ann.severity || 'info';
     card.className = `ann-bar-card severity-${sev}`;
     card.dataset.annId = ann.id;
+    card.style.top = `${positions[i].toFixed(3)}%`;
 
-    // Use CSS percentage for top — immune to bar height measurement issues
-    const topPct = (ann.lineNumber / totalLines) * 100;
-    card.style.top = `${topPct.toFixed(3)}%`;
-
-    // Range annotation: span height as percentage
+    // Range annotation: span from card top to proportional end position,
+    // at least MIN_CARD_HEIGHT_PCT tall so it stays clickable
     if (ann.endLine !== undefined && ann.endLine > ann.lineNumber) {
       const endPct = (ann.endLine / totalLines) * 100;
-      const spanPct = Math.max(0.5, endPct - topPct);
-      card.style.height = `${spanPct.toFixed(3)}%`;
+      const spanPct = Math.max(1.5, endPct - (ann.lineNumber / totalLines) * 100);
+      card.style.minHeight = `${spanPct.toFixed(3)}%`;
       card.classList.add('ann-bar-range');
     }
 

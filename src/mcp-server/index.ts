@@ -1137,10 +1137,16 @@ server.tool(
     detail: z.string().describe('Detailed explanation sent as a chat message to the user'),
     severity: z.enum(['info', 'warning', 'error']).default('error').describe('Severity: "error" for critical issues, "warning" for anomalies, "info" for observations'),
     navigate: z.boolean().default(true).describe('Jump the viewer to this line'),
+    clearPrevious: z.boolean().default(false).describe('Clear all existing annotations before adding this one. Set to true on the FIRST finding of a new analysis to avoid mixing findings from different sessions.'),
   },
-  async ({ lineNumber, endLine, title, detail, severity, navigate }) => {
+  async ({ lineNumber, endLine, title, detail, severity, navigate, clearPrevious }) => {
     try {
       const results: Record<string, any> = {};
+
+      // 0. Optionally clear stale annotations from previous sessions
+      if (clearPrevious) {
+        await apiCall('POST', '/api/annotation-clear').catch(() => null);
+      }
 
       // 1. Annotate
       const annBody: Record<string, any> = { lineNumber, text: title, severity };

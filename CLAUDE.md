@@ -23,12 +23,14 @@ Use this pattern for interactive conversations with the LOGAN user:
 
 ```
 # Every finding = one logan_report_finding call
+# ALWAYS set clearPrevious=True on the FIRST finding of a new analysis
 logan_report_finding(
   lineNumber=8045,          # 0-based line of the issue
   endLine=20600,            # optional: use for multi-line ranges
   title="Auth abort race",  # short label shown in annotation bar
   detail="Full explanation sent to chat...",
-  severity="error"          # error | warning | info
+  severity="error",         # error | warning | info
+  clearPrevious=True        # set True on first finding to clear stale annotations
 )
 ```
 
