@@ -68,6 +68,13 @@ export function getAgentName(): string | null {
   return getConnectedAgentName();
 }
 
+function notifyMemoryChanged(ctx: ApiContext): void {
+  const win = ctx.getMainWindow();
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('agent-memory-changed', ctx.getAgentMemory());
+  }
+}
+
 function notifyAgentConnectionChanged(ctx: ApiContext): void {
   const connected = isAgentConnected();
   const name = getConnectedAgentName();
@@ -132,6 +139,9 @@ export interface ApiContext {
   clearHighlights(): any;
   loadNotes(): Promise<any>;
   saveNotes(content: string): Promise<any>;
+  getAgentMemory(): any;
+  saveAgentMemory(content: string, agentName?: string): any;
+  clearAgentMemory(): any;
   detectTimeGaps(options: any): Promise<any>;
   navigateToLine(lineNumber: number): void;
   getBaselineStore(): BaselineStore;
@@ -257,6 +267,12 @@ export function startApiServer(ctx: ApiContext): void {
           return;
         }
 
+        if (url === '/api/agent-memory') {
+          const mem = ctx.getAgentMemory();
+          sendJson(res, { success: true, memory: mem || null });
+          return;
+        }
+
         if (url === '/api/agent-status') {
           sendJson(res, {
             success: true,
@@ -283,7 +299,9 @@ export function startApiServer(ctx: ApiContext): void {
               sendJson(res, { success: false, error: 'Another agent is already connected', connectedAgent: activeAgent.name }, 409);
               return;
             }
-            res.write(`event: connected\ndata: ${JSON.stringify({ name: agentName })}\n\n`);
+            // Include any existing agent memory so the agent can resume context
+            const memory = ctx.getAgentMemory();
+            res.write(`event: connected\ndata: ${JSON.stringify({ name: agentName, memory: memory || null })}\n\n`);
             activeAgent = { res, name: agentName };
             notifyAgentConnectionChanged(ctx);
             req.on('close', () => {
@@ -494,6 +512,21 @@ export function startApiServer(ctx: ApiContext): void {
           if (body.content === undefined) return sendError(res, 'content required');
           const result = await ctx.saveNotes(body.content);
           sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/agent-memory') {
+          if (body.content === undefined) return sendError(res, 'content required');
+          const ok = ctx.saveAgentMemory(body.content, body.agentName || activeAgent?.name);
+          notifyMemoryChanged(ctx);
+          sendJson(res, { success: ok });
+          return;
+        }
+
+        if (url === '/api/agent-memory-clear') {
+          ctx.clearAgentMemory();
+          notifyMemoryChanged(ctx);
+          sendJson(res, { success: true });
           return;
         }
 

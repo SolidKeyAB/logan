@@ -518,6 +518,18 @@ const api = {
     return () => ipcRenderer.removeListener('annotations-changed', handler);
   },
 
+  getAgentMemory: (): Promise<{ content: string; agentName: string; updatedAt: number } | null> =>
+    ipcRenderer.invoke('agent-memory-get'),
+  saveAgentMemory: (content: string, agentName?: string): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('agent-memory-save', content, agentName),
+  clearAgentMemory: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('agent-memory-clear'),
+  onAgentMemoryChanged: (callback: (memory: any) => void): (() => void) => {
+    const handler = (_: any, mem: any) => callback(mem);
+    ipcRenderer.on('agent-memory-changed', handler);
+    return () => ipcRenderer.removeListener('agent-memory-changed', handler);
+  },
+
   // Device discovery
   serialListPorts: (): Promise<{ success: boolean; ports?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.SERIAL_LIST_PORTS),

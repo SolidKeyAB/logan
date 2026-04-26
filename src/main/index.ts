@@ -892,6 +892,10 @@ app.whenReady().then(() => {
         return { success: true, content: '' };
       }
     },
+    getAgentMemory: () => getAgentMemory(currentFilePath),
+    saveAgentMemory: (content: string, agentName?: string) =>
+      saveAgentMemory(currentFilePath, content, agentName),
+    clearAgentMemory: () => clearAgentMemory(currentFilePath),
     saveNotes: async (content: string) => {
       if (!currentFilePath) return { success: false, error: 'No file open' };
       if (!ensureLocalLoganDir(currentFilePath)) {
@@ -3723,6 +3727,59 @@ ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: numb
   } catch (error) {
     return { success: false, error: String(error) };
   }
+});
+
+// === Agent Memory ===
+// Per-file persistent memory for AI agents. Stored alongside the log file so
+// agents can resume analysis across sessions.
+
+interface AgentMemoryData {
+  content: string;
+  agentName: string;
+  updatedAt: number;
+}
+
+function agentMemoryPath(filePath: string | null): string | null {
+  if (!filePath) return null;
+  return path.join(getLocalLoganDir(filePath), path.basename(filePath) + '.agent-memory.json');
+}
+
+function getAgentMemory(filePath: string | null): AgentMemoryData | null {
+  const p = agentMemoryPath(filePath);
+  if (!p) return null;
+  try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch { return null; }
+}
+
+function saveAgentMemory(filePath: string | null, content: string, agentName?: string): boolean {
+  if (!filePath) return false;
+  if (!ensureLocalLoganDir(filePath)) return false;
+  const p = agentMemoryPath(filePath)!;
+  const data: AgentMemoryData = {
+    content,
+    agentName: agentName || 'Agent',
+    updatedAt: Date.now(),
+  };
+  try { fs.writeFileSync(p, JSON.stringify(data, null, 2), 'utf-8'); return true; } catch { return false; }
+}
+
+function clearAgentMemory(filePath: string | null): boolean {
+  const p = agentMemoryPath(filePath);
+  if (!p) return false;
+  try { if (fs.existsSync(p)) fs.unlinkSync(p); return true; } catch { return false; }
+}
+
+ipcMain.handle('agent-memory-get', () => {
+  const mem = getAgentMemory(currentFilePath);
+  return mem || null;
+});
+
+ipcMain.handle('agent-memory-save', (_e, content: string, agentName?: string) => {
+  const ok = saveAgentMemory(currentFilePath, content, agentName);
+  return { success: ok };
+});
+
+ipcMain.handle('agent-memory-clear', () => {
+  return { success: clearAgentMemory(currentFilePath) };
 });
 
 // === Save to Notes ===

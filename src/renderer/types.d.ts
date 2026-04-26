@@ -470,6 +470,11 @@ interface Api {
   clearAnnotations: () => Promise<{ success: boolean }>;
   onAnnotationsChanged: (callback: (annotations: any[]) => void) => () => void;
 
+  getAgentMemory: () => Promise<{ content: string; agentName: string; updatedAt: number } | null>;
+  saveAgentMemory: (content: string, agentName?: string) => Promise<{ success: boolean }>;
+  clearAgentMemory: () => Promise<{ success: boolean }>;
+  onAgentMemoryChanged: (callback: (memory: any) => void) => () => void;
+
   // Device discovery
   serialListPorts: () => Promise<{ success: boolean; ports?: Array<{ path: string; manufacturer?: string; vendorId?: string; productId?: string }>; error?: string }>;
   logcatListDevices: () => Promise<{ success: boolean; devices?: Array<{ id: string; state: string; model?: string }>; error?: string }>;

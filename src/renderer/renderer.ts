@@ -5159,6 +5159,8 @@ function openBottomTab(tabId: string): void {
     if (badge) badge.textContent = '';
     // Refresh agent connection status
     window.api.getAgentStatus().then((s: any) => updateAgentConnectionStatus(s.connected, s.count, s.name));
+    // Refresh memory bar
+    window.api.getAgentMemory().then((mem: any) => updateAgentMemoryBar(mem));
   }
   if (tabId === 'live') {
     refreshLiveDevices();
@@ -5682,6 +5684,29 @@ function updateAgentConnectionStatus(connected: boolean, count: number, name?: s
     dot.className = 'chat-agent-status-dot disconnected';
     text.textContent = 'No agent connected';
   }
+}
+
+function updateAgentMemoryBar(memory: { content: string; agentName: string; updatedAt: number } | null): void {
+  const bar = document.getElementById('chat-memory-bar');
+  const label = document.getElementById('chat-memory-label');
+  if (!bar || !label) return;
+  if (!memory) {
+    bar.classList.add('hidden');
+    return;
+  }
+  const ago = formatTimeAgo(memory.updatedAt);
+  const preview = memory.content.split('\n')[0].slice(0, 60);
+  label.textContent = `${memory.agentName} · ${ago} — ${preview}${memory.content.length > 60 ? '…' : ''}`;
+  label.title = memory.content;
+  bar.classList.remove('hidden');
+}
+
+function formatTimeAgo(ts: number): string {
+  const diff = Date.now() - ts;
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return `${Math.floor(diff / 86400000)}d ago`;
 }
 
 let agentRunning = false;
@@ -13223,6 +13248,16 @@ function init(): void {
       updateLaunchButton();
     }
   });
+  // Agent memory push listener
+  window.api.onAgentMemoryChanged((memory: any) => {
+    updateAgentMemoryBar(memory);
+  });
+
+  // Clear agent memory button
+  document.getElementById('btn-clear-agent-memory')?.addEventListener('click', async () => {
+    await window.api.clearAgentMemory();
+  });
+
   // Agent annotations push listener
   window.api.onAnnotationsChanged((anns: any[]) => {
     state.annotations = anns;

@@ -791,6 +791,33 @@ server.tool(
   }
 );
 
+// === Tool: logan_memory_read ===
+server.tool(
+  'logan_memory_read',
+  'Read the agent memory note for the current log file. Memory persists across sessions so you can resume analysis where you left off.',
+  {},
+  async () => {
+    const result = await apiCall('GET', '/api/agent-memory');
+    if (!result.memory) return { content: [{ type: 'text', text: 'No memory saved for this file yet.' }] };
+    const { content, agentName, updatedAt } = result.memory;
+    const ts = new Date(updatedAt).toLocaleString();
+    return { content: [{ type: 'text', text: `Memory saved by ${agentName} at ${ts}:\n\n${content}` }] };
+  }
+);
+
+// === Tool: logan_memory_write ===
+server.tool(
+  'logan_memory_write',
+  'Save a memory note for the current log file. Use this to record findings, progress, and next steps so you can resume analysis in a future session.',
+  {
+    content: z.string().describe('The memory content to save — findings, current status, next steps, etc.'),
+  },
+  async ({ content }) => {
+    await apiCall('POST', '/api/agent-memory', { content });
+    return { content: [{ type: 'text', text: 'Memory saved.' }] };
+  }
+);
+
 // === Tool: logan_remove_bookmark ===
 server.tool(
   'logan_remove_bookmark',
