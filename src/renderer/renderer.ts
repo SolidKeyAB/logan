@@ -3372,7 +3372,10 @@ async function buildMinimap(onProgress?: (percent: number) => void): Promise<voi
   minimapData = [];
   minimapContentElement.innerHTML = '';
 
-  const minimapHeight = minimapElement.clientHeight;
+  const minimapHeight = minimapElement.clientHeight ||
+    logViewerWrapper?.clientHeight ||
+    logViewerElement?.clientHeight ||
+    400;
   const maxSamples = Math.min(400, minimapHeight);
   const sampleRate = Math.max(1, Math.floor(totalLines / maxSamples));
   // Scan a window of lines per slot so errors aren't missed by unlucky sampling
@@ -3465,7 +3468,10 @@ function renderMinimapDensityStrip(): void {
 
   minimapElement.querySelectorAll('.minimap-density-strip-seg').forEach(el => el.remove());
 
-  const minimapHeight = minimapElement.clientHeight;
+  const minimapHeight = minimapElement.clientHeight ||
+    logViewerWrapper?.clientHeight ||
+    logViewerElement?.clientHeight ||
+    400;
   const SEGMENTS = Math.min(60, minimapData.length);
   const segSize = minimapData.length / SEGMENTS;
   const segHeight = minimapHeight / SEGMENTS;
@@ -3509,7 +3515,13 @@ function renderMinimapMarkers(): void {
   const totalLines = getTotalLines();
   if (totalLines === 0) return;
 
-  const minimapHeight = minimapElement.clientHeight;
+  // clientHeight is 0 if the element isn't laid out yet — fall back to the
+  // wrapper or log-viewer height so markers don't all pile at top:0.
+  const minimapHeight = minimapElement.clientHeight ||
+    logViewerWrapper?.clientHeight ||
+    logViewerElement?.clientHeight ||
+    400;
+  if (minimapHeight === 0) return;
   const fragment = document.createDocumentFragment();
 
   // Add saved notes range markers (drawn first, behind other markers)
@@ -3563,20 +3575,31 @@ function renderMinimapMarkers(): void {
     }
   }
 
-  // Add search config markers (colored by config)
+  // Add search config markers — bucket aggregation so they spread across the full minimap
   for (const config of state.searchConfigs) {
     if (!config.enabled) continue;
     const results = state.searchConfigResults.get(config.id) || [];
-    const maxScMarkers = 50;
-    const scStep = Math.max(1, Math.floor(results.length / maxScMarkers));
-    for (let i = 0; i < results.length; i += scStep) {
-      const r = results[i];
+    if (results.length === 0) continue;
+
+    const SC_BUCKETS = Math.max(50, Math.floor(minimapHeight / 3));
+    const scBuckets = new Uint32Array(SC_BUCKETS);
+    for (const r of results) {
+      const di = getFilteredDisplayIndex(r.lineNumber);
+      const pos = di >= 0 ? di : r.lineNumber;
+      const idx = Math.min(SC_BUCKETS - 1, Math.floor((pos / totalLines) * SC_BUCKETS));
+      scBuckets[idx]++;
+    }
+    const scBucketHeight = minimapHeight / SC_BUCKETS;
+    let scMaxBucket = 1;
+    for (let i = 0; i < SC_BUCKETS; i++) if (scBuckets[i] > scMaxBucket) scMaxBucket = scBuckets[i];
+
+    for (let i = 0; i < SC_BUCKETS; i++) {
+      if (scBuckets[i] === 0) continue;
+      const opacity = Math.min(0.9, 0.35 + (scBuckets[i] / scMaxBucket) * 0.55);
       const marker = document.createElement('div');
       marker.className = 'minimap-sc-marker';
-      const scDi = getFilteredDisplayIndex(r.lineNumber);
-      const scMarkerPos = scDi >= 0 ? scDi : r.lineNumber;
-      marker.style.top = `${(scMarkerPos / totalLines) * minimapHeight}px`;
-      marker.style.backgroundColor = config.color;
+      marker.style.cssText = `position:absolute;left:8px;right:0;top:${i * scBucketHeight}px;height:${Math.max(2, Math.ceil(scBucketHeight))}px;background-color:${config.color};opacity:${opacity};`;
+      marker.title = `${config.pattern}: ${scBuckets[i]} match${scBuckets[i] !== 1 ? 'es' : ''}`;
       fragment.appendChild(marker);
     }
   }
@@ -8023,14 +8046,26 @@ async function renderSearchConfigsResults(): Promise<void> {
   }
 
   list.innerHTML = '';
+
+  const MAX_DISPLAY = 2000;
+  const totalCount = allResults.length;
+  const displayResults = allResults.slice(0, MAX_DISPLAY);
+
+  if (totalCount > MAX_DISPLAY) {
+    const cap = document.createElement('div');
+    cap.className = 'sc-results-cap-notice';
+    cap.textContent = `Showing first ${MAX_DISPLAY.toLocaleString()} of ${totalCount.toLocaleString()} matches`;
+    list.appendChild(cap);
+  }
+
   const CHUNK_SIZE = 200;
 
-  for (let chunkStart = 0; chunkStart < allResults.length; chunkStart += CHUNK_SIZE) {
-    const chunkEnd = Math.min(chunkStart + CHUNK_SIZE, allResults.length);
+  for (let chunkStart = 0; chunkStart < displayResults.length; chunkStart += CHUNK_SIZE) {
+    const chunkEnd = Math.min(chunkStart + CHUNK_SIZE, displayResults.length);
     const fragment = document.createDocumentFragment();
 
     for (let i = chunkStart; i < chunkEnd; i++) {
-      const r = allResults[i];
+      const r = displayResults[i];
       const item = document.createElement('div');
       item.className = 'sc-result-item';
 
@@ -8068,7 +8103,7 @@ async function renderSearchConfigsResults(): Promise<void> {
     }
 
     list.appendChild(fragment);
-    if (chunkEnd < allResults.length) await yieldToUI();
+    if (chunkEnd < displayResults.length) await yieldToUI();
   }
 }
 
