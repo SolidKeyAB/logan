@@ -3089,11 +3089,11 @@ body.platform-darwin .titlebar {
 .minimap-line.level-fatal,
 .minimap-line.level-error   { background-color: var(--error-color);   margin-left: 8px;  opacity: 1.0; }
 .minimap-line.level-warning,
-.minimap-line.level-warn    { background-color: var(--warning-color); margin-left: 26px; opacity: 0.95; }
-.minimap-line.level-info    { background-color: var(--info-color);    margin-left: 53px; opacity: 0.7; }
-.minimap-line.level-debug   { background-color: var(--debug-color);   margin-left: 73px; opacity: 0.4; }
-.minimap-line.level-trace   { background-color: var(--text-muted);    margin-left: 87px; opacity: 0.28; }
-.minimap-line.level-default { background-color: var(--text-muted);    margin-left: 98px; opacity: 0.18; }
+.minimap-line.level-warn    { background-color: var(--warning-color); margin-left: 62px; opacity: 0.38; }
+.minimap-line.level-info    { background-color: var(--info-color);    margin-left: 68px; opacity: 0.32; }
+.minimap-line.level-debug   { background-color: var(--debug-color);   margin-left: 80px; opacity: 0.22; }
+.minimap-line.level-trace   { background-color: var(--text-muted);    margin-left: 90px; opacity: 0.15; }
+.minimap-line.level-default { background-color: var(--text-muted);    margin-left: 98px; opacity: 0.10; }
 
 .minimap-viewport {
   position: absolute;
