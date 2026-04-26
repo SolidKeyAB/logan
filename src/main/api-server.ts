@@ -88,14 +88,36 @@ function notifyAgentConnectionChanged(ctx: ApiContext): void {
   }
 }
 
-function broadcastSSE(msg: ChatMessage): void {
+function broadcastSSE(msg: ChatMessage, ctx?: ApiContext): void {
   const data = `event: message\ndata: ${JSON.stringify(msg)}\n\n`;
   if (activeAgent) {
-    try { activeAgent.res.write(data); } catch { activeAgent = null; }
+    try { activeAgent.res.write(data); } catch {
+      activeAgent = null;
+      if (ctx) notifyAgentConnectionChanged(ctx);
+    }
   }
   for (const res of chatListeners) {
     try { res.write(data); } catch { chatListeners.delete(res); }
   }
+}
+
+// Heartbeat timer — SSE connections drop silently when idle without a periodic ping
+let sseHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+function startSseHeartbeat(ctx: ApiContext): void {
+  if (sseHeartbeatTimer) return;
+  sseHeartbeatTimer = setInterval(() => {
+    const ping = ': ping\n\n'; // SSE comment, keeps TCP alive
+    if (activeAgent) {
+      try { activeAgent.res.write(ping); } catch {
+        activeAgent = null;
+        notifyAgentConnectionChanged(ctx);
+      }
+    }
+    for (const res of chatListeners) {
+      try { res.write(ping); } catch { chatListeners.delete(res); }
+    }
+  }, 20000); // every 20 seconds
 }
 
 export function addChatMessage(from: 'user' | 'agent', text: string): ChatMessage {
@@ -721,6 +743,7 @@ export function startApiServer(ctx: ApiContext): void {
   server.listen(API_PORT, '127.0.0.1', () => {
     console.log(`LOGAN API server listening on http://127.0.0.1:${API_PORT}`);
     writePortFile();
+    startSseHeartbeat(ctx);
   });
 }
 
