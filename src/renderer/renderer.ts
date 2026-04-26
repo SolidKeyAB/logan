@@ -13731,6 +13731,16 @@ function init(): void {
 
   // Highlights
   elements.btnAddHighlight.addEventListener('click', showHighlightModal);
+  document.getElementById('btn-clear-highlights')?.addEventListener('click', async () => {
+    if (state.highlights.length === 0) return;
+    await window.api.clearAllHighlights();
+    state.highlights = [];
+    activeHighlightGroupId = null;
+    updateHighlightGroupsUI();
+    updateHighlightsUI();
+    renderVisibleLines();
+    renderMinimapMarkers();
+  });
   elements.btnSaveHighlight.addEventListener('click', saveHighlight);
   elements.btnCancelHighlight.addEventListener('click', hideHighlightModal);
 
@@ -13851,6 +13861,14 @@ function init(): void {
   // Bookmark Sets
   elements.btnSaveBookmarkSet.addEventListener('click', saveBookmarkSet);
   elements.btnLoadBookmarkSet.addEventListener('click', refreshBookmarkSets);
+  document.getElementById('btn-clear-bookmarks')?.addEventListener('click', async () => {
+    if (state.bookmarks.length === 0) return;
+    await window.api.clearBookmarks();
+    state.bookmarks = [];
+    updateBookmarksUI();
+    renderVisibleLines();
+    renderMinimapMarkers();
+  });
 
   // Notes modal
   elements.btnSaveNotes.addEventListener('click', () => hideNotesModal(true));
