@@ -478,7 +478,7 @@ server.tool(
   {
     redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
     timeGapThreshold: z.number().min(1).default(60).describe('Minimum time gap in seconds to report'),
-    autoAnnotate: z.boolean().default(true).describe('Automatically annotate crash sites and top failing components in the LOGAN viewer'),
+    autoAnnotate: z.boolean().default(false).describe('Automatically annotate crash sites and top failing components in the LOGAN viewer (prefer using logan_report_finding for precise findings)'),
   },
   async ({ redact, timeGapThreshold, autoAnnotate }) => {
     try {
@@ -615,7 +615,7 @@ server.tool(
     redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
     autoBookmark: z.boolean().default(false).describe('Automatically bookmark crash sites in LOGAN'),
     autoHighlight: z.boolean().default(false).describe('Automatically highlight crash keywords in LOGAN'),
-    autoAnnotate: z.boolean().default(true).describe('Automatically annotate each crash site in the LOGAN viewer'),
+    autoAnnotate: z.boolean().default(false).describe('Automatically annotate each crash site in the LOGAN viewer (prefer using logan_report_finding for precise findings)'),
   },
   async ({ contextLines, maxCrashes, redact, autoBookmark, autoHighlight, autoAnnotate }) => {
     try {
@@ -655,7 +655,7 @@ server.tool(
     includeErrorContext: z.boolean().default(true).describe('Include context lines around error sites'),
     contextLines: z.number().int().min(1).max(20).default(5).describe('Context lines around error sites'),
     redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
-    autoAnnotate: z.boolean().default(true).describe('Automatically annotate the first error site in the LOGAN viewer'),
+    autoAnnotate: z.boolean().default(false).describe('Automatically annotate the first error site in the LOGAN viewer (prefer using logan_report_finding for precise findings)'),
   },
   async ({ component, maxSamplesPerLevel, includeErrorContext, contextLines, redact, autoAnnotate }) => {
     try {
@@ -1120,6 +1120,46 @@ server.tool(
       const urlPath = since ? `/api/messages?since=${since}` : '/api/messages';
       const result = await apiCall('GET', urlPath);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_report_finding ===
+server.tool(
+  'logan_report_finding',
+  'Surface a specific finding to the user: annotates the line/range in the viewer, navigates to it, and sends a chat message — all in one call. Use this whenever you identify a critical point, anomaly, or root cause so it is immediately visible in the log viewer.',
+  {
+    lineNumber: z.number().int().min(0).describe('0-based line number of the finding'),
+    endLine: z.number().int().min(0).optional().describe('0-based end line for a range finding (inclusive). Use when the issue spans multiple lines.'),
+    title: z.string().describe('Short title for the annotation (shown in the bar), e.g. "Auth abort race condition"'),
+    detail: z.string().describe('Detailed explanation sent as a chat message to the user'),
+    severity: z.enum(['info', 'warning', 'error']).default('error').describe('Severity: "error" for critical issues, "warning" for anomalies, "info" for observations'),
+    navigate: z.boolean().default(true).describe('Jump the viewer to this line'),
+  },
+  async ({ lineNumber, endLine, title, detail, severity, navigate }) => {
+    try {
+      const results: Record<string, any> = {};
+
+      // 1. Annotate
+      const annBody: Record<string, any> = { lineNumber, text: title, severity };
+      if (endLine !== undefined) annBody.endLine = endLine;
+      results.annotation = await apiCall('POST', '/api/annotate', annBody);
+
+      // 2. Navigate viewer to the line
+      if (navigate) {
+        results.navigate = await apiCall('POST', '/api/navigate', { lineNumber }).catch(() => null);
+      }
+
+      // 3. Send chat message with full detail
+      const lineLabel = endLine !== undefined && endLine > lineNumber
+        ? `Lines ${lineNumber + 1}–${endLine + 1}`
+        : `Line ${lineNumber + 1}`;
+      const chatText = `**[${severity.toUpperCase()}] ${title}** (${lineLabel})\n\n${detail}`;
+      results.message = await apiCall('POST', '/api/agent-message', { message: chatText });
+
+      return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
     } catch (err: any) {
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
     }

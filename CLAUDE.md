@@ -17,12 +17,30 @@ Use this pattern for interactive conversations with the LOGAN user:
 4. Repeat from step 2 until user says goodbye
 ```
 
+### Surfacing Findings — CRITICAL RULE
+
+**Whenever you identify a specific critical point, anomaly, or root cause in the log, you MUST call `logan_report_finding` to pin it in the viewer.** Do NOT just describe findings in chat text — call `logan_report_finding` first, then follow up with explanation. This creates a visible annotation in the log viewer so the user can click to navigate directly to the issue.
+
+```
+# Every finding = one logan_report_finding call
+logan_report_finding(
+  lineNumber=8045,          # 0-based line of the issue
+  endLine=20600,            # optional: use for multi-line ranges
+  title="Auth abort race",  # short label shown in annotation bar
+  detail="Full explanation sent to chat...",
+  severity="error"          # error | warning | info
+)
+```
+
+Use `logan_report_finding` for each distinct finding, then send a summary via `logan_send_message` if needed.
+
 ### Key MCP Tools
 
 | Tool | Purpose |
 |------|---------|
 | `logan_status` | Check if file is open, get line count and state |
-| `logan_send_message` | Send chat message to user |
+| `logan_report_finding` | **Pin a finding**: annotate + navigate + chat message in one call |
+| `logan_send_message` | Send chat message to user (for summaries, questions, greetings) |
 | `logan_wait_for_message` | Block until user replies (SSE-backed) |
 | `logan_get_messages` | Fetch chat history |
 | `logan_get_lines` | Read specific lines from the log |
@@ -35,6 +53,7 @@ Use this pattern for interactive conversations with the LOGAN user:
 | `logan_time_gaps` | Find time gaps in log timestamps |
 | `logan_triage` | AI-guided triage of the log file |
 | `logan_investigate_crashes` | Deep-dive into crash patterns |
+| `logan_annotate` | Add annotation to a line/range (use logan_report_finding instead when possible) |
 | `logan_baseline_save` / `logan_baseline_compare` | Save and compare baselines |
 | `logan_get_notes` / `logan_save_notes` | Read/write freeform notes |
 
@@ -49,6 +68,7 @@ LOGAN includes a setup wizard (gear icon in Chat tab) that:
 ### Important
 
 - Always call `logan_status` first to check if a file is open
+- **Always call `logan_report_finding` for each specific issue found** — never just describe line numbers in chat
 - The MCP server auto-connects via SSE for real-time message delivery
 - Only one agent can be connected at a time
 - See `docs/AGENT_CHAT_GUIDE.md` for detailed integration docs
