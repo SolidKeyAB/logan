@@ -12,8 +12,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-latest
-            platform: mac
           - os: ubuntu-latest
             platform: linux
           - os: windows-latest
@@ -31,40 +29,53 @@ jobs:
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake python3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake python3 \
+            libfuse2 rpm \
+            libudev-dev libusb-1.0-0-dev
 
       - name: Install dependencies
         run: npm ci
 
+      - name: Rebuild native modules for Electron
+        run: npx electron-rebuild --force
+        env:
+          npm_config_platform: ${{ runner.os == 'Windows' && 'win32' || 'linux' }}
+
       - name: Run tests
         run: npm test
 
-      - name: Build application
+      - name: Build TypeScript
         run: npm run build
 
-      - name: Package for macOS
-        if: matrix.platform == 'mac'
-        run: npx electron-builder --mac --publish never
-
-      - name: Package for Linux
+      - name: Package for Linux (AppImage + deb)
         if: matrix.platform == 'linux'
-        run: npx electron-builder --linux --publish never
+        run: npx electron-builder --linux AppImage deb --publish never
 
-      - name: Package for Windows
+      - name: Package for Windows (NSIS installer + portable)
         if: matrix.platform == 'win'
-        run: npx electron-builder --win --publish never
+        run: npx electron-builder --win nsis portable --publish never
 
-      - name: Upload artifacts
+      - name: Upload Linux artifacts
+        if: matrix.platform == 'linux'
         uses: actions/upload-artifact@v4
         with:
-          name: logan-${{ matrix.platform }}
+          name: logan-linux
           path: |
-            release/*.dmg
-            release/*.zip
             release/*.AppImage
             release/*.deb
+          if-no-files-found: error
+
+      - name: Upload Windows artifacts
+        if: matrix.platform == 'win'
+        uses: actions/upload-artifact@v4
+        with:
+          name: logan-windows
+          path: |
             release/*.exe
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   release:
     needs: build
@@ -78,10 +89,14 @@ jobs:
         with:
           path: artifacts
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+      - name: List artifacts
+        run: find artifacts -type f | sort
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
           generate_release_notes: true
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
