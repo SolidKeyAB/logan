@@ -11440,10 +11440,10 @@ function updateAnalysisUI(): void {
       <div class="insight-section crash-section">
         <div class="insight-header">Crashes & Failures (${ins.crashes.length}${ins.crashes.length >= 50 ? '+' : ''})</div>
         ${ins.crashes.map(c => `
-          <div class="crash-item" data-line="${c.lineNumber}" title="Line ${c.lineNumber + 1}">
+          <div class="crash-item" data-line="${c.lineNumber - 1}" title="Line ${c.lineNumber}">
             <div class="crash-line">
               <span class="crash-keyword">${escapeHtml(c.keyword)}</span>
-              <span class="crash-line-num">line ${c.lineNumber + 1}</span>
+              <span class="crash-line-num">line ${c.lineNumber}</span>
             </div>
             <div class="crash-text">${escapeHtml(c.text.length > 100 ? c.text.substring(0, 100) + '...' : c.text)}</div>
           </div>
@@ -11467,7 +11467,7 @@ function updateAnalysisUI(): void {
       <div class="insight-section components-section">
         <div class="insight-header">Top Failing Components</div>
         ${ins.topFailingComponents.map(comp => `
-          <div class="component-item" data-line="${comp.sampleLine}" title="${comp.errorCount} errors, ${comp.warningCount} warnings">
+          <div class="component-item" data-line="${comp.sampleLine > 0 ? comp.sampleLine - 1 : -1}" title="${comp.errorCount} errors, ${comp.warningCount} warnings">
             <div class="component-header">
               <span class="component-name">${escapeHtml(comp.name)}</span>
               <span class="component-errors">${comp.errorCount} err${comp.warningCount > 0 ? ` / ${comp.warningCount} warn` : ''}</span>

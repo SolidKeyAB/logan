@@ -13,11 +13,14 @@ import {
 const yieldToEventLoop = () => new Promise<void>(resolve => setImmediate(resolve));
 
 const KNOWN_COLUMNS = {
-  channel: ['channel', 'component', 'module', 'category', 'logger'],
-  source: ['source', 'process', 'thread', 'origin', 'class'],
-  level: ['level', 'severity', 'loglevel', 'priority'],
-  message: ['message', 'msg', 'text', 'content', 'description'],
+  // timestamp MUST come before channel — 'LoggerTime' contains 'logger' (channel keyword)
+  // but should be classified as timestamp. More-specific types go first.
   timestamp: ['time', 'timestamp', 'date', 'datetime', 'loggertime', 'tracetime'],
+  level:     ['level', 'severity', 'loglevel', 'priority'],
+  message:   ['message', 'msg', 'text', 'content', 'description'],
+  source:    ['source', 'process', 'thread', 'origin', 'class'],
+  // channel last — 'logger' is a substring of 'loggertime' so must be lowest priority
+  channel:   ['channel', 'component', 'module', 'category', 'logger'],
 };
 
 interface ColumnInfo {
