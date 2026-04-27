@@ -405,7 +405,8 @@ server.tool(
   },
   async ({ lineNumber }) => {
     try {
-      const result = await apiCall('POST', '/api/navigate', { lineNumber });
+      // Convert 1-based viewer line to 0-based internal line number
+      const result = await apiCall('POST', '/api/navigate', { lineNumber: Math.max(0, lineNumber - 1) });
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err: any) {
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -1020,9 +1021,10 @@ server.tool(
   },
   async (params) => {
     try {
+      // Convert 1-based viewer lines to 0-based internal line numbers
       const result = await apiCall('POST', '/api/annotate', {
-        lineNumber: params.lineNumber,
-        ...(params.endLine !== undefined ? { endLine: params.endLine } : {}),
+        lineNumber: Math.max(0, params.lineNumber - 1),
+        ...(params.endLine !== undefined ? { endLine: Math.max(0, params.endLine - 1) } : {}),
         text: params.text,
         severity: params.severity || 'info',
       });
@@ -1160,20 +1162,24 @@ server.tool(
         await apiCall('POST', '/api/annotation-clear').catch(() => null);
       }
 
+      // Convert 1-based viewer lines to 0-based internal line numbers
+      const line0 = Math.max(0, lineNumber - 1);
+      const end0 = endLine !== undefined ? Math.max(0, endLine - 1) : undefined;
+
       // 1. Annotate
-      const annBody: Record<string, any> = { lineNumber, text: title, severity };
-      if (endLine !== undefined) annBody.endLine = endLine;
+      const annBody: Record<string, any> = { lineNumber: line0, text: title, severity };
+      if (end0 !== undefined) annBody.endLine = end0;
       results.annotation = await apiCall('POST', '/api/annotate', annBody);
 
       // 2. Navigate viewer to the line
       if (navigate) {
-        results.navigate = await apiCall('POST', '/api/navigate', { lineNumber }).catch(() => null);
+        results.navigate = await apiCall('POST', '/api/navigate', { lineNumber: line0 }).catch(() => null);
       }
 
-      // 3. Send chat message with full detail
+      // 3. Send chat message with full detail (keep 1-based for user display)
       const lineLabel = endLine !== undefined && endLine > lineNumber
-        ? `Lines ${lineNumber + 1}–${endLine + 1}`
-        : `Line ${lineNumber + 1}`;
+        ? `Lines ${lineNumber}–${endLine}`
+        : `Line ${lineNumber}`;
       const chatText = `**[${severity.toUpperCase()}] ${title}** (${lineLabel})\n\n${detail}`;
       results.message = await apiCall('POST', '/api/agent-message', { message: chatText });
 

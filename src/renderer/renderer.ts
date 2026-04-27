@@ -5644,6 +5644,7 @@ function updateTracebackUI(): void {
 // ─── Agent Chat ──────────────────────────────────────────────────────
 
 function addChatMessage(msg: { id?: string; from: string; text: string; timestamp: number }): void {
+  if (msg.from === 'agent') hideTypingIndicator();
   const el = document.createElement('div');
   el.className = `chat-message from-${msg.from}`;
   if (msg.id) el.dataset.msgId = msg.id;
@@ -5670,6 +5671,28 @@ function addChatMessage(msg: { id?: string; from: string; text: string; timestam
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
 }
 
+let chatTypingIndicator: HTMLElement | null = null;
+
+function showTypingIndicator(): void {
+  if (chatTypingIndicator) return;
+  const el = document.createElement('div');
+  el.className = 'chat-typing-indicator';
+  for (let i = 0; i < 3; i++) {
+    const dot = document.createElement('div');
+    dot.className = 'chat-typing-dot';
+    el.appendChild(dot);
+  }
+  chatTypingIndicator = el;
+  elements.chatMessages.appendChild(el);
+  elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+}
+
+function hideTypingIndicator(): void {
+  if (!chatTypingIndicator) return;
+  chatTypingIndicator.remove();
+  chatTypingIndicator = null;
+}
+
 function sendChatMessage(): void {
   const text = elements.chatInput.value.trim();
   if (!text) return;
@@ -5678,6 +5701,7 @@ function sendChatMessage(): void {
   const msg = { from: 'user', text, timestamp: Date.now() };
   addChatMessage(msg);
   elements.chatInput.value = '';
+  showTypingIndicator();
 
   // Send to main process
   window.api.sendAgentMessage(text).catch(() => {
@@ -6162,28 +6186,7 @@ function rebuildAnnotationIndex(): void {
 }
 
 function navigateToAnnotation(ann: any): void {
-  if (!logViewerElement) return;
-  const lineNum = ann.lineNumber;
-  const lineH = getLineHeight();
-
-  if (!state.isFiltered || !state.filteredLineNumbers) {
-    // No filter: scroll directly to the line's pixel position
-    logViewerElement.scrollTop = Math.max(0, lineNum * lineH);
-  } else {
-    const di = getFilteredDisplayIndex(lineNum);
-    if (di >= 0) {
-      logViewerElement.scrollTop = Math.max(0, di * lineH);
-    } else {
-      // Line filtered out — proportional position using raw total
-      const maxScroll = logViewerElement.scrollHeight - logViewerElement.clientHeight;
-      logViewerElement.scrollTop = Math.max(0, (lineNum / state.totalLines) * maxScroll);
-    }
-  }
-
-  state.selectedLine = lineNum;
-  updateCursorStatus(lineNum);
-  requestAnimationFrame(() => { renderVisibleLines(); });
-  setActiveAnnotation(ann.id);
+  navigateTo(ann.lineNumber).then(() => setActiveAnnotation(ann.id));
 }
 
 let activeAnnotationId: string | null = null;
@@ -9938,28 +9941,51 @@ function navigateSearchPrev(): void {
 
 function goToSearchResult(index: number): void {
   if (index < 0 || index >= state.searchResults.length) return;
-
   state.currentSearchIndex = index;
   const result = state.searchResults[index];
-  const di = getFilteredDisplayIndex(result.lineNumber);
-  const scrollTarget = di >= 0 ? di : result.lineNumber;
-  goToLine(scrollTarget, result.lineNumber);
-  updateSearchUI();
-  renderVisibleLines();
-  updateSearchResultsCurrent();
-  scrollSearchResultIntoView();
+  navigateTo(result.lineNumber).then(() => {
+    updateSearchUI();
+    updateSearchResultsCurrent();
+    scrollSearchResultIntoView();
+  });
 }
 
-// Navigate to a line. displayIndex is the position in the current view (filtered or not).
-// originalLineNumber overrides which line gets highlighted/selected — use when the
-// display index differs from the real line number (e.g. filtered search results).
+// Canonical navigation entry point. Takes an absolute 0-based line number.
+// Pre-warms the line cache so the render shows content immediately (no blank flash).
+async function navigateTo(absLine: number): Promise<void> {
+  if (!logViewerElement) return;
+  const total = getTotalLines();
+  if (total === 0) return;
+  absLine = Math.max(0, Math.min(absLine, total - 1));
+
+  const di = getFilteredDisplayIndex(absLine);
+  const displayLine = di >= 0 ? di : absLine;
+
+  state.selectedLine = absLine;
+
+  // Pre-set the visible range so loadVisibleLines fetches the right lines
+  const visCount = Math.ceil(logViewerElement.clientHeight / getLineHeight());
+  state.visibleStartLine = Math.max(0, displayLine - BUFFER_LINES);
+  state.visibleEndLine = Math.min(total - 1, displayLine + visCount + BUFFER_LINES);
+
+  // Cancel any pending RAF (handleScroll will schedule one; we do it now synchronously)
+  if (scrollRAF !== null) { cancelAnimationFrame(scrollRAF); scrollRAF = null; }
+
+  // Pre-warm cache — eliminates the blank-frame flash on cold jumps
+  await loadVisibleLines();
+
+  // Now set scroll: handleScroll fires, updates state (same range), renders with warm cache
+  logViewerElement.scrollTop = Math.max(0, lineToScrollTop(displayLine));
+  updateCursorStatus(absLine);
+}
+
+// Legacy thin wrapper — kept for callers that cannot be async.
+// Use navigateTo() for all new navigation code.
 function goToLine(displayIndex: number, originalLineNumber?: number): void {
   if (!logViewerElement) return;
-
   const lineNumber = originalLineNumber ?? displayIndex;
   state.selectedLine = lineNumber;
-  const targetScrollTop = lineToScrollTop(displayIndex);
-  logViewerElement.scrollTop = Math.max(0, targetScrollTop);
+  logViewerElement.scrollTop = Math.max(0, lineToScrollTop(displayIndex));
   updateCursorStatus(lineNumber);
 }
 
@@ -10663,7 +10689,7 @@ function renderTimeGaps(gaps: TimeGap[], options?: TimeGapOptions): void {
     <div class="time-gap-item" data-line="${gap.lineNumber}" data-index="${index}">
       <div class="gap-header">
         <span class="gap-duration">${formatDuration(gap.gapSeconds)}</span>
-        <span class="gap-line">Line ${gap.lineNumber}</span>
+        <span class="gap-line">Line ${gap.lineNumber + 1}</span>
       </div>
       <div class="gap-times">${gap.prevTimestamp} → ${gap.currTimestamp}</div>
       <div class="gap-preview" title="${escapeHtml(gap.linePreview)}">${escapeHtml(gap.linePreview)}</div>
@@ -10676,12 +10702,12 @@ function renderTimeGaps(gaps: TimeGap[], options?: TimeGapOptions): void {
   elements.timeGapsList.querySelectorAll('.time-gap-item').forEach(item => {
     item.addEventListener('click', () => {
       const index = parseInt((item as HTMLElement).dataset.index || '0');
-      const lineNumber = parseInt((item as HTMLElement).dataset.line || '0');
-      if (lineNumber > 0) {
+      const lineNumber = parseInt((item as HTMLElement).dataset.line || '-1');
+      if (lineNumber >= 0) {
         currentGapIndex = index;
         updateGapNavPosition();
         highlightCurrentGapItem();
-        goToLine(lineNumber);
+        navigateTo(lineNumber);
       }
     });
   });
@@ -11012,8 +11038,8 @@ function updateBookmarksUI(): void {
         const id = target.dataset.id!;
         editBookmarkComment(id);
       } else {
-        const line = parseInt((item as HTMLElement).dataset.line || '0', 10);
-        goToLine(line);
+        const line = parseInt((item as HTMLElement).dataset.line || '-1', 10);
+        if (line >= 0) navigateTo(line);
       }
     });
 
@@ -11414,10 +11440,10 @@ function updateAnalysisUI(): void {
       <div class="insight-section crash-section">
         <div class="insight-header">Crashes & Failures (${ins.crashes.length}${ins.crashes.length >= 50 ? '+' : ''})</div>
         ${ins.crashes.map(c => `
-          <div class="crash-item" data-line="${c.lineNumber}" title="Line ${c.lineNumber}">
+          <div class="crash-item" data-line="${c.lineNumber}" title="Line ${c.lineNumber + 1}">
             <div class="crash-line">
               <span class="crash-keyword">${escapeHtml(c.keyword)}</span>
-              <span class="crash-line-num">line ${c.lineNumber}</span>
+              <span class="crash-line-num">line ${c.lineNumber + 1}</span>
             </div>
             <div class="crash-text">${escapeHtml(c.text.length > 100 ? c.text.substring(0, 100) + '...' : c.text)}</div>
           </div>
@@ -11516,16 +11542,16 @@ function updateAnalysisUI(): void {
   // Click handlers for crash items - navigate to line
   elements.analysisResults.querySelectorAll('.crash-item').forEach((item) => {
     item.addEventListener('click', () => {
-      const line = parseInt((item as HTMLElement).dataset.line || '0', 10);
-      if (line > 0) goToLine(line);
+      const line = parseInt((item as HTMLElement).dataset.line || '-1', 10);
+      if (line >= 0) navigateTo(line);
     });
   });
 
   // Click handlers for component items - navigate to first error line
   elements.analysisResults.querySelectorAll('.component-item').forEach((item) => {
     item.addEventListener('click', () => {
-      const line = parseInt((item as HTMLElement).dataset.line || '0', 10);
-      if (line > 0) goToLine(line);
+      const line = parseInt((item as HTMLElement).dataset.line || '-1', 10);
+      if (line >= 0) navigateTo(line);
     });
   });
 
@@ -13327,6 +13353,13 @@ function init(): void {
   // Agent connection status changes
   window.api.onAgentConnectionChanged((data: any) => {
     updateAgentConnectionStatus(data.connected, data.count, data.name);
+    const banner = document.getElementById('chat-reconnect-banner');
+    if (data.connected) {
+      banner?.classList.add('hidden');
+    } else if (agentRunning) {
+      hideTypingIndicator();
+      banner?.classList.remove('hidden');
+    }
     // If agent was running but disconnected (count dropped to 0), update button
     if (agentRunning && !data.connected) {
       agentRunning = false;

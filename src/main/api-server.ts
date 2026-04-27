@@ -519,13 +519,10 @@ export function startApiServer(ctx: ApiContext): void {
         // --- Agent Annotations ---
         if (url === '/api/annotate') {
           if (body.lineNumber === undefined || !body.text) return sendError(res, 'lineNumber and text required');
-          // Accept 1-based viewerLine numbers (as displayed in LOGAN) — convert to 0-based internally
-          const ln0 = Math.max(0, body.lineNumber - 1);
-          const el0 = body.endLine !== undefined ? Math.max(0, body.endLine - 1) : undefined;
           const annotation: Annotation = {
             id: `ann-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-            lineNumber: ln0,
-            ...(el0 !== undefined ? { endLine: el0 } : {}),
+            lineNumber: body.lineNumber,
+            ...(body.endLine !== undefined ? { endLine: body.endLine } : {}),
             text: body.text,
             agentName: body.agentName || activeAgent?.name || 'Agent',
             timestamp: Date.now(),
@@ -580,9 +577,7 @@ export function startApiServer(ctx: ApiContext): void {
         }
 
         if (url === '/api/navigate') {
-          // Accept 1-based viewerLine — convert to 0-based for internal use
-          const lineNumber = Math.max(0, (body.lineNumber ?? 1) - 1);
-          ctx.navigateToLine(lineNumber);
+          ctx.navigateToLine(body.lineNumber ?? 0);
           sendJson(res, { success: true });
           return;
         }
