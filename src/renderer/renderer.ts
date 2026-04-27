@@ -9327,12 +9327,10 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
 
       updateFileStatsUI();
 
-      // Always hide markdown preview before creating the log viewer —
-      // if the new file is markdown, showMarkdownPreview() will re-enable it below.
-      isMarkdownFile = isMarkdownExtension(filePath);
-      hideMarkdownPreview();
+      // Display mode manager handles all mode transitions:
+      // current mode deactivates itself, new mode activates itself.
+      await displayManager.switchTo(filePath);
 
-      createLogViewer();
       renderTabBar();
       renderFolderTree(); // Update active file highlight
 
@@ -9386,12 +9384,6 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       updateStatusBar();
       updateLocalStorageStatus();
       updateSplitNavigation();
-
-      // isMarkdownFile was already set above; show preview if needed
-      if (isMarkdownFile) {
-        await renderMarkdownPreview();
-        showMarkdownPreview();
-      }
 
       // Restore video player state for this file
       restoreVideoState();
@@ -12071,78 +12063,153 @@ imageViewerContainer?.addEventListener('wheel', (e) => {
   setImageZoom(imageZoom * delta);
 }, { passive: false });
 
-async function renderMarkdownPreview(): Promise<void> {
-  if (!state.filePath || !isMarkdownFile) return;
+// ─── File Display Mode System ────────────────────────────────────────────────
+//
+// Each mode owns its own activate() and deactivate() lifecycle.
+// displayManager.switchTo(filePath) is the ONLY entry point for display changes:
+//   1. currentMode.deactivate()  ← current mode cleans up after itself
+//   2. nextMode.activate()       ← new mode sets itself up
+//
+// Adding a new file type = add a new mode object. No scattered cleanup code.
+// ─────────────────────────────────────────────────────────────────────────────
 
-  try {
-    // Fetch all content for markdown preview
-    const result = await window.api.getLines(0, state.totalLines);
-    if (result.success && result.lines) {
-      const content = result.lines.map(l => l.text).join('\n');
-      const html = marked.parse(content);
-      elements.markdownPreview.innerHTML = html;
-
-      // Make links open in external browser
-      elements.markdownPreview.querySelectorAll('a').forEach(link => {
-        link.addEventListener('click', (e) => {
-          e.preventDefault();
-          const href = link.getAttribute('href');
-          if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
-            window.api.openExternalUrl?.(href);
-          }
-        });
-      });
-    }
-  } catch (error) {
-    elements.markdownPreview.innerHTML = '<p>Error rendering markdown</p>';
-  }
+interface FileDisplayMode {
+  readonly name: string;
+  canHandle(filePath: string): boolean;
+  activate(filePath: string): Promise<void>;
+  deactivate(): void;
 }
 
+// ── Log Viewer Mode ───────────────────────────────────────────────────────────
+const logViewerMode: FileDisplayMode = {
+  name: 'log',
+
+  canHandle(filePath: string): boolean {
+    return !isMarkdownExtension(filePath);
+  },
+
+  async activate(_filePath: string): Promise<void> {
+    isMarkdownFile = false;
+    elements.btnWordWrap.textContent = 'Wrap';
+    elements.btnWordWrap.title = 'Toggle word wrap (⌥Z)';
+    createLogViewer();
+  },
+
+  deactivate(): void {
+    // Log viewer DOM is recreated on each activate() via createLogViewer()
+    // which removes the old wrapper, so no manual cleanup needed here.
+  },
+};
+
+// ── Markdown Mode ─────────────────────────────────────────────────────────────
+const markdownMode: FileDisplayMode = {
+  name: 'markdown',
+
+  canHandle(filePath: string): boolean {
+    return isMarkdownExtension(filePath);
+  },
+
+  async activate(_filePath: string): Promise<void> {
+    isMarkdownFile = true;
+    markdownPreviewMode = true;
+    elements.btnWordWrap.textContent = 'Raw';
+    elements.btnWordWrap.title = 'Show raw markdown';
+
+    // Fetch and render markdown content
+    try {
+      const result = await window.api.getLines(0, state.totalLines);
+      if (result.success && result.lines) {
+        const content = result.lines.map(l => l.text).join('\n');
+        const html = marked.parse(content);
+        elements.markdownPreview.innerHTML = html;
+        elements.markdownPreview.querySelectorAll('a').forEach(link => {
+          link.addEventListener('click', (e) => {
+            e.preventDefault();
+            const href = link.getAttribute('href');
+            if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
+              window.api.openExternalUrl?.(href);
+            }
+          });
+        });
+      }
+    } catch {
+      elements.markdownPreview.innerHTML = '<p>Error rendering markdown</p>';
+    }
+
+    // Show preview, hide log viewer via CSS class (not inline style)
+    elements.markdownPreview.classList.remove('hidden');
+    elements.editorContainer.classList.add('markdown-active');
+  },
+
+  deactivate(): void {
+    // This mode cleans up after itself — guaranteed regardless of who triggers the switch
+    isMarkdownFile = false;
+    markdownPreviewMode = false;
+    elements.editorContainer.classList.remove('markdown-active');
+    elements.markdownPreview.classList.add('hidden');
+    elements.markdownPreview.innerHTML = '';
+  },
+};
+
+// ── Display Manager ───────────────────────────────────────────────────────────
+const displayManager = (() => {
+  const modes: FileDisplayMode[] = [markdownMode, logViewerMode];
+  let current: FileDisplayMode | null = null;
+
+  function resolve(filePath: string): FileDisplayMode {
+    return modes.find(m => m.canHandle(filePath)) ?? logViewerMode;
+  }
+
+  return {
+    async switchTo(filePath: string): Promise<void> {
+      const next = resolve(filePath);
+      if (current && current !== next) {
+        current.deactivate();
+      } else if (current === next && current) {
+        // Same mode, switching to a different file — still deactivate to reset state
+        current.deactivate();
+      }
+      current = next;
+      await next.activate(filePath);
+    },
+
+    getCurrentMode(): FileDisplayMode | null { return current; },
+
+    isMarkdown(): boolean { return current?.name === 'markdown'; },
+
+    // Toggle between rendered preview and raw markdown text (within markdown mode)
+    toggleMarkdownView(): void {
+      if (current?.name !== 'markdown') { toggleWordWrap(); return; }
+      if (markdownPreviewMode) {
+        markdownPreviewMode = false;
+        elements.markdownPreview.classList.add('hidden');
+        elements.editorContainer.classList.remove('markdown-active');
+        elements.btnWordWrap.textContent = 'Preview';
+        elements.btnWordWrap.title = 'Show markdown preview';
+      } else {
+        markdownPreviewMode = true;
+        elements.markdownPreview.classList.remove('hidden');
+        elements.editorContainer.classList.add('markdown-active');
+        elements.btnWordWrap.textContent = 'Raw';
+        elements.btnWordWrap.title = 'Show raw markdown';
+        // Re-fetch in case content changed
+        markdownMode.activate(state.filePath || '').catch(() => {});
+      }
+    },
+  };
+})();
+
+// Keep legacy function aliases so existing call sites compile without change
+function hideMarkdownPreview(): void { markdownMode.deactivate(); }
 function showMarkdownPreview(): void {
   if (!isMarkdownFile) return;
-
   markdownPreviewMode = true;
   elements.markdownPreview.classList.remove('hidden');
-  // Use a class on the container — no inline styles that can leak across file loads
   elements.editorContainer.classList.add('markdown-active');
-
-  // Update button state
   elements.btnWordWrap.textContent = 'Raw';
   elements.btnWordWrap.title = 'Show raw markdown';
 }
-
-function hideMarkdownPreview(): void {
-  markdownPreviewMode = false;
-  elements.markdownPreview.classList.add('hidden');
-  elements.markdownPreview.innerHTML = '';
-  elements.editorContainer.classList.remove('markdown-active');
-  elements.btnWordWrap.textContent = 'Wrap';
-  elements.btnWordWrap.title = 'Toggle word wrap (⌥Z)';
-}
-
-function showMarkdownRaw(): void {
-  markdownPreviewMode = false;
-  elements.markdownPreview.classList.add('hidden');
-  elements.editorContainer.classList.remove('markdown-active');
-
-  // Update button state
-  elements.btnWordWrap.textContent = 'Preview';
-  elements.btnWordWrap.title = 'Show markdown preview';
-}
-
-function toggleMarkdownPreview(): void {
-  if (!isMarkdownFile) {
-    toggleWordWrap();
-    return;
-  }
-
-  if (markdownPreviewMode) {
-    showMarkdownRaw();
-  } else {
-    showMarkdownPreview();
-    renderMarkdownPreview();
-  }
-}
+function toggleMarkdownPreview(): void { displayManager.toggleMarkdownView(); }
 
 function applyZoom(): void {
   // Update status bar
@@ -14261,13 +14328,8 @@ async function switchToTab(tabId: string): Promise<void> {
         state.filteredLineNumbers = await window.api.getFilteredLineNumbers() ?? null;
       }
 
-      // Handle markdown preview state for the new tab
-      isMarkdownFile = isMarkdownExtension(tab.filePath);
-      hideMarkdownPreview(); // always reset first
-      if (isMarkdownFile) {
-        await renderMarkdownPreview();
-        showMarkdownPreview();
-      }
+      // Display mode manager handles mode transition for this tab
+      await displayManager.switchTo(tab.filePath);
 
       // Update with fresh info from backend
       state.totalLines = result.info.totalLines;
@@ -14289,7 +14351,7 @@ async function switchToTab(tabId: string): Promise<void> {
       loadSearchConfigSessions();
       loadContextDefinitions();
 
-      createLogViewer();
+      // displayManager.switchTo() already called createLogViewer() via logViewerMode.activate()
 
       // Wait for DOM layout
       await new Promise(resolve => requestAnimationFrame(resolve));
