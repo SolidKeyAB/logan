@@ -9327,16 +9327,10 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
 
       updateFileStatsUI();
 
-      // Reset markdown state before creating the log viewer so the preview
-      // doesn't remain visible while the new file's lines are loading.
+      // Always hide markdown preview before creating the log viewer —
+      // if the new file is markdown, showMarkdownPreview() will re-enable it below.
       isMarkdownFile = isMarkdownExtension(filePath);
-      if (!isMarkdownFile) {
-        markdownPreviewMode = false;
-        elements.markdownPreview.classList.add('hidden');
-        elements.markdownPreview.innerHTML = '';
-        elements.btnWordWrap.textContent = 'Wrap';
-        elements.btnWordWrap.title = 'Toggle word wrap (⌥Z)';
-      }
+      hideMarkdownPreview();
 
       createLogViewer();
       renderTabBar();
@@ -9395,9 +9389,6 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
 
       // isMarkdownFile was already set above; show preview if needed
       if (isMarkdownFile) {
-        markdownPreviewMode = true;
-        elements.btnWordWrap.textContent = 'Raw';
-        elements.btnWordWrap.title = 'Show raw markdown';
         await renderMarkdownPreview();
         showMarkdownPreview();
       }
@@ -12112,27 +12103,27 @@ function showMarkdownPreview(): void {
 
   markdownPreviewMode = true;
   elements.markdownPreview.classList.remove('hidden');
-
-  // Hide log viewer wrapper if it exists
-  const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
-  if (wrapper) {
-    wrapper.style.display = 'none';
-  }
+  // Use a class on the container — no inline styles that can leak across file loads
+  elements.editorContainer.classList.add('markdown-active');
 
   // Update button state
   elements.btnWordWrap.textContent = 'Raw';
   elements.btnWordWrap.title = 'Show raw markdown';
 }
 
+function hideMarkdownPreview(): void {
+  markdownPreviewMode = false;
+  elements.markdownPreview.classList.add('hidden');
+  elements.markdownPreview.innerHTML = '';
+  elements.editorContainer.classList.remove('markdown-active');
+  elements.btnWordWrap.textContent = 'Wrap';
+  elements.btnWordWrap.title = 'Toggle word wrap (⌥Z)';
+}
+
 function showMarkdownRaw(): void {
   markdownPreviewMode = false;
   elements.markdownPreview.classList.add('hidden');
-
-  // Show log viewer wrapper
-  const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
-  if (wrapper) {
-    wrapper.style.display = '';
-  }
+  elements.editorContainer.classList.remove('markdown-active');
 
   // Update button state
   elements.btnWordWrap.textContent = 'Preview';
@@ -14272,22 +14263,10 @@ async function switchToTab(tabId: string): Promise<void> {
 
       // Handle markdown preview state for the new tab
       isMarkdownFile = isMarkdownExtension(tab.filePath);
+      hideMarkdownPreview(); // always reset first
       if (isMarkdownFile) {
-        markdownPreviewMode = true;
-        elements.btnWordWrap.textContent = 'Raw';
-        elements.btnWordWrap.title = 'Show raw markdown';
         await renderMarkdownPreview();
         showMarkdownPreview();
-      } else {
-        markdownPreviewMode = false;
-        elements.markdownPreview.classList.add('hidden');
-        elements.markdownPreview.innerHTML = '';
-        elements.btnWordWrap.textContent = 'Wrap';
-        elements.btnWordWrap.title = 'Toggle word wrap (⌥Z)';
-        const wrapper = document.querySelector('.log-viewer-wrapper') as HTMLElement;
-        if (wrapper) {
-          wrapper.style.display = '';
-        }
       }
 
       // Update with fresh info from backend

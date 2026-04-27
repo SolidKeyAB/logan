@@ -4366,6 +4366,78 @@ kbd {
   cursor: default;
 }
 
+/* Typing indicator */
+.chat-typing-indicator {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  background: #2d2d2d;
+  border-radius: 8px;
+  border-bottom-left-radius: 2px;
+}
+
+.chat-typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #888;
+  animation: chat-dot-bounce 1.2s ease-in-out infinite;
+}
+
+.chat-typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.chat-typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes chat-dot-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-5px); opacity: 1; }
+}
+
+/* Reconnect banner */
+.chat-reconnect-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: rgba(192, 57, 43, 0.18);
+  border-bottom: 1px solid rgba(192, 57, 43, 0.35);
+  font-size: 12px;
+  color: #e88;
+  flex-shrink: 0;
+}
+
+.chat-reconnect-banner.hidden { display: none; }
+
+.chat-reconnect-icon { font-size: 13px; }
+
+.chat-reconnect-text { flex: 1; }
+
+.chat-reconnect-btn {
+  background: #c0392b;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chat-reconnect-btn:hover { opacity: 0.85; }
+
+.chat-reconnect-dismiss {
+  background: none;
+  border: none;
+  color: #e88;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  opacity: 0.7;
+}
+
+.chat-reconnect-dismiss:hover { opacity: 1; }
+
 /* Search Results content (inside bottom panel tab) */
 .bottom-tab-sub-header {
   display: flex;
@@ -4819,6 +4891,10 @@ kbd {
 }
 
 /* Markdown Preview */
+/* When markdown preview is active, the log viewer wrapper is hidden via CSS class
+   (not inline style) so there is no risk of it leaking across file loads */
+.editor-container.markdown-active .log-viewer-wrapper { display: none !important; }
+
 .markdown-preview {
   position: absolute;
   top: 0;
