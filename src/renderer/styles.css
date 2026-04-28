@@ -4017,25 +4017,33 @@ kbd {
 /* ── Panel color picker ─────────────────────────────────────────────────── */
 .bottom-panel-color-btn {
   background: none;
-  border: none;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
   cursor: pointer;
-  padding: 0 6px;
+  padding: 2px 7px;
+  margin: 0 4px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
+  gap: 5px;
+  color: #aaa;
+  font-size: 11px;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.bottom-panel-color-btn:hover {
+  border-color: rgba(255, 255, 255, 0.45);
+  color: #fff;
+  background: rgba(255, 255, 255, 0.07);
 }
 
 .panel-color-dot {
   display: block;
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
-  background: rgba(200, 200, 220, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  transition: border-color 0.15s;
-}
-.bottom-panel-color-btn:hover .panel-color-dot {
-  border-color: rgba(255, 255, 255, 0.7);
+  background: rgba(200, 200, 220, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  flex-shrink: 0;
 }
 
 .panel-color-picker {
