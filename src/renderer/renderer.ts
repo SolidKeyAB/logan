@@ -5201,7 +5201,7 @@ function applyPanelBgColor(color: string): void {
 }
 
 function initBottomPanelColorPicker(): void {
-  const btn = document.getElementById('btn-panel-color');
+  const btn = document.getElementById('btn-panel-color') as HTMLElement;
   const picker = document.getElementById('panel-color-picker') as HTMLElement;
   const canvas = document.getElementById('panel-color-wheel') as HTMLCanvasElement;
   const resetBtn = document.getElementById('btn-panel-color-reset');
@@ -5219,6 +5219,10 @@ function initBottomPanelColorPicker(): void {
   function openPicker(): void {
     isOpen = true;
     picker.classList.remove('hidden');
+    // Position above the button using fixed coords (avoids stacking context issues)
+    const r = btn.getBoundingClientRect();
+    picker.style.right = `${window.innerWidth - r.right}px`;
+    picker.style.bottom = `${window.innerHeight - r.top + 4}px`;
   }
   function closePicker(): void {
     isOpen = false;

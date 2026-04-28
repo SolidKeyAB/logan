@@ -3110,19 +3110,19 @@ body.platform-darwin .titlebar {
 /* Line-number tooltip */
 .minimap-tooltip {
   position: absolute;
-  left: 8px;
-  right: 2px;
+  right: 2px;          /* anchored to right edge of minimap */
+  width: max-content;  /* grows left to fit the text */
   height: 16px;
   line-height: 16px;
+  padding: 0 5px;
   text-align: center;
-  background: rgba(10, 14, 20, 0.82);
-  color: rgba(255, 255, 255, 0.88);
+  background: rgba(10, 14, 20, 0.88);
+  color: rgba(255, 255, 255, 0.92);
   font-size: 10px;
   font-family: var(--font-mono, monospace);
   pointer-events: none;
   z-index: 20;
   border-radius: 2px;
-  overflow: hidden;
   white-space: nowrap;
 }
 .minimap-tooltip.hidden { display: none; }
@@ -4047,10 +4047,8 @@ kbd {
 }
 
 .panel-color-picker {
-  position: absolute;
-  bottom: 100%;
-  right: 40px;
-  z-index: 200;
+  position: fixed; /* root stacking context — above minimap, above everything */
+  z-index: 10000;
   background: var(--bg-secondary, #252526);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 10px;
