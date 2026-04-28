@@ -377,7 +377,17 @@
           <button class="bottom-tab-btn" data-bottom-tab="chat" data-help="Chat with an AI agent connected via MCP or HTTP API.&#10;The agent can search, navigate, analyze, and bookmark for you.">Agent Chat</button>
           <button class="bottom-tab-btn" data-bottom-tab="notes" data-help="Freeform notes saved per file as .logan/filename.notes.txt.&#10;Use Save Snippet to append selected log lines to notes.">Notes</button>
         </div>
+        <button id="btn-panel-color" class="bottom-panel-color-btn" title="Panel background color">
+          <span class="panel-color-dot"></span>
+        </button>
         <button id="btn-bottom-panel-close" class="bottom-panel-close-btn" title="Close panel">&times;</button>
+      </div>
+      <!-- Color picker popover -->
+      <div id="panel-color-picker" class="panel-color-picker hidden">
+        <canvas id="panel-color-wheel" width="160" height="160"></canvas>
+        <div class="panel-color-actions">
+          <button id="btn-panel-color-reset" class="panel-color-reset-btn" title="Reset to default">Reset</button>
+        </div>
       </div>
       <div class="bottom-panel-body">
         <!-- Analysis tab -->
@@ -638,6 +648,12 @@
               <span class="chat-memory-icon">🧠</span>
               <span id="chat-memory-label" class="chat-memory-label">Memory saved</span>
               <button id="btn-clear-agent-memory" class="chat-memory-clear" title="Clear agent memory">✕</button>
+            </div>
+            <div id="chat-reconnect-banner" class="chat-reconnect-banner hidden">
+              <span class="chat-reconnect-icon">⚡</span>
+              <span class="chat-reconnect-text">Agent disconnected</span>
+              <button id="chat-reconnect-btn" class="chat-reconnect-btn">Reconnect</button>
+              <button id="chat-reconnect-dismiss" class="chat-reconnect-dismiss" title="Dismiss">✕</button>
             </div>
             <div id="chat-messages" class="chat-messages"></div>
             <div class="chat-input-bar">

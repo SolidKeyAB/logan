@@ -5188,6 +5188,145 @@ function openBottomTab(tabId: string): void {
   saveBottomPanelState();
 }
 
+// ─── Bottom Panel Color Picker ───────────────────────────────────────────────
+
+const PANEL_COLOR_DEFAULT = 'rgba(30, 30, 30, 0.95)';
+const PANEL_COLOR_KEY = 'logan-panel-bg-color';
+
+function applyPanelBgColor(color: string): void {
+  elements.bottomPanel.style.background = color;
+  // Keep the dot in sync
+  const dot = document.querySelector('.panel-color-dot') as HTMLElement | null;
+  if (dot) dot.style.background = color;
+}
+
+function initBottomPanelColorPicker(): void {
+  const btn = document.getElementById('btn-panel-color');
+  const picker = document.getElementById('panel-color-picker') as HTMLElement;
+  const canvas = document.getElementById('panel-color-wheel') as HTMLCanvasElement;
+  const resetBtn = document.getElementById('btn-panel-color-reset');
+  if (!btn || !picker || !canvas || !resetBtn) return;
+
+  // Restore saved color
+  const saved = localStorage.getItem(PANEL_COLOR_KEY);
+  if (saved) applyPanelBgColor(saved);
+
+  // Draw the hue/brightness wheel
+  drawColorWheel(canvas);
+
+  let isOpen = false;
+
+  function openPicker(): void {
+    isOpen = true;
+    picker.classList.remove('hidden');
+  }
+  function closePicker(): void {
+    isOpen = false;
+    picker.classList.add('hidden');
+  }
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (isOpen) closePicker(); else openPicker();
+  });
+
+  // Close when clicking outside
+  document.addEventListener('click', (e) => {
+    if (isOpen && !picker.contains(e.target as Node) && e.target !== btn) {
+      closePicker();
+    }
+  });
+
+  // Read color from wheel on hover (live preview) and click (commit)
+  function colorFromEvent(e: MouseEvent): string {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    const r = cx;
+    const dist = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+    if (dist > r) return '';
+    const ctx = canvas.getContext('2d')!;
+    const pixel = ctx.getImageData(Math.round(x), Math.round(y), 1, 1).data;
+    return `rgba(${pixel[0]}, ${pixel[1]}, ${pixel[2]}, 0.95)`;
+  }
+
+  let dragging = false;
+
+  canvas.addEventListener('mousedown', (e) => {
+    dragging = true;
+    const color = colorFromEvent(e);
+    if (color) applyPanelBgColor(color);
+  });
+
+  canvas.addEventListener('mousemove', (e) => {
+    if (!dragging) {
+      // Live preview on hover too
+      const color = colorFromEvent(e);
+      if (color) applyPanelBgColor(color);
+    } else {
+      const color = colorFromEvent(e);
+      if (color) applyPanelBgColor(color);
+    }
+  });
+
+  canvas.addEventListener('mouseup', (e) => {
+    dragging = false;
+    const color = colorFromEvent(e);
+    if (color) {
+      applyPanelBgColor(color);
+      localStorage.setItem(PANEL_COLOR_KEY, color);
+    }
+    closePicker();
+  });
+
+  // Restore preview when leaving canvas without committing
+  canvas.addEventListener('mouseleave', () => {
+    if (!dragging) {
+      const stored = localStorage.getItem(PANEL_COLOR_KEY) || PANEL_COLOR_DEFAULT;
+      applyPanelBgColor(stored);
+    }
+  });
+
+  resetBtn.addEventListener('click', () => {
+    localStorage.removeItem(PANEL_COLOR_KEY);
+    applyPanelBgColor(PANEL_COLOR_DEFAULT);
+    closePicker();
+  });
+}
+
+function drawColorWheel(canvas: HTMLCanvasElement): void {
+  const ctx = canvas.getContext('2d')!;
+  const cx = canvas.width / 2;
+  const cy = canvas.height / 2;
+  const r = cx;
+
+  // Draw hue ring (full saturation, medium brightness)
+  for (let angle = 0; angle < 360; angle++) {
+    const startAngle = ((angle - 1) * Math.PI) / 180;
+    const endAngle = ((angle + 1) * Math.PI) / 180;
+    const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    gradient.addColorStop(0, `hsl(${angle}, 0%, 18%)`);   // dark center
+    gradient.addColorStop(0.3, `hsl(${angle}, 60%, 30%)`);  // darker mid
+    gradient.addColorStop(0.7, `hsl(${angle}, 90%, 50%)`);  // vivid
+    gradient.addColorStop(1, `hsl(${angle}, 70%, 70%)`);    // lighter edge
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, startAngle, endAngle);
+    ctx.closePath();
+    ctx.fillStyle = gradient;
+    ctx.fill();
+  }
+
+  // Clip to circle
+  ctx.globalCompositeOperation = 'destination-in';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r - 1, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalCompositeOperation = 'source-over';
+}
+
 function closeBottomPanel(): void {
   state.bottomPanelVisible = false;
   state.activeBottomTab = null;
@@ -13378,6 +13517,7 @@ function init(): void {
 
   // Bottom panel (tabbed) events
   elements.btnBottomPanelClose.addEventListener('click', closeBottomPanel);
+  initBottomPanelColorPicker();
   // Right sidebar buttons
   elements.btnAnnotationsToggle.addEventListener('click', toggleAnnotations);
   elements.btnNotesToggle.addEventListener('click', () => toggleBottomTab('notes'));
