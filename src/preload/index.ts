@@ -503,6 +503,12 @@ const api = {
   clearRecentFiles: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('recent-files-clear'),
 
+  // Recent folders
+  listRecentFolders: (): Promise<{ success: boolean; folders?: Array<{ path: string; lastOpened: number }> }> =>
+    ipcRenderer.invoke('recent-folders-list'),
+  clearRecentFolders: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('recent-folders-clear'),
+
   // Agent annotations
   addAnnotation: (annotation: any): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('annotation-add', annotation),

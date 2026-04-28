@@ -462,6 +462,8 @@ interface Api {
   browseAgentScript: () => Promise<string | null>;
   listRecentFiles: () => Promise<{ success: boolean; files?: Array<{ path: string; lastOpened: number }> }>;
   clearRecentFiles: () => Promise<{ success: boolean }>;
+  listRecentFolders: () => Promise<{ success: boolean; folders?: Array<{ path: string; lastOpened: number }> }>;
+  clearRecentFolders: () => Promise<{ success: boolean }>;
 
   // Agent annotations
   addAnnotation: (annotation: { id: string; lineNumber: number; text: string; agentName: string; timestamp: number; severity?: 'info' | 'warning' | 'error' }) => Promise<{ success: boolean }>;

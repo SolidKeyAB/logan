@@ -257,6 +257,37 @@ function addToRecentFiles(filePath: string): void {
   saveRecentFiles(list);
 }
 
+// Recent folders
+const RECENT_FOLDERS_CAP = 15;
+
+function getRecentFoldersPath(): string {
+  return path.join(os.homedir(), '.logan', 'recent-folders.json');
+}
+
+function loadRecentFolders(): Array<{ path: string; lastOpened: number }> {
+  try {
+    const data = fs.readFileSync(getRecentFoldersPath(), 'utf-8');
+    const parsed = JSON.parse(data);
+    if (Array.isArray(parsed)) return parsed;
+  } catch { /* missing or invalid */ }
+  return [];
+}
+
+function saveRecentFolders(list: Array<{ path: string; lastOpened: number }>): void {
+  try {
+    const dir = path.join(os.homedir(), '.logan');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(getRecentFoldersPath(), JSON.stringify(list, null, 2));
+  } catch { /* ignore */ }
+}
+
+function addToRecentFolders(folderPath: string): void {
+  const list = loadRecentFolders().filter(e => e.path !== folderPath);
+  list.unshift({ path: folderPath, lastOpened: Date.now() });
+  if (list.length > RECENT_FOLDERS_CAP) list.length = RECENT_FOLDERS_CAP;
+  saveRecentFolders(list);
+}
+
 // Activity history logging
 const ACTIVITY_HISTORY_CAP = 500;
 const ACTIVITY_HISTORY_TRIM_TO = 400;
@@ -1872,7 +1903,9 @@ ipcMain.handle(IPC.OPEN_FOLDER_DIALOG, async () => {
   const result = await showOpenDialog({
     properties: ['openDirectory'],
   });
-  return result.canceled ? null : result.filePaths[0];
+  if (result.canceled || !result.filePaths[0]) return null;
+  addToRecentFolders(result.filePaths[0]);
+  return result.filePaths[0];
 });
 
 // Text extensions used by folder search (ripgrep glob filters)
@@ -5727,6 +5760,20 @@ ipcMain.handle('recent-files-list', async () => {
 
 ipcMain.handle('recent-files-clear', async () => {
   saveRecentFiles([]);
+  return { success: true };
+});
+
+// === Recent Folders ===
+
+ipcMain.handle('recent-folders-list', async () => {
+  const list = loadRecentFolders().filter(e => {
+    try { return fs.existsSync(e.path); } catch { return false; }
+  });
+  return { success: true, folders: list };
+});
+
+ipcMain.handle('recent-folders-clear', async () => {
+  saveRecentFolders([]);
   return { success: true };
 });
 

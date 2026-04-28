@@ -690,7 +690,7 @@ const SLOW_SCROLL_FRAME_COUNT = 10; // Number of slow frames before warning
 const elements = {
   logo: document.getElementById('logo') as HTMLImageElement,
   btnOpenFile: document.getElementById('btn-open-file') as HTMLButtonElement,
-  btnRecentFiles: document.getElementById('btn-recent-files') as HTMLSpanElement,
+  btnRecentFiles: document.getElementById('btn-recent-files') as HTMLButtonElement,
   recentFilesPopup: document.getElementById('recent-files-popup') as HTMLDivElement,
   btnOpenWelcome: document.getElementById('btn-open-welcome') as HTMLButtonElement,
   btnSearch: document.getElementById('btn-search') as HTMLButtonElement,
@@ -725,6 +725,8 @@ const elements = {
   markdownPreview: document.getElementById('markdown-preview') as HTMLDivElement,
   foldersList: document.getElementById('folders-list') as HTMLDivElement,
   btnAddFolder: document.getElementById('btn-add-folder') as HTMLButtonElement,
+  btnRecentFolders: document.getElementById('btn-recent-folders') as HTMLButtonElement,
+  recentFoldersPopup: document.getElementById('recent-folders-popup') as HTMLDivElement,
   btnRefreshFolders: document.getElementById('btn-refresh-folders') as HTMLButtonElement, // May be null — per-folder refresh buttons used instead
   folderSearchInput: document.getElementById('folder-search-input') as HTMLInputElement,
   btnFolderSearch: document.getElementById('btn-folder-search') as HTMLButtonElement,
@@ -4235,6 +4237,74 @@ async function openFile(): Promise<void> {
   if (!filePath) return;
 
   await loadFile(filePath);
+}
+
+async function toggleRecentFoldersPopup(): Promise<void> {
+  const popup = elements.recentFoldersPopup;
+  if (!popup.classList.contains('hidden')) {
+    popup.classList.add('hidden');
+    return;
+  }
+
+  const result = await window.api.listRecentFolders();
+  const folders = result.folders || [];
+
+  let html = `<div class="recent-files-header">Recent Folders</div>`;
+  if (folders.length === 0) {
+    html += `<div class="recent-files-empty">No recent folders</div>`;
+  } else {
+    html += `<div class="recent-files-list">`;
+    for (const f of folders) {
+      const parts = f.path.replace(/\\/g, '/').split('/');
+      const name = parts.pop() || f.path;
+      const parent = parts.join('/') || '/';
+      const ageMs = Date.now() - f.lastOpened;
+      let ageText: string;
+      if (ageMs < 60000) ageText = 'just now';
+      else if (ageMs < 3600000) ageText = `${Math.floor(ageMs / 60000)}m ago`;
+      else if (ageMs < 86400000) ageText = `${Math.floor(ageMs / 3600000)}h ago`;
+      else ageText = `${Math.floor(ageMs / 86400000)}d ago`;
+      html += `
+        <div class="recent-file-item" data-path="${escapeHtml(f.path)}" title="${escapeHtml(f.path)}">
+          <span class="recent-file-name">${escapeHtml(name)}</span>
+          <span class="recent-file-meta">${escapeHtml(parent)} · ${ageText}</span>
+        </div>`;
+    }
+    html += `</div>`;
+    html += `<div class="recent-files-footer"><button class="recent-files-clear-btn">Clear history</button></div>`;
+  }
+
+  popup.innerHTML = html;
+
+  const btnRect = elements.btnRecentFolders.getBoundingClientRect();
+  popup.style.top = `${btnRect.bottom + 4}px`;
+  popup.style.left = `${btnRect.left}px`;
+  popup.classList.remove('hidden');
+
+  popup.querySelectorAll('.recent-file-item').forEach(item => {
+    item.addEventListener('click', async () => {
+      const folderPath = (item as HTMLElement).dataset.path;
+      if (!folderPath) return;
+      popup.classList.add('hidden');
+      if (state.folders.some(f => f.path === folderPath)) return;
+      const res = await window.api.readFolder(folderPath);
+      if (res.success && res.files) {
+        const folderName = folderPath.replace(/\\/g, '/').split('/').pop() || folderPath;
+        state.folders.push({
+          path: folderPath,
+          name: folderName,
+          files: mapFolderEntries(res.files),
+          collapsed: false,
+        });
+        renderFolderTree();
+        updateFolderSearchState();
+      }
+    });
+  });
+  popup.querySelector('.recent-files-clear-btn')?.addEventListener('click', async () => {
+    await window.api.clearRecentFolders();
+    popup.classList.add('hidden');
+  });
 }
 
 // === Folder Operations ===
@@ -13437,18 +13507,13 @@ function init(): void {
   elements.logo.style.cursor = 'pointer';
 
   // File operations
-  elements.btnOpenFile.addEventListener('click', (e) => {
-    // Don't open file dialog if the recent files chevron was clicked
-    if ((e.target as HTMLElement).id === 'btn-recent-files') return;
-    openFile();
-  });
-  elements.btnRecentFiles.addEventListener('click', (e) => {
-    e.stopPropagation();
+  elements.btnOpenFile.addEventListener('click', openFile);
+  elements.btnOpenFile.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     toggleRecentFilesPopup();
   });
-  elements.btnOpenFile.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
+  elements.btnRecentFiles.addEventListener('click', (e) => {
+    e.stopPropagation();
     toggleRecentFilesPopup();
   });
   document.addEventListener('click', (e) => {
@@ -13457,11 +13522,20 @@ function init(): void {
         !elements.btnRecentFiles.contains(e.target as Node)) {
       elements.recentFilesPopup.classList.add('hidden');
     }
+    if (!elements.recentFoldersPopup.classList.contains('hidden') &&
+        !elements.recentFoldersPopup.contains(e.target as Node) &&
+        !elements.btnRecentFolders.contains(e.target as Node)) {
+      elements.recentFoldersPopup.classList.add('hidden');
+    }
   });
   elements.btnOpenWelcome.addEventListener('click', openFile);
 
   // Folder operations
   elements.btnAddFolder.addEventListener('click', openFolder);
+  elements.btnRecentFolders.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleRecentFoldersPopup();
+  });
   elements.btnRefreshFolders?.addEventListener('click', refreshFolders);
 
   // Folder search

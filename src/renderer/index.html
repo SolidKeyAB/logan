@@ -29,9 +29,11 @@
     <div id="tab-bar" class="tab-bar">
       <div class="tab-bar-left">
         <div class="open-file-wrapper">
-          <button id="btn-open-file" class="tab-bar-btn" title="Open file (Ctrl+O) | Recent (right-click)">
+          <button id="btn-open-file" class="tab-bar-btn" title="Open file (Ctrl+O)">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-            <span id="btn-recent-files" class="open-file-chevron" title="Recent files">&#9662;</span>
+          </button>
+          <button id="btn-recent-files" class="tab-bar-btn recent-btn" title="Recent files">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           </button>
           <div id="recent-files-popup" class="recent-files-popup hidden"></div>
         </div>
@@ -125,9 +127,15 @@
           <!-- Folders Panel -->
           <div class="panel-view" id="panel-folders" data-panel="folders">
             <div class="section-header-inline">
-              <button id="btn-add-folder" class="section-btn" title="Open local folder">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
-              </button>
+              <div class="open-folder-wrapper">
+                <button id="btn-add-folder" class="section-btn" title="Open local folder">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+                </button>
+                <button id="btn-recent-folders" class="section-btn recent-btn" title="Recent folders">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                </button>
+                <div id="recent-folders-popup" class="recent-files-popup hidden"></div>
+              </div>
               <button id="btn-open-ssh-folder" class="section-btn" title="Browse SSH remote files (requires active SSH connection in Live panel)">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2"/><path d="M7 8l4 4-4 4"/><line x1="13" y1="16" x2="17" y2="16"/></svg>
               </button>

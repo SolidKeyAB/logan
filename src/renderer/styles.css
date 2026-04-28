@@ -285,15 +285,16 @@ body.platform-darwin .titlebar {
   position: relative;
 }
 
-/* Recent Files dropdown */
-.open-file-wrapper { position: relative; display: inline-flex; align-items: center; }
-.open-file-chevron {
-  margin-left: 4px;
-  font-size: 10px;
-  opacity: 0.6;
-  cursor: pointer;
+/* Recent Files / Folders dropdowns */
+.open-file-wrapper,
+.open-folder-wrapper { position: relative; display: inline-flex; align-items: center; }
+
+/* Clock icon button that opens recent list */
+.recent-btn {
+  opacity: 0.5;
+  padding: 0 4px !important;
 }
-.open-file-chevron:hover { opacity: 1; }
+.recent-btn:hover { opacity: 1 !important; }
 
 .recent-files-popup {
   position: fixed;
