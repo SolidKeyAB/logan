@@ -203,6 +203,7 @@ export interface SshProfile {
   port: number;         // default 22
   username: string;
   identityFile?: string; // path to key (from SSH config)
+  password?: string;    // password auth (stored plaintext — local app only)
   createdAt: number;
 }
 

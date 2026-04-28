@@ -1758,6 +1758,15 @@ ipcMain.handle(IPC.SSH_DELETE_PROFILE, async (_, id: string) => {
   }
 });
 
+ipcMain.handle('ssh-test-connection', async (_, config: { host: string; port: number; username: string; identityFile?: string; password?: string }) => {
+  try {
+    if (!sshUtilHandler) return { success: false, error: 'SSH not available' };
+    return await sshUtilHandler.testConnection(config);
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
 // === Saved Connections ===
 
 const getConnectionsPath = () => path.join(getConfigDir(), 'connections.json');

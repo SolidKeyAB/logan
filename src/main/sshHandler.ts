@@ -91,6 +91,7 @@ export class SshHandler extends EventEmitter {
     port: number;
     username: string;
     identityFile?: string;
+    password?: string;
     remotePath?: string;
     passphrase?: string;
   }): Promise<string> {
@@ -126,35 +127,39 @@ export class SshHandler extends EventEmitter {
       readyTimeout: 10000,
     };
 
-    // Try agent first if available
-    if (process.env.SSH_AUTH_SOCK) {
-      connectConfig.agent = process.env.SSH_AUTH_SOCK;
-    }
-
-    // Try identity file
-    const keyPaths: string[] = [];
-    if (config.identityFile && fs.existsSync(config.identityFile)) {
-      keyPaths.push(config.identityFile);
-    }
-    // Default key locations
-    const defaultKeys = [
-      path.join(os.homedir(), '.ssh', 'id_ed25519'),
-      path.join(os.homedir(), '.ssh', 'id_rsa'),
-    ];
-    for (const k of defaultKeys) {
-      if (fs.existsSync(k) && !keyPaths.includes(k)) {
-        keyPaths.push(k);
+    if (config.password) {
+      // Password auth — skip key/agent entirely
+      connectConfig.password = config.password;
+    } else {
+      // Try agent first if available
+      if (process.env.SSH_AUTH_SOCK) {
+        connectConfig.agent = process.env.SSH_AUTH_SOCK;
       }
-    }
 
-    if (keyPaths.length > 0) {
-      try {
-        connectConfig.privateKey = fs.readFileSync(keyPaths[0]);
-        if (config.passphrase) {
-          connectConfig.passphrase = config.passphrase;
+      // Try identity file then defaults
+      const keyPaths: string[] = [];
+      if (config.identityFile && fs.existsSync(config.identityFile)) {
+        keyPaths.push(config.identityFile);
+      }
+      const defaultKeys = [
+        path.join(os.homedir(), '.ssh', 'id_ed25519'),
+        path.join(os.homedir(), '.ssh', 'id_rsa'),
+      ];
+      for (const k of defaultKeys) {
+        if (fs.existsSync(k) && !keyPaths.includes(k)) {
+          keyPaths.push(k);
         }
-      } catch {
-        // If reading key fails, we'll still try agent auth
+      }
+
+      if (keyPaths.length > 0) {
+        try {
+          connectConfig.privateKey = fs.readFileSync(keyPaths[0]);
+          if (config.passphrase) {
+            connectConfig.passphrase = config.passphrase;
+          }
+        } catch {
+          // Key read failed — agent auth may still work
+        }
       }
     }
 
@@ -242,6 +247,54 @@ export class SshHandler extends EventEmitter {
         }
       });
 
+      client.connect(connectConfig);
+    });
+  }
+
+  async testConnection(config: {
+    host: string;
+    port: number;
+    username: string;
+    identityFile?: string;
+    password?: string;
+  }): Promise<{ success: boolean; error?: string }> {
+    return new Promise((resolve) => {
+      const client = new Client();
+      const connectConfig: any = {
+        host: config.host,
+        port: config.port,
+        username: config.username,
+        readyTimeout: 10000,
+      };
+
+      if (config.password) {
+        connectConfig.password = config.password;
+      } else {
+        if (process.env.SSH_AUTH_SOCK) {
+          connectConfig.agent = process.env.SSH_AUTH_SOCK;
+        }
+        const keyPaths: string[] = [];
+        if (config.identityFile && fs.existsSync(config.identityFile)) {
+          keyPaths.push(config.identityFile);
+        }
+        for (const k of [path.join(os.homedir(), '.ssh', 'id_ed25519'), path.join(os.homedir(), '.ssh', 'id_rsa')]) {
+          if (fs.existsSync(k) && !keyPaths.includes(k)) keyPaths.push(k);
+        }
+        if (keyPaths.length > 0) {
+          try { connectConfig.privateKey = fs.readFileSync(keyPaths[0]); } catch { /* agent fallback */ }
+        }
+      }
+
+      client.on('ready', () => {
+        client.sftp((err) => {
+          client.end();
+          if (err) resolve({ success: false, error: err.message });
+          else resolve({ success: true });
+        });
+      });
+      client.on('error', (err) => {
+        resolve({ success: false, error: err.message });
+      });
       client.connect(connectConfig);
     });
   }

@@ -538,30 +538,40 @@ body.platform-darwin .titlebar {
 }
 
 /* SSH Connect Modal */
+/* SSH Connect Modal */
+.ssh-modal-content { width: 500px; max-height: 90vh; display: flex; flex-direction: column; }
+.ssh-modal-content .modal-body { overflow-y: auto; flex: 1; }
+
+.ssh-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+.ssh-section-hint, .ssh-label-hint { font-weight: 400; text-transform: none; color: var(--text-muted); letter-spacing: 0; }
+
 .ssh-connect-hosts {
-  max-height: 200px;
+  max-height: 180px;
   overflow-y: auto;
   margin-bottom: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
 }
 .ssh-connect-host-item {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 7px 10px;
   cursor: pointer;
-  border-radius: 4px;
-  border: 1px solid transparent;
-  transition: all 0.1s;
+  border-bottom: 1px solid var(--border-color);
+  transition: background 0.1s;
 }
-.ssh-connect-host-item:hover {
-  background: var(--bg-tertiary);
-  border-color: var(--border-color);
-}
-.ssh-connect-host-item.selected {
-  background: rgba(0,122,204,0.1);
-  border-color: var(--accent-color);
-}
-.ssh-host-icon { color: var(--text-muted); font-size: 14px; flex-shrink: 0; }
+.ssh-connect-host-item:last-child { border-bottom: none; }
+.ssh-connect-host-item:hover { background: var(--bg-tertiary); }
+.ssh-connect-host-item.selected { background: rgba(0,122,204,0.12); }
+.ssh-host-icon { color: var(--text-muted); font-size: 13px; flex-shrink: 0; }
 .ssh-host-name { font-size: 12px; font-weight: 600; color: var(--text-primary); }
 .ssh-host-detail { font-size: 11px; color: var(--text-muted); }
 .ssh-host-badge {
@@ -571,19 +581,32 @@ body.platform-darwin .titlebar {
   background: var(--bg-tertiary);
   color: var(--text-muted);
   margin-left: auto;
+  flex-shrink: 0;
 }
+.ssh-host-delete {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.ssh-connect-host-item:hover .ssh-host-delete { opacity: 1; }
+.ssh-host-delete:hover { color: var(--error-color, #e88080) !important; }
 
 .ssh-connect-divider {
   text-align: center;
-  margin: 12px 0;
+  margin: 10px 0;
   position: relative;
 }
 .ssh-connect-divider::before {
   content: '';
   position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
+  left: 0; right: 0; top: 50%;
   height: 1px;
   background: var(--border-color);
 }
@@ -594,6 +617,27 @@ body.platform-darwin .titlebar {
   font-size: 11px;
   color: var(--text-muted);
 }
+
+/* Auth type tabs */
+.ssh-auth-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+.ssh-auth-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 10px;
+  margin-bottom: -1px;
+}
+.ssh-auth-tab.active { color: var(--accent-color); border-bottom-color: var(--accent-color); }
+.ssh-auth-tab:hover:not(.active) { color: var(--text-secondary); }
+.ssh-auth-panel.hidden { display: none; }
 
 .ssh-connect-form .filter-group { margin-bottom: 8px; }
 .ssh-connect-form label { font-size: 11px; color: var(--text-secondary); margin-bottom: 3px; display: block; }
@@ -606,7 +650,7 @@ body.platform-darwin .titlebar {
 
 .ssh-connect-empty {
   text-align: center;
-  padding: 16px;
+  padding: 12px;
   color: var(--text-muted);
   font-size: 12px;
 }

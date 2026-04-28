@@ -556,6 +556,9 @@ const api = {
   sshDeleteProfile: (id: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.SSH_DELETE_PROFILE, id),
 
+  sshTestConnection: (config: { host: string; port: number; username: string; identityFile?: string; password?: string }): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('ssh-test-connection', config),
+
   sshListRemoteDir: (remotePath: string): Promise<{ success: boolean; files?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.SSH_LIST_REMOTE_DIR, remotePath),
 

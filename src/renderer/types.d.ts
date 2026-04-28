@@ -486,6 +486,7 @@ interface Api {
   sshListProfiles: () => Promise<{ success: boolean; profiles?: SshProfile[]; error?: string }>;
   sshSaveProfile: (profile: SshProfile) => Promise<{ success: boolean; error?: string }>;
   sshDeleteProfile: (id: string) => Promise<{ success: boolean; error?: string }>;
+  sshTestConnection: (config: { host: string; port: number; username: string; identityFile?: string; password?: string }) => Promise<{ success: boolean; error?: string }>;
   sshListRemoteDir: (remotePath: string) => Promise<{ success: boolean; files?: FolderFile[]; error?: string }>;
   sshDownloadFile: (remotePath: string) => Promise<{ success: boolean; localPath?: string; error?: string }>;
 

@@ -1251,17 +1251,26 @@
 
     <!-- SSH Connect & Browse Modal -->
     <div id="ssh-connect-modal" class="modal hidden">
-      <div class="modal-content" style="width: 480px;">
+      <div class="modal-content ssh-modal-content">
         <div class="modal-header">
-          <h3>SSH Remote Browse</h3>
+          <h3>SSH Remote Browser</h3>
           <button class="modal-close" data-modal="ssh-connect-modal">&times;</button>
         </div>
         <div class="modal-body">
-          <div id="ssh-connect-hosts" class="ssh-connect-hosts">
-            <!-- Populated dynamically: saved profiles + SSH config hosts -->
+          <!-- Saved profiles -->
+          <div class="ssh-section-label">Saved Connections
+            <span class="ssh-section-hint">(click to load)</span>
           </div>
-          <div class="ssh-connect-divider"><span>or enter manually</span></div>
+          <div id="ssh-connect-hosts" class="ssh-connect-hosts">
+            <!-- Populated dynamically -->
+          </div>
+          <div class="ssh-connect-divider"><span>Connection Details</span></div>
+          <!-- Form -->
           <div class="ssh-connect-form">
+            <div class="filter-group">
+              <label>Name <span class="ssh-label-hint">(saved label)</span></label>
+              <input type="text" id="ssh-connect-name" class="modal-input" placeholder="e.g. Production Server">
+            </div>
             <div style="display:flex;gap:8px;">
               <div class="filter-group" style="flex:3;">
                 <label>Host</label>
@@ -1272,14 +1281,25 @@
                 <input type="number" id="ssh-connect-port" class="modal-input" value="22" min="1" max="65535">
               </div>
             </div>
-            <div style="display:flex;gap:8px;">
-              <div class="filter-group" style="flex:1;">
-                <label>Username</label>
-                <input type="text" id="ssh-connect-username" class="modal-input" placeholder="root">
-              </div>
-              <div class="filter-group" style="flex:1;">
-                <label>Identity File</label>
+            <div class="filter-group">
+              <label>Username</label>
+              <input type="text" id="ssh-connect-username" class="modal-input" placeholder="user">
+            </div>
+            <!-- Auth type tabs -->
+            <div class="ssh-auth-tabs">
+              <button class="ssh-auth-tab active" data-auth="key">SSH Key</button>
+              <button class="ssh-auth-tab" data-auth="password">Password</button>
+            </div>
+            <div id="ssh-auth-key" class="ssh-auth-panel">
+              <div class="filter-group">
+                <label>Identity File <span class="ssh-label-hint">(blank = use ~/.ssh/id_ed25519 or id_rsa)</span></label>
                 <input type="text" id="ssh-connect-identity" class="modal-input" placeholder="~/.ssh/id_ed25519">
+              </div>
+            </div>
+            <div id="ssh-auth-password" class="ssh-auth-panel hidden">
+              <div class="filter-group">
+                <label>Password</label>
+                <input type="password" id="ssh-connect-password" class="modal-input" placeholder="SSH password">
               </div>
             </div>
             <div class="filter-group">
@@ -1290,8 +1310,10 @@
           <div id="ssh-connect-status" class="ssh-connect-status"></div>
         </div>
         <div class="modal-footer">
+          <button id="btn-ssh-test" class="secondary-btn">Test Connection</button>
+          <div style="flex:1;"></div>
           <button id="btn-ssh-connect-cancel" class="secondary-btn">Cancel</button>
-          <button id="btn-ssh-connect-go" class="primary-btn">Connect & Browse</button>
+          <button id="btn-ssh-connect-go" class="primary-btn">Connect &amp; Browse</button>
         </div>
       </div>
     </div>

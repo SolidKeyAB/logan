@@ -7230,170 +7230,262 @@ async function showSshConnectModal(): Promise<void> {
   const statusEl = document.getElementById('ssh-connect-status')!;
   const btnGo = document.getElementById('btn-ssh-connect-go') as HTMLButtonElement;
   const btnCancel = document.getElementById('btn-ssh-connect-cancel') as HTMLButtonElement;
+  const btnTest = document.getElementById('btn-ssh-test') as HTMLButtonElement;
+  const nameInput = document.getElementById('ssh-connect-name') as HTMLInputElement;
   const hostInput = document.getElementById('ssh-connect-host') as HTMLInputElement;
   const portInput = document.getElementById('ssh-connect-port') as HTMLInputElement;
   const userInput = document.getElementById('ssh-connect-username') as HTMLInputElement;
   const identInput = document.getElementById('ssh-connect-identity') as HTMLInputElement;
+  const passInput = document.getElementById('ssh-connect-password') as HTMLInputElement;
   const pathInput = document.getElementById('ssh-connect-path') as HTMLInputElement;
+  const authKeyPanel = document.getElementById('ssh-auth-key')!;
+  const authPassPanel = document.getElementById('ssh-auth-password')!;
 
+  // Auth type tabs
+  let authMode: 'key' | 'password' = 'key';
+  modal.querySelectorAll('.ssh-auth-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      modal.querySelectorAll('.ssh-auth-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      authMode = (tab as HTMLElement).dataset.auth as 'key' | 'password';
+      authKeyPanel.classList.toggle('hidden', authMode !== 'key');
+      authPassPanel.classList.toggle('hidden', authMode !== 'password');
+    });
+  });
+
+  // Reset form & status
   statusEl.textContent = '';
   statusEl.style.color = '';
+  passInput.value = '';
 
-  // Load available hosts
+  const getFormConfig = () => ({
+    host: hostInput.value.trim(),
+    port: parseInt(portInput.value) || 22,
+    username: userInput.value.trim(),
+    identityFile: authMode === 'key' ? (identInput.value.trim() || undefined) : undefined,
+    password: authMode === 'password' ? (passInput.value || undefined) : undefined,
+  });
+
+  const setStatus = (msg: string, color: string) => {
+    statusEl.textContent = msg;
+    statusEl.style.color = color;
+  };
+
+  // Load saved profiles + SSH config hosts
   const [configResult, profilesResult] = await Promise.all([
     window.api.sshParseConfig(),
     window.api.sshListProfiles(),
   ]);
 
-  const hosts: Array<{ name: string; host: string; port: number; username: string; identityFile?: string; source: string }> = [];
+  const savedProfiles: any[] = profilesResult.success ? (profilesResult.profiles || []) : [];
 
-  // Add saved profiles
-  if (profilesResult.success && profilesResult.profiles) {
-    for (const p of profilesResult.profiles) {
-      hosts.push({ name: p.name, host: p.host, port: p.port || 22, username: p.username || '', identityFile: p.identityFile, source: 'profile' });
+  const renderHostsList = () => {
+    // Active live SSH connection
+    let activeConn: LiveConnectionState | undefined;
+    for (const conn of state.liveConnections.values()) {
+      if (conn.source === 'ssh' && conn.connected) { activeConn = conn; break; }
     }
-  }
-  // Add SSH config hosts (avoid duplicates)
-  if (configResult.success && configResult.hosts) {
-    for (const h of configResult.hosts) {
-      if (!hosts.some(e => e.host === (h.hostName || h.host))) {
-        hosts.push({ name: h.host, host: h.hostName || h.host, port: h.port || 22, username: h.user || '', identityFile: h.identityFile, source: 'config' });
+
+    // SSH config hosts not already in saved profiles
+    const configHosts: Array<{ name: string; host: string; port: number; username: string; identityFile?: string }> = [];
+    if (configResult.success && configResult.hosts) {
+      for (const h of configResult.hosts) {
+        const resolvedHost = h.hostName || h.host;
+        if (!savedProfiles.some(p => p.host === resolvedHost)) {
+          configHosts.push({ name: h.host, host: resolvedHost, port: h.port || 22, username: h.user || '', identityFile: h.identityFile });
+        }
       }
     }
-  }
 
-  // Also check for active SSH connections
-  let activeConn: LiveConnectionState | undefined;
-  for (const conn of state.liveConnections.values()) {
-    if (conn.source === 'ssh' && conn.connected) { activeConn = conn; break; }
-  }
+    if (!activeConn && savedProfiles.length === 0 && configHosts.length === 0) {
+      hostsList.innerHTML = '<div class="ssh-connect-empty">No saved connections yet — fill in the form below.</div>';
+      return;
+    }
 
-  // Render hosts list
-  if (hosts.length === 0 && !activeConn) {
-    hostsList.innerHTML = '<div class="ssh-connect-empty">No saved SSH profiles or config hosts found.<br>Enter connection details below.</div>';
-  } else {
     let html = '';
     if (activeConn) {
       html += `<div class="ssh-connect-host-item active-conn" data-active="true">
-        <span class="ssh-host-icon">&#9889;</span>
-        <div><div class="ssh-host-name">${escapeHtml(activeConn.displayName)}</div><div class="ssh-host-detail">Active connection</div></div>
-        <span class="ssh-host-badge" style="background:#4caf50;color:#fff;">Connected</span>
+        <span class="ssh-host-icon">⚡</span>
+        <div style="flex:1;min-width:0;">
+          <div class="ssh-host-name">${escapeHtml(activeConn.displayName)}</div>
+          <div class="ssh-host-detail">Active live connection</div>
+        </div>
+        <span class="ssh-host-badge" style="background:#4caf50;color:#fff;">live</span>
       </div>`;
     }
-    for (const h of hosts) {
+    for (const p of savedProfiles) {
+      html += `<div class="ssh-connect-host-item" data-profile-id="${escapeHtml(p.id)}" data-host="${escapeHtml(p.host)}" data-port="${p.port}" data-user="${escapeHtml(p.username)}" data-identity="${escapeHtml(p.identityFile || '')}" data-has-password="${p.password ? '1' : '0'}">
+        <span class="ssh-host-icon">🖥</span>
+        <div style="flex:1;min-width:0;">
+          <div class="ssh-host-name">${escapeHtml(p.name || p.host)}</div>
+          <div class="ssh-host-detail">${escapeHtml(p.username || 'user')}@${escapeHtml(p.host)}:${p.port}${p.password ? ' · password auth' : ' · key auth'}</div>
+        </div>
+        <span class="ssh-host-badge">saved</span>
+        <button class="ssh-host-delete" title="Remove this connection" data-id="${escapeHtml(p.id)}">×</button>
+      </div>`;
+    }
+    for (const h of configHosts) {
       html += `<div class="ssh-connect-host-item" data-host="${escapeHtml(h.host)}" data-port="${h.port}" data-user="${escapeHtml(h.username)}" data-identity="${escapeHtml(h.identityFile || '')}">
-        <span class="ssh-host-icon">&#128421;</span>
-        <div><div class="ssh-host-name">${escapeHtml(h.name)}</div><div class="ssh-host-detail">${escapeHtml(h.username || 'user')}@${escapeHtml(h.host)}:${h.port}</div></div>
-        <span class="ssh-host-badge">${h.source}</span>
+        <span class="ssh-host-icon">🖥</span>
+        <div style="flex:1;min-width:0;">
+          <div class="ssh-host-name">${escapeHtml(h.name)}</div>
+          <div class="ssh-host-detail">${escapeHtml(h.username || 'user')}@${escapeHtml(h.host)}:${h.port}</div>
+        </div>
+        <span class="ssh-host-badge">~/.ssh/config</span>
       </div>`;
     }
     hostsList.innerHTML = html;
 
-    // Click to select and fill form
+    // Click item → fill form
     hostsList.querySelectorAll('.ssh-connect-host-item').forEach(item => {
-      item.addEventListener('click', () => {
+      item.addEventListener('click', (e) => {
+        if ((e.target as HTMLElement).classList.contains('ssh-host-delete')) return;
         hostsList.querySelectorAll('.ssh-connect-host-item').forEach(i => i.classList.remove('selected'));
         item.classList.add('selected');
         const el = item as HTMLElement;
         if (el.dataset.active) {
-          // Active connection — just set path
-          hostInput.value = '';
-          userInput.value = '';
-          statusEl.textContent = 'Will use active SSH connection';
-          statusEl.style.color = '#4caf50';
+          setStatus('Will use active live SSH connection', '#4caf50');
+          return;
+        }
+        nameInput.value = el.querySelector('.ssh-host-name')?.textContent || '';
+        hostInput.value = el.dataset.host || '';
+        portInput.value = el.dataset.port || '22';
+        userInput.value = el.dataset.user || '';
+        if (el.dataset.hasPassword === '1') {
+          // Saved with password auth — switch to password tab (password not pre-filled for security)
+          modal.querySelectorAll('.ssh-auth-tab').forEach(t => {
+            t.classList.toggle('active', (t as HTMLElement).dataset.auth === 'password');
+          });
+          authMode = 'password';
+          authKeyPanel.classList.add('hidden');
+          authPassPanel.classList.remove('hidden');
+          setStatus('Password not pre-filled — re-enter to connect', '#ffb840');
         } else {
-          hostInput.value = el.dataset.host || '';
-          portInput.value = el.dataset.port || '22';
-          userInput.value = el.dataset.user || '';
+          modal.querySelectorAll('.ssh-auth-tab').forEach(t => {
+            t.classList.toggle('active', (t as HTMLElement).dataset.auth === 'key');
+          });
+          authMode = 'key';
+          authKeyPanel.classList.remove('hidden');
+          authPassPanel.classList.add('hidden');
           identInput.value = el.dataset.identity || '';
+          setStatus('', '');
         }
       });
     });
-  }
 
+    // Delete buttons
+    hostsList.querySelectorAll('.ssh-host-delete').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = (btn as HTMLElement).dataset.id!;
+        await window.api.sshDeleteProfile(id);
+        const idx = savedProfiles.findIndex(p => p.id === id);
+        if (idx >= 0) savedProfiles.splice(idx, 1);
+        renderHostsList();
+      });
+    });
+  };
+
+  renderHostsList();
   modal.classList.remove('hidden');
-  pathInput.focus();
+  hostInput.focus();
 
-  // Handle Connect & Browse
   return new Promise<void>((resolve) => {
     const cleanup = () => {
       modal.classList.add('hidden');
       btnGo.removeEventListener('click', onConnect);
       btnCancel.removeEventListener('click', onCancel);
+      btnTest.removeEventListener('click', onTest);
       resolve();
     };
 
     const onCancel = () => cleanup();
 
+    const onTest = async () => {
+      const host = hostInput.value.trim();
+      if (!host) { setStatus('Host is required', '#ff5050'); return; }
+      const cfg = getFormConfig();
+      btnTest.disabled = true;
+      setStatus('Testing connection…', '#ffb840');
+      const result = await window.api.sshTestConnection(cfg);
+      btnTest.disabled = false;
+      if (result.success) {
+        setStatus('✓ Connection successful', '#4caf50');
+      } else {
+        setStatus(`✗ ${result.error || 'Connection failed'}`, '#ff5050');
+      }
+    };
+
     const onConnect = async () => {
+      const host = hostInput.value.trim();
+      if (!host) { setStatus('Host is required', '#ff5050'); return; }
+
+      // Check if active live conn is selected
       const selectedActive = hostsList.querySelector('.ssh-connect-host-item.selected.active-conn');
       const remotePath = pathInput.value.trim() || '/var/log';
 
       btnGo.disabled = true;
-      statusEl.textContent = 'Connecting...';
-      statusEl.style.color = '#ffb840';
+      setStatus('Connecting…', '#ffb840');
 
       try {
-        if (selectedActive || activeConn) {
-          // Use existing connection
-          const result = await window.api.sshListRemoteDir(remotePath);
-          if (!result.success) {
-            statusEl.textContent = `Failed: ${result.error}`;
-            statusEl.style.color = '#ff5050';
-            btnGo.disabled = false;
-            return;
-          }
-          const files = result.files || [];
-          const connLabel = activeConn?.displayName || 'SSH';
-          addSshFolderToPanel(connLabel, remotePath, files);
-          cleanup();
+        let connLabel: string;
+        let connectionId: string | undefined;
+
+        if (selectedActive) {
+          // Reuse active live connection
+          const activeConn = [...state.liveConnections.values()].find(c => c.source === 'ssh' && c.connected);
+          connLabel = activeConn?.displayName || 'SSH';
         } else {
-          // Need to create a new SSH connection via Live panel
-          const host = hostInput.value.trim();
-          const port = parseInt(portInput.value) || 22;
-          const username = userInput.value.trim();
-          const identityFile = identInput.value.trim();
-
-          if (!host) { statusEl.textContent = 'Host is required'; statusEl.style.color = '#ff5050'; btnGo.disabled = false; return; }
-
-          // Connect via the live SSH mechanism
-          const displayName = `${username || 'user'}@${host}`;
-          const connResult = await window.api.liveConnect('ssh', {
-            host, port, username: username || undefined,
-            identityFile: identityFile || undefined,
-          }, displayName, `SFTP browse ${host}`);
-
+          const cfg = getFormConfig();
+          const displayName = `${cfg.username || 'user'}@${cfg.host}`;
+          const connResult = await window.api.liveConnect('ssh', cfg, displayName, `SFTP browse ${cfg.host}`);
           if (!connResult.success) {
-            statusEl.textContent = `Connection failed: ${connResult.error}`;
-            statusEl.style.color = '#ff5050';
+            setStatus(`Connection failed: ${connResult.error}`, '#ff5050');
             btnGo.disabled = false;
             return;
           }
+          connectionId = connResult.connectionId;
+          connLabel = displayName;
 
-          statusEl.textContent = 'Connected! Browsing...';
-          // Small delay for connection to establish
-          await new Promise(r => setTimeout(r, 500));
-
-          const result = await window.api.sshListRemoteDir(remotePath);
-          if (!result.success) {
-            statusEl.textContent = `Browse failed: ${result.error}`;
-            statusEl.style.color = '#ff5050';
-            btnGo.disabled = false;
-            return;
+          // Auto-save profile (only if not already saved for this host+user)
+          const alreadySaved = savedProfiles.some(p => p.host === cfg.host && p.username === cfg.username);
+          if (!alreadySaved) {
+            const profileName = nameInput.value.trim() || `${cfg.username || 'user'}@${cfg.host}`;
+            const newProfile = {
+              id: `ssh-${Date.now()}`,
+              name: profileName,
+              host: cfg.host,
+              port: cfg.port,
+              username: cfg.username,
+              identityFile: cfg.identityFile,
+              password: cfg.password, // stored locally, never sent over network
+              createdAt: Date.now(),
+            };
+            await window.api.sshSaveProfile(newProfile);
           }
-          const files = result.files || [];
-          addSshFolderToPanel(`${username || 'user'}@${host}`, remotePath, files, connResult.connectionId);
-          cleanup();
         }
+
+        setStatus('Connected! Loading directory…', '#4caf50');
+        // Small delay for SFTP to be ready
+        await new Promise(r => setTimeout(r, 300));
+
+        const result = await window.api.sshListRemoteDir(remotePath);
+        if (!result.success) {
+          setStatus(`Browse failed: ${result.error}`, '#ff5050');
+          btnGo.disabled = false;
+          return;
+        }
+        addSshFolderToPanel(connLabel, remotePath, result.files || [], connectionId);
+        cleanup();
       } catch (err) {
-        statusEl.textContent = `Error: ${err}`;
-        statusEl.style.color = '#ff5050';
+        setStatus(`Error: ${err}`, '#ff5050');
         btnGo.disabled = false;
       }
     };
 
     btnGo.addEventListener('click', onConnect);
     btnCancel.addEventListener('click', onCancel);
+    btnTest.addEventListener('click', onTest);
     modal.querySelector('.modal-close')?.addEventListener('click', onCancel);
   });
 }
