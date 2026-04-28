@@ -383,13 +383,6 @@
         </button>
         <button id="btn-bottom-panel-close" class="bottom-panel-close-btn" title="Close panel">&times;</button>
       </div>
-      <!-- Color picker popover -->
-      <div id="panel-color-picker" class="panel-color-picker hidden">
-        <canvas id="panel-color-wheel" width="160" height="160"></canvas>
-        <div class="panel-color-actions">
-          <button id="btn-panel-color-reset" class="panel-color-reset-btn" title="Reset to default">Reset</button>
-        </div>
-      </div>
       <div class="bottom-panel-body">
         <!-- Analysis tab -->
         <div class="bottom-tab-view" data-bottom-tab="analysis">
@@ -1313,6 +1306,13 @@
       </div>
     </div>
 
+  <!-- Color picker popover — must be a direct body child to escape backdrop-filter stacking contexts -->
+  <div id="panel-color-picker" class="panel-color-picker hidden">
+    <canvas id="panel-color-wheel" width="160" height="160"></canvas>
+    <div class="panel-color-actions">
+      <button id="btn-panel-color-reset" class="panel-color-reset-btn" title="Reset to default">Reset</button>
+    </div>
+  </div>
   <script src="renderer.js"></script>
 </body>
 </html>
