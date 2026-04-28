@@ -487,7 +487,7 @@ interface Api {
   sshSaveProfile: (profile: SshProfile) => Promise<{ success: boolean; error?: string }>;
   sshDeleteProfile: (id: string) => Promise<{ success: boolean; error?: string }>;
   sshTestConnection: (config: { host: string; port: number; username: string; identityFile?: string; password?: string }) => Promise<{ success: boolean; error?: string }>;
-  sshListRemoteDir: (remotePath: string) => Promise<{ success: boolean; files?: FolderFile[]; error?: string }>;
+  sshListRemoteDir: (remotePath: string, connectionId?: string) => Promise<{ success: boolean; files?: FolderFile[]; error?: string }>;
   sshDownloadFile: (remotePath: string) => Promise<{ success: boolean; localPath?: string; error?: string }>;
 
   // Unified live connection management

@@ -4445,15 +4445,26 @@ function renderFolderEntries(entries: LocalFolderFile[], depth: number, isRemote
     if (entry.isDirectory) {
       const hasChildren = entry.children && entry.children.length > 0;
       const isLoading = (entry as any)._loading;
+      const loadError = (entry as any)._loadError as string | undefined;
+      let innerHtml = '';
+      if (hasChildren) {
+        innerHtml = renderFolderEntries(entry.children!, depth + 1, isRemote);
+      } else if (!entry.collapsed && isRemote) {
+        if (isLoading) {
+          innerHtml = `<div class="folder-loading" style="padding-left:${8 + (depth+1) * 14}px">Loading…</div>`;
+        } else if (loadError) {
+          innerHtml = `<div class="folder-loading" style="padding-left:${8 + (depth+1) * 14}px;color:var(--error-color,#e88080);" title="${escapeHtml(loadError)}">Failed to load</div>`;
+        } else if ((entry as any)._loaded) {
+          innerHtml = `<div class="folder-loading" style="padding-left:${8 + (depth+1) * 14}px">Empty</div>`;
+        }
+      }
       return `
         <div class="folder-subdir ${entry.collapsed ? 'collapsed' : ''}" data-subdir-path="${escapeHtml(entry.path)}" ${isRemote ? 'data-remote-dir="true"' : ''}>
           <div class="folder-subdir-header" style="padding-left: ${8 + depth * 14}px">
             <span class="folder-toggle">${isLoading ? '&#8987;' : '&#9660;'}</span>
             <span class="folder-subdir-name" title="${escapeHtml(entry.path)}">${escapeHtml(entry.name)}</span>
           </div>
-          <div class="folder-subdir-files">
-            ${hasChildren ? renderFolderEntries(entry.children!, depth + 1, isRemote) : (!entry.collapsed && isRemote && !isLoading ? '<div class="folder-loading" style="padding-left:' + (8 + (depth+1) * 14) + 'px;font-size:11px;color:var(--text-muted);">Loading...</div>' : '')}
-          </div>
+          <div class="folder-subdir-files">${innerHtml}</div>
         </div>`;
     }
     const icon = entry.fileType === 'image' ? '\uD83D\uDDBC' : entry.fileType === 'video' ? '\u25B6' : '';
@@ -4491,7 +4502,7 @@ function renderFolderTree(): void {
   elements.foldersList.innerHTML = state.folders
     .map(
       (folder) => `
-      <div class="folder-group ${folder.collapsed ? 'collapsed' : ''}${folder.isRemote ? ' remote' : ''}" data-path="${escapeHtml(folder.path)}" ${folder.isRemote ? 'data-remote="true"' : ''}>
+      <div class="folder-group ${folder.collapsed ? 'collapsed' : ''}${folder.isRemote ? ' remote' : ''}" data-path="${escapeHtml(folder.path)}" ${folder.isRemote ? 'data-remote="true"' : ''} ${folder.connectionId ? `data-connection-id="${escapeHtml(folder.connectionId)}"` : ''}>
         <div class="folder-header">
           <span class="folder-toggle">&#9660;</span>
           <span class="folder-name" title="${escapeHtml(folder.path)}">${folder.isRemote ? '<span class="ssh-badge">SSH</span> ' : ''}${escapeHtml(folder.name)}</span>
@@ -4552,7 +4563,9 @@ function renderFolderTree(): void {
       const subdirEl = header.closest('.folder-subdir') as HTMLElement;
       const subdirPath = subdirEl?.dataset.subdirPath;
       const isRemoteDir = subdirEl?.dataset.remoteDir === 'true';
-      const folderGroupPath = (subdirEl?.closest('.folder-group') as HTMLElement)?.dataset.path;
+      const folderGroupEl = subdirEl?.closest('.folder-group') as HTMLElement;
+      const folderGroupPath = folderGroupEl?.dataset.path;
+      const connectionId = folderGroupEl?.dataset.connectionId;
       if (!subdirPath || !folderGroupPath) return;
       const folder = state.folders.find(f => f.path === folderGroupPath);
       if (!folder) return;
@@ -4562,16 +4575,24 @@ function renderFolderTree(): void {
       // Toggle collapse
       node.collapsed = !node.collapsed;
 
-      // Lazy-load remote subdirectory contents if expanding and no children yet
-      if (!node.collapsed && isRemoteDir && (!node.children || node.children.length === 0)) {
+      // Lazy-load remote subdirectory contents if expanding and not yet loaded
+      if (!node.collapsed && isRemoteDir && !(node as any)._loaded && (!node.children || node.children.length === 0)) {
         (node as any)._loading = true;
+        (node as any)._loadError = undefined;
         renderFolderTree();
         try {
-          const result = await window.api.sshListRemoteDir(subdirPath);
-          if (result.success && result.files) {
-            node.children = mapFolderEntries(result.files);
+          const result = await window.api.sshListRemoteDir(subdirPath, connectionId);
+          if (result.success) {
+            node.children = mapFolderEntries(result.files || []);
+            (node as any)._loaded = true;
+          } else {
+            (node as any)._loadError = result.error || 'Failed to list directory';
+            console.error('sshListRemoteDir failed:', result.error);
           }
-        } catch { /* ignore */ }
+        } catch (err) {
+          (node as any)._loadError = String(err);
+          console.error('sshListRemoteDir error:', err);
+        }
         (node as any)._loading = false;
       }
 

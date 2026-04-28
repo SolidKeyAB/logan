@@ -559,8 +559,8 @@ const api = {
   sshTestConnection: (config: { host: string; port: number; username: string; identityFile?: string; password?: string }): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('ssh-test-connection', config),
 
-  sshListRemoteDir: (remotePath: string): Promise<{ success: boolean; files?: any[]; error?: string }> =>
-    ipcRenderer.invoke(IPC.SSH_LIST_REMOTE_DIR, remotePath),
+  sshListRemoteDir: (remotePath: string, connectionId?: string): Promise<{ success: boolean; files?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.SSH_LIST_REMOTE_DIR, remotePath, connectionId),
 
   sshDownloadFile: (remotePath: string): Promise<{ success: boolean; localPath?: string; error?: string }> =>
     ipcRenderer.invoke(IPC.SSH_DOWNLOAD_FILE, remotePath),

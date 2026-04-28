@@ -1837,18 +1837,22 @@ ipcMain.handle(IPC.CONNECTION_UPDATE, async (_, id: string, fields: Partial<Save
   }
 });
 
-ipcMain.handle(IPC.SSH_LIST_REMOTE_DIR, async (_, remotePath: string) => {
+ipcMain.handle(IPC.SSH_LIST_REMOTE_DIR, async (_, remotePath: string, connectionId?: string) => {
   try {
-    // Find an active SSH connection to use for SFTP
     let sshConn: LiveConnection | undefined;
-    for (const conn of liveConnections.values()) {
-      if (conn.source === 'ssh' && conn.connected) {
-        sshConn = conn;
-        break;
+    // Prefer the specific connection if given
+    if (connectionId) {
+      const c = liveConnections.get(connectionId);
+      if (c && c.connected) sshConn = c;
+    }
+    // Fall back to any active SSH connection
+    if (!sshConn) {
+      for (const conn of liveConnections.values()) {
+        if (conn.source === 'ssh' && conn.connected) { sshConn = conn; break; }
       }
     }
     if (!sshConn) {
-      return { success: false, error: 'No active SSH connection for SFTP' };
+      return { success: false, error: 'No active SSH connection. Reconnect via SSH Remote Browser.' };
     }
     const files = await (sshConn.handler as any).listRemoteDir(remotePath);
     return { success: true, files };
