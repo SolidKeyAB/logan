@@ -2,6 +2,28 @@
 
 A fast, AI-ready log file viewer built with Electron. Handles **14 million+ lines** with virtual scrolling, integrates with AI agents via MCP, connects to live serial/logcat/SSH streams, and provides deep analysis tools — all in one desktop app.
 
+## TL;DR
+
+**Download and run** — grab the latest build from [GitHub Releases](https://github.com/SolidKeyAB/logan/releases):
+
+| Platform | File |
+|----------|------|
+| Linux | `.AppImage` or `.deb` |
+| Windows | `LOGAN.Setup.x.x.x.exe` |
+
+**Build from source:**
+
+```bash
+git clone https://github.com/SolidKeyAB/logan.git
+cd logan
+npm install
+npm start
+```
+
+> Linux only: `sudo apt install -y build-essential cmake python3` before `npm install`.
+
+---
+
 ## Features
 
 ### Core Viewer
