@@ -4742,16 +4742,29 @@ function renderFolderSearchResults(pattern: string, cancelled?: boolean): void {
     item.addEventListener('click', async () => {
       const index = parseInt((item as HTMLElement).dataset.index || '0', 10);
       const match = state.folderSearchResults[index];
-      if (match) {
-        await loadFile(match.filePath);
-        // If a filter is active (restored from tab state), clear it so the
-        // absolute line number from ripgrep maps correctly to a display index.
-        if (state.isFiltered) {
-          await clearFilter();
-        }
-        goToLine(match.lineNumber - 1); // match.lineNumber is 1-based from ripgrep
-        renderVisibleLines();
+      if (!match) return;
+
+      const absLine = match.lineNumber - 1; // ripgrep is 1-based → 0-based
+
+      // Same file already open in current tab — just clear filter and navigate
+      if (match.filePath === state.filePath) {
+        if (state.isFiltered) await clearFilter();
+        await navigateTo(absLine);
+        return;
       }
+
+      // File open in another tab — switch to it, clear any restored filter, navigate
+      const existingTab = findTabByFilePath(match.filePath);
+      if (existingTab) {
+        await switchToTab(existingTab.id);
+        if (state.isFiltered) await clearFilter();
+        await navigateTo(absLine);
+        return;
+      }
+
+      // File not open — load fresh (loadFile clears filter + pre-warms cache)
+      await loadFile(match.filePath);
+      await navigateTo(absLine);
     });
   });
 }
@@ -14003,6 +14016,7 @@ function init(): void {
   elements.btnFilter.addEventListener('click', showFilterModal);
   elements.btnApplyFilter.addEventListener('click', () => applyFilter());
   elements.btnClearFilter.addEventListener('click', clearFilter);
+  document.getElementById('btn-status-clear-filter')?.addEventListener('click', clearFilter);
   elements.btnAddIncludePattern.addEventListener('click', () => addIncludePatternRow());
 
   // Advanced Filter

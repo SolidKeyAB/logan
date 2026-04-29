@@ -681,7 +681,13 @@
         <span id="status-file">No file</span>
         <span class="status-separator">|</span>
         <span id="status-lines">0 lines</span>
-        <span id="status-filtered" class="hidden">(<span id="filtered-count">0</span> filtered)</span>
+        <span id="status-filtered" class="status-filter-badge hidden" title="A filter is active — click to clear">
+          <span class="status-filter-icon">⊘</span>
+          <span>Filtered:</span>
+          <span id="filtered-count">0</span>
+          <span>lines</span>
+          <button id="btn-status-clear-filter" class="status-filter-clear" title="Clear filter">×</button>
+        </span>
       </div>
       <div class="status-center">
         <div id="progress-container" class="progress-container hidden">
