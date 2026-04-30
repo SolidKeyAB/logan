@@ -9648,7 +9648,10 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       } else {
         state.highlights = [];
       }
+      // Reset active highlight group — groups are per-session, not per-file
+      activeHighlightGroupId = null;
       updateHighlightsUI();
+      updateHighlightGroupsUI();
 
       // Handle split file detection (from opening an existing split file or header metadata)
       if (result.splitFiles && result.splitFiles.length > 0) {
@@ -9689,7 +9692,9 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       // Auto-cd terminal to file's directory
       terminalCdToFile(filePath);
 
-      // Wait for DOM layout before loading lines
+      // Two RAFs: first lets the browser start layout after createLogViewer() inserts
+      // the new element; second ensures clientHeight is fully computed before we read it.
+      await new Promise(resolve => requestAnimationFrame(resolve));
       await new Promise(resolve => requestAnimationFrame(resolve));
 
       // Initialize visible range based on container size
@@ -9701,6 +9706,9 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       }
 
       await loadVisibleLines();
+      // Explicit render after load to guarantee content is painted even if
+      // a ResizeObserver callback raced and cleared the content mid-flight.
+      renderVisibleLines();
 
       elements.btnAnalyze.disabled = false;
       elements.btnSplit.disabled = false;
