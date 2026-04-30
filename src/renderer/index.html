@@ -717,6 +717,16 @@
           <button class="modal-close" data-modal="filter-modal">&times;</button>
         </div>
         <div class="modal-body">
+          <!-- Filter Presets -->
+          <div class="filter-group filter-presets-section">
+            <div class="filter-presets-header">
+              <label>Presets</label>
+              <button id="btn-save-filter-preset" class="secondary-btn small" title="Save current settings as preset">+ Save</button>
+            </div>
+            <div id="filter-presets-list" class="filter-presets-list">
+              <!-- populated dynamically -->
+            </div>
+          </div>
           <div class="filter-group">
             <label>Log Levels</label>
             <div class="checkbox-group">

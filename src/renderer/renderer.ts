@@ -84,6 +84,17 @@ interface IncludePattern {
   caseSensitive: boolean;
 }
 
+interface FilterPreset {
+  id: string;
+  name: string;
+  levels: string[];
+  includePatterns: Array<{ pattern: string; caseSensitive: boolean }>;
+  excludePatterns: string[];
+  matchCase: boolean;
+  exactMatch: boolean;
+  contextLines: number;
+}
+
 interface FilterConfig {
   minFrequency?: number;
   maxFrequency?: number;
@@ -782,6 +793,8 @@ const elements = {
   btnColumnsCancel: document.getElementById('btn-columns-cancel') as HTMLButtonElement,
   includePatternsContainer: document.getElementById('include-patterns-container') as HTMLDivElement,
   btnAddIncludePattern: document.getElementById('btn-add-include-pattern') as HTMLButtonElement,
+  filterPresetsListEl: document.getElementById('filter-presets-list') as HTMLDivElement,
+  btnSaveFilterPreset: document.getElementById('btn-save-filter-preset') as HTMLButtonElement,
   excludePatterns: document.getElementById('exclude-patterns') as HTMLTextAreaElement,
   filterMatchCase: document.getElementById('filter-match-case') as HTMLInputElement,
   filterExactMatch: document.getElementById('filter-exact-match') as HTMLInputElement,
@@ -10362,12 +10375,72 @@ function getIncludePatterns(): IncludePattern[] {
   return patterns;
 }
 
+async function renderFilterPresets(): Promise<void> {
+  const container = elements.filterPresetsListEl;
+  if (!container) return;
+  const result = await window.api.filterPresetsList();
+  const presets: FilterPreset[] = result.presets || [];
+  if (presets.length === 0) {
+    container.innerHTML = '<span class="filter-preset-empty">No saved presets</span>';
+    return;
+  }
+  container.innerHTML = presets.map(p => `
+    <span class="filter-preset-pill" data-preset-id="${escapeHtml(p.id)}">
+      ${escapeHtml(p.name)}
+      <button class="filter-preset-delete" data-id="${escapeHtml(p.id)}" title="Delete preset">×</button>
+    </span>
+  `).join('');
+
+  // Load preset into form on click
+  container.querySelectorAll('.filter-preset-pill').forEach(pill => {
+    pill.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).classList.contains('filter-preset-delete')) return;
+      const id = (pill as HTMLElement).dataset.presetId!;
+      const preset = presets.find(p => p.id === id);
+      if (!preset) return;
+      loadFilterPresetIntoForm(preset);
+    });
+  });
+
+  // Delete preset
+  container.querySelectorAll('.filter-preset-delete').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = (btn as HTMLElement).dataset.id!;
+      await window.api.filterPresetsDelete(id);
+      renderFilterPresets();
+    });
+  });
+}
+
+function loadFilterPresetIntoForm(preset: FilterPreset): void {
+  // Set level checkboxes
+  document.querySelectorAll<HTMLInputElement>('input[name="level"]').forEach(cb => {
+    cb.checked = preset.levels.includes(cb.value);
+  });
+
+  // Set include patterns
+  elements.includePatternsContainer.innerHTML = '';
+  for (const p of preset.includePatterns) {
+    addIncludePatternRow(p.pattern, p.caseSensitive);
+  }
+
+  // Set exclude patterns
+  elements.excludePatterns.value = preset.excludePatterns.join('\n');
+
+  // Set options
+  if (elements.filterMatchCase) elements.filterMatchCase.checked = preset.matchCase;
+  if (elements.filterExactMatch) elements.filterExactMatch.checked = preset.exactMatch;
+  if (elements.basicContextLines) elements.basicContextLines.value = String(preset.contextLines);
+}
+
 function showFilterModal(): void {
   elements.filterModal.classList.remove('hidden');
   // Add an empty row if container is empty
   if (elements.includePatternsContainer.children.length === 0) {
     addIncludePatternRow();
   }
+  renderFilterPresets();
 }
 
 function hideFilterModal(): void {
@@ -14018,6 +14091,24 @@ function init(): void {
   elements.btnClearFilter.addEventListener('click', clearFilter);
   document.getElementById('btn-status-clear-filter')?.addEventListener('click', clearFilter);
   elements.btnAddIncludePattern.addEventListener('click', () => addIncludePatternRow());
+
+  elements.btnSaveFilterPreset?.addEventListener('click', async () => {
+    const name = prompt('Preset name:');
+    if (!name?.trim()) return;
+    const levelCheckboxes = document.querySelectorAll<HTMLInputElement>('input[name="level"]:checked');
+    const preset: FilterPreset = {
+      id: `fp-${Date.now()}`,
+      name: name.trim(),
+      levels: Array.from(levelCheckboxes).map(cb => cb.value),
+      includePatterns: getIncludePatterns(),
+      excludePatterns: elements.excludePatterns.value.split('\n').filter(p => p.trim()),
+      matchCase: elements.filterMatchCase?.checked || false,
+      exactMatch: elements.filterExactMatch?.checked || false,
+      contextLines: parseInt(elements.basicContextLines?.value || '0') || 0,
+    };
+    await window.api.filterPresetsSave(preset);
+    renderFilterPresets();
+  });
 
   // Advanced Filter
   elements.btnAdvancedFilter.addEventListener('click', showAdvancedFilterModal);

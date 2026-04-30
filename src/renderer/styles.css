@@ -2758,6 +2758,54 @@ body.platform-darwin .titlebar {
   border-top: 1px solid var(--border-color);
 }
 
+/* Filter Presets */
+.filter-presets-section { margin-bottom: 12px; }
+.filter-presets-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.filter-presets-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 24px;
+}
+.filter-preset-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.filter-preset-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 2px 8px 2px 10px;
+  font-size: 11px;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s;
+}
+.filter-preset-pill:hover {
+  border-color: var(--accent-color);
+  background: rgba(0,122,204,0.1);
+}
+.filter-preset-delete {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+  opacity: 0.6;
+}
+.filter-preset-delete:hover { opacity: 1; color: var(--error-color, #e88080); }
+
 .filter-group {
   margin-bottom: 16px;
 }

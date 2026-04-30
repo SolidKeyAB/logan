@@ -464,6 +464,9 @@ interface Api {
   clearRecentFiles: () => Promise<{ success: boolean }>;
   listRecentFolders: () => Promise<{ success: boolean; folders?: Array<{ path: string; lastOpened: number }> }>;
   clearRecentFolders: () => Promise<{ success: boolean }>;
+  filterPresetsList: () => Promise<{ success: boolean; presets?: any[] }>;
+  filterPresetsSave: (preset: any) => Promise<{ success: boolean }>;
+  filterPresetsDelete: (id: string) => Promise<{ success: boolean }>;
 
   // Agent annotations
   addAnnotation: (annotation: { id: string; lineNumber: number; text: string; agentName: string; timestamp: number; severity?: 'info' | 'warning' | 'error' }) => Promise<{ success: boolean }>;

@@ -5790,6 +5790,50 @@ ipcMain.handle('recent-folders-clear', async () => {
   return { success: true };
 });
 
+// === Filter Presets ===
+interface FilterPreset {
+  id: string;
+  name: string;
+  levels: string[];
+  includePatterns: Array<{ pattern: string; caseSensitive: boolean }>;
+  excludePatterns: string[];
+  matchCase: boolean;
+  exactMatch: boolean;
+  contextLines: number;
+}
+
+const FILTER_PRESETS_PATH = () => path.join(os.homedir(), '.logan', 'filter-presets.json');
+
+function loadFilterPresets(): FilterPreset[] {
+  try {
+    const p = FILTER_PRESETS_PATH();
+    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  } catch { /* */ }
+  return [];
+}
+
+function saveFilterPresets(presets: FilterPreset[]): void {
+  try {
+    const dir = path.join(os.homedir(), '.logan');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(FILTER_PRESETS_PATH(), JSON.stringify(presets, null, 2));
+  } catch { /* */ }
+}
+
+ipcMain.handle('filter-presets-list', () => ({ success: true, presets: loadFilterPresets() }));
+
+ipcMain.handle('filter-presets-save', (_, preset: FilterPreset) => {
+  const presets = loadFilterPresets().filter(p => p.id !== preset.id);
+  presets.unshift(preset);
+  saveFilterPresets(presets);
+  return { success: true };
+});
+
+ipcMain.handle('filter-presets-delete', (_, id: string) => {
+  saveFilterPresets(loadFilterPresets().filter(p => p.id !== id));
+  return { success: true };
+});
+
 ipcMain.handle('agent-browse-script', async () => {
   const result = await dialog.showOpenDialog({
     title: 'Select Agent Script',

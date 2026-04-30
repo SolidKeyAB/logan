@@ -508,6 +508,12 @@ const api = {
     ipcRenderer.invoke('recent-folders-list'),
   clearRecentFolders: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('recent-folders-clear'),
+  filterPresetsList: (): Promise<{ success: boolean; presets?: any[] }> =>
+    ipcRenderer.invoke('filter-presets-list'),
+  filterPresetsSave: (preset: any): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('filter-presets-save', preset),
+  filterPresetsDelete: (id: string): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('filter-presets-delete', id),
 
   // Agent annotations
   addAnnotation: (annotation: any): Promise<{ success: boolean }> =>
