@@ -218,6 +218,9 @@ interface TabState {
   filteredLineNumbers: number[] | null;
   activeLevelFilter: string | null;
   appliedFilterSuggestion: { id: string; title: string } | null;
+  // Filter suspension — config preserved, view temporarily shows all lines
+  lastFilterConfig: FilterConfig | null;
+  filterSuspended: 'auto' | 'manual' | null; // 'auto'=navigation triggered, 'manual'=user toggled
 }
 
 // Per-connection state for Live panel
@@ -249,6 +252,8 @@ interface AppState {
   isFiltered: boolean;
   activeLevelFilter: string | null;
   appliedFilterSuggestion: { id: string; title: string } | null;
+  lastFilterConfig: FilterConfig | null;
+  filterSuspended: 'auto' | 'manual' | null;
   searchResults: SearchResult[];
   currentSearchIndex: number;
   hiddenSearchMatches: HiddenMatch[];
@@ -326,6 +331,8 @@ const state: AppState = {
   isFiltered: false,
   activeLevelFilter: null,
   appliedFilterSuggestion: null,
+  lastFilterConfig: null,
+  filterSuspended: null,
   searchResults: [],
   currentSearchIndex: -1,
   hiddenSearchMatches: [],
@@ -4759,18 +4766,18 @@ function renderFolderSearchResults(pattern: string, cancelled?: boolean): void {
 
       const absLine = match.lineNumber - 1; // ripgrep is 1-based → 0-based
 
-      // Same file already open in current tab — just clear filter and navigate
+      // Same file already open in current tab — suspend filter and navigate
       if (match.filePath === state.filePath) {
-        if (state.isFiltered) await clearFilter();
+        if (state.isFiltered) await suspendFilter('auto');
         await navigateTo(absLine);
         return;
       }
 
-      // File open in another tab — switch to it, clear any restored filter, navigate
+      // File open in another tab — switch to it, suspend any restored filter, navigate
       const existingTab = findTabByFilePath(match.filePath);
       if (existingTab) {
         await switchToTab(existingTab.id);
-        if (state.isFiltered) await clearFilter();
+        if (state.isFiltered) await suspendFilter('auto');
         await navigateTo(absLine);
         return;
       }
@@ -10514,6 +10521,8 @@ async function applyFilter(providedConfig?: FilterConfig): Promise<void> {
       state.isFiltered = true;
       state.filteredLines = result.stats.filteredLines;
       state.filteredLineNumbers = result.filteredLineNumbers ?? null;
+      state.lastFilterConfig = config;   // remember for suspension/resume
+      state.filterSuspended = null;      // filter is now actively applied
       cachedLines.clear();
 
       // Reset scroll to top of filtered view
@@ -10541,15 +10550,40 @@ async function clearFilter(): Promise<void> {
   state.filteredLineNumbers = null;
   state.activeLevelFilter = null;
   state.appliedFilterSuggestion = null;
+  state.lastFilterConfig = null;
+  state.filterSuspended = null;
   cachedLines.clear();
 
-  // Clear backend filter state
   await window.api.clearFilter();
 
   hideFilterModal();
   await loadVisibleLines();
   updateStatusBar();
   updateLevelBadgeStyles();
+}
+
+// Suspend: keep config, temporarily show unfiltered view.
+// reason='auto' (navigation) → badge blinks; reason='manual' → badge solid.
+async function suspendFilter(reason: 'auto' | 'manual' = 'auto'): Promise<void> {
+  if (!state.isFiltered) return;
+  state.filterSuspended = reason;
+  state.isFiltered = false;
+  state.filteredLines = null;
+  state.filteredLineNumbers = null;
+  state.activeLevelFilter = null;
+  cachedLines.clear();
+
+  await window.api.clearFilter();
+  await loadVisibleLines();
+  updateStatusBar();
+  updateLevelBadgeStyles();
+}
+
+// Resume: re-apply the saved config from before suspension.
+async function resumeFilter(): Promise<void> {
+  if (!state.lastFilterConfig) return;
+  state.filterSuspended = null;
+  await applyFilter(state.lastFilterConfig);
 }
 
 async function applyQuickLevelFilter(level: string): Promise<void> {
@@ -10577,6 +10611,8 @@ async function applyQuickLevelFilter(level: string): Promise<void> {
       state.filteredLines = result.stats.filteredLines;
       state.filteredLineNumbers = result.filteredLineNumbers ?? null;
       state.activeLevelFilter = level;
+      state.lastFilterConfig = config;
+      state.filterSuspended = null;
       cachedLines.clear();
 
       // Reset scroll to top of filtered view
@@ -12183,17 +12219,35 @@ function updateStatusBar(): void {
     elements.statusLines.textContent = `${state.totalLines.toLocaleString()} lines`;
     elements.statusSize.textContent = formatBytes(state.fileStats?.size || 0);
 
+    const badge = elements.statusFiltered;
     if (state.isFiltered && state.filteredLines !== null) {
-      elements.statusFiltered.classList.remove('hidden');
+      // Active filter
+      badge.classList.remove('hidden', 'suspended', 'suspended-auto', 'suspended-manual');
+      badge.title = 'Filter active — click to pause, × to clear';
       elements.filteredCount.textContent = state.filteredLines.toLocaleString();
+      const label = badge.querySelector('.status-filter-label') as HTMLElement | null;
+      if (label) label.textContent = 'Filtered:';
+    } else if (state.filterSuspended && state.lastFilterConfig) {
+      // Suspended filter — show badge with different state
+      badge.classList.remove('hidden');
+      badge.classList.remove('suspended-auto', 'suspended-manual');
+      badge.classList.add('suspended', `suspended-${state.filterSuspended}`);
+      badge.title = state.filterSuspended === 'auto'
+        ? 'Filter paused (navigated to line) — click to re-enable'
+        : 'Filter paused — click to re-enable';
+      elements.filteredCount.textContent = '';
+      const label = badge.querySelector('.status-filter-label') as HTMLElement | null;
+      if (label) label.textContent = 'Filter paused';
     } else {
-      elements.statusFiltered.classList.add('hidden');
+      badge.classList.add('hidden');
+      badge.classList.remove('suspended', 'suspended-auto', 'suspended-manual');
     }
   } else {
     elements.statusFile.textContent = 'No file';
     elements.statusLines.textContent = '0 lines';
     elements.statusSize.textContent = '0 B';
     elements.statusFiltered.classList.add('hidden');
+    elements.statusFiltered.classList.remove('suspended', 'suspended-auto', 'suspended-manual');
   }
 }
 
@@ -14097,6 +14151,15 @@ function init(): void {
   elements.btnFilter.addEventListener('click', showFilterModal);
   elements.btnApplyFilter.addEventListener('click', () => applyFilter());
   elements.btnClearFilter.addEventListener('click', clearFilter);
+  // Badge body click = toggle suspend/resume; × button = permanent clear
+  elements.statusFiltered.addEventListener('click', async (e) => {
+    if ((e.target as HTMLElement).id === 'btn-status-clear-filter') return;
+    if (state.isFiltered) {
+      await suspendFilter('manual');
+    } else if (state.filterSuspended && state.lastFilterConfig) {
+      await resumeFilter();
+    }
+  });
   document.getElementById('btn-status-clear-filter')?.addEventListener('click', clearFilter);
   elements.btnAddIncludePattern.addEventListener('click', () => addIncludePatternRow());
 
@@ -14660,6 +14723,8 @@ function saveCurrentTabState(): void {
     filteredLineNumbers: state.filteredLineNumbers,
     activeLevelFilter: state.activeLevelFilter,
     appliedFilterSuggestion: state.appliedFilterSuggestion,
+    lastFilterConfig: state.lastFilterConfig,
+    filterSuspended: state.filterSuspended,
   };
 }
 
@@ -14686,6 +14751,8 @@ function restoreTabState(tab: TabState): void {
   state.filteredLineNumbers = tab.filteredLineNumbers;
   state.activeLevelFilter = tab.activeLevelFilter;
   state.appliedFilterSuggestion = tab.appliedFilterSuggestion;
+  state.lastFilterConfig = tab.lastFilterConfig;
+  state.filterSuspended = tab.filterSuspended;
 
   // Restore cached lines
   cachedLines.clear();
@@ -14732,6 +14799,8 @@ function createTab(filePath: string): TabState {
     filteredLineNumbers: null,
     activeLevelFilter: null,
     appliedFilterSuggestion: null,
+    lastFilterConfig: null,
+    filterSuspended: null,
   };
   return tab;
 }

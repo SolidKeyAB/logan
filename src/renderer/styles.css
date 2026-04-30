@@ -2586,7 +2586,11 @@ body.platform-darwin .titlebar {
   color: rgba(255, 255, 255, 0.5);
 }
 
-/* Filter active badge in status bar */
+/* Filter active/paused badge in status bar */
+@keyframes filter-badge-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
 .status-filter-badge {
   display: inline-flex;
   align-items: center;
@@ -2598,21 +2602,33 @@ body.platform-darwin .titlebar {
   padding: 1px 6px 1px 5px;
   font-size: 11px;
   font-weight: 500;
-  cursor: default;
+  cursor: pointer;
+  user-select: none;
 }
 .status-filter-badge.hidden { display: none; }
+.status-filter-badge:hover { background: rgba(255, 184, 64, 0.26); }
+/* Suspended manually — dimmed, solid */
+.status-filter-badge.suspended {
+  background: rgba(255, 184, 64, 0.07);
+  border-color: rgba(255, 184, 64, 0.22);
+  color: rgba(255, 184, 64, 0.55);
+}
+/* Suspended by auto-navigation — blinks as a reminder */
+.status-filter-badge.suspended-auto {
+  animation: filter-badge-blink 1.4s ease-in-out infinite;
+}
 .status-filter-icon { font-size: 10px; opacity: 0.8; }
 .status-filter-clear {
   background: none;
   border: none;
-  color: #ffb840;
+  color: inherit;
   cursor: pointer;
   font-size: 13px;
   line-height: 1;
   padding: 0 0 0 2px;
   opacity: 0.7;
 }
-.status-filter-clear:hover { opacity: 1; }
+.status-filter-clear:hover { opacity: 1; color: var(--error-color, #e88080) !important; }
 
 .progress-container {
   display: flex;
