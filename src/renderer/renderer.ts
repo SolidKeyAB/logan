@@ -13955,10 +13955,6 @@ function init(): void {
         updateLaunchButton();
         document.getElementById('chat-reconnect-banner')?.classList.add('hidden');
         if (res.agentName) updateAgentConnectionStatus(true, 1, res.agentName);
-        if (!res.resumed) {
-          // Fresh relaunch — add a system note in chat
-          addChatMessage({ from: 'agent', text: '(Reconnected — resuming from conversation context)', timestamp: Date.now() });
-        }
       } else {
         addChatMessage({ from: 'agent', text: `Reconnect failed: ${res.error || 'unknown error'}`, timestamp: Date.now() });
       }

@@ -19,7 +19,7 @@ import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, 
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
-import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession, buildReconnectContext } from './api-server';
+import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession } from './api-server';
 import { BaselineStore, buildFingerprint } from './baselineStore';
 // Native-dependent modules — lazy-loaded to prevent SIGSEGV if bindings aren't built
 let SerialHandler: any = null;
@@ -5555,33 +5555,28 @@ function findClaudeCli(): string | null {
   return null;
 }
 
-function buildAgentPrompt(isReconnect = false): string {
-  let contextSection = '';
+function archiveAgentMemory(filePath: string | null): void {
+  if (!filePath) return;
+  try {
+    const mem = getAgentMemory(filePath);
+    if (!mem?.content) return;
+    const dir = getLocalLoganDir(filePath);
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const archivePath = path.join(dir, `${path.basename(filePath)}.agent-memory.${ts}.archived.json`);
+    fs.writeFileSync(archivePath, JSON.stringify({ ...mem, archivedAt: Date.now() }, null, 2));
+    clearAgentMemory(filePath);
+  } catch { /* ignore */ }
+}
 
-  if (isReconnect) {
-    // Prefer agent-written memory (curated, compact) over raw chat transcript
-    const mem = getAgentMemory(currentFilePath);
-    if (mem?.content) {
-      contextSection = `Session memory (written by you before the interruption):\n---\n${mem.content}\n---\n\n`;
-    } else {
-      // Fall back to last 10 raw messages if no memory saved yet
-      contextSection = buildReconnectContext(10, 2000);
-    }
-  }
-
-  const opening = isReconnect
-    ? 'You have reconnected to LOGAN after a network interruption. Resume helping the user — do NOT re-greet. Briefly acknowledge the reconnect and continue.'
-    : 'Use logan_status to check the current state, then greet the user with logan_send_message.';
-
-  return `${contextSection}You are connected to LOGAN, a log analysis tool, via MCP.
-${opening}
+function buildAgentPrompt(): string {
+  return `You are connected to LOGAN, a log analysis tool, via MCP.
+Use logan_status to check the current state, then greet the user with logan_send_message.
 Then enter a chat loop: call logan_wait_for_message to receive user messages, process them
 using LOGAN's MCP tools (logan_search, logan_analyze, logan_filter, logan_get_lines, etc.),
 and reply with logan_send_message. Continue until the user says goodbye or stop.
 
-IMPORTANT: After completing each significant task (analysis, search, finding a root cause),
-call logan_memory_save with a brief note of what you found and what the user asked.
-This lets you resume the session naturally if you reconnect.`;
+After completing each significant task, call logan_memory_write with a brief note of
+what you found and what the user asked — this lets you resume naturally if you reconnect.`;
 }
 
 async function launchAgentProcess(isReconnect = false): Promise<{ success: boolean; agentName?: string; error?: string }> {
@@ -5590,7 +5585,12 @@ async function launchAgentProcess(isReconnect = false): Promise<{ success: boole
   }
 
   const config = getAgentConfig();
-  const prompt = buildAgentPrompt(isReconnect);
+  const prompt = buildAgentPrompt();
+
+  if (!isReconnect) {
+    // Fresh session: archive any existing memory so old notes don't bleed in
+    archiveAgentMemory(currentFilePath);
+  }
 
   try {
     if (config.type === 'claude-code') {
@@ -5659,17 +5659,28 @@ ipcMain.handle('agent-launch', async () => {
   return launchAgentProcess(false);
 });
 
-// Reconnect: if process still alive, just notify the renderer it's back;
-// if dead, relaunch with conversation context so the agent can resume.
+// Reconnect: if process still alive, just restore the connected state.
+// If dead, relaunch as a fresh session and send a system message asking
+// the agent to check its saved memory so it can resume naturally.
 ipcMain.handle('agent-reconnect', async () => {
   if (agentProcess) {
-    // Process still alive — just push a connected event so the banner disappears
+    // Process still alive (SSE timeout only) — push connected event
     const name = getAgentName() || 'agent';
     mainWindow?.webContents.send('agent-connection-changed', { connected: true, count: 1, name });
     return { success: true, agentName: name, resumed: true };
   }
-  // Process is dead — relaunch with context
-  return launchAgentProcess(true);
+
+  // Process died — relaunch fresh, then nudge the agent to check its memory
+  const result = await launchAgentProcess(true);
+  if (result.success) {
+    const mem = getAgentMemory(currentFilePath);
+    const nudge = mem?.content
+      ? 'You have just reconnected to LOGAN after an interruption. You have saved memory for this session — call logan_memory_read to recall context and then briefly let the user know you are back and what you were working on.'
+      : 'You have just reconnected to LOGAN after an interruption. Briefly let the user know you are back and ready to continue.';
+    // Small delay so the agent's MCP tools are ready before receiving the nudge
+    setTimeout(() => addChatMessage('user', nudge), 2000);
+  }
+  return result;
 });
 
 ipcMain.handle('agent-stop', async () => {
