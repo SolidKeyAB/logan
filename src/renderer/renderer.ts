@@ -1133,6 +1133,7 @@ let splitDiffState = {
 let isSplitResizing = false;
 let splitStartX = 0;
 let splitStartLeftWidth = 0;
+let splitRowContainer: HTMLDivElement | null = null;
 
 // Advanced Filter State
 let advancedFilterGroups: FilterGroup[] = [];
@@ -1689,13 +1690,19 @@ function activateSplitView(targetTabId: string): void {
   splitDiffState.secondaryTabId = targetTabId;
   splitDiffState.secondaryFilePath = targetTab.filePath;
 
-  // Add split layout classes
+  // Add split marker class (used for diff-mode gating etc.)
   elements.editorContainer.classList.add('split-view');
 
-  // Wrap primary viewer in a pane
+  // Create a row-container that holds both panes — keeps editorContainer column layout intact
+  // so the compare-header (inserted by updateCompareHeader) sits above the panes correctly
+  splitRowContainer = document.createElement('div');
+  splitRowContainer.className = 'split-row-container';
+  elements.editorContainer.appendChild(splitRowContainer);
+
+  // Move primary viewer into split row container
   if (logViewerWrapper) {
+    splitRowContainer.appendChild(logViewerWrapper);
     logViewerWrapper.classList.add('split-pane', 'primary-pane');
-    // Add primary header
     const existingHeader = logViewerWrapper.querySelector('.split-pane-header');
     if (!existingHeader) {
       const primaryHeader = document.createElement('div');
@@ -1705,13 +1712,13 @@ function activateSplitView(targetTabId: string): void {
     }
   }
 
-  // Add resize handle
+  // Add resize handle inside split row
   const resizeHandle = document.createElement('div');
   resizeHandle.className = 'split-resize-handle';
-  elements.editorContainer.appendChild(resizeHandle);
+  splitRowContainer.appendChild(resizeHandle);
 
-  // Create secondary viewer
-  secondaryViewer = createSecondaryViewer(elements.editorContainer);
+  // Create secondary viewer inside split row
+  secondaryViewer = createSecondaryViewer(splitRowContainer);
   secondarySetFile(secondaryViewer, targetTab.filePath, targetTab.totalLines);
 
   // Resize handle drag
@@ -1767,11 +1774,17 @@ async function activateDiffView(targetTabId: string): Promise<void> {
     splitDiffState.rightDisplayLines = right;
     splitDiffState.currentHunkIndex = -1;
 
-    // Add split layout classes
+    // Add split marker classes
     elements.editorContainer.classList.add('split-view', 'diff-mode');
 
-    // Wrap primary viewer in a pane
+    // Create row container
+    splitRowContainer = document.createElement('div');
+    splitRowContainer.className = 'split-row-container';
+    elements.editorContainer.appendChild(splitRowContainer);
+
+    // Move primary viewer into split row
     if (logViewerWrapper) {
+      splitRowContainer.appendChild(logViewerWrapper);
       logViewerWrapper.classList.add('split-pane', 'primary-pane');
       const existingHeader = logViewerWrapper.querySelector('.split-pane-header');
       if (!existingHeader) {
@@ -1782,10 +1795,10 @@ async function activateDiffView(targetTabId: string): Promise<void> {
       }
     }
 
-    // Add resize handle
+    // Add resize handle inside split row
     const resizeHandle = document.createElement('div');
     resizeHandle.className = 'split-resize-handle';
-    elements.editorContainer.appendChild(resizeHandle);
+    splitRowContainer.appendChild(resizeHandle);
 
     resizeHandle.addEventListener('mousedown', (e) => {
       isSplitResizing = true;
@@ -1797,8 +1810,8 @@ async function activateDiffView(targetTabId: string): Promise<void> {
       e.preventDefault();
     });
 
-    // Create secondary viewer
-    secondaryViewer = createSecondaryViewer(elements.editorContainer);
+    // Create secondary viewer inside split row
+    secondaryViewer = createSecondaryViewer(splitRowContainer);
     secondarySetFile(secondaryViewer, targetTab.filePath, targetTab.totalLines);
     secondarySetDiffDisplayLines(secondaryViewer, right);
 
@@ -1830,14 +1843,19 @@ function deactivateSplitView(): void {
   const diffNavBar = document.querySelector('.diff-nav-bar');
   if (diffNavBar) diffNavBar.remove();
 
-  // Remove resize handle
-  const resizeHandle = elements.editorContainer.querySelector('.split-resize-handle');
-  if (resizeHandle) resizeHandle.remove();
-
-  // Destroy secondary viewer
+  // Destroy secondary viewer (inside split row container)
   if (secondaryViewer) {
     destroySecondaryViewer(secondaryViewer);
     secondaryViewer = null;
+  }
+
+  // Move logViewerWrapper back to editorContainer, remove split row container
+  if (splitRowContainer) {
+    if (logViewerWrapper) {
+      elements.editorContainer.insertBefore(logViewerWrapper, splitRowContainer);
+    }
+    splitRowContainer.remove(); // also removes resize handle
+    splitRowContainer = null;
   }
 
   // Remove primary pane header
@@ -1846,6 +1864,7 @@ function deactivateSplitView(): void {
     if (primaryHeader) primaryHeader.remove();
     logViewerWrapper.classList.remove('split-pane', 'primary-pane');
     logViewerWrapper.style.width = '';
+    logViewerWrapper.style.flex = '';
   }
 
   // Remove layout classes
@@ -11436,16 +11455,24 @@ function navigateGap(direction: 'prev' | 'next'): void {
 async function showCompareModal(): Promise<void> {
   if (!state.filePath) return;
 
+  // Remember the original tab so primary pane shows the correct file
+  const originalTabId = state.activeTabId;
+
   // Pick second file
   const otherPath = await window.api.openFileDialog();
   if (!otherPath || otherPath === state.filePath) return;
 
-  // Load the other file as a tab
+  // Load the other file (this switches to its tab)
   await loadFile(otherPath);
 
   // Find the tab for the other file
   const otherTab = state.tabs.find(t => t.filePath === otherPath);
   if (!otherTab) return;
+
+  // Switch back to the original file so it becomes the primary pane
+  if (originalTabId && originalTabId !== state.activeTabId) {
+    await switchToTab(originalTabId);
+  }
 
   activateSplitView(otherTab.id);
 
@@ -14570,7 +14597,7 @@ function init(): void {
   document.addEventListener('mousemove', (e) => {
     if (!isSplitResizing || !logViewerWrapper) return;
     const deltaX = e.clientX - splitStartX;
-    const containerWidth = elements.editorContainer.clientWidth;
+    const containerWidth = splitRowContainer?.clientWidth || elements.editorContainer.clientWidth;
     const newWidth = Math.max(200, Math.min(containerWidth - 200, splitStartLeftWidth + deltaX));
     logViewerWrapper.style.width = `${newWidth}px`;
     logViewerWrapper.style.flex = 'none';

@@ -6021,11 +6021,17 @@ kbd {
    ============================================ */
 
 /* Split layout: side by side */
-.editor-container.split-view {
+/* split-row-container holds both panes side by side; editorContainer stays column
+   so the compare-header sits above the row as a normal flex column item */
+.split-row-container {
+  display: flex;
   flex-direction: row;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.editor-container.split-view .log-viewer-wrapper {
+.split-row-container .log-viewer-wrapper {
   flex: 1;
   min-width: 200px;
 }
