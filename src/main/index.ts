@@ -5556,15 +5556,32 @@ function findClaudeCli(): string | null {
 }
 
 function buildAgentPrompt(isReconnect = false): string {
-  const contextSection = isReconnect ? buildReconnectContext() : '';
+  let contextSection = '';
+
+  if (isReconnect) {
+    // Prefer agent-written memory (curated, compact) over raw chat transcript
+    const mem = getAgentMemory(currentFilePath);
+    if (mem?.content) {
+      contextSection = `Session memory (written by you before the interruption):\n---\n${mem.content}\n---\n\n`;
+    } else {
+      // Fall back to last 10 raw messages if no memory saved yet
+      contextSection = buildReconnectContext(10, 2000);
+    }
+  }
+
   const opening = isReconnect
-    ? 'You have reconnected to LOGAN after a network interruption. Resume helping the user from where you left off — do NOT re-greet them, just acknowledge the reconnect briefly.'
+    ? 'You have reconnected to LOGAN after a network interruption. Resume helping the user — do NOT re-greet. Briefly acknowledge the reconnect and continue.'
     : 'Use logan_status to check the current state, then greet the user with logan_send_message.';
+
   return `${contextSection}You are connected to LOGAN, a log analysis tool, via MCP.
 ${opening}
 Then enter a chat loop: call logan_wait_for_message to receive user messages, process them
 using LOGAN's MCP tools (logan_search, logan_analyze, logan_filter, logan_get_lines, etc.),
-and reply with logan_send_message. Continue until the user says goodbye or stop.`;
+and reply with logan_send_message. Continue until the user says goodbye or stop.
+
+IMPORTANT: After completing each significant task (analysis, search, finding a root cause),
+call logan_memory_save with a brief note of what you found and what the user asked.
+This lets you resume the session naturally if you reconnect.`;
 }
 
 async function launchAgentProcess(isReconnect = false): Promise<{ success: boolean; agentName?: string; error?: string }> {
