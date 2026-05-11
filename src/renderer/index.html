@@ -704,6 +704,16 @@
         </div>
       </div>
       <div class="status-right">
+        <div id="level-visibility-bar" class="level-vis-bar hidden">
+          <button class="lv-pill" data-level="fatal" title="fatal — click to hide">F</button>
+          <button class="lv-pill" data-level="error" title="error — click to hide">E</button>
+          <button class="lv-pill" data-level="warning" title="warning — click to hide">W</button>
+          <button class="lv-pill" data-level="info" title="info — click to hide">I</button>
+          <button class="lv-pill" data-level="debug" title="debug — click to hide">D</button>
+          <button class="lv-pill" data-level="verbose" title="verbose — click to hide">V</button>
+          <button class="lv-pill" data-level="trace" title="trace — click to hide">T</button>
+          <button class="lv-pill" data-level="other" title="other — click to hide">?</button>
+        </div>
         <span id="status-local-storage" class="status-local-storage hidden" title="Local .logan/ storage status"></span>
         <span id="status-cursor">Ln 1, Col 1</span>
         <span class="status-separator">|</span>
@@ -738,10 +748,12 @@
           <div class="filter-group">
             <label>Log Levels</label>
             <div class="checkbox-group">
+              <label class="checkbox-label"><input type="checkbox" name="level" value="fatal" checked> Fatal</label>
               <label class="checkbox-label"><input type="checkbox" name="level" value="error" checked> Error</label>
               <label class="checkbox-label"><input type="checkbox" name="level" value="warning" checked> Warning</label>
               <label class="checkbox-label"><input type="checkbox" name="level" value="info" checked> Info</label>
               <label class="checkbox-label"><input type="checkbox" name="level" value="debug"> Debug</label>
+              <label class="checkbox-label"><input type="checkbox" name="level" value="verbose"> Verbose</label>
               <label class="checkbox-label"><input type="checkbox" name="level" value="trace"> Trace</label>
               <label class="checkbox-label"><input type="checkbox" name="level" value="other" checked> Other</label>
             </div>

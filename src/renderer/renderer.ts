@@ -79,6 +79,7 @@ interface AnalysisResult {
   insights: AnalysisInsights;
   density?: {
     buckets: number;
+    fatal: number[];
     error: number[];
     warning: number[];
     info: number[];
@@ -316,6 +317,9 @@ interface AppState {
   contextViewMode: 'tree' | 'lanes';
   contextGroupMode: 'separate' | 'combined';
   editingContextId: string | null;
+  // Level visibility quick-toggle (persisted globally)
+  hiddenLevels: Set<string>;
+  levelBarFilterActive: boolean;
   // Traceback
   tracebackResult: any | null;
   tracebackSort: 'time' | 'score';
@@ -383,6 +387,8 @@ const state: AppState = {
   contextViewMode: 'tree' as 'tree' | 'lanes',
   contextGroupMode: 'separate' as 'separate' | 'combined',
   editingContextId: null,
+  hiddenLevels: new Set<string>(JSON.parse(localStorage.getItem('logan-hidden-levels') || '[]')),
+  levelBarFilterActive: false,
   tracebackResult: null,
   tracebackSort: 'time' as 'time' | 'score',
   tracebackFilterCat: 'all',
@@ -3295,8 +3301,10 @@ function escapeRegex(str: string): string {
 
 // Severity rank used for worst-case sampling and density strip coloring.
 const LEVEL_SEVERITY: Record<string, number> = {
-  fatal: 6, error: 5, warning: 4, warn: 4, info: 3, debug: 2, trace: 1,
+  fatal: 7, error: 6, warning: 5, warn: 5, info: 4, debug: 3, verbose: 2, trace: 1,
 };
+
+const ALL_LOG_LEVELS = ['fatal', 'error', 'warning', 'info', 'debug', 'verbose', 'trace', 'other'] as const;
 
 function updateMinimapViewport(): void {
   if (!logViewerElement || !minimapViewportElement || !minimapElement) return;
@@ -3541,12 +3549,13 @@ function renderMinimapCanvas(): void {
     return;
   }
 
-  const { buckets, error, warning, info } = density;
+  const { buckets, fatal: fatalArr, error, warning, info } = density;
+  const fatalData = fatalArr || [];
 
   // Global max for brightness normalisation
   let globalMax = 1;
   for (let i = 0; i < buckets; i++) {
-    const t = error[i] + warning[i] + info[i];
+    const t = (fatalData[i] || 0) + error[i] + warning[i] + info[i];
     if (t > globalMax) globalMax = t;
   }
 
@@ -3554,10 +3563,11 @@ function renderMinimapCanvas(): void {
 
   for (let py = 0; py < ch; py++) {
     const bi = Math.min(buckets - 1, Math.floor((py / ch) * buckets));
+    const f = fatalData[bi] || 0;
     const e = error[bi] || 0;
     const w = warning[bi] || 0;
     const inf = info[bi] || 0;
-    const total = e + w + inf;
+    const total = f + e + w + inf;
 
     // Base: very dark
     let r = 18, g = 18, b = 26;
@@ -3565,6 +3575,11 @@ function renderMinimapCanvas(): void {
     if (total > 0) {
       const brightness = Math.min(1, Math.sqrt(total / globalMax));
       const denom = Math.max(total, 1);
+      // Fatal: magenta (highest priority — drawn first, overrides error)
+      const fr = (f / denom) * brightness;
+      r = Math.min(255, r + fr * 224);
+      g = Math.min(255, g + fr * 18);
+      b = Math.min(255, b + fr * 251);
       // Error: crimson
       const er = (e / denom) * brightness;
       r = Math.min(255, r + er * 210);
@@ -10643,6 +10658,10 @@ function showFilterModal(): void {
     addIncludePatternRow();
   }
   renderFilterPresets();
+  // Sync level checkboxes with current hidden levels
+  document.querySelectorAll<HTMLInputElement>('input[name="level"]').forEach(cb => {
+    cb.checked = !state.hiddenLevels.has(cb.value);
+  });
 }
 
 function hideFilterModal(): void {
@@ -10734,6 +10753,7 @@ async function clearFilter(): Promise<void> {
   state.appliedFilterSuggestion = null;
   state.lastFilterConfig = null;
   state.filterSuspended = null;
+  state.levelBarFilterActive = false;
   cachedLines.clear();
 
   await window.api.clearFilter();
@@ -10742,6 +10762,47 @@ async function clearFilter(): Promise<void> {
   await loadVisibleLines();
   updateStatusBar();
   updateLevelBadgeStyles();
+}
+
+// ─── Level Visibility Quick-Toggle ──────────────────────────────────────────
+
+function saveHiddenLevels(): void {
+  localStorage.setItem('logan-hidden-levels', JSON.stringify([...state.hiddenLevels]));
+}
+
+function updateLevelVisibilityBar(): void {
+  const bar = document.getElementById('level-visibility-bar');
+  if (!bar) return;
+  bar.querySelectorAll<HTMLButtonElement>('.lv-pill').forEach(btn => {
+    const level = btn.dataset.level!;
+    const hidden = state.hiddenLevels.has(level);
+    btn.classList.toggle('hidden-level', hidden);
+    btn.title = hidden ? `${level} (hidden — click to show)` : `${level} — click to hide`;
+  });
+}
+
+async function applyLevelVisibilityFilter(): Promise<void> {
+  saveHiddenLevels();
+  updateLevelVisibilityBar();
+
+  if (state.hiddenLevels.size === 0) {
+    if (state.levelBarFilterActive) {
+      state.levelBarFilterActive = false;
+      await clearFilter();
+    }
+    return;
+  }
+
+  const visibleLevels = (ALL_LOG_LEVELS as readonly string[]).filter(l => !state.hiddenLevels.has(l));
+  state.levelBarFilterActive = true;
+  await applyFilter({
+    levels: visibleLevels,
+    includePatterns: [],
+    excludePatterns: [],
+    matchCase: false,
+    exactMatch: false,
+    contextLines: 0,
+  });
 }
 
 // Suspend: keep config, temporarily show unfiltered view.
@@ -10823,6 +10884,7 @@ function updateLevelBadgeStyles(): void {
       badge.classList.remove('active-filter');
     }
   });
+  updateLevelVisibilityBar();
 }
 
 // === Advanced Filter ===
@@ -10949,7 +11011,7 @@ function renderFilterRuleHTML(groupId: string, rule: FilterRule): string {
   const isLevelType = rule.type === 'level' || rule.type === 'not_level';
   const showCaseSensitive = !isLevelType;
 
-  const levelOptions = ['error', 'warning', 'info', 'debug', 'trace']
+  const levelOptions = ['fatal', 'error', 'warning', 'info', 'debug', 'verbose', 'trace']
     .map(l => `<option value="${l}" ${rule.value === l ? 'selected' : ''}>${l}</option>`)
     .join('');
 
@@ -11455,7 +11517,7 @@ function renderCompareHeader(): void {
   });
 }
 
-function renderCompareCanvas(id: string, density: { buckets: number; error: number[]; warning: number[]; info: number[] }): void {
+function renderCompareCanvas(id: string, density: { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[] }): void {
   const canvas = document.getElementById(id) as HTMLCanvasElement | null;
   if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
@@ -11463,21 +11525,23 @@ function renderCompareCanvas(id: string, density: { buckets: number; error: numb
   const ch = Math.floor(canvas.offsetHeight * dpr) || Math.round(120 * dpr);
   canvas.width = cw; canvas.height = ch;
   const ctx = canvas.getContext('2d')!;
-  const { buckets, error, warning, info } = density;
+  const { buckets, fatal: fatalArr, error, warning, info } = density;
+  const fD = fatalArr || [];
   let globalMax = 1;
   for (let i = 0; i < buckets; i++) {
-    const t = error[i] + warning[i] + info[i];
+    const t = (fD[i]||0) + error[i] + warning[i] + info[i];
     if (t > globalMax) globalMax = t;
   }
   const pixels = new Uint8ClampedArray(cw * ch * 4);
   for (let py = 0; py < ch; py++) {
     const bi = Math.min(buckets - 1, Math.floor((py / ch) * buckets));
-    const e = error[bi] || 0, w = warning[bi] || 0, inf = info[bi] || 0;
-    const total = e + w + inf;
+    const f = fD[bi]||0, e = error[bi] || 0, w = warning[bi] || 0, inf = info[bi] || 0;
+    const total = f + e + w + inf;
     let r = 18, g = 18, b = 26;
     if (total > 0) {
       const br = Math.min(1, Math.sqrt(total / globalMax));
       const d = Math.max(total, 1);
+      r = Math.min(255, r + (f/d)*br*224); g = Math.min(255, g + (f/d)*br*18); b = Math.min(255, b + (f/d)*br*251);
       r = Math.min(255, r + (e/d)*br*210);
       g = Math.min(255, g + (e/d)*br*28);
       b = Math.min(255, b + (e/d)*br*28);
@@ -11497,8 +11561,8 @@ function renderCompareCanvas(id: string, density: { buckets: number; error: numb
 }
 
 function renderDiffCanvas(id: string,
-  densA: { buckets: number; error: number[]; warning: number[]; info: number[] },
-  densB: { buckets: number; error: number[]; warning: number[]; info: number[] }
+  densA: { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[] },
+  densB: { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[] }
 ): void {
   const canvas = document.getElementById(id) as HTMLCanvasElement | null;
   if (!canvas) return;
@@ -12597,12 +12661,16 @@ function updateStatusBar(): void {
       badge.classList.add('hidden');
       badge.classList.remove('suspended', 'suspended-auto', 'suspended-manual');
     }
+    // Show level visibility bar when file is open
+    document.getElementById('level-visibility-bar')?.classList.remove('hidden');
+    updateLevelVisibilityBar();
   } else {
     elements.statusFile.textContent = 'No file';
     elements.statusLines.textContent = '0 lines';
     elements.statusSize.textContent = '0 B';
     elements.statusFiltered.classList.add('hidden');
     elements.statusFiltered.classList.remove('suspended', 'suspended-auto', 'suspended-manual');
+    document.getElementById('level-visibility-bar')?.classList.add('hidden');
   }
 }
 
@@ -14587,6 +14655,20 @@ function init(): void {
     }
   });
   document.getElementById('btn-status-clear-filter')?.addEventListener('click', clearFilter);
+
+  // Level visibility quick-toggle
+  document.getElementById('level-visibility-bar')?.addEventListener('click', async (e) => {
+    const pill = (e.target as HTMLElement).closest<HTMLButtonElement>('.lv-pill');
+    if (!pill || !pill.dataset.level) return;
+    const level = pill.dataset.level;
+    if (state.hiddenLevels.has(level)) {
+      state.hiddenLevels.delete(level);
+    } else {
+      state.hiddenLevels.add(level);
+    }
+    await applyLevelVisibilityFilter();
+  });
+
   elements.btnAddIncludePattern.addEventListener('click', () => addIncludePatternRow());
 
   elements.btnSaveFilterPreset?.addEventListener('click', async () => {

@@ -1743,9 +1743,19 @@ body.platform-darwin .titlebar {
   color: var(--debug-color);
 }
 
+.level-badge.fatal {
+  background-color: rgba(224, 64, 251, 0.2);
+  color: #e040fb;
+}
+
 .level-badge.trace {
   background-color: rgba(136, 136, 136, 0.2);
   color: var(--text-secondary);
+}
+
+.level-badge.verbose {
+  background-color: rgba(90, 138, 106, 0.15);
+  color: #5a8a6a;
 }
 
 /* Pattern & Duplicate Items */
@@ -2478,6 +2488,10 @@ body.platform-darwin .titlebar {
 }
 
 /* Log Level Colors */
+.log-line.level-fatal .line-content {
+  color: #e040fb;
+}
+
 .log-line.level-error .line-content {
   color: var(--error-color);
 }
@@ -2492,6 +2506,10 @@ body.platform-darwin .titlebar {
 
 .log-line.level-debug .line-content {
   color: var(--debug-color);
+}
+
+.log-line.level-verbose .line-content {
+  color: #5a8a6a;
 }
 
 .log-line.level-trace .line-content {
@@ -2629,6 +2647,46 @@ body.platform-darwin .titlebar {
   opacity: 0.7;
 }
 .status-filter-clear:hover { opacity: 1; color: var(--error-color, #e88080) !important; }
+
+/* Level visibility quick-toggle bar */
+.level-vis-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  border-right: 1px solid rgba(255,255,255,0.12);
+  margin-right: 4px;
+}
+.level-vis-bar.hidden { display: none; }
+.lv-pill {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--statusbar-text, #ccc);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 4px;
+  opacity: 0.7;
+  transition: opacity 0.15s, background 0.15s, border-color 0.15s;
+  user-select: none;
+}
+.lv-pill:hover { opacity: 1; background: rgba(255,255,255,0.08); }
+.lv-pill[data-level="fatal"] { color: #e040fb; }
+.lv-pill[data-level="error"] { color: var(--error-color, #f14c4c); }
+.lv-pill[data-level="warning"] { color: var(--warning-color, #cca700); }
+.lv-pill[data-level="info"] { color: var(--info-color, #3794ff); }
+.lv-pill[data-level="debug"] { color: var(--debug-color, #6a9955); }
+.lv-pill[data-level="verbose"] { color: #5a8a6a; }
+.lv-pill[data-level="trace"] { color: var(--text-muted, #666); }
+.lv-pill[data-level="other"] { color: var(--text-muted, #666); }
+.lv-pill.hidden-level {
+  opacity: 0.22;
+  text-decoration: line-through;
+  border-color: rgba(255,255,255,0.1);
+}
+.lv-pill.hidden-level:hover { opacity: 0.5; }
 
 .progress-container {
   display: flex;

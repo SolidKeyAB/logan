@@ -62,6 +62,7 @@ export interface AnalysisResult {
   // Density buckets for minimap heat map (indexed by file byte position)
   density?: {
     buckets: number;
+    fatal: number[];
     error: number[];
     warning: number[];
     info: number[];

@@ -62,12 +62,13 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
 
       // Data collection
       const levelCounts: Record<string, number> = {
-        error: 0, warning: 0, info: 0, debug: 0, trace: 0
+        fatal: 0, error: 0, warning: 0, info: 0, debug: 0, verbose: 0, trace: 0
       };
 
       // Density buckets — adaptive count based on file size (500–10,000)
       // Used by the minimap to draw a heat map by log level
       const DENSITY_BUCKETS = Math.min(Math.max(Math.ceil(fileSize / 500), 500), 10000);
+      const densityFatal = new Uint32Array(DENSITY_BUCKETS);
       const densityError = new Uint32Array(DENSITY_BUCKETS);
       const densityWarning = new Uint32Array(DENSITY_BUCKETS);
       const densityInfo = new Uint32Array(DENSITY_BUCKETS);
@@ -130,7 +131,8 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
           levelCounts[level]++;
           // Update density bucket based on byte position
           const bucket = Math.min(DENSITY_BUCKETS - 1, Math.floor((bytesRead / fileSize) * DENSITY_BUCKETS));
-          if (level === 'error') densityError[bucket]++;
+          if (level === 'fatal') densityFatal[bucket]++;
+          else if (level === 'error') densityError[bucket]++;
           else if (level === 'warning') densityWarning[bucket]++;
           else if (level === 'info') densityInfo[bucket]++;
         }
@@ -259,6 +261,7 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
         insights,
         density: {
           buckets: DENSITY_BUCKETS,
+          fatal: Array.from(densityFatal),
           error: Array.from(densityError),
           warning: Array.from(densityWarning),
           info: Array.from(densityInfo),
@@ -352,21 +355,25 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
   }
 
   private normalizeLevel(rawLevel: string): string | null {
-    if (/^(error|fatal|critical|severe)$/.test(rawLevel)) return 'error';
-    if (/^(warn|warning)$/.test(rawLevel)) return 'warning';
-    if (/^(info|information)$/.test(rawLevel)) return 'info';
-    if (/^debug$/.test(rawLevel)) return 'debug';
-    if (/^(trace|verbose)$/.test(rawLevel)) return 'trace';
+    if (/^(fatal|panic|emergency|alert|emerg)$/.test(rawLevel)) return 'fatal';
+    if (/^(error|critical|severe|crit|exception)$/.test(rawLevel)) return 'error';
+    if (/^(warn|warning|notice)$/.test(rawLevel)) return 'warning';
+    if (/^(info|information|informational)$/.test(rawLevel)) return 'info';
+    if (/^(debug|dbg|d)$/.test(rawLevel)) return 'debug';
+    if (/^(verbose|verb|v|fine|finer)$/.test(rawLevel)) return 'verbose';
+    if (/^(trace|finest|silly)$/.test(rawLevel)) return 'trace';
     return null;
   }
 
   private detectLevelFromText(text: string): string | null {
     const upper = (text.length > 200 ? text.substring(0, 200) : text).toUpperCase();
-    if (/\b(ERROR|FATAL|CRITICAL|EXCEPTION|PANIC)\b/.test(upper)) return 'error';
-    if (/\b(WARN|WARNING)\b/.test(upper)) return 'warning';
+    if (/\b(FATAL|PANIC|EMERGENCY|EMERG)\b/.test(upper)) return 'fatal';
+    if (/\b(ERROR|CRITICAL|CRIT|EXCEPTION)\b/.test(upper)) return 'error';
+    if (/\b(WARN|WARNING|NOTICE)\b/.test(upper)) return 'warning';
     if (/\b(INFO)\b/.test(upper)) return 'info';
-    if (/\b(DEBUG)\b/.test(upper)) return 'debug';
-    if (/\b(TRACE|VERBOSE)\b/.test(upper)) return 'trace';
+    if (/\b(DEBUG|DBG)\b/.test(upper)) return 'debug';
+    if (/\b(VERBOSE|VERB)\b/.test(upper)) return 'verbose';
+    if (/\b(TRACE)\b/.test(upper)) return 'trace';
     return null;
   }
 
