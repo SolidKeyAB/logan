@@ -1134,6 +1134,7 @@ let isSplitResizing = false;
 let splitStartX = 0;
 let splitStartLeftWidth = 0;
 let splitRowContainer: HTMLDivElement | null = null;
+let splitPrimaryPane: HTMLDivElement | null = null;
 
 // Advanced Filter State
 let advancedFilterGroups: FilterGroup[] = [];
@@ -1694,22 +1695,26 @@ function activateSplitView(targetTabId: string): void {
   elements.editorContainer.classList.add('split-view');
 
   // Create a row-container that holds both panes — keeps editorContainer column layout intact
-  // so the compare-header (inserted by updateCompareHeader) sits above the panes correctly
+  // so the compare-header sits above the panes correctly
   splitRowContainer = document.createElement('div');
   splitRowContainer.className = 'split-row-container';
   elements.editorContainer.appendChild(splitRowContainer);
 
-  // Move primary viewer into split row container
+  // Wrap logViewerWrapper in a column pane (header on top, viewer row below)
+  // logViewerWrapper is itself a ROW flex (viewer + minimap), so it must stay inside a COLUMN wrapper
+  splitPrimaryPane = document.createElement('div');
+  splitPrimaryPane.className = 'split-pane primary-pane';
+  splitRowContainer.appendChild(splitPrimaryPane);
+
+  const primaryHeader = document.createElement('div');
+  primaryHeader.className = 'split-pane-header primary-header';
+  primaryHeader.innerHTML = `<span class="split-pane-filename">${escapeHtml(getFileName(state.filePath || ''))}</span>`;
+  splitPrimaryPane.appendChild(primaryHeader);
+
   if (logViewerWrapper) {
-    splitRowContainer.appendChild(logViewerWrapper);
-    logViewerWrapper.classList.add('split-pane', 'primary-pane');
-    const existingHeader = logViewerWrapper.querySelector('.split-pane-header');
-    if (!existingHeader) {
-      const primaryHeader = document.createElement('div');
-      primaryHeader.className = 'split-pane-header primary-header';
-      primaryHeader.innerHTML = `<span class="split-pane-filename">${escapeHtml(getFileName(state.filePath || ''))}</span>`;
-      logViewerWrapper.insertBefore(primaryHeader, logViewerWrapper.firstChild);
-    }
+    logViewerWrapper.style.width = '';
+    logViewerWrapper.style.flex = '';
+    splitPrimaryPane.appendChild(logViewerWrapper);
   }
 
   // Add resize handle inside split row
@@ -1721,11 +1726,11 @@ function activateSplitView(targetTabId: string): void {
   secondaryViewer = createSecondaryViewer(splitRowContainer);
   secondarySetFile(secondaryViewer, targetTab.filePath, targetTab.totalLines);
 
-  // Resize handle drag
+  // Resize handle drag — size primaryPane not logViewerWrapper
   resizeHandle.addEventListener('mousedown', (e) => {
     isSplitResizing = true;
     splitStartX = e.clientX;
-    splitStartLeftWidth = logViewerWrapper?.offsetWidth || 0;
+    splitStartLeftWidth = splitPrimaryPane?.offsetWidth || 0;
     resizeHandle.classList.add('dragging');
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
@@ -1782,17 +1787,20 @@ async function activateDiffView(targetTabId: string): Promise<void> {
     splitRowContainer.className = 'split-row-container';
     elements.editorContainer.appendChild(splitRowContainer);
 
-    // Move primary viewer into split row
+    // Wrap logViewerWrapper in a column pane
+    splitPrimaryPane = document.createElement('div');
+    splitPrimaryPane.className = 'split-pane primary-pane';
+    splitRowContainer.appendChild(splitPrimaryPane);
+
+    const diffPrimaryHeader = document.createElement('div');
+    diffPrimaryHeader.className = 'split-pane-header primary-header';
+    diffPrimaryHeader.innerHTML = `<span class="split-pane-filename">${escapeHtml(getFileName(state.filePath || ''))}</span>`;
+    splitPrimaryPane.appendChild(diffPrimaryHeader);
+
     if (logViewerWrapper) {
-      splitRowContainer.appendChild(logViewerWrapper);
-      logViewerWrapper.classList.add('split-pane', 'primary-pane');
-      const existingHeader = logViewerWrapper.querySelector('.split-pane-header');
-      if (!existingHeader) {
-        const primaryHeader = document.createElement('div');
-        primaryHeader.className = 'split-pane-header primary-header';
-        primaryHeader.innerHTML = `<span class="split-pane-filename">${escapeHtml(getFileName(state.filePath || ''))}</span>`;
-        logViewerWrapper.insertBefore(primaryHeader, logViewerWrapper.firstChild);
-      }
+      logViewerWrapper.style.width = '';
+      logViewerWrapper.style.flex = '';
+      splitPrimaryPane.appendChild(logViewerWrapper);
     }
 
     // Add resize handle inside split row
@@ -1803,7 +1811,7 @@ async function activateDiffView(targetTabId: string): Promise<void> {
     resizeHandle.addEventListener('mousedown', (e) => {
       isSplitResizing = true;
       splitStartX = e.clientX;
-      splitStartLeftWidth = logViewerWrapper?.offsetWidth || 0;
+      splitStartLeftWidth = splitPrimaryPane?.offsetWidth || 0;
       resizeHandle.classList.add('dragging');
       document.body.style.cursor = 'col-resize';
       document.body.style.userSelect = 'none';
@@ -1849,22 +1857,16 @@ function deactivateSplitView(): void {
     secondaryViewer = null;
   }
 
-  // Move logViewerWrapper back to editorContainer, remove split row container
+  // Move logViewerWrapper back to editorContainer, remove split containers
   if (splitRowContainer) {
     if (logViewerWrapper) {
       elements.editorContainer.insertBefore(logViewerWrapper, splitRowContainer);
+      logViewerWrapper.style.width = '';
+      logViewerWrapper.style.flex = '';
     }
-    splitRowContainer.remove(); // also removes resize handle
+    splitRowContainer.remove(); // removes primary pane wrapper, resize handle, secondary pane
     splitRowContainer = null;
-  }
-
-  // Remove primary pane header
-  if (logViewerWrapper) {
-    const primaryHeader = logViewerWrapper.querySelector('.primary-header');
-    if (primaryHeader) primaryHeader.remove();
-    logViewerWrapper.classList.remove('split-pane', 'primary-pane');
-    logViewerWrapper.style.width = '';
-    logViewerWrapper.style.flex = '';
+    splitPrimaryPane = null;
   }
 
   // Remove layout classes
@@ -11520,22 +11522,44 @@ function renderCompareHeader(): void {
 
   const densA = state.analysisResult?.density;
   const densB = compareAnalysisResult?.density;
+  const lcA = state.analysisResult?.levelCounts || {};
+  const lcB = compareAnalysisResult?.levelCounts || {};
 
   if (!densA || !densB) {
     header.innerHTML = '<span class="compare-analyzing">Analyzing for comparison…</span>';
     return;
   }
 
+  const fmtCount = (n: number) => n > 999 ? `${(n/1000).toFixed(1)}k` : String(n);
+  const levelRow = (lc: Record<string, number>) => {
+    const items: string[] = [];
+    if (lc.fatal > 0)   items.push(`<span class="cmp-lv fatal">${fmtCount(lc.fatal)} FATAL</span>`);
+    if (lc.error > 0)   items.push(`<span class="cmp-lv error">${fmtCount(lc.error)} ERR</span>`);
+    if (lc.warning > 0) items.push(`<span class="cmp-lv warning">${fmtCount(lc.warning)} WARN</span>`);
+    if (lc.info > 0)    items.push(`<span class="cmp-lv info">${fmtCount(lc.info)} INFO</span>`);
+    if (lc.debug > 0)   items.push(`<span class="cmp-lv debug">${fmtCount(lc.debug)} DBG</span>`);
+    return items.length ? items.join(' ') : '<span class="cmp-lv none">no levels</span>';
+  };
+
   header.innerHTML = `
     <div class="compare-header-inner">
-      <span class="compare-file-label">${escapeHtml(getFileName(state.filePath || ''))}</span>
+      <div class="compare-file-col">
+        <span class="compare-file-label" title="${escapeHtml(state.filePath || '')}">${escapeHtml(getFileName(state.filePath || ''))}</span>
+        <div class="compare-level-row">${levelRow(lcA)}</div>
+      </div>
       <div class="compare-canvases">
         <canvas id="compare-canvas-a" class="compare-mini-canvas"></canvas>
         <canvas id="compare-canvas-diff" class="compare-diff-canvas"></canvas>
         <canvas id="compare-canvas-b" class="compare-mini-canvas"></canvas>
       </div>
-      <span class="compare-file-label">${escapeHtml(getFileName(compareFilePath || ''))}</span>
+      <div class="compare-file-col compare-file-col-right">
+        <span class="compare-file-label" title="${escapeHtml(compareFilePath || '')}">${escapeHtml(getFileName(compareFilePath || ''))}</span>
+        <div class="compare-level-row">${levelRow(lcB)}</div>
+      </div>
+      <button class="compare-close-btn" title="Close comparison" id="btn-compare-close">✕</button>
     </div>`;
+
+  document.getElementById('btn-compare-close')?.addEventListener('click', deactivateSplitView);
 
   requestAnimationFrame(() => {
     renderCompareCanvas('compare-canvas-a', densA);
@@ -14595,12 +14619,12 @@ function init(): void {
 
   // Split pane resize
   document.addEventListener('mousemove', (e) => {
-    if (!isSplitResizing || !logViewerWrapper) return;
+    if (!isSplitResizing || !splitPrimaryPane) return;
     const deltaX = e.clientX - splitStartX;
     const containerWidth = splitRowContainer?.clientWidth || elements.editorContainer.clientWidth;
     const newWidth = Math.max(200, Math.min(containerWidth - 200, splitStartLeftWidth + deltaX));
-    logViewerWrapper.style.width = `${newWidth}px`;
-    logViewerWrapper.style.flex = 'none';
+    splitPrimaryPane.style.width = `${newWidth}px`;
+    splitPrimaryPane.style.flex = 'none';
   });
 
   // Search
