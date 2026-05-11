@@ -400,20 +400,26 @@ export class FileHandler {
     const sample = text.length > 200 ? text.substring(0, 200) : text;
     const upperText = sample.toUpperCase();
 
-    // Check for common log level patterns
-    if (/\b(ERROR|FATAL|CRITICAL|SEVERE)\b/.test(upperText)) {
+    // Check for common log level patterns (ordered by severity — most specific first)
+    if (/\b(FATAL|PANIC|EMERGENCY|EMERG)\b/.test(upperText)) {
+      return 'fatal';
+    }
+    if (/\b(ERROR|CRITICAL|CRIT|SEVERE|EXCEPTION)\b/.test(upperText)) {
       return 'error';
     }
-    if (/\b(WARN|WARNING)\b/.test(upperText)) {
+    if (/\b(WARN|WARNING|NOTICE)\b/.test(upperText)) {
       return 'warning';
     }
     if (/\b(INFO|INFORMATION)\b/.test(upperText)) {
       return 'info';
     }
-    if (/\b(DEBUG)\b/.test(upperText)) {
+    if (/\b(DEBUG|DBG)\b/.test(upperText)) {
       return 'debug';
     }
-    if (/\b(TRACE|VERBOSE)\b/.test(upperText)) {
+    if (/\b(VERBOSE|VERB)\b/.test(upperText)) {
+      return 'verbose';
+    }
+    if (/\b(TRACE)\b/.test(upperText)) {
       return 'trace';
     }
 

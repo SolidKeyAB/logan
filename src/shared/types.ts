@@ -9,7 +9,7 @@ export interface FileInfo {
 export interface LineData {
   lineNumber: number;
   text: string;
-  level?: 'error' | 'warning' | 'info' | 'debug' | 'trace';
+  level?: 'fatal' | 'error' | 'warning' | 'info' | 'debug' | 'verbose' | 'trace';
 }
 
 export interface SearchMatch {
