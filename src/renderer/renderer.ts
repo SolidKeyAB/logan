@@ -11711,13 +11711,13 @@ function createCompareMidPanel(): void {
     </div>
     <div class="cmp-nav-row">
       <div class="cmp-nav-group">
-        <button id="btn-cmp-match-prev" class="cmp-nav-btn cmp-match-btn" title="Previous matching section">↑</button>
-        <span class="cmp-nav-label match-label">≈ match</span>
-        <button id="btn-cmp-match-next" class="cmp-nav-btn cmp-match-btn" title="Next matching section">↓</button>
+        <button id="btn-cmp-match-prev" class="cmp-nav-btn cmp-match-btn" title="Previous similar section">↑</button>
+        <span class="cmp-nav-label match-label" title="Similar sections found in the matrix">–</span>
+        <button id="btn-cmp-match-next" class="cmp-nav-btn cmp-match-btn" title="Next similar section">↓</button>
       </div>
       <div class="cmp-nav-group">
         <button id="btn-cmp-prev" class="cmp-nav-btn cmp-diff-btn" title="Previous difference">↑</button>
-        <span class="cmp-nav-label diff-label">≠ diff</span>
+        <span class="cmp-nav-label diff-label" title="Divergent regions found">–</span>
         <button id="btn-cmp-next" class="cmp-nav-btn cmp-diff-btn" title="Next difference">↓</button>
       </div>
     </div>
@@ -11838,15 +11838,15 @@ function updateCmpNavLabels(): void {
   const n = compareMatchPeaks.length;
   const d = compareDiffPeaks.length;
   if (matchLabel) {
-    matchLabel.textContent = n > 0 ? `${n} match${n === 1 ? '' : 'es'}` : 'no matches';
+    matchLabel.textContent = n > 0 ? `${n} similar` : 'none';
     matchLabel.title = n > 0
-      ? `${n} similar section${n===1?'':'s'} found — click to jump to each`
-      : 'No clearly matching sections detected';
+      ? `${n} similar section${n===1?'':'s'} — press ↑↓ to jump to each`
+      : 'No clearly similar sections detected';
   }
   if (diffLabel) {
-    diffLabel.textContent = d > 0 ? `${d} diff${d === 1 ? '' : 's'}` : 'no diffs';
+    diffLabel.textContent = d > 0 ? `${d} diff` : 'none';
     diffLabel.title = d > 0
-      ? `${d} divergent region${d===1?'':'s'} found — click to jump to each`
+      ? `${d} divergent region${d===1?'':'s'} — press ↑↓ to jump to each`
       : 'No significant divergences detected';
   }
 }
@@ -12187,9 +12187,7 @@ function navigateToCompareMatch(direction: 1 | -1): void {
 function highlightCurrentNavTarget(type: 'diff' | 'match', idx: number, total: number): void {
   const labelSel = type === 'match' ? '.match-label' : '.diff-label';
   const el = compareMidPanel?.querySelector(labelSel) as HTMLElement | null;
-  if (el) {
-    el.textContent = `${idx + 1} / ${total} ${type}`;
-  }
+  if (el) el.textContent = `${idx + 1}/${total}`;
 }
 
 function jumpBothPanesToRatio(ratio: number): void {

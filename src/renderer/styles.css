@@ -6190,20 +6190,21 @@ kbd {
   text-align: center;
 }
 
-/* Two nav groups: ≈ match and ≠ diff */
+/* Nav groups stacked vertically — fits the 128px panel width */
 .cmp-nav-row {
   display: flex;
-  gap: 4px;
+  flex-direction: column;
+  gap: 2px;
   padding: 3px 4px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
 }
 
 .cmp-nav-group {
-  flex: 1;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
+  width: 100%;
 }
 
 .cmp-nav-btn {
@@ -6211,10 +6212,10 @@ kbd {
   border: 1px solid var(--border-color);
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 10px;
-  padding: 1px 4px;
+  font-size: 11px;
+  padding: 0px 5px;
   border-radius: 3px;
-  line-height: 1.4;
+  line-height: 1.6;
   transition: background 0.15s, color 0.15s;
   flex-shrink: 0;
 }
@@ -6225,14 +6226,13 @@ kbd {
 .cmp-diff-btn:hover  { background: rgba(220,80,70,0.12); color: #f06050; }
 
 .cmp-nav-label {
-  font-size: 9px;
-  font-weight: 600;
+  font-size: 10px;
+  font-weight: 500;
   flex: 1;
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  letter-spacing: 0.02em;
 }
 .match-label { color: #40c060; }
 .diff-label  { color: #e04840; }
