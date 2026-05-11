@@ -10595,11 +10595,6 @@ async function applyFilter(providedConfig?: FilterConfig): Promise<void> {
     };
   }
 
-  if (!state.analysisResult) {
-    alert('Please run analysis first before applying filters.');
-    return;
-  }
-
   showProgress('Applying filter...');
 
   // Listen for progress updates from the main process
