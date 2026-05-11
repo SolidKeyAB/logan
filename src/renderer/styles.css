@@ -3227,7 +3227,21 @@ body.platform-darwin .titlebar {
   flex-shrink: 0;
   gap: 6px;
 }
-.compare-analyzing { color: var(--text-muted); font-style: italic; }
+.compare-analyzing { color: var(--text-muted); font-style: italic; white-space: nowrap; }
+.compare-progress-bar-wrap {
+  flex: 1;
+  height: 4px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 2px;
+  overflow: hidden;
+  min-width: 60px;
+}
+.compare-progress-bar-fill {
+  height: 100%;
+  background: var(--accent-color, #007acc);
+  border-radius: 2px;
+  transition: width 0.25s ease;
+}
 .compare-header-inner {
   display: flex;
   align-items: center;

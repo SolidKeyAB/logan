@@ -277,6 +277,12 @@ const api = {
     return () => ipcRenderer.removeListener('analyze-progress', handler);
   },
 
+  onCompareAnalyzeProgress: (callback: (data: { phase: string; percent: number; message?: string }) => void): (() => void) => {
+    const handler = (_: any, data: { phase: string; percent: number; message?: string }) => callback(data);
+    ipcRenderer.on('compare-analyze-progress', handler);
+    return () => ipcRenderer.removeListener('compare-analyze-progress', handler);
+  },
+
   // Open external URL in default browser
   openExternalUrl: (url: string): Promise<void> =>
     ipcRenderer.invoke('open-external-url', url),

@@ -11390,26 +11390,39 @@ async function showCompareModal(): Promise<void> {
   // Run analysis on the second file in background for density comparison
   compareFilePath = otherPath;
   compareAnalysisResult = null;
-  updateCompareHeader();
+  updateCompareHeader(0, 'Starting…');
 
-  window.api.analyzeFilePath(otherPath).then((result: { success: boolean; result?: any; error?: string }) => {
-    if (result.success && result.result) {
-      compareAnalysisResult = result.result;
-      renderCompareHeader();
-    }
-  }).catch(() => {});
+  const unsubProgress = window.api.onCompareAnalyzeProgress((p) => {
+    updateCompareHeader(p.percent, p.message || p.phase);
+  });
+
+  window.api.analyzeFilePath(otherPath)
+    .then((result: { success: boolean; result?: any; error?: string }) => {
+      unsubProgress();
+      if (result.success && result.result) {
+        compareAnalysisResult = result.result;
+        renderCompareHeader();
+      } else {
+        updateCompareHeader(0, 'Analysis failed');
+      }
+    })
+    .catch(() => { unsubProgress(); updateCompareHeader(0, 'Analysis failed'); });
 }
 
-function updateCompareHeader(): void {
+function updateCompareHeader(percent = 0, message = 'Analyzing…'): void {
   let header = document.getElementById('compare-header');
   if (!header) {
     header = document.createElement('div');
     header.id = 'compare-header';
     header.className = 'compare-header';
-    // Insert above the split view
     elements.editorContainer.insertBefore(header, elements.editorContainer.firstChild);
   }
-  header.innerHTML = '<span class="compare-analyzing">Analyzing for comparison…</span>';
+  header.innerHTML = `
+    <span class="compare-analyzing">Analyzing second file for comparison…</span>
+    <div class="compare-progress-bar-wrap">
+      <div class="compare-progress-bar-fill" style="width:${Math.max(2, percent)}%"></div>
+    </div>
+    <span class="compare-analyzing" style="min-width:80px;text-align:right">${percent}% — ${escapeHtml(message)}</span>`;
 }
 
 function renderCompareHeader(): void {

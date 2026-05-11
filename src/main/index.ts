@@ -4136,7 +4136,12 @@ ipcMain.handle('analyze-file-path', async (_, filePath: string) => {
 
   const compareSignal = { cancelled: false };
   try {
-    const result = await analyzer.analyze(filePath, {}, undefined, compareSignal);
+    const result = await analyzer.analyze(
+      filePath,
+      {},
+      (progress) => mainWindow?.webContents.send('compare-analyze-progress', progress),
+      compareSignal
+    );
     cacheAnalysisResult(filePath, result);
     return { success: true, result };
   } catch (error) {
