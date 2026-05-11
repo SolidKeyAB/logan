@@ -6177,11 +6177,33 @@ kbd {
 .cmp-panel-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 3px 6px;
-  gap: 4px;
+  justify-content: center;
+  padding: 3px 4px 2px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
+}
+
+.cmp-similarity {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+/* Two nav groups: ≈ match and ≠ diff */
+.cmp-nav-row {
+  display: flex;
+  gap: 4px;
+  padding: 3px 4px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.cmp-nav-group {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .cmp-nav-btn {
@@ -6189,45 +6211,31 @@ kbd {
   border: 1px solid var(--border-color);
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 11px;
-  padding: 2px 6px;
+  font-size: 10px;
+  padding: 1px 4px;
   border-radius: 3px;
-  line-height: 1;
+  line-height: 1.4;
   transition: background 0.15s, color 0.15s;
-}
-.cmp-nav-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-
-.cmp-header-center {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-}
-
-.cmp-similarity {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-secondary);
-  text-align: center;
-}
-
-.cmp-legend {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 9px;
-  color: var(--text-muted);
-}
-
-.cmp-legend-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
   flex-shrink: 0;
 }
+.cmp-nav-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.cmp-match-btn { border-color: rgba(40,190,80,0.4); color: #40c060; }
+.cmp-match-btn:hover { background: rgba(40,190,80,0.12); color: #60e080; }
+.cmp-diff-btn  { border-color: rgba(220,80,70,0.4); color: #e04840; }
+.cmp-diff-btn:hover  { background: rgba(220,80,70,0.12); color: #f06050; }
 
-.cmp-legend-label { letter-spacing: 0.02em; }
+.cmp-nav-label {
+  font-size: 9px;
+  font-weight: 600;
+  flex: 1;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.02em;
+}
+.match-label { color: #40c060; }
+.diff-label  { color: #e04840; }
 
 .cmp-strips {
   flex: 1;

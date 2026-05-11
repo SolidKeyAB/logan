@@ -1065,8 +1065,10 @@ let compareAnalysisResult: any | null = null;
 let compareFilePath: string | null = null;
 let compareMidPanel: HTMLDivElement | null = null;
 let compareMidPanelRO: ResizeObserver | null = null;
-let compareDiffPeaks: number[] = []; // ratio positions (0–1) of significant diff regions
+let compareDiffPeaks: number[] = []; // ratio positions (0–1) of significant diff regions (diagonal)
 let compareDiffPeakIdx = -1;
+let compareMatchPeaks: Array<{ ratioA: number; ratioB: number }> = []; // bright spots in the matrix
+let compareMatchPeakIdx = -1;
 const MINIMAP_SAMPLE_RATE = 1000; // Sample every N lines for minimap
 
 // Range selection (context menu)
@@ -1890,6 +1892,8 @@ function deactivateSplitView(): void {
   compareMidPanel = null; // already removed via splitRowContainer.remove()
   compareDiffPeaks = [];
   compareDiffPeakIdx = -1;
+  compareMatchPeaks = [];
+  compareMatchPeakIdx = -1;
 
   // Reset state
   const wasDiff = viewMode === 'diff';
@@ -11703,15 +11707,19 @@ function createCompareMidPanel(): void {
   compareMidPanel.className = 'compare-mid-panel';
   compareMidPanel.innerHTML = `
     <div class="cmp-panel-header">
-      <button id="btn-cmp-prev" class="cmp-nav-btn" title="Jump to previous difference">↑</button>
-      <div class="cmp-header-center">
-        <span id="cmp-similarity" class="cmp-similarity">–</span>
-        <div class="cmp-legend">
-          <span class="cmp-legend-dot" style="background:#e8e8ff"></span><span class="cmp-legend-label">match</span>
-          <span class="cmp-legend-dot" style="background:#1a1a2e"></span><span class="cmp-legend-label">diff</span>
-        </div>
+      <span id="cmp-similarity" class="cmp-similarity">–</span>
+    </div>
+    <div class="cmp-nav-row">
+      <div class="cmp-nav-group">
+        <button id="btn-cmp-match-prev" class="cmp-nav-btn cmp-match-btn" title="Previous matching section">↑</button>
+        <span class="cmp-nav-label match-label">≈ match</span>
+        <button id="btn-cmp-match-next" class="cmp-nav-btn cmp-match-btn" title="Next matching section">↓</button>
       </div>
-      <button id="btn-cmp-next" class="cmp-nav-btn" title="Jump to next difference">↓</button>
+      <div class="cmp-nav-group">
+        <button id="btn-cmp-prev" class="cmp-nav-btn cmp-diff-btn" title="Previous difference">↑</button>
+        <span class="cmp-nav-label diff-label">≠ diff</span>
+        <button id="btn-cmp-next" class="cmp-nav-btn cmp-diff-btn" title="Next difference">↓</button>
+      </div>
     </div>
     <div class="cmp-axis-label">
       <span class="cmp-axis-a">A→</span><span class="cmp-axis-b">↓B</span>
@@ -11730,7 +11738,7 @@ function createCompareMidPanel(): void {
   secondary ? splitRowContainer.insertBefore(compareMidPanel, secondary)
             : splitRowContainer.appendChild(compareMidPanel);
 
-  // Navigation buttons
+  // Diff navigation buttons
   document.getElementById('btn-cmp-prev')?.addEventListener('click', (e) => {
     e.stopPropagation();
     navigateToCompareDiff(-1);
@@ -11738,6 +11746,15 @@ function createCompareMidPanel(): void {
   document.getElementById('btn-cmp-next')?.addEventListener('click', (e) => {
     e.stopPropagation();
     navigateToCompareDiff(1);
+  });
+  // Match navigation buttons
+  document.getElementById('btn-cmp-match-prev')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    navigateToCompareMatch(-1);
+  });
+  document.getElementById('btn-cmp-match-next')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    navigateToCompareMatch(1);
   });
 
   // Click on the matrix canvas → navigate file A to X position, file B to Y position
@@ -11802,14 +11819,20 @@ function renderCompareMidPanel(): void {
   const pct = Math.round(similarity * 100);
   const simEl = document.getElementById('cmp-similarity');
   if (simEl) {
-    simEl.textContent = `${pct}%`;
-    simEl.title = `Overall pattern similarity: ${pct}%\nThis is the average across all file sections.\nIndividual sections can be more or less similar — see the green/red strip.`;
+    simEl.textContent = `${pct}% similar`;
+    simEl.title = `Overall pattern similarity: ${pct}%\nBright spots in the matrix = matching sections (including off-diagonal = different positions).\nUse ≈ match buttons to navigate to them.`;
     simEl.style.color = pct >= 80 ? '#6a9955' : pct >= 50 ? '#cca700' : '#f14c4c';
   }
 
   renderComparePanelCanvas('cmp-canvas-a', densA, false);
   renderComparePanelCanvas('cmp-canvas-b', densB, false);
   renderComparePanelMatrix('cmp-matrix-canvas', densA, densB);
+
+  // Update nav button labels with counts
+  const matchLabel = compareMidPanel?.querySelector('.match-label');
+  const diffLabel = compareMidPanel?.querySelector('.diff-label');
+  if (matchLabel) matchLabel.textContent = `≈ ${compareMatchPeaks.length}`;
+  if (diffLabel) diffLabel.textContent = `≠ ${compareDiffPeaks.length}`;
 }
 
 type DensityData = { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[]; debug?: number[]; verbose?: number[] };
@@ -12070,9 +12093,9 @@ function renderComparePanelMatrix(id: string, densA: DensityData, densB: Density
   }
   ctx.putImageData(new ImageData(pixels, cw, ch), 0, 0);
 
-  // Draw diff peak markers as horizontal+vertical lines
+  // Draw diff peak markers as crosshair lines on diagonal
   if (compareDiffPeaks.length > 0) {
-    ctx.strokeStyle = 'rgba(255, 220, 60, 0.5)';
+    ctx.strokeStyle = 'rgba(255, 220, 60, 0.45)';
     ctx.lineWidth = 1;
     for (const peak of compareDiffPeaks) {
       const x = Math.floor(peak * cw);
@@ -12081,16 +12104,77 @@ function renderComparePanelMatrix(id: string, densA: DensityData, densB: Density
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cw, y); ctx.stroke();
     }
   }
+
+  // Find match peaks: local maxima in the similarity matrix above a threshold.
+  // Sample at a coarser grid (GRID×GRID), find local maxima, sort by brightness.
+  const GRID = 40;
+  type MatrixCell = { ratioA: number; ratioB: number; score: number };
+  const cells: MatrixCell[] = [];
+  for (let gy = 0; gy < GRID; gy++) {
+    for (let gx = 0; gx < GRID; gx++) {
+      const ratioA = (gx + 0.5) / GRID;
+      const ratioB = (gy + 0.5) / GRID;
+      const ia = Math.min(cw - 1, Math.floor(ratioA * cw));
+      const ib = Math.min(ch - 1, Math.floor(ratioB * ch));
+      const i4 = (ib * cw + ia) << 2;
+      // Use green channel as brightness proxy
+      const brightness = pixels[i4 + 1] / 255;
+      if (brightness > 0.4) cells.push({ ratioA, ratioB, score: brightness });
+    }
+  }
+  // Keep only local maxima (no neighbour with higher score within 2 cells)
+  const peaks: Array<{ ratioA: number; ratioB: number }> = [];
+  cells.sort((a, b) => b.score - a.score);
+  const SUPPRESSION = 2 / GRID; // suppress peaks within 2 grid cells
+  for (const c of cells) {
+    const dominated = peaks.some(p =>
+      Math.abs(p.ratioA - c.ratioA) < SUPPRESSION && Math.abs(p.ratioB - c.ratioB) < SUPPRESSION
+    );
+    if (!dominated) peaks.push({ ratioA: c.ratioA, ratioB: c.ratioB });
+    if (peaks.length >= 20) break; // cap at 20 match peaks
+  }
+  // Sort peaks top-to-bottom (by ratioB so pressing ↓ scans file B downward)
+  compareMatchPeaks = peaks.sort((a, b) => a.ratioB - b.ratioB);
+  compareMatchPeakIdx = -1;
+
+  // Draw small circles at match peak locations
+  ctx.strokeStyle = 'rgba(180, 220, 255, 0.7)';
+  ctx.lineWidth = 1.5;
+  for (const p of compareMatchPeaks) {
+    const px2 = Math.floor(p.ratioA * cw);
+    const py2 = Math.floor(p.ratioB * ch);
+    ctx.beginPath();
+    ctx.arc(px2, py2, Math.max(3, Math.round(4 * dpr / 2)), 0, Math.PI * 2);
+    ctx.stroke();
+  }
 }
 
 function navigateToCompareDiff(direction: 1 | -1): void {
   if (compareDiffPeaks.length === 0) return;
-  compareDiffPeakIdx = Math.max(0, Math.min(
-    compareDiffPeaks.length - 1,
-    compareDiffPeakIdx + direction
-  ));
-  if (compareDiffPeakIdx < 0) compareDiffPeakIdx = direction > 0 ? 0 : compareDiffPeaks.length - 1;
+  compareDiffPeakIdx += direction;
+  if (compareDiffPeakIdx < 0) compareDiffPeakIdx = compareDiffPeaks.length - 1;
+  if (compareDiffPeakIdx >= compareDiffPeaks.length) compareDiffPeakIdx = 0;
   jumpBothPanesToRatio(compareDiffPeaks[compareDiffPeakIdx]);
+  highlightCurrentNavTarget('diff', compareDiffPeakIdx, compareDiffPeaks.length);
+}
+
+function navigateToCompareMatch(direction: 1 | -1): void {
+  if (compareMatchPeaks.length === 0) return;
+  compareMatchPeakIdx += direction;
+  if (compareMatchPeakIdx < 0) compareMatchPeakIdx = compareMatchPeaks.length - 1;
+  if (compareMatchPeakIdx >= compareMatchPeaks.length) compareMatchPeakIdx = 0;
+  const peak = compareMatchPeaks[compareMatchPeakIdx];
+  jumpToRatioPair(peak.ratioA, peak.ratioB);
+  highlightCurrentNavTarget('match', compareMatchPeakIdx, compareMatchPeaks.length);
+}
+
+function highlightCurrentNavTarget(type: 'diff' | 'match', idx: number, total: number): void {
+  const labelSel = type === 'match' ? '.match-label' : '.diff-label';
+  const el = compareMidPanel?.querySelector(labelSel);
+  if (el) {
+    const icon = type === 'match' ? '≈' : '≠';
+    el.textContent = `${icon} ${idx + 1}/${total}`;
+  }
 }
 
 function jumpBothPanesToRatio(ratio: number): void {
