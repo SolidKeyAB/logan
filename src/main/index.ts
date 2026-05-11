@@ -4129,6 +4129,13 @@ ipcMain.handle('analyze-file-path', async (_, filePath: string) => {
     return { success: false, error: 'No file path provided' };
   }
 
+  // Return cached result immediately if available — no re-analysis needed
+  const cached = analysisResultCache.get(filePath);
+  if (cached) {
+    mainWindow?.webContents.send('compare-analyze-progress', { phase: 'done', percent: 100, message: 'Using cached analysis' });
+    return { success: true, result: cached };
+  }
+
   const analyzer = analyzerRegistry.getDefault();
   if (!analyzer) {
     return { success: false, error: 'Analyzer not found' };
