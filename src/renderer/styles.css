@@ -3208,6 +3208,50 @@ body.platform-darwin .titlebar {
   overflow: hidden;
 }
 
+/* ── Canvas minimap ──────────────────────────────────────────────────── */
+.minimap-canvas {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+}
+
+/* ── Compare header ──────────────────────────────────────────────────── */
+.compare-header {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 11px;
+  flex-shrink: 0;
+  gap: 6px;
+}
+.compare-analyzing { color: var(--text-muted); font-style: italic; }
+.compare-header-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.compare-file-label {
+  color: var(--text-secondary);
+  font-size: 11px;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.compare-canvases {
+  display: flex;
+  gap: 2px;
+  align-items: stretch;
+  height: 40px;
+  flex-shrink: 0;
+}
+.compare-mini-canvas { width: 40px; height: 40px; border-radius: 2px; }
+.compare-diff-canvas { width: 20px; height: 40px; border-radius: 2px; }
+
 /* ── Heatmap: full-width continuous severity zones ────────────────────── */
 .minimap-density-strip-seg {
   position: absolute;

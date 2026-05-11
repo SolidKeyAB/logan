@@ -234,6 +234,9 @@ const api = {
   analyzeFile: (analyzerName?: string, options?: any): Promise<{ success: boolean; result?: any; error?: string }> =>
     ipcRenderer.invoke('analyze-file', analyzerName, options),
 
+  analyzeFilePath: (filePath: string): Promise<{ success: boolean; result?: any; error?: string }> =>
+    ipcRenderer.invoke('analyze-file-path', filePath),
+
   cancelAnalysis: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('cancel-analysis'),
 

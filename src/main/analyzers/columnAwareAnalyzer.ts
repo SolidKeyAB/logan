@@ -65,9 +65,9 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
         error: 0, warning: 0, info: 0, debug: 0, trace: 0
       };
 
-      // Density buckets — 200 buckets keyed by byte position
+      // Density buckets — adaptive count based on file size (500–10,000)
       // Used by the minimap to draw a heat map by log level
-      const DENSITY_BUCKETS = 200;
+      const DENSITY_BUCKETS = Math.min(Math.max(Math.ceil(fileSize / 500), 500), 10000);
       const densityError = new Uint32Array(DENSITY_BUCKETS);
       const densityWarning = new Uint32Array(DENSITY_BUCKETS);
       const densityInfo = new Uint32Array(DENSITY_BUCKETS);

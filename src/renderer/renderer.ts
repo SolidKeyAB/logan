@@ -77,6 +77,12 @@ interface AnalysisResult {
   analyzerName: string;
   analyzedAt: number;
   insights: AnalysisInsights;
+  density?: {
+    buckets: number;
+    error: number[];
+    warning: number[];
+    info: number[];
+  };
 }
 
 interface IncludePattern {
@@ -819,7 +825,7 @@ const elements = {
   // Tab bar
   tabBar: document.getElementById('tab-bar') as HTMLDivElement,
   tabsContainer: document.getElementById('tabs-container') as HTMLDivElement,
-  btnNewTab: document.getElementById('btn-new-tab') as HTMLButtonElement,
+  btnCompare: document.getElementById('btn-compare') as HTMLButtonElement,
   // Loading overlay
   loadingOverlay: document.getElementById('loading-overlay') as HTMLDivElement,
   loadingVideo: document.getElementById('loading-video') as HTMLVideoElement,
@@ -1041,9 +1047,14 @@ let logContentElement: HTMLDivElement | null = null;
 let logViewerWrapper: HTMLDivElement | null = null;
 let minimapElement: HTMLDivElement | null = null;
 let minimapContentElement: HTMLDivElement | null = null;
+let minimapCanvasElement: HTMLCanvasElement | null = null;
 let minimapViewportElement: HTMLDivElement | null = null;
 let annotationBarElement: HTMLDivElement | null = null;
 let minimapData: Array<{ level: string | undefined; lineNumber?: number }> = [];
+
+// Compare feature state
+let compareAnalysisResult: any | null = null;
+let compareFilePath: string | null = null;
 const MINIMAP_SAMPLE_RATE = 1000; // Sample every N lines for minimap
 
 // Range selection (context menu)
@@ -1834,6 +1845,11 @@ function deactivateSplitView(): void {
   // Remove layout classes
   elements.editorContainer.classList.remove('split-view', 'diff-mode');
 
+  // Clean up compare state
+  compareAnalysisResult = null;
+  compareFilePath = null;
+  document.getElementById('compare-header')?.remove();
+
   // Reset state
   const wasDiff = viewMode === 'diff';
   viewMode = 'single';
@@ -1978,13 +1994,17 @@ function createLogViewer(): void {
   minimapElement = document.createElement('div');
   minimapElement.className = 'minimap';
 
+  minimapCanvasElement = document.createElement('canvas');
+  minimapCanvasElement.className = 'minimap-canvas';
+  minimapElement.appendChild(minimapCanvasElement);
+  // keep minimapContentElement pointing at a hidden div so legacy calls don't crash
   minimapContentElement = document.createElement('div');
-  minimapContentElement.className = 'minimap-content';
+  minimapContentElement.style.display = 'none';
+  minimapElement.appendChild(minimapContentElement);
 
   minimapViewportElement = document.createElement('div');
   minimapViewportElement.className = 'minimap-viewport';
 
-  minimapElement.appendChild(minimapContentElement);
   minimapElement.appendChild(minimapViewportElement);
 
   // Line-number tooltip for minimap hover
@@ -2083,6 +2103,7 @@ function createLogViewer(): void {
       state.visibleEndLine = Math.min(startLine + visibleLines + BUFFER_LINES, getTotalLines() - 1);
       loadVisibleLines();
     }
+    renderMinimapCanvas();
   });
   resizeObserver.observe(logViewerElement);
 }
@@ -3489,17 +3510,87 @@ async function buildMinimap(onProgress?: (percent: number) => void): Promise<voi
 }
 
 function renderMinimap(): void {
-  if (!minimapContentElement || !minimapElement) return;
+  if (!minimapElement) return;
 
   const totalLines = getTotalLines();
-  if (totalLines === 0 || minimapData.length === 0) return;
+  if (totalLines === 0 && minimapData.length === 0) return;
 
-  // Per-line bars removed — the heatmap strip is the sole background layer.
-  minimapContentElement.innerHTML = '';
-
+  if (minimapContentElement) minimapContentElement.innerHTML = '';
+  renderMinimapCanvas();
   renderMinimapDensityStrip();
   renderMinimapMarkers();
   updateMinimapViewport();
+}
+
+function renderMinimapCanvas(): void {
+  if (!minimapCanvasElement || !minimapElement) return;
+  const density = state.analysisResult?.density;
+
+  const dpr = window.devicePixelRatio || 1;
+  const cw = Math.floor(minimapCanvasElement.offsetWidth * dpr);
+  const ch = Math.floor(minimapCanvasElement.offsetHeight * dpr);
+  if (cw === 0 || ch === 0) return;
+
+  minimapCanvasElement.width = cw;
+  minimapCanvasElement.height = ch;
+  const ctx = minimapCanvasElement.getContext('2d')!;
+
+  if (!density || density.buckets === 0) {
+    ctx.fillStyle = '#14141a';
+    ctx.fillRect(0, 0, cw, ch);
+    return;
+  }
+
+  const { buckets, error, warning, info } = density;
+
+  // Global max for brightness normalisation
+  let globalMax = 1;
+  for (let i = 0; i < buckets; i++) {
+    const t = error[i] + warning[i] + info[i];
+    if (t > globalMax) globalMax = t;
+  }
+
+  const pixels = new Uint8ClampedArray(cw * ch * 4);
+
+  for (let py = 0; py < ch; py++) {
+    const bi = Math.min(buckets - 1, Math.floor((py / ch) * buckets));
+    const e = error[bi] || 0;
+    const w = warning[bi] || 0;
+    const inf = info[bi] || 0;
+    const total = e + w + inf;
+
+    // Base: very dark
+    let r = 18, g = 18, b = 26;
+
+    if (total > 0) {
+      const brightness = Math.min(1, Math.sqrt(total / globalMax));
+      const denom = Math.max(total, 1);
+      // Error: crimson
+      const er = (e / denom) * brightness;
+      r = Math.min(255, r + er * 210);
+      g = Math.min(255, g + er * 28);
+      b = Math.min(255, b + er * 28);
+      // Warning: amber
+      const wr = (w / denom) * brightness;
+      r = Math.min(255, r + wr * 185);
+      g = Math.min(255, g + wr * 110);
+      // Info: steel blue (subtle)
+      const ir = (inf / denom) * brightness * 0.45;
+      g = Math.min(255, g + ir * 75);
+      b = Math.min(255, b + ir * 135);
+    }
+
+    const rowBase = py * cw;
+    for (let px = 0; px < cw; px++) {
+      const i = (rowBase + px) << 2;
+      pixels[i]     = r;
+      pixels[i + 1] = g;
+      pixels[i + 2] = b;
+      pixels[i + 3] = 255;
+    }
+  }
+
+  ctx.putImageData(new ImageData(pixels, cw, ch), 0, 0);
 }
 
 function renderMinimapDensityStrip(): void {
@@ -9861,6 +9952,7 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
         updateProgress(percent);
         updateProgressText(`Building minimap... ${percent}%`);
       });
+      renderMinimapCanvas();
 
       // Auto-analyze if enabled in settings
       if (userSettings.autoAnalyze && !isMarkdownFile) {
@@ -9936,6 +10028,7 @@ async function analyzeFile(): Promise<void> {
     if (result.success && result.result) {
       state.analysisResult = result.result;
       state.comparisonReport = null;
+      renderMinimapCanvas();
       await loadBaselineList();
       updateAnalysisUI();
     } else {
@@ -11274,6 +11367,166 @@ function navigateGap(direction: 'prev' | 'next'): void {
   updateGapNavPosition();
   highlightCurrentGapItem();
   goToLine(currentTimeGaps[currentGapIndex].lineNumber);
+}
+
+// ── Compare Feature ────────────────────────────────────────────────────────
+
+async function showCompareModal(): Promise<void> {
+  if (!state.filePath) return;
+
+  // Pick second file
+  const otherPath = await window.api.openFileDialog();
+  if (!otherPath || otherPath === state.filePath) return;
+
+  // Load the other file as a tab
+  await loadFile(otherPath);
+
+  // Find the tab for the other file
+  const otherTab = state.tabs.find(t => t.filePath === otherPath);
+  if (!otherTab) return;
+
+  activateSplitView(otherTab.id);
+
+  // Run analysis on the second file in background for density comparison
+  compareFilePath = otherPath;
+  compareAnalysisResult = null;
+  updateCompareHeader();
+
+  window.api.analyzeFilePath(otherPath).then((result: { success: boolean; result?: any; error?: string }) => {
+    if (result.success && result.result) {
+      compareAnalysisResult = result.result;
+      renderCompareHeader();
+    }
+  }).catch(() => {});
+}
+
+function updateCompareHeader(): void {
+  let header = document.getElementById('compare-header');
+  if (!header) {
+    header = document.createElement('div');
+    header.id = 'compare-header';
+    header.className = 'compare-header';
+    // Insert above the split view
+    elements.editorContainer.insertBefore(header, elements.editorContainer.firstChild);
+  }
+  header.innerHTML = '<span class="compare-analyzing">Analyzing for comparison…</span>';
+}
+
+function renderCompareHeader(): void {
+  const header = document.getElementById('compare-header');
+  if (!header) return;
+
+  const densA = state.analysisResult?.density;
+  const densB = compareAnalysisResult?.density;
+
+  if (!densA || !densB) {
+    header.innerHTML = '<span class="compare-analyzing">Analyzing for comparison…</span>';
+    return;
+  }
+
+  header.innerHTML = `
+    <div class="compare-header-inner">
+      <span class="compare-file-label">${escapeHtml(getFileName(state.filePath || ''))}</span>
+      <div class="compare-canvases">
+        <canvas id="compare-canvas-a" class="compare-mini-canvas"></canvas>
+        <canvas id="compare-canvas-diff" class="compare-diff-canvas"></canvas>
+        <canvas id="compare-canvas-b" class="compare-mini-canvas"></canvas>
+      </div>
+      <span class="compare-file-label">${escapeHtml(getFileName(compareFilePath || ''))}</span>
+    </div>`;
+
+  requestAnimationFrame(() => {
+    renderCompareCanvas('compare-canvas-a', densA);
+    renderCompareCanvas('compare-canvas-b', densB);
+    renderDiffCanvas('compare-canvas-diff', densA, densB);
+  });
+}
+
+function renderCompareCanvas(id: string, density: { buckets: number; error: number[]; warning: number[]; info: number[] }): void {
+  const canvas = document.getElementById(id) as HTMLCanvasElement | null;
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cw = Math.floor(canvas.offsetWidth * dpr) || Math.round(30 * dpr);
+  const ch = Math.floor(canvas.offsetHeight * dpr) || Math.round(120 * dpr);
+  canvas.width = cw; canvas.height = ch;
+  const ctx = canvas.getContext('2d')!;
+  const { buckets, error, warning, info } = density;
+  let globalMax = 1;
+  for (let i = 0; i < buckets; i++) {
+    const t = error[i] + warning[i] + info[i];
+    if (t > globalMax) globalMax = t;
+  }
+  const pixels = new Uint8ClampedArray(cw * ch * 4);
+  for (let py = 0; py < ch; py++) {
+    const bi = Math.min(buckets - 1, Math.floor((py / ch) * buckets));
+    const e = error[bi] || 0, w = warning[bi] || 0, inf = info[bi] || 0;
+    const total = e + w + inf;
+    let r = 18, g = 18, b = 26;
+    if (total > 0) {
+      const br = Math.min(1, Math.sqrt(total / globalMax));
+      const d = Math.max(total, 1);
+      r = Math.min(255, r + (e/d)*br*210);
+      g = Math.min(255, g + (e/d)*br*28);
+      b = Math.min(255, b + (e/d)*br*28);
+      r = Math.min(255, r + (w/d)*br*185);
+      g = Math.min(255, g + (w/d)*br*110);
+      const ir = (inf/d)*br*0.45;
+      g = Math.min(255, g + ir*75);
+      b = Math.min(255, b + ir*135);
+    }
+    const base = py * cw;
+    for (let px = 0; px < cw; px++) {
+      const i = (base + px) << 2;
+      pixels[i]=r; pixels[i+1]=g; pixels[i+2]=b; pixels[i+3]=255;
+    }
+  }
+  ctx.putImageData(new ImageData(pixels, cw, ch), 0, 0);
+}
+
+function renderDiffCanvas(id: string,
+  densA: { buckets: number; error: number[]; warning: number[]; info: number[] },
+  densB: { buckets: number; error: number[]; warning: number[]; info: number[] }
+): void {
+  const canvas = document.getElementById(id) as HTMLCanvasElement | null;
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cw = Math.floor(canvas.offsetWidth * dpr) || Math.round(20 * dpr);
+  const ch = Math.floor(canvas.offsetHeight * dpr) || Math.round(120 * dpr);
+  canvas.width = cw; canvas.height = ch;
+  const ctx = canvas.getContext('2d')!;
+
+  // Normalise both to the same scale
+  let maxA = 1, maxB = 1;
+  for (let i = 0; i < densA.buckets; i++) { const t = densA.error[i]+densA.warning[i]+densA.info[i]; if(t>maxA)maxA=t; }
+  for (let i = 0; i < densB.buckets; i++) { const t = densB.error[i]+densB.warning[i]+densB.info[i]; if(t>maxB)maxB=t; }
+
+  const pixels = new Uint8ClampedArray(cw * ch * 4);
+  for (let py = 0; py < ch; py++) {
+    const biA = Math.min(densA.buckets-1, Math.floor((py/ch)*densA.buckets));
+    const biB = Math.min(densB.buckets-1, Math.floor((py/ch)*densB.buckets));
+
+    // Normalised [0,1] for each file
+    const eA = (densA.error[biA]||0)/maxA, wA = (densA.warning[biA]||0)/maxA;
+    const eB = (densB.error[biB]||0)/maxB, wB = (densB.warning[biB]||0)/maxB;
+
+    const diffE = Math.abs(eA - eB);
+    const diffW = Math.abs(wA - wB) * 0.6;
+    const diffTotal = Math.min(1, diffE + diffW);
+
+    // Colour: dark for similar, red/orange for different
+    let r = 18, g = 28, b = 42;
+    if (diffTotal > 0.05) {
+      r = Math.min(255, 30 + diffTotal * 220);
+      g = Math.min(255, 28 + (1-diffTotal) * 80);
+      b = Math.min(255, 42 + (1-diffTotal) * 60);
+    }
+    const base = py * cw;
+    for (let px = 0; px < cw; px++) {
+      const i = (base + px) << 2;
+      pixels[i]=r; pixels[i+1]=g; pixels[i+2]=b; pixels[i+3]=255;
+    }
+  }
+  ctx.putImageData(new ImageData(pixels, cw, ch), 0, 0);
 }
 
 // Split File
@@ -14507,7 +14760,7 @@ function init(): void {
   elements.btnDeleteHighlightGroup.addEventListener('click', deleteActiveHighlightGroup);
 
   // Tab bar
-  elements.btnNewTab.addEventListener('click', openFile);
+  elements.btnCompare.addEventListener('click', showCompareModal);
 
   // Zoom controls
   elements.btnZoomIn.addEventListener('click', zoomIn);

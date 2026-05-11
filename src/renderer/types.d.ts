@@ -348,6 +348,7 @@ interface Api {
   // Analysis
   listAnalyzers: () => Promise<{ success: boolean; analyzers?: Array<{ name: string; description: string }> }>;
   analyzeFile: (analyzerName?: string, options?: AnalyzerOptions) => Promise<{ success: boolean; result?: AnalysisResult; error?: string }>;
+  analyzeFilePath: (filePath: string) => Promise<{ success: boolean; result?: AnalysisResult; error?: string }>;
   cancelAnalysis: () => Promise<{ success: boolean }>;
   applyFilter: (config: any) => Promise<{ success: boolean; stats?: { filteredLines: number }; filteredLineNumbers?: number[]; error?: string }>;
   cancelFilter: () => Promise<{ success: boolean }>;

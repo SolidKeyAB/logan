@@ -4123,6 +4123,27 @@ ipcMain.handle('analyze-file', async (_, analyzerName?: string, options?: Analyz
   }
 });
 
+// Run analysis on a specific file path (used by compare feature)
+ipcMain.handle('analyze-file-path', async (_, filePath: string) => {
+  if (!filePath) {
+    return { success: false, error: 'No file path provided' };
+  }
+
+  const analyzer = analyzerRegistry.getDefault();
+  if (!analyzer) {
+    return { success: false, error: 'Analyzer not found' };
+  }
+
+  const compareSignal = { cancelled: false };
+  try {
+    const result = await analyzer.analyze(filePath, {}, undefined, compareSignal);
+    cacheAnalysisResult(filePath, result);
+    return { success: true, result };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
 // Cancel analysis
 ipcMain.handle('cancel-analysis', async () => {
   analyzeSignal.cancelled = true;
