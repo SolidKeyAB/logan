@@ -10,6 +10,8 @@ import { AnalysisResult } from './analyzers/types';
 
 const API_PORT = 19532;
 const PORT_FILE = path.join(os.homedir(), '.logan', 'mcp-port');
+const SESSION_FILE = path.join(os.homedir(), '.logan', 'agent-session.json');
+const SESSION_MAX_MESSAGES = 100; // keep last 100 messages on disk
 
 // --- Chat message queue & SSE ---
 export interface ChatMessage {
@@ -20,6 +22,51 @@ export interface ChatMessage {
 }
 
 const chatMessages: ChatMessage[] = [];
+
+// Persist session to disk (debounced)
+let _saveTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleSessionSave(): void {
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => {
+    _saveTimer = null;
+    try {
+      const dir = path.dirname(SESSION_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const toSave = chatMessages.slice(-SESSION_MAX_MESSAGES);
+      fs.writeFileSync(SESSION_FILE, JSON.stringify(toSave, null, 2));
+    } catch { /* ignore */ }
+  }, 1000);
+}
+
+// Load persisted session messages (called on startup)
+export function loadPersistedSession(): void {
+  try {
+    if (!fs.existsSync(SESSION_FILE)) return;
+    const saved: ChatMessage[] = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf-8'));
+    if (!Array.isArray(saved)) return;
+    // Only restore messages from the last 24h
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const recent = saved.filter(m => m.timestamp > cutoff);
+    chatMessages.push(...recent);
+  } catch { /* stale or invalid */ }
+}
+
+// Build a compact context string from recent messages for reconnect prompts
+export function buildReconnectContext(maxMessages = 20, maxChars = 3000): string {
+  if (chatMessages.length === 0) return '';
+  const recent = chatMessages.slice(-maxMessages);
+  let ctx = 'Previous conversation (reconnecting after interruption):\n---\n';
+  for (const m of recent) {
+    const label = m.from === 'user' ? 'User' : 'Agent';
+    const text = m.text.length > 600 ? m.text.substring(0, 600) + '…' : m.text;
+    ctx += `${label}: ${text}\n`;
+  }
+  ctx += '---\n';
+  if (ctx.length > maxChars) {
+    ctx = '…[earlier context omitted]\n' + ctx.substring(ctx.length - maxChars);
+  }
+  return ctx;
+}
 
 // Single-agent connection: one SSE client at a time (must supply a name)
 let activeAgent: { res: http.ServerResponse; name: string } | null = null;
@@ -128,6 +175,7 @@ export function addChatMessage(from: 'user' | 'agent', text: string): ChatMessag
     timestamp: Date.now(),
   };
   chatMessages.push(msg);
+  scheduleSessionSave();
   broadcastSSE(msg);
   return msg;
 }

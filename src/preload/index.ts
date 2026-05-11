@@ -485,8 +485,11 @@ const api = {
     return () => ipcRenderer.removeListener('agent-connection-changed', handler);
   },
 
-  launchAgent: (): Promise<{ success: boolean; error?: string }> =>
+  launchAgent: (): Promise<{ success: boolean; agentName?: string; error?: string }> =>
     ipcRenderer.invoke('agent-launch'),
+
+  reconnectAgent: (): Promise<{ success: boolean; agentName?: string; resumed?: boolean; error?: string }> =>
+    ipcRenderer.invoke('agent-reconnect'),
 
   stopAgent: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('agent-stop'),

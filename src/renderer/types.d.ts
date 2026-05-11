@@ -446,7 +446,8 @@ interface Api {
   onAgentMessage: (callback: (msg: { id: string; from: string; text: string; timestamp: number }) => void) => () => void;
   getAgentStatus: () => Promise<{ connected: boolean; count: number }>;
   onAgentConnectionChanged: (callback: (data: { connected: boolean; count: number }) => void) => () => void;
-  launchAgent: () => Promise<{ success: boolean; error?: string }>;
+  launchAgent: () => Promise<{ success: boolean; agentName?: string; error?: string }>;
+  reconnectAgent: () => Promise<{ success: boolean; agentName?: string; resumed?: boolean; error?: string }>;
   stopAgent: () => Promise<{ success: boolean }>;
   getAgentRunning: () => Promise<{ running: boolean }>;
   detectAgentEnvironment: () => Promise<{

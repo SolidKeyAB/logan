@@ -19,7 +19,7 @@ import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, 
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
-import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName } from './api-server';
+import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession, buildReconnectContext } from './api-server';
 import { BaselineStore, buildFingerprint } from './baselineStore';
 // Native-dependent modules — lazy-loaded to prevent SIGSEGV if bindings aren't built
 let SerialHandler: any = null;
@@ -1455,6 +1455,7 @@ app.whenReady().then(() => {
       };
     },
   };
+  loadPersistedSession(); // restore last 24h of chat history
   startApiServer(apiContext);
 });
 
@@ -5554,28 +5555,32 @@ function findClaudeCli(): string | null {
   return null;
 }
 
-const CLAUDE_CHAT_LOOP_PROMPT = `You are connected to LOGAN, a log analysis tool, via MCP.
-Use logan_status to check the current state, then greet the user with logan_send_message.
+function buildAgentPrompt(isReconnect = false): string {
+  const contextSection = isReconnect ? buildReconnectContext() : '';
+  const opening = isReconnect
+    ? 'You have reconnected to LOGAN after a network interruption. Resume helping the user from where you left off — do NOT re-greet them, just acknowledge the reconnect briefly.'
+    : 'Use logan_status to check the current state, then greet the user with logan_send_message.';
+  return `${contextSection}You are connected to LOGAN, a log analysis tool, via MCP.
+${opening}
 Then enter a chat loop: call logan_wait_for_message to receive user messages, process them
 using LOGAN's MCP tools (logan_search, logan_analyze, logan_filter, logan_get_lines, etc.),
 and reply with logan_send_message. Continue until the user says goodbye or stop.`;
+}
 
-ipcMain.handle('agent-launch', async () => {
+async function launchAgentProcess(isReconnect = false): Promise<{ success: boolean; agentName?: string; error?: string }> {
   if (agentProcess) {
     return { success: false, error: 'Agent is already running' };
   }
 
   const config = getAgentConfig();
+  const prompt = buildAgentPrompt(isReconnect);
 
   try {
     if (config.type === 'claude-code') {
-      // Launch Claude Code CLI with MCP config
       const claudePath = findClaudeCli();
       if (!claudePath) {
         return { success: false, error: 'Claude Code CLI not found. Please install it or reconfigure.' };
       }
-
-      // Generate temp MCP config for Claude Code
       const mcpConfig = {
         mcpServers: {
           logan: {
@@ -5587,76 +5592,43 @@ ipcMain.handle('agent-launch', async () => {
       };
       const tmpMcpPath = path.join(os.tmpdir(), 'logan-claude-mcp.json');
       fs.writeFileSync(tmpMcpPath, JSON.stringify(mcpConfig));
-
-      const args = [
-        '--print',
-        '--mcp-config', tmpMcpPath,
-        '--permission-mode', 'bypassPermissions',
-        '--strict-mcp-config',
-      ];
+      const args = ['--print', '--mcp-config', tmpMcpPath, '--permission-mode', 'bypassPermissions', '--strict-mcp-config'];
       if (config.model) args.push('--model', config.model);
-      args.push(CLAUDE_CHAT_LOOP_PROMPT);
-
-      agentProcess = spawn(claudePath, args, {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env },
-      });
+      args.push(prompt);
+      agentProcess = spawn(claudePath, args, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env } });
     } else if (config.type === 'local-llm') {
-      // Launch local LLM bridge agent
       const llmScriptPath = path.join(app.getAppPath(), 'examples', 'agent-local-llm.mjs');
-      if (!fs.existsSync(llmScriptPath)) {
-        return { success: false, error: `Local LLM agent script not found: ${llmScriptPath}` };
-      }
+      if (!fs.existsSync(llmScriptPath)) return { success: false, error: `Local LLM agent script not found: ${llmScriptPath}` };
       agentProcess = spawn(process.execPath, [llmScriptPath], {
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
-          LLM_ENDPOINT: config.llmEndpoint || 'http://localhost:11434/v1',
-          LLM_MODEL: config.llmModel || 'llama3',
-          AGENT_NAME: config.agentName || 'wolvie',
-        },
+        env: { ...process.env, LLM_ENDPOINT: config.llmEndpoint || 'http://localhost:11434/v1', LLM_MODEL: config.llmModel || 'llama3', AGENT_NAME: config.agentName || 'wolvie' },
       });
     } else if (config.type === 'custom' && config.scriptPath) {
-      if (!fs.existsSync(config.scriptPath)) {
-        return { success: false, error: `Agent script not found: ${config.scriptPath}` };
-      }
-      agentProcess = spawn(process.execPath, [config.scriptPath], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env },
-      });
+      if (!fs.existsSync(config.scriptPath)) return { success: false, error: `Agent script not found: ${config.scriptPath}` };
+      agentProcess = spawn(process.execPath, [config.scriptPath], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env } });
     } else {
-      // Built-in agent
       const scriptPath = getBuiltinScriptPath();
-      if (!fs.existsSync(scriptPath)) {
-        return { success: false, error: `Built-in agent script not found: ${scriptPath}` };
-      }
-      agentProcess = spawn(process.execPath, [scriptPath], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env },
-      });
+      if (!fs.existsSync(scriptPath)) return { success: false, error: `Built-in agent script not found: ${scriptPath}` };
+      agentProcess = spawn(process.execPath, [scriptPath], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env } });
     }
 
     agentProcess.stdout?.on('data', (data: Buffer) => {
       const text = data.toString().trim();
       if (text) console.log(`[agent-stdout] ${text}`);
     });
-
     agentProcess.stderr?.on('data', (data: Buffer) => {
       const text = data.toString().trim();
       if (text) console.error(`[agent-stderr] ${text}`);
     });
-
     agentProcess.on('exit', (code) => {
       console.log(`[agent] exited with code ${code}`);
       agentProcess = null;
       mainWindow?.webContents.send('agent-connection-changed', { connected: false, count: 0 });
     });
 
-    // Build display name — default is "wolvie" for all types
     const baseName = config.agentName || 'wolvie';
     const agentName = config.type === 'claude-code' ? `${baseName} (Claude${config.model ? ' ' + config.model : ''})`
       : config.type === 'local-llm' ? `${baseName} (${config.llmModel || 'local'})`
-      : config.type === 'custom' ? baseName
       : baseName;
 
     return { success: true, agentName };
@@ -5664,6 +5636,23 @@ ipcMain.handle('agent-launch', async () => {
     agentProcess = null;
     return { success: false, error: err.message || String(err) };
   }
+}
+
+ipcMain.handle('agent-launch', async () => {
+  return launchAgentProcess(false);
+});
+
+// Reconnect: if process still alive, just notify the renderer it's back;
+// if dead, relaunch with conversation context so the agent can resume.
+ipcMain.handle('agent-reconnect', async () => {
+  if (agentProcess) {
+    // Process still alive — just push a connected event so the banner disappears
+    const name = getAgentName() || 'agent';
+    mainWindow?.webContents.send('agent-connection-changed', { connected: true, count: 1, name });
+    return { success: true, agentName: name, resumed: true };
+  }
+  // Process is dead — relaunch with context
+  return launchAgentProcess(true);
 });
 
 ipcMain.handle('agent-stop', async () => {

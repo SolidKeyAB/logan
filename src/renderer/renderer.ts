@@ -13938,11 +13938,36 @@ function init(): void {
       hideTypingIndicator();
       banner?.classList.remove('hidden');
     }
-    // If agent was running but disconnected (count dropped to 0), update button
     if (agentRunning && !data.connected) {
       agentRunning = false;
       updateLaunchButton();
     }
+  });
+
+  // Reconnect banner buttons
+  document.getElementById('chat-reconnect-btn')?.addEventListener('click', async () => {
+    const btn = document.getElementById('chat-reconnect-btn') as HTMLButtonElement | null;
+    if (btn) { btn.disabled = true; btn.textContent = 'Reconnecting…'; }
+    try {
+      const res = await window.api.reconnectAgent() as any;
+      if (res.success) {
+        agentRunning = true;
+        updateLaunchButton();
+        document.getElementById('chat-reconnect-banner')?.classList.add('hidden');
+        if (res.agentName) updateAgentConnectionStatus(true, 1, res.agentName);
+        if (!res.resumed) {
+          // Fresh relaunch — add a system note in chat
+          addChatMessage({ from: 'agent', text: '(Reconnected — resuming from conversation context)', timestamp: Date.now() });
+        }
+      } else {
+        addChatMessage({ from: 'agent', text: `Reconnect failed: ${res.error || 'unknown error'}`, timestamp: Date.now() });
+      }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Reconnect'; }
+    }
+  });
+  document.getElementById('chat-reconnect-dismiss')?.addEventListener('click', () => {
+    document.getElementById('chat-reconnect-banner')?.classList.add('hidden');
   });
   // Agent memory push listener
   window.api.onAgentMemoryChanged((memory: any) => {
