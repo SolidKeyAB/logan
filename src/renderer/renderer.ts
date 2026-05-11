@@ -11838,15 +11838,15 @@ function updateCmpNavLabels(): void {
   const n = compareMatchPeaks.length;
   const d = compareDiffPeaks.length;
   if (matchLabel) {
-    matchLabel.textContent = n > 0 ? `${n} similar` : 'none';
+    matchLabel.textContent = n > 0 ? `${n} similar region${n===1?'':'s'}` : 'no matches';
     matchLabel.title = n > 0
-      ? `${n} similar section${n===1?'':'s'} — press ↑↓ to jump to each`
+      ? `${n} similar section${n===1?'':'s'} found in the matrix\nPress ↑↓ to jump to each one`
       : 'No clearly similar sections detected';
   }
   if (diffLabel) {
-    diffLabel.textContent = d > 0 ? `${d} diff` : 'none';
+    diffLabel.textContent = d > 0 ? `${d} diff region${d===1?'':'s'}` : 'no diffs';
     diffLabel.title = d > 0
-      ? `${d} divergent region${d===1?'':'s'} — press ↑↓ to jump to each`
+      ? `${d} divergent region${d===1?'':'s'} found\nPress ↑↓ to jump to each one`
       : 'No significant divergences detected';
   }
 }
@@ -12187,7 +12187,11 @@ function navigateToCompareMatch(direction: 1 | -1): void {
 function highlightCurrentNavTarget(type: 'diff' | 'match', idx: number, total: number): void {
   const labelSel = type === 'match' ? '.match-label' : '.diff-label';
   const el = compareMidPanel?.querySelector(labelSel) as HTMLElement | null;
-  if (el) el.textContent = `${idx + 1}/${total}`;
+  if (el) {
+    const word = type === 'match' ? 'similar' : 'diff';
+    el.textContent = `${word} ${idx + 1} of ${total}`;
+    el.title = `Showing ${word} region ${idx + 1} of ${total} — press ↑↓ to cycle`;
+  }
 }
 
 function jumpBothPanesToRatio(ratio: number): void {
