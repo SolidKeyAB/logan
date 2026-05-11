@@ -6239,20 +6239,35 @@ kbd {
 }
 
 .cmp-density-canvas {
+  width: 16px;
+  flex-shrink: 0;
+  display: block;
+  /* height set via JS */
+}
+
+.cmp-matrix-canvas {
   flex: 1;
   min-width: 0;
   display: block;
-  /* height set via JS from parent clientHeight */
-}
-
-.cmp-diff-strip {
-  width: 28px;
-  flex-shrink: 0;
-  display: block;
-  border-left: 1px solid rgba(255,255,255,0.06);
-  border-right: 1px solid rgba(255,255,255,0.06);
+  cursor: crosshair;
+  border-left: 1px solid rgba(255,255,255,0.08);
+  border-right: 1px solid rgba(255,255,255,0.08);
   /* height set via JS */
 }
+
+.cmp-axis-label {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 18px 0 18px;
+  font-size: 9px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  pointer-events: none;
+  margin-bottom: 2px;
+}
+
+.cmp-axis-a { opacity: 0.6; }
+.cmp-axis-b { opacity: 0.6; }
 
 /* Diff colors */
 .diff-added {

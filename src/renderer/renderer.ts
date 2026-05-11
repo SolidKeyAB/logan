@@ -11703,20 +11703,26 @@ function createCompareMidPanel(): void {
   compareMidPanel.className = 'compare-mid-panel';
   compareMidPanel.innerHTML = `
     <div class="cmp-panel-header">
-      <button id="btn-cmp-prev" class="cmp-nav-btn" title="Jump to previous difference (↑)">↑</button>
+      <button id="btn-cmp-prev" class="cmp-nav-btn" title="Jump to previous difference">↑</button>
       <div class="cmp-header-center">
-        <span id="cmp-similarity" class="cmp-similarity" title="Pattern similarity: how closely the activity patterns match">–</span>
+        <span id="cmp-similarity" class="cmp-similarity">–</span>
         <div class="cmp-legend">
-          <span class="cmp-legend-dot" style="background:#28be50"></span><span class="cmp-legend-label">match</span>
-          <span class="cmp-legend-dot" style="background:#dc3730"></span><span class="cmp-legend-label">diff</span>
+          <span class="cmp-legend-dot" style="background:#e8e8ff"></span><span class="cmp-legend-label">match</span>
+          <span class="cmp-legend-dot" style="background:#1a1a2e"></span><span class="cmp-legend-label">diff</span>
         </div>
       </div>
-      <button id="btn-cmp-next" class="cmp-nav-btn" title="Jump to next difference (↓)">↓</button>
+      <button id="btn-cmp-next" class="cmp-nav-btn" title="Jump to next difference">↓</button>
+    </div>
+    <div class="cmp-axis-label">
+      <span class="cmp-axis-a">A→</span><span class="cmp-axis-b">↓B</span>
     </div>
     <div class="cmp-strips" id="cmp-strips">
-      <canvas id="cmp-canvas-a" class="cmp-density-canvas" title="File A activity pattern — click any position to navigate both files there"></canvas>
-      <canvas id="cmp-diff-canvas" class="cmp-diff-strip" title="Green = similar pattern here&#10;Red = files diverge here&#10;Dark = both quiet&#10;Click to navigate"></canvas>
-      <canvas id="cmp-canvas-b" class="cmp-density-canvas" title="File B activity pattern — click any position to navigate both files there"></canvas>
+      <canvas id="cmp-canvas-a" class="cmp-density-canvas"
+        title="File A density (left edge)&#10;X-axis of matrix below"></canvas>
+      <canvas id="cmp-matrix-canvas" class="cmp-matrix-canvas"
+        title="Similarity matrix&#10;X = position in File A, Y = position in File B&#10;Bright = matching sections (even at different positions)&#10;Click to navigate both files to that pair of positions"></canvas>
+      <canvas id="cmp-canvas-b" class="cmp-density-canvas"
+        title="File B density (right edge)&#10;Y-axis of matrix"></canvas>
     </div>`;
 
   // Insert between primary and secondary panes
@@ -11734,10 +11740,27 @@ function createCompareMidPanel(): void {
     navigateToCompareDiff(1);
   });
 
-  // Click on strips → navigate both panes to that relative position
-  document.getElementById('cmp-strips')?.addEventListener('click', (e) => {
-    const strips = document.getElementById('cmp-strips')!;
-    const rect = strips.getBoundingClientRect();
+  // Click on the matrix canvas → navigate file A to X position, file B to Y position
+  document.getElementById('cmp-matrix-canvas')?.addEventListener('click', (e) => {
+    const canvas = e.currentTarget as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const ratioA = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const ratioB = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+    jumpToRatioPair(ratioA, ratioB);
+  });
+
+  // Click on file A density strip → navigate both to same relative position
+  document.getElementById('cmp-canvas-a')?.addEventListener('click', (e) => {
+    const canvas = e.currentTarget as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+    jumpBothPanesToRatio(ratio);
+  });
+
+  // Click on file B density strip → navigate both to same relative position
+  document.getElementById('cmp-canvas-b')?.addEventListener('click', (e) => {
+    const canvas = e.currentTarget as HTMLCanvasElement;
+    const rect = canvas.getBoundingClientRect();
     const ratio = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
     jumpBothPanesToRatio(ratio);
   });
@@ -11767,7 +11790,7 @@ function renderCompareMidPanel(): void {
     return;
   }
 
-  (['cmp-canvas-a', 'cmp-diff-canvas', 'cmp-canvas-b'] as const).forEach(id => {
+  (['cmp-canvas-a', 'cmp-matrix-canvas', 'cmp-canvas-b'] as const).forEach(id => {
     const c = document.getElementById(id) as HTMLCanvasElement | null;
     if (c) { c.style.height = panelH + 'px'; c.height = Math.floor(panelH * (window.devicePixelRatio || 1)); }
   });
@@ -11786,7 +11809,7 @@ function renderCompareMidPanel(): void {
 
   renderComparePanelCanvas('cmp-canvas-a', densA, false);
   renderComparePanelCanvas('cmp-canvas-b', densB, false);
-  renderComparePanelDiff('cmp-diff-canvas', densA, densB);
+  renderComparePanelMatrix('cmp-matrix-canvas', densA, densB);
 }
 
 type DensityData = { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[]; debug?: number[]; verbose?: number[] };
@@ -11956,6 +11979,106 @@ function renderComparePanelDiff(id: string, densA: DensityData, densB: DensityDa
     for (const peak of compareDiffPeaks) {
       const py2 = Math.floor(peak * ch);
       ctx.fillRect(0, py2, cw, Math.max(2, Math.round(2 * dpr)));
+    }
+  }
+}
+
+function jumpToRatioPair(ratioA: number, ratioB: number): void {
+  // Navigate file A to position ratioA, file B to position ratioB (independently)
+  const totalA = getTotalLines();
+  if (totalA > 0) goToLine(Math.floor(ratioA * totalA));
+
+  if (secondaryViewer) {
+    const totalB = secondaryGetTotalLines(secondaryViewer);
+    if (totalB > 0) {
+      const line = Math.floor(ratioB * totalB);
+      secondaryViewer.highlightedLine = line;
+      const scrollTop = secondaryLineToScrollTop(secondaryViewer, line);
+      secondaryViewer.viewerElement.scrollTop = scrollTop;
+      secondaryHandleScroll(secondaryViewer);
+    }
+  }
+}
+
+function renderComparePanelMatrix(id: string, densA: DensityData, densB: DensityData): void {
+  const canvas = document.getElementById(id) as HTMLCanvasElement | null;
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cw = Math.floor(canvas.offsetWidth * dpr) || Math.round(80 * dpr);
+  const ch = canvas.height || Math.round(400 * dpr);
+  if (cw === 0 || ch === 0) return;
+  canvas.width = cw;
+  const ctx = canvas.getContext('2d')!;
+
+  // Pre-compute normalised activity profiles for both files
+  let maxA = 1, maxB = 1;
+  for (let i = 0; i < densA.buckets; i++) { const t = densityTotal(densA, i); if (t > maxA) maxA = t; }
+  for (let i = 0; i < densB.buckets; i++) { const t = densityTotal(densB, i); if (t > maxB) maxB = t; }
+
+  // Downsample each file to the canvas dimensions for fast lookup
+  const profileA = new Float32Array(cw);
+  const profileB = new Float32Array(ch);
+  for (let px = 0; px < cw; px++) {
+    const bi = Math.min(densA.buckets - 1, Math.floor((px / cw) * densA.buckets));
+    profileA[px] = maxA > 1 ? Math.log1p(densityTotal(densA, bi)) / Math.log1p(maxA) : 0;
+  }
+  for (let py = 0; py < ch; py++) {
+    const bi = Math.min(densB.buckets - 1, Math.floor((py / ch) * densB.buckets));
+    profileB[py] = maxB > 1 ? Math.log1p(densityTotal(densB, bi)) / Math.log1p(maxB) : 0;
+  }
+
+  const pixels = new Uint8ClampedArray(cw * ch * 4);
+
+  // Use a small window to compare neighbourhoods (avoids single-bucket noise)
+  const WIN = Math.max(1, Math.floor(cw / 40));
+
+  for (let py = 0; py < ch; py++) {
+    for (let px = 0; px < cw; px++) {
+      // Average activity in a small window around (px) in A and (py) in B
+      let sumA = 0, sumB = 0, cnt = 0;
+      for (let w = -WIN; w <= WIN; w++) {
+        const ia = Math.max(0, Math.min(cw - 1, px + w));
+        const ib = Math.max(0, Math.min(ch - 1, py + w));
+        sumA += profileA[ia];
+        sumB += profileB[ib];
+        cnt++;
+      }
+      const na = sumA / cnt, nb = sumB / cnt;
+      const hasActivity = na > 0.04 || nb > 0.04;
+      const similarity = hasActivity ? Math.max(0, 1 - Math.abs(na - nb) * 2) : 0;
+
+      let r: number, g: number, b: number;
+      if (!hasActivity) {
+        // Both quiet — near-black
+        r = 16; g = 16; b = 28;
+      } else {
+        // similarity 0→1: dark navy → bright white/blue-white
+        // Use perceptually distinct: low=dark indigo, high=bright white
+        const v = similarity * similarity; // gamma-compress for better contrast
+        r = Math.round(v * 220 + 10);
+        g = Math.round(v * 220 + 10);
+        b = Math.round(v * 255 + 30);
+      }
+
+      // Highlight the main diagonal (positional match) with a subtle tint
+      const diagDist = Math.abs(px / cw - py / ch);
+      if (diagDist < 0.015) { r = Math.min(255, r + 20); g = Math.min(255, g + 8); }
+
+      const i4 = (py * cw + px) << 2;
+      pixels[i4] = r; pixels[i4+1] = g; pixels[i4+2] = b; pixels[i4+3] = 255;
+    }
+  }
+  ctx.putImageData(new ImageData(pixels, cw, ch), 0, 0);
+
+  // Draw diff peak markers as horizontal+vertical lines
+  if (compareDiffPeaks.length > 0) {
+    ctx.strokeStyle = 'rgba(255, 220, 60, 0.5)';
+    ctx.lineWidth = 1;
+    for (const peak of compareDiffPeaks) {
+      const x = Math.floor(peak * cw);
+      const y = Math.floor(peak * ch);
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, ch); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cw, y); ctx.stroke();
     }
   }
 }
