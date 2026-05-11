@@ -5921,6 +5921,84 @@ function updateTracebackUI(): void {
 
 // ─── Agent Chat ──────────────────────────────────────────────────────
 
+// ── Chat message formatter ────────────────────────────────────────────────────
+// Runs once per agent message at append time — no ongoing cost.
+// User messages are kept as plain text (no XSS surface, simpler UX).
+function formatAgentText(raw: string): string {
+  // Step 1 — pull fenced code blocks out to protect them from other transforms
+  const blocks: string[] = [];
+  let s = raw.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const cls = lang ? ` class="lang-${escapeHtml(lang)}"` : '';
+    blocks.push(`<pre class="chat-code-block"><code${cls}>${escapeHtml(code.trim())}</code></pre>`);
+    return `\x00B${blocks.length - 1}\x00`;
+  });
+
+  // Step 2 — pull inline code
+  const inlines: string[] = [];
+  s = s.replace(/`([^`\n]+)`/g, (_, c) => {
+    inlines.push(`<code class="chat-inline-code">${escapeHtml(c)}</code>`);
+    return `\x00I${inlines.length - 1}\x00`;
+  });
+
+  // Step 3 — escape remaining HTML so we can safely inject markup
+  s = escapeHtml(s);
+
+  // Step 4 — file paths (absolute, optional :line suffix)
+  s = s.replace(
+    /(~?\/[^\s"'&lt;&gt;(){}\[\],]+\.(?:log|txt|json|yaml|yml|conf|cfg|md|ts|js|py|sh|xml|csv|gz|zip|db|out|err)(?::\d+)?)/g,
+    (match) => {
+      const m = match.match(/^(.+):(\d+)$/);
+      const [fp, ln] = m ? [m[1], m[2]] : [match, ''];
+      const lineAttr = ln ? ` data-line="${ln}"` : '';
+      return `<span class="chat-link chat-file-link" data-action="open-file" data-path="${fp}"${lineAttr} title="Open in LOGAN">${match}</span>`;
+    }
+  );
+
+  // Step 5 — URLs
+  s = s.replace(/(https?:\/\/[^\s"'&lt;&gt;(){}\[\]]+)/g,
+    (url) => `<a class="chat-link chat-url-link" data-action="open-url" data-url="${url}" href="#">${url}</a>`
+  );
+
+  // Step 6 — "line N" / "Line N" / "lines N-M" references
+  s = s.replace(/\b([Ll]ines?)\s+([\d,]+(?:\s*[-–]\s*[\d,]+)?)/g, (match, word, nums) => {
+    const first = nums.replace(/[,\s]/g, '').split(/[-–]/)[0];
+    return `<span class="chat-link chat-line-link" data-action="goto-line" data-line="${first}" title="Go to line">${match}</span>`;
+  });
+
+  // Step 7 — bold, italic
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+
+  // Step 8 — headings
+  s = s.replace(/^### (.+)$/gm, '<div class="chat-h chat-h3">$1</div>');
+  s = s.replace(/^## (.+)$/gm,  '<div class="chat-h chat-h2">$1</div>');
+  s = s.replace(/^# (.+)$/gm,   '<div class="chat-h chat-h1">$1</div>');
+
+  // Step 9 — bullet lists (convert runs of "- " or "* " lines)
+  s = s.replace(/((?:^[-*•]\s.+(?:\n|$))+)/gm, (block) => {
+    const items = block.trim().split('\n')
+      .map(l => `<li>${l.replace(/^[-*•]\s/, '')}</li>`).join('');
+    return `<ul class="chat-ul">${items}</ul>`;
+  });
+
+  // Step 10 — numbered lists
+  s = s.replace(/((?:^\d+\.\s.+(?:\n|$))+)/gm, (block) => {
+    const items = block.trim().split('\n')
+      .map(l => `<li>${l.replace(/^\d+\.\s/, '')}</li>`).join('');
+    return `<ol class="chat-ol">${items}</ol>`;
+  });
+
+  // Step 11 — paragraphs from blank lines, single newlines → <br>
+  s = s.replace(/\n{2,}/g, '\n<br>\n');
+  s = s.replace(/\n/g, '<br>');
+
+  // Step 12 — restore code blocks and inline code
+  s = s.replace(/\x00B(\d+)\x00/g, (_, i) => blocks[+i]);
+  s = s.replace(/\x00I(\d+)\x00/g, (_, i) => inlines[+i]);
+
+  return s;
+}
+
 function addChatMessage(msg: { id?: string; from: string; text: string; timestamp: number }): void {
   if (msg.from === 'agent') hideTypingIndicator();
   const el = document.createElement('div');
@@ -5933,7 +6011,11 @@ function addChatMessage(msg: { id?: string; from: string; text: string; timestam
 
   const text = document.createElement('div');
   text.className = 'chat-text';
-  text.textContent = msg.text;
+  if (msg.from === 'agent') {
+    text.innerHTML = formatAgentText(msg.text);
+  } else {
+    text.textContent = msg.text;
+  }
 
   const time = document.createElement('div');
   time.className = 'chat-time';
@@ -5945,7 +6027,6 @@ function addChatMessage(msg: { id?: string; from: string; text: string; timestam
   el.appendChild(time);
   elements.chatMessages.appendChild(el);
 
-  // Auto-scroll to bottom
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
 }
 
@@ -13917,6 +13998,28 @@ function init(): void {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendChatMessage();
+    }
+  });
+
+  // Delegated click handler for rich chat links (file paths, URLs, line refs)
+  elements.chatMessages.addEventListener('click', async (e) => {
+    const target = (e.target as HTMLElement).closest('[data-action]') as HTMLElement | null;
+    if (!target) return;
+    e.preventDefault();
+    const action = target.dataset.action;
+    if (action === 'open-file') {
+      const fp = target.dataset.path;
+      const ln = target.dataset.line ? parseInt(target.dataset.line) - 1 : undefined;
+      if (fp) {
+        await loadFile(fp);
+        if (ln !== undefined && !isNaN(ln)) await navigateTo(ln);
+      }
+    } else if (action === 'open-url') {
+      const url = target.dataset.url;
+      if (url) window.api.openExternalUrl?.(url);
+    } else if (action === 'goto-line') {
+      const ln = parseInt(target.dataset.line || '') - 1;
+      if (!isNaN(ln) && ln >= 0) await navigateTo(ln);
     }
   });
   // Receive agent messages in real-time
