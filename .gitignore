@@ -26,3 +26,5 @@ scripts/__pycache__/
 scripts/*.pyc
 scripts/logan-agent.py
 scripts/poll_chat.py
+.claude/worktrees/
+.claude/scheduled_tasks.lock
