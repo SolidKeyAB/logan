@@ -11827,12 +11827,28 @@ function renderCompareMidPanel(): void {
   renderComparePanelCanvas('cmp-canvas-a', densA, false);
   renderComparePanelCanvas('cmp-canvas-b', densB, false);
   renderComparePanelMatrix('cmp-matrix-canvas', densA, densB);
+  // Labels updated AFTER matrix render — matrix sets compareMatchPeaks
+  updateCmpNavLabels();
+}
 
-  // Update nav button labels with counts
-  const matchLabel = compareMidPanel?.querySelector('.match-label');
-  const diffLabel = compareMidPanel?.querySelector('.diff-label');
-  if (matchLabel) matchLabel.textContent = `≈ ${compareMatchPeaks.length}`;
-  if (diffLabel) diffLabel.textContent = `≠ ${compareDiffPeaks.length}`;
+function updateCmpNavLabels(): void {
+  if (!compareMidPanel) return;
+  const matchLabel = compareMidPanel.querySelector('.match-label') as HTMLElement | null;
+  const diffLabel  = compareMidPanel.querySelector('.diff-label')  as HTMLElement | null;
+  const n = compareMatchPeaks.length;
+  const d = compareDiffPeaks.length;
+  if (matchLabel) {
+    matchLabel.textContent = n > 0 ? `${n} match${n === 1 ? '' : 'es'}` : 'no matches';
+    matchLabel.title = n > 0
+      ? `${n} similar section${n===1?'':'s'} found — click to jump to each`
+      : 'No clearly matching sections detected';
+  }
+  if (diffLabel) {
+    diffLabel.textContent = d > 0 ? `${d} diff${d === 1 ? '' : 's'}` : 'no diffs';
+    diffLabel.title = d > 0
+      ? `${d} divergent region${d===1?'':'s'} found — click to jump to each`
+      : 'No significant divergences detected';
+  }
 }
 
 type DensityData = { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[]; debug?: number[]; verbose?: number[] };
@@ -12119,7 +12135,7 @@ function renderComparePanelMatrix(id: string, densA: DensityData, densB: Density
       const i4 = (ib * cw + ia) << 2;
       // Use green channel as brightness proxy
       const brightness = pixels[i4 + 1] / 255;
-      if (brightness > 0.4) cells.push({ ratioA, ratioB, score: brightness });
+      if (brightness > 0.22) cells.push({ ratioA, ratioB, score: brightness });
     }
   }
   // Keep only local maxima (no neighbour with higher score within 2 cells)
@@ -12170,10 +12186,9 @@ function navigateToCompareMatch(direction: 1 | -1): void {
 
 function highlightCurrentNavTarget(type: 'diff' | 'match', idx: number, total: number): void {
   const labelSel = type === 'match' ? '.match-label' : '.diff-label';
-  const el = compareMidPanel?.querySelector(labelSel);
+  const el = compareMidPanel?.querySelector(labelSel) as HTMLElement | null;
   if (el) {
-    const icon = type === 'match' ? '≈' : '≠';
-    el.textContent = `${icon} ${idx + 1}/${total}`;
+    el.textContent = `${idx + 1} / ${total} ${type}`;
   }
 }
 
