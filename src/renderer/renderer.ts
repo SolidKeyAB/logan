@@ -11703,14 +11703,20 @@ function createCompareMidPanel(): void {
   compareMidPanel.className = 'compare-mid-panel';
   compareMidPanel.innerHTML = `
     <div class="cmp-panel-header">
-      <button id="btn-cmp-prev" class="cmp-nav-btn" title="Previous difference">↑</button>
-      <span id="cmp-similarity" class="cmp-similarity">–</span>
-      <button id="btn-cmp-next" class="cmp-nav-btn" title="Next difference">↓</button>
+      <button id="btn-cmp-prev" class="cmp-nav-btn" title="Jump to previous difference (↑)">↑</button>
+      <div class="cmp-header-center">
+        <span id="cmp-similarity" class="cmp-similarity" title="Pattern similarity: how closely the activity patterns match">–</span>
+        <div class="cmp-legend">
+          <span class="cmp-legend-dot" style="background:#28be50"></span><span class="cmp-legend-label">match</span>
+          <span class="cmp-legend-dot" style="background:#dc3730"></span><span class="cmp-legend-label">diff</span>
+        </div>
+      </div>
+      <button id="btn-cmp-next" class="cmp-nav-btn" title="Jump to next difference (↓)">↓</button>
     </div>
     <div class="cmp-strips" id="cmp-strips">
-      <canvas id="cmp-canvas-a" class="cmp-density-canvas" title="File A — click to navigate"></canvas>
-      <canvas id="cmp-diff-canvas" class="cmp-diff-strip" title="Differences — red=diverge, green=match — click to navigate"></canvas>
-      <canvas id="cmp-canvas-b" class="cmp-density-canvas" title="File B — click to navigate"></canvas>
+      <canvas id="cmp-canvas-a" class="cmp-density-canvas" title="File A activity pattern — click any position to navigate both files there"></canvas>
+      <canvas id="cmp-diff-canvas" class="cmp-diff-strip" title="Green = similar pattern here&#10;Red = files diverge here&#10;Dark = both quiet&#10;Click to navigate"></canvas>
+      <canvas id="cmp-canvas-b" class="cmp-density-canvas" title="File B activity pattern — click any position to navigate both files there"></canvas>
     </div>`;
 
   // Insert between primary and secondary panes
@@ -11774,7 +11780,7 @@ function renderCompareMidPanel(): void {
   const simEl = document.getElementById('cmp-similarity');
   if (simEl) {
     simEl.textContent = `${pct}%`;
-    simEl.title = `Overall pattern similarity: ${pct}%`;
+    simEl.title = `Overall pattern similarity: ${pct}%\nThis is the average across all file sections.\nIndividual sections can be more or less similar — see the green/red strip.`;
     simEl.style.color = pct >= 80 ? '#6a9955' : pct >= 50 ? '#cca700' : '#f14c4c';
   }
 
@@ -11906,18 +11912,36 @@ function renderComparePanelDiff(id: string, densA: DensityData, densB: DensityDa
     const biA = Math.min(densA.buckets-1, Math.floor((py/ch)*densA.buckets));
     const biB = Math.min(densB.buckets-1, Math.floor((py/ch)*densB.buckets));
     const na = nA(biA), nb = nB(biB);
+    const hasActivity = na > 0.04 || nb > 0.04;
     const diff = Math.abs(na - nb);
-    let r = 22, g = 35, b = 50;
-    if (diff > 0.08) {
-      const d = Math.min(1, diff * 1.8);
-      r = Math.min(255, 40 + d * 210);
-      g = Math.min(255, 35 + (1-d) * 100);
-      b = Math.min(255, 50 + (1-d) * 40);
-    } else if (na > 0.05 || nb > 0.05) {
+    const similarity = 1 - Math.min(1, diff * 1.5); // 0 = different, 1 = identical
+
+    let r: number, g: number, b: number;
+    if (!hasActivity) {
+      // Both quiet — dark neutral, not green (green means "actively similar")
+      r = 20; g = 25; b = 35;
+    } else {
+      // Blend green (similar) → yellow → red (different) based on similarity score
+      // Green: rgb(40, 190, 80)   Yellow: rgb(220, 190, 40)   Red: rgb(220, 55, 45)
+      if (similarity >= 0.5) {
+        // green ↔ yellow
+        const t = (similarity - 0.5) * 2; // 0=yellow, 1=green
+        r = Math.round(220 - t * 180);     // 220→40
+        g = Math.round(190);               // stays ~190
+        b = Math.round(40 + t * 40);       // 40→80
+      } else {
+        // yellow ↔ red
+        const t = similarity * 2;          // 0=red, 1=yellow
+        r = Math.round(220);               // stays ~220
+        g = Math.round(55 + t * 135);      // 55→190
+        b = Math.round(45 - t * 5);        // 45→40
+      }
+      // Scale brightness by activity level (low activity = dim even if similar)
       const act = Math.min(1, (na + nb) / 2);
-      g = Math.min(255, 35 + act * 120);
-      b = Math.min(255, 50 + act * 50);
+      const bright = 0.35 + 0.65 * act;
+      r = Math.round(r * bright); g = Math.round(g * bright); b = Math.round(b * bright);
     }
+
     const base = py * cw;
     for (let px = 0; px < cw; px++) {
       const i4 = (base + px) << 2;
@@ -11926,9 +11950,9 @@ function renderComparePanelDiff(id: string, densA: DensityData, densB: DensityDa
   }
   ctx.putImageData(new ImageData(pixels, cw, ch), 0, 0);
 
-  // Draw peak tick marks on diff strip
+  // Yellow tick marks for diff peaks
   if (compareDiffPeaks.length > 0) {
-    ctx.fillStyle = 'rgba(255, 220, 50, 0.9)';
+    ctx.fillStyle = 'rgba(255, 230, 60, 0.95)';
     for (const peak of compareDiffPeaks) {
       const py2 = Math.floor(peak * ch);
       ctx.fillRect(0, py2, cw, Math.max(2, Math.round(2 * dpr)));

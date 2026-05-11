@@ -6197,13 +6197,37 @@ kbd {
 }
 .cmp-nav-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 
+.cmp-header-center {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
 .cmp-similarity {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--text-secondary);
   text-align: center;
-  flex: 1;
 }
+
+.cmp-legend {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+.cmp-legend-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cmp-legend-label { letter-spacing: 0.02em; }
 
 .cmp-strips {
   flex: 1;
