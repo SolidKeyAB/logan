@@ -66,6 +66,8 @@ export interface AnalysisResult {
     error: number[];
     warning: number[];
     info: number[];
+    debug?: number[];
+    verbose?: number[];
   };
 }
 

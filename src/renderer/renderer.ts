@@ -83,6 +83,8 @@ interface AnalysisResult {
     error: number[];
     warning: number[];
     info: number[];
+    debug?: number[];
+    verbose?: number[];
   };
 }
 
@@ -11470,31 +11472,40 @@ function navigateGap(direction: 'prev' | 'next'): void {
 async function showCompareModal(): Promise<void> {
   if (!state.filePath) return;
 
-  // Remember the original tab so primary pane shows the correct file
   const originalTabId = state.activeTabId;
+  const originalFilePath = state.filePath;
 
   // Pick second file
   const otherPath = await window.api.openFileDialog();
-  if (!otherPath || otherPath === state.filePath) return;
+  if (!otherPath || otherPath === originalFilePath) return;
 
-  // Load the other file (this switches to its tab)
+  // Ensure the primary file has been analyzed (density data is required for the panel)
+  if (!state.analysisResult && originalFilePath) {
+    showProgress('Analyzing primary file…');
+    try {
+      const r = await window.api.analyzeFile();
+      if (r.success && r.result) {
+        state.analysisResult = r.result;
+        renderMinimapCanvas();
+        updateAnalysisUI();
+      }
+    } finally { hideProgress(); }
+  }
+
+  // Load the second file (switches to its tab)
   await loadFile(otherPath);
 
-  // Find the tab for the other file
   const otherTab = state.tabs.find(t => t.filePath === otherPath);
   if (!otherTab) return;
 
-  // Switch back to the original file so it becomes the primary pane
+  // Switch back to the original file — it becomes the primary pane
   if (originalTabId && originalTabId !== state.activeTabId) {
     await switchToTab(originalTabId);
   }
 
   activateSplitView(otherTab.id);
-
-  // Create the comparison mid-panel (tall density strips + navigation)
   createCompareMidPanel();
 
-  // Run analysis on the second file in background for density comparison
   compareFilePath = otherPath;
   compareAnalysisResult = null;
   updateCompareHeader(0, 'Starting…');
@@ -11509,7 +11520,8 @@ async function showCompareModal(): Promise<void> {
       if (result.success && result.result) {
         compareAnalysisResult = result.result;
         renderCompareHeader();
-        renderCompareMidPanel();
+        // RAF ensures the browser has laid out the panel before we read its dimensions
+        requestAnimationFrame(() => renderCompareMidPanel());
       } else {
         updateCompareHeader(0, 'Analysis failed');
       }
@@ -11635,10 +11647,7 @@ function renderCompareCanvas(id: string, density: { buckets: number; fatal?: num
   ctx.putImageData(new ImageData(pixels, cw, ch), 0, 0);
 }
 
-function renderDiffCanvas(id: string,
-  densA: { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[] },
-  densB: { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[] }
-): void {
+function renderDiffCanvas(id: string, densA: DensityData, densB: DensityData): void {
   const canvas = document.getElementById(id) as HTMLCanvasElement | null;
   if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
@@ -11647,20 +11656,11 @@ function renderDiffCanvas(id: string,
   canvas.width = cw; canvas.height = ch;
   const ctx = canvas.getContext('2d')!;
 
-  // Build log-scaled normalised profiles for both files
   let maxA = 1, maxB = 1;
-  const fDA = densA.fatal || [], fDB = densB.fatal || [];
-  for (let i = 0; i < densA.buckets; i++) {
-    const t = (fDA[i]||0)+densA.error[i]+densA.warning[i]+densA.info[i];
-    if(t>maxA) maxA=t;
-  }
-  for (let i = 0; i < densB.buckets; i++) {
-    const t = (fDB[i]||0)+densB.error[i]+densB.warning[i]+densB.info[i];
-    if(t>maxB) maxB=t;
-  }
-
-  const normA = (i: number) => maxA > 1 ? Math.log1p((fDA[i]||0)+densA.error[i]+densA.warning[i]+densA.info[i]) / Math.log1p(maxA) : 0;
-  const normB = (i: number) => maxB > 1 ? Math.log1p((fDB[i]||0)+densB.error[i]+densB.warning[i]+densB.info[i]) / Math.log1p(maxB) : 0;
+  for (let i = 0; i < densA.buckets; i++) { const t=densityTotal(densA,i); if(t>maxA)maxA=t; }
+  for (let i = 0; i < densB.buckets; i++) { const t=densityTotal(densB,i); if(t>maxB)maxB=t; }
+  const normA = (i: number) => maxA > 1 ? Math.log1p(densityTotal(densA,i)) / Math.log1p(maxA) : 0;
+  const normB = (i: number) => maxB > 1 ? Math.log1p(densityTotal(densB,i)) / Math.log1p(maxB) : 0;
 
   const pixels = new Uint8ClampedArray(cw * ch * 4);
   for (let py = 0; py < ch; py++) {
@@ -11748,15 +11748,23 @@ function renderCompareMidPanel(): void {
   const densB = compareAnalysisResult?.density;
   if (!densA || !densB || !compareMidPanel) return;
 
-  // Size canvases explicitly from the strips container (height:100% on canvas is unreliable)
+  // Resolve canvas height: use strips container, fall back to panel minus header
   const stripsEl = document.getElementById('cmp-strips');
-  if (stripsEl && stripsEl.clientHeight > 0) {
-    const h = stripsEl.clientHeight;
-    (['cmp-canvas-a', 'cmp-diff-canvas', 'cmp-canvas-b'] as const).forEach(id => {
-      const c = document.getElementById(id) as HTMLCanvasElement | null;
-      if (c) c.style.height = h + 'px';
-    });
+  let panelH = stripsEl?.clientHeight || 0;
+  if (panelH <= 0) {
+    const headerH = compareMidPanel.querySelector('.cmp-panel-header')?.clientHeight || 28;
+    panelH = (compareMidPanel.clientHeight || 0) - headerH;
   }
+  if (panelH <= 10) {
+    // Layout hasn't settled yet — try again next frame
+    requestAnimationFrame(() => renderCompareMidPanel());
+    return;
+  }
+
+  (['cmp-canvas-a', 'cmp-diff-canvas', 'cmp-canvas-b'] as const).forEach(id => {
+    const c = document.getElementById(id) as HTMLCanvasElement | null;
+    if (c) { c.style.height = panelH + 'px'; c.height = Math.floor(panelH * (window.devicePixelRatio || 1)); }
+  });
 
   // Compute similarity score and diff peaks
   const { similarity, peaks } = computeCompareSimilarity(densA, densB);
@@ -11775,20 +11783,16 @@ function renderCompareMidPanel(): void {
   renderComparePanelDiff('cmp-diff-canvas', densA, densB);
 }
 
-function computeCompareSimilarity(
-  densA: { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[] },
-  densB: { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[] }
-): { similarity: number; peaks: number[] } {
-  const fDA = densA.fatal || [], fDB = densB.fatal || [];
+type DensityData = { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[]; debug?: number[]; verbose?: number[] };
+
+function densityTotal(d: DensityData, i: number): number {
+  return (d.fatal?.[i]||0)+d.error[i]+d.warning[i]+d.info[i]+(d.debug?.[i]||0)+(d.verbose?.[i]||0);
+}
+
+function computeCompareSimilarity(densA: DensityData, densB: DensityData): { similarity: number; peaks: number[] } {
   let maxA = 1, maxB = 1;
-  for (let i = 0; i < densA.buckets; i++) {
-    const t = (fDA[i]||0)+densA.error[i]+densA.warning[i]+densA.info[i];
-    if (t > maxA) maxA = t;
-  }
-  for (let i = 0; i < densB.buckets; i++) {
-    const t = (fDB[i]||0)+densB.error[i]+densB.warning[i]+densB.info[i];
-    if (t > maxB) maxB = t;
-  }
+  for (let i = 0; i < densA.buckets; i++) { const t = densityTotal(densA, i); if (t > maxA) maxA = t; }
+  for (let i = 0; i < densB.buckets; i++) { const t = densityTotal(densB, i); if (t > maxB) maxB = t; }
   const logNorm = (v: number, m: number) => m > 1 ? Math.log1p(v) / Math.log1p(m) : 0;
 
   const sampleCount = 500; // use 500 samples regardless of bucket count
@@ -11800,8 +11804,8 @@ function computeCompareSimilarity(
     const ratio = s / sampleCount;
     const biA = Math.min(densA.buckets - 1, Math.floor(ratio * densA.buckets));
     const biB = Math.min(densB.buckets - 1, Math.floor(ratio * densB.buckets));
-    const nA = logNorm((fDA[biA]||0)+densA.error[biA]+densA.warning[biA]+densA.info[biA], maxA);
-    const nB = logNorm((fDB[biB]||0)+densB.error[biB]+densB.warning[biB]+densB.info[biB], maxB);
+    const nA = logNorm(densityTotal(densA, biA), maxA);
+    const nB = logNorm(densityTotal(densB, biB), maxB);
     const diff = Math.abs(nA - nB);
     totalDiff += diff;
 
@@ -11819,40 +11823,49 @@ function computeCompareSimilarity(
 
 function renderComparePanelCanvas(
   id: string,
-  density: { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[] },
+  density: { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[]; debug?: number[]; verbose?: number[] },
   _secondary: boolean
 ): void {
   const canvas = document.getElementById(id) as HTMLCanvasElement | null;
   if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
+  // offsetWidth/Height are set by renderCompareMidPanel before this call
   const cw = Math.floor(canvas.offsetWidth * dpr) || Math.round(40 * dpr);
-  const ch = Math.floor(canvas.offsetHeight * dpr) || Math.round(300 * dpr);
+  const ch = canvas.height || Math.round(300 * dpr); // use already-set buffer height
   if (cw === 0 || ch === 0) return;
-  canvas.width = cw; canvas.height = ch;
+  canvas.width = cw;
+  // canvas.height already set by caller
   const ctx = canvas.getContext('2d')!;
 
-  const { buckets, fatal: fD_, error, warning, info } = density;
-  const fD = fD_ || [];
+  const { buckets, fatal: fD_, error, warning, info, debug: dbg_, verbose: vrb_ } = density;
+  const fD = fD_ || [], dbg = dbg_ || [], vrb = vrb_ || [];
   let globalMax = 1;
   for (let i = 0; i < buckets; i++) {
-    const t = (fD[i]||0)+error[i]+warning[i]+info[i];
+    const t = (fD[i]||0)+error[i]+warning[i]+info[i]+(dbg[i]||0)+(vrb[i]||0);
     if (t > globalMax) globalMax = t;
   }
-  const hasData = globalMax > 1;
   const pixels = new Uint8ClampedArray(cw * ch * 4);
   for (let py = 0; py < ch; py++) {
     const bi = Math.min(buckets - 1, Math.floor((py / ch) * buckets));
     const f = fD[bi]||0, e = error[bi]||0, w = warning[bi]||0, inf = info[bi]||0;
-    const total = f + e + w + inf;
+    const dg = dbg[bi]||0, vb = vrb[bi]||0;
+    const total = f + e + w + inf + dg + vb;
     let r = 22, g = 22, b = 32;
-    if (!hasData) { r = 40; g = 40; b = 55; }
-    else if (total > 0) {
+    if (total > 0) {
       const br = 0.35 + 0.65 * (Math.log1p(total) / Math.log1p(globalMax));
       const d = Math.max(total, 1);
+      // Fatal: magenta
       r = Math.min(255, r + (f/d)*br*230); g = Math.min(255, g + (f/d)*br*20);  b = Math.min(255, b + (f/d)*br*255);
+      // Error: red
       r = Math.min(255, r + (e/d)*br*220); g = Math.min(255, g + (e/d)*br*32);  b = Math.min(255, b + (e/d)*br*32);
+      // Warning: amber
       r = Math.min(255, r + (w/d)*br*200); g = Math.min(255, g + (w/d)*br*130);
+      // Info: blue
       r = Math.min(255, r + (inf/d)*br*20); g = Math.min(255, g + (inf/d)*br*100); b = Math.min(255, b + (inf/d)*br*180);
+      // Debug: green (subtle)
+      g = Math.min(255, g + (dg/d)*br*110); b = Math.min(255, b + (dg/d)*br*50);
+      // Verbose: teal (very subtle)
+      g = Math.min(255, g + (vb/d)*br*70); b = Math.min(255, b + (vb/d)*br*80);
     }
     const base = py * cw;
     for (let px = 0; px < cw; px++) {
@@ -11872,26 +11885,21 @@ function renderComparePanelCanvas(
   }
 }
 
-function renderComparePanelDiff(
-  id: string,
-  densA: { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[] },
-  densB: { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[] }
-): void {
+function renderComparePanelDiff(id: string, densA: DensityData, densB: DensityData): void {
   const canvas = document.getElementById(id) as HTMLCanvasElement | null;
   if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
   const cw = Math.floor(canvas.offsetWidth * dpr) || Math.round(24 * dpr);
-  const ch = Math.floor(canvas.offsetHeight * dpr) || Math.round(300 * dpr);
+  const ch = canvas.height || Math.round(300 * dpr);
   if (cw === 0 || ch === 0) return;
-  canvas.width = cw; canvas.height = ch;
+  canvas.width = cw;
   const ctx = canvas.getContext('2d')!;
 
-  const fDA = densA.fatal || [], fDB = densB.fatal || [];
   let maxA = 1, maxB = 1;
-  for (let i = 0; i < densA.buckets; i++) { const t=(fDA[i]||0)+densA.error[i]+densA.warning[i]+densA.info[i]; if(t>maxA)maxA=t; }
-  for (let i = 0; i < densB.buckets; i++) { const t=(fDB[i]||0)+densB.error[i]+densB.warning[i]+densB.info[i]; if(t>maxB)maxB=t; }
-  const nA = (bi: number) => maxA > 1 ? Math.log1p((fDA[bi]||0)+densA.error[bi]+densA.warning[bi]+densA.info[bi]) / Math.log1p(maxA) : 0;
-  const nB = (bi: number) => maxB > 1 ? Math.log1p((fDB[bi]||0)+densB.error[bi]+densB.warning[bi]+densB.info[bi]) / Math.log1p(maxB) : 0;
+  for (let i = 0; i < densA.buckets; i++) { const t=densityTotal(densA,i); if(t>maxA)maxA=t; }
+  for (let i = 0; i < densB.buckets; i++) { const t=densityTotal(densB,i); if(t>maxB)maxB=t; }
+  const nA = (bi: number) => maxA > 1 ? Math.log1p(densityTotal(densA,bi)) / Math.log1p(maxA) : 0;
+  const nB = (bi: number) => maxB > 1 ? Math.log1p(densityTotal(densB,bi)) / Math.log1p(maxB) : 0;
 
   const pixels = new Uint8ClampedArray(cw * ch * 4);
   for (let py = 0; py < ch; py++) {

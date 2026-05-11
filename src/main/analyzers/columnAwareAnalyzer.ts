@@ -72,6 +72,8 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
       const densityError = new Uint32Array(DENSITY_BUCKETS);
       const densityWarning = new Uint32Array(DENSITY_BUCKETS);
       const densityInfo = new Uint32Array(DENSITY_BUCKETS);
+      const densityDebug = new Uint32Array(DENSITY_BUCKETS);
+      const densityVerbose = new Uint32Array(DENSITY_BUCKETS);
 
       // Crash tracking
       const crashes: CrashEntry[] = [];
@@ -135,6 +137,8 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
           else if (level === 'error') densityError[bucket]++;
           else if (level === 'warning') densityWarning[bucket]++;
           else if (level === 'info') densityInfo[bucket]++;
+          else if (level === 'debug') densityDebug[bucket]++;
+          else if (level === 'verbose') densityVerbose[bucket]++;
         }
 
         // Extract message text
@@ -265,6 +269,8 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
           error: Array.from(densityError),
           warning: Array.from(densityWarning),
           info: Array.from(densityInfo),
+          debug: Array.from(densityDebug),
+          verbose: Array.from(densityVerbose),
         }
       };
 
