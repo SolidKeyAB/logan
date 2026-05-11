@@ -454,6 +454,15 @@ const api = {
     return () => ipcRenderer.removeListener('open-file-from-cli', handler);
   },
 
+  onFileChanged: (callback: (filePath: string) => void): (() => void) => {
+    const handler = (_: any, filePath: string) => callback(filePath);
+    ipcRenderer.on('file-changed', handler);
+    return () => ipcRenderer.removeListener('file-changed', handler);
+  },
+
+  reloadFile: (filePath: string): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('reload-file', filePath),
+
   // Agent chat
   sendAgentMessage: (text: string): Promise<{ success: boolean; message?: any }> =>
     ipcRenderer.invoke('agent-send-message', text),

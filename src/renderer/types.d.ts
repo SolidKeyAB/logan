@@ -437,6 +437,8 @@ interface Api {
 
   // CLI file open
   onOpenFileFromCli: (callback: (filePath: string) => void) => () => void;
+  onFileChanged: (callback: (filePath: string) => void) => () => void;
+  reloadFile: (filePath: string) => Promise<{ success: boolean }>;
 
   // Agent chat
   sendAgentMessage: (text: string) => Promise<{ success: boolean; message?: { id: string; from: string; text: string; timestamp: number } }>;

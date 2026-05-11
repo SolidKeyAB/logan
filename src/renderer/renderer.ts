@@ -4259,6 +4259,17 @@ async function openFile(): Promise<void> {
   await loadFile(filePath);
 }
 
+async function reloadCurrentFile(): Promise<void> {
+  if (!state.filePath) return;
+  const filePath = state.filePath;
+  // Evict from main-process cache so openFile re-indexes from disk
+  await window.api.reloadFile(filePath);
+  // Dismiss banner if visible
+  document.getElementById('file-changed-banner')?.classList.add('hidden');
+  // Re-open the file in the current tab (preserves tab, resets filter/analysis)
+  await loadFile(filePath, false);
+}
+
 async function toggleRecentFoldersPopup(): Promise<void> {
   const popup = elements.recentFoldersPopup;
   if (!popup.classList.contains('hidden')) {
@@ -9628,6 +9639,8 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       state.totalLines = result.info.totalLines;
       state.isFiltered = false;
       state.filteredLines = null;
+      // Hide stale "file changed" banner for the new/reloaded file
+      document.getElementById('file-changed-banner')?.classList.add('hidden');
       state.searchResults = [];
       state.currentSearchIndex = -1;
       state.hiddenSearchMatches = [];
@@ -13131,6 +13144,12 @@ function setupActivityBar(): void {
 
   // Keyboard shortcuts: Ctrl+1..5 sidebar panels, Ctrl+6..7 bottom tabs, Escape close
   document.addEventListener('keydown', (e) => {
+    // Ctrl+R — reload current file from disk
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === 'r') {
+      if (state.filePath) { e.preventDefault(); reloadCurrentFile(); }
+      return;
+    }
+
     // Ctrl+1..5 — toggle sidebar panels
     if (e.ctrlKey && !e.shiftKey && !e.altKey) {
       const num = parseInt(e.key, 10);
@@ -13759,6 +13778,28 @@ function init(): void {
   // CLI file open — allow main process to open a file (from `logan myfile.log` or API)
   window.api.onOpenFileFromCli((filePath: string) => {
     loadFile(filePath);
+  });
+
+  // File changed externally — show banner or auto-reload markdown
+  window.api.onFileChanged((changedPath: string) => {
+    if (changedPath !== state.filePath) return;
+    if (isMarkdownFile) {
+      // MD preview: silently reload so the preview is always fresh
+      reloadCurrentFile();
+    } else {
+      // Log files: show banner so user decides
+      const banner = document.getElementById('file-changed-banner');
+      if (banner) banner.classList.remove('hidden');
+    }
+  });
+
+  // File changed banner buttons
+  document.getElementById('btn-reload-file')?.addEventListener('click', () => {
+    document.getElementById('file-changed-banner')?.classList.add('hidden');
+    reloadCurrentFile();
+  });
+  document.getElementById('btn-dismiss-file-changed')?.addEventListener('click', () => {
+    document.getElementById('file-changed-banner')?.classList.add('hidden');
   });
 
   // Logo click - open GitHub

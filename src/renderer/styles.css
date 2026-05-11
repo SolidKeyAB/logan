@@ -6185,6 +6185,43 @@ kbd {
   opacity: 0.7;
 }
 
+/* File changed externally banner */
+.file-changed-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  background: rgba(59, 130, 246, 0.12);
+  border-bottom: 1px solid rgba(59, 130, 246, 0.35);
+  font-size: 12px;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+.file-changed-banner.hidden { display: none; }
+.file-changed-icon { font-size: 14px; color: #60a5fa; }
+.file-changed-text { flex: 1; color: var(--text-secondary); }
+.file-changed-reload-btn {
+  background: rgba(59, 130, 246, 0.2);
+  border: 1px solid rgba(59, 130, 246, 0.5);
+  color: #93c5fd;
+  border-radius: 3px;
+  padding: 2px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.file-changed-reload-btn:hover { background: rgba(59, 130, 246, 0.35); }
+.file-changed-dismiss-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  line-height: 1;
+  opacity: 0.6;
+}
+.file-changed-dismiss-btn:hover { opacity: 1; }
+
 .long-lines-warning {
   display: flex;
   align-items: center;

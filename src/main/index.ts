@@ -105,6 +105,35 @@ function getFilteredLines(): number[] | null {
 const fileHandlerCache = new Map<string, FileHandler>();
 const MAX_CACHED_FILES = 10; // Limit cache size to prevent memory issues
 
+// File watchers — one per open file path, notifies renderer when content changes
+const fileWatchers = new Map<string, fs.FSWatcher>();
+const fileWatchDebounce = new Map<string, ReturnType<typeof setTimeout>>();
+
+function startWatchingFile(filePath: string): void {
+  if (fileWatchers.has(filePath)) return;
+  try {
+    const watcher = fs.watch(filePath, { persistent: false }, (event) => {
+      if (event !== 'change') return;
+      // Debounce — editors often write in multiple flushes
+      const existing = fileWatchDebounce.get(filePath);
+      if (existing) clearTimeout(existing);
+      fileWatchDebounce.set(filePath, setTimeout(() => {
+        fileWatchDebounce.delete(filePath);
+        mainWindow?.webContents.send('file-changed', filePath);
+      }, 300));
+    });
+    watcher.on('error', () => stopWatchingFile(filePath));
+    fileWatchers.set(filePath, watcher);
+  } catch { /* file may not exist or not watchable */ }
+}
+
+function stopWatchingFile(filePath: string): void {
+  const t = fileWatchDebounce.get(filePath);
+  if (t) { clearTimeout(t); fileWatchDebounce.delete(filePath); }
+  const w = fileWatchers.get(filePath);
+  if (w) { try { w.close(); } catch { /* ignore */ } fileWatchers.delete(filePath); }
+}
+
 function getFileHandler(): FileHandler | null {
   if (!currentFilePath) return null;
   const handler = fileHandlerCache.get(currentFilePath);
@@ -117,20 +146,26 @@ function getFileHandler(): FileHandler | null {
 }
 
 function addToCache(filePath: string, handler: FileHandler): void {
-  // If already cached, remove so it goes to end (most-recently-used)
   if (fileHandlerCache.has(filePath)) {
     fileHandlerCache.delete(filePath);
   }
-  // If cache is full, evict least-recently-used (first entry) and close its fd
   if (fileHandlerCache.size >= MAX_CACHED_FILES) {
     const firstKey = fileHandlerCache.keys().next().value;
     if (firstKey) {
       const evicted = fileHandlerCache.get(firstKey);
       if (evicted) evicted.close();
       fileHandlerCache.delete(firstKey);
+      stopWatchingFile(firstKey);
     }
   }
   fileHandlerCache.set(filePath, handler);
+  startWatchingFile(filePath);
+}
+
+function evictFromCache(filePath: string): void {
+  const handler = fileHandlerCache.get(filePath);
+  if (handler) { handler.close(); fileHandlerCache.delete(filePath); }
+  stopWatchingFile(filePath);
 }
 
 // In-memory storage
@@ -5787,6 +5822,13 @@ ipcMain.handle('recent-folders-list', async () => {
 
 ipcMain.handle('recent-folders-clear', async () => {
   saveRecentFolders([]);
+  return { success: true };
+});
+
+// === File Reload ===
+// Evict a file from cache so the next openFile call re-indexes from disk.
+ipcMain.handle('reload-file', async (_, filePath: string) => {
+  evictFromCache(filePath);
   return { success: true };
 });
 
