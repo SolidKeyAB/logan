@@ -1277,6 +1277,7 @@ interface SecondaryViewerInstance {
   scrollDirection: 'up' | 'down';
   scrollRAF: number | null;
   resizeObserver: ResizeObserver | null;
+  highlightedLine: number | null;
 }
 
 function createSecondaryViewer(container: HTMLElement): SecondaryViewerInstance {
@@ -1318,6 +1319,7 @@ function createSecondaryViewer(container: HTMLElement): SecondaryViewerInstance 
     scrollDirection: 'down',
     scrollRAF: null,
     resizeObserver: null,
+    highlightedLine: null,
   };
 
   // Close button handler
@@ -1470,6 +1472,7 @@ function secondaryRenderVisibleLines(sv: SecondaryViewerInstance): void {
       const div = sv.pool.acquire();
       let className = 'log-line';
       if (line.level) className += ` level-${line.level}`;
+      if (sv.highlightedLine === line.lineNumber) className += ' selected';
       if (displayLine) {
         if (displayLine.type === 'added') className += ' diff-added';
         else if (displayLine.type === 'removed') className += ' diff-removed';
@@ -11733,18 +11736,27 @@ function createCompareMidPanel(): void {
     jumpBothPanesToRatio(ratio);
   });
 
-  // Re-render canvases on resize
-  const stripsEl = compareMidPanel.querySelector('.cmp-strips') as HTMLElement;
-  if (stripsEl) {
-    compareMidPanelRO = new ResizeObserver(() => renderCompareMidPanel());
-    compareMidPanelRO.observe(stripsEl);
-  }
+  // Re-render canvases when the panel height changes
+  compareMidPanelRO = new ResizeObserver(() => {
+    if (compareAnalysisResult) renderCompareMidPanel();
+  });
+  compareMidPanelRO.observe(compareMidPanel);
 }
 
 function renderCompareMidPanel(): void {
   const densA = state.analysisResult?.density;
   const densB = compareAnalysisResult?.density;
   if (!densA || !densB || !compareMidPanel) return;
+
+  // Size canvases explicitly from the strips container (height:100% on canvas is unreliable)
+  const stripsEl = document.getElementById('cmp-strips');
+  if (stripsEl && stripsEl.clientHeight > 0) {
+    const h = stripsEl.clientHeight;
+    (['cmp-canvas-a', 'cmp-diff-canvas', 'cmp-canvas-b'] as const).forEach(id => {
+      const c = document.getElementById(id) as HTMLCanvasElement | null;
+      if (c) c.style.height = h + 'px';
+    });
+  }
 
   // Compute similarity score and diff peaks
   const { similarity, peaks } = computeCompareSimilarity(densA, densB);
@@ -11938,6 +11950,7 @@ function jumpBothPanesToRatio(ratio: number): void {
     const totalB = secondaryGetTotalLines(secondaryViewer);
     if (totalB > 0) {
       const line = Math.floor(ratio * totalB);
+      secondaryViewer.highlightedLine = line;
       const scrollTop = secondaryLineToScrollTop(secondaryViewer, line);
       secondaryViewer.viewerElement.scrollTop = scrollTop;
       secondaryHandleScroll(secondaryViewer);

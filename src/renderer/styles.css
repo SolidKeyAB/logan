@@ -6085,6 +6085,9 @@ kbd {
   min-height: 0;
 }
 
+/* Hide minimap in split/compare mode — the comparison panel in the middle replaces it */
+.split-pane .minimap { display: none; }
+
 /* Split pane header (file name bar) */
 .split-pane-header {
   display: flex;
@@ -6214,17 +6217,17 @@ kbd {
 .cmp-density-canvas {
   flex: 1;
   min-width: 0;
-  height: 100%;
   display: block;
+  /* height set via JS from parent clientHeight */
 }
 
 .cmp-diff-strip {
   width: 28px;
   flex-shrink: 0;
-  height: 100%;
   display: block;
   border-left: 1px solid rgba(255,255,255,0.06);
   border-right: 1px solid rgba(255,255,255,0.06);
+  /* height set via JS */
 }
 
 /* Diff colors */
