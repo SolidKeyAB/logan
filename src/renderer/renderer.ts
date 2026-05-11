@@ -1061,6 +1061,10 @@ let minimapData: Array<{ level: string | undefined; lineNumber?: number }> = [];
 // Compare feature state
 let compareAnalysisResult: any | null = null;
 let compareFilePath: string | null = null;
+let compareMidPanel: HTMLDivElement | null = null;
+let compareMidPanelRO: ResizeObserver | null = null;
+let compareDiffPeaks: number[] = []; // ratio positions (0–1) of significant diff regions
+let compareDiffPeakIdx = -1;
 const MINIMAP_SAMPLE_RATE = 1000; // Sample every N lines for minimap
 
 // Range selection (context menu)
@@ -1876,6 +1880,11 @@ function deactivateSplitView(): void {
   compareAnalysisResult = null;
   compareFilePath = null;
   document.getElementById('compare-header')?.remove();
+  compareMidPanelRO?.disconnect();
+  compareMidPanelRO = null;
+  compareMidPanel = null; // already removed via splitRowContainer.remove()
+  compareDiffPeaks = [];
+  compareDiffPeakIdx = -1;
 
   // Reset state
   const wasDiff = viewMode === 'diff';
@@ -11479,6 +11488,9 @@ async function showCompareModal(): Promise<void> {
 
   activateSplitView(otherTab.id);
 
+  // Create the comparison mid-panel (tall density strips + navigation)
+  createCompareMidPanel();
+
   // Run analysis on the second file in background for density comparison
   compareFilePath = otherPath;
   compareAnalysisResult = null;
@@ -11494,6 +11506,7 @@ async function showCompareModal(): Promise<void> {
       if (result.success && result.result) {
         compareAnalysisResult = result.result;
         renderCompareHeader();
+        renderCompareMidPanel();
       } else {
         updateCompareHeader(0, 'Analysis failed');
       }
@@ -11673,6 +11686,263 @@ function renderDiffCanvas(id: string,
     }
   }
   ctx.putImageData(new ImageData(pixels, cw, ch), 0, 0);
+}
+
+// ─── Compare Mid-Panel (tall density strips + navigation) ────────────────────
+
+function createCompareMidPanel(): void {
+  if (!splitRowContainer) return;
+
+  // Remove the simple resize handle — replaced by the comparison panel
+  splitRowContainer.querySelector('.split-resize-handle')?.remove();
+
+  compareMidPanel = document.createElement('div');
+  compareMidPanel.className = 'compare-mid-panel';
+  compareMidPanel.innerHTML = `
+    <div class="cmp-panel-header">
+      <button id="btn-cmp-prev" class="cmp-nav-btn" title="Previous difference">↑</button>
+      <span id="cmp-similarity" class="cmp-similarity">–</span>
+      <button id="btn-cmp-next" class="cmp-nav-btn" title="Next difference">↓</button>
+    </div>
+    <div class="cmp-strips" id="cmp-strips">
+      <canvas id="cmp-canvas-a" class="cmp-density-canvas" title="File A — click to navigate"></canvas>
+      <canvas id="cmp-diff-canvas" class="cmp-diff-strip" title="Differences — red=diverge, green=match — click to navigate"></canvas>
+      <canvas id="cmp-canvas-b" class="cmp-density-canvas" title="File B — click to navigate"></canvas>
+    </div>`;
+
+  // Insert between primary and secondary panes
+  const secondary = splitRowContainer.querySelector('.secondary-pane');
+  secondary ? splitRowContainer.insertBefore(compareMidPanel, secondary)
+            : splitRowContainer.appendChild(compareMidPanel);
+
+  // Navigation buttons
+  document.getElementById('btn-cmp-prev')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    navigateToCompareDiff(-1);
+  });
+  document.getElementById('btn-cmp-next')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    navigateToCompareDiff(1);
+  });
+
+  // Click on strips → navigate both panes to that relative position
+  document.getElementById('cmp-strips')?.addEventListener('click', (e) => {
+    const strips = document.getElementById('cmp-strips')!;
+    const rect = strips.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+    jumpBothPanesToRatio(ratio);
+  });
+
+  // Re-render canvases on resize
+  const stripsEl = compareMidPanel.querySelector('.cmp-strips') as HTMLElement;
+  if (stripsEl) {
+    compareMidPanelRO = new ResizeObserver(() => renderCompareMidPanel());
+    compareMidPanelRO.observe(stripsEl);
+  }
+}
+
+function renderCompareMidPanel(): void {
+  const densA = state.analysisResult?.density;
+  const densB = compareAnalysisResult?.density;
+  if (!densA || !densB || !compareMidPanel) return;
+
+  // Compute similarity score and diff peaks
+  const { similarity, peaks } = computeCompareSimilarity(densA, densB);
+  compareDiffPeaks = peaks;
+
+  const pct = Math.round(similarity * 100);
+  const simEl = document.getElementById('cmp-similarity');
+  if (simEl) {
+    simEl.textContent = `${pct}%`;
+    simEl.title = `Overall pattern similarity: ${pct}%`;
+    simEl.style.color = pct >= 80 ? '#6a9955' : pct >= 50 ? '#cca700' : '#f14c4c';
+  }
+
+  renderComparePanelCanvas('cmp-canvas-a', densA, false);
+  renderComparePanelCanvas('cmp-canvas-b', densB, false);
+  renderComparePanelDiff('cmp-diff-canvas', densA, densB);
+}
+
+function computeCompareSimilarity(
+  densA: { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[] },
+  densB: { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[] }
+): { similarity: number; peaks: number[] } {
+  const fDA = densA.fatal || [], fDB = densB.fatal || [];
+  let maxA = 1, maxB = 1;
+  for (let i = 0; i < densA.buckets; i++) {
+    const t = (fDA[i]||0)+densA.error[i]+densA.warning[i]+densA.info[i];
+    if (t > maxA) maxA = t;
+  }
+  for (let i = 0; i < densB.buckets; i++) {
+    const t = (fDB[i]||0)+densB.error[i]+densB.warning[i]+densB.info[i];
+    if (t > maxB) maxB = t;
+  }
+  const logNorm = (v: number, m: number) => m > 1 ? Math.log1p(v) / Math.log1p(m) : 0;
+
+  const sampleCount = 500; // use 500 samples regardless of bucket count
+  let totalDiff = 0;
+  const peaks: number[] = [];
+  let inPeak = false;
+
+  for (let s = 0; s < sampleCount; s++) {
+    const ratio = s / sampleCount;
+    const biA = Math.min(densA.buckets - 1, Math.floor(ratio * densA.buckets));
+    const biB = Math.min(densB.buckets - 1, Math.floor(ratio * densB.buckets));
+    const nA = logNorm((fDA[biA]||0)+densA.error[biA]+densA.warning[biA]+densA.info[biA], maxA);
+    const nB = logNorm((fDB[biB]||0)+densB.error[biB]+densB.warning[biB]+densB.info[biB], maxB);
+    const diff = Math.abs(nA - nB);
+    totalDiff += diff;
+
+    if (diff > 0.25 && !inPeak) {
+      peaks.push(ratio);
+      inPeak = true;
+    } else if (diff < 0.1) {
+      inPeak = false;
+    }
+  }
+
+  const similarity = Math.max(0, 1 - (totalDiff / sampleCount));
+  return { similarity, peaks };
+}
+
+function renderComparePanelCanvas(
+  id: string,
+  density: { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[] },
+  _secondary: boolean
+): void {
+  const canvas = document.getElementById(id) as HTMLCanvasElement | null;
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cw = Math.floor(canvas.offsetWidth * dpr) || Math.round(40 * dpr);
+  const ch = Math.floor(canvas.offsetHeight * dpr) || Math.round(300 * dpr);
+  if (cw === 0 || ch === 0) return;
+  canvas.width = cw; canvas.height = ch;
+  const ctx = canvas.getContext('2d')!;
+
+  const { buckets, fatal: fD_, error, warning, info } = density;
+  const fD = fD_ || [];
+  let globalMax = 1;
+  for (let i = 0; i < buckets; i++) {
+    const t = (fD[i]||0)+error[i]+warning[i]+info[i];
+    if (t > globalMax) globalMax = t;
+  }
+  const hasData = globalMax > 1;
+  const pixels = new Uint8ClampedArray(cw * ch * 4);
+  for (let py = 0; py < ch; py++) {
+    const bi = Math.min(buckets - 1, Math.floor((py / ch) * buckets));
+    const f = fD[bi]||0, e = error[bi]||0, w = warning[bi]||0, inf = info[bi]||0;
+    const total = f + e + w + inf;
+    let r = 22, g = 22, b = 32;
+    if (!hasData) { r = 40; g = 40; b = 55; }
+    else if (total > 0) {
+      const br = 0.35 + 0.65 * (Math.log1p(total) / Math.log1p(globalMax));
+      const d = Math.max(total, 1);
+      r = Math.min(255, r + (f/d)*br*230); g = Math.min(255, g + (f/d)*br*20);  b = Math.min(255, b + (f/d)*br*255);
+      r = Math.min(255, r + (e/d)*br*220); g = Math.min(255, g + (e/d)*br*32);  b = Math.min(255, b + (e/d)*br*32);
+      r = Math.min(255, r + (w/d)*br*200); g = Math.min(255, g + (w/d)*br*130);
+      r = Math.min(255, r + (inf/d)*br*20); g = Math.min(255, g + (inf/d)*br*100); b = Math.min(255, b + (inf/d)*br*180);
+    }
+    const base = py * cw;
+    for (let px = 0; px < cw; px++) {
+      const i4 = (base + px) << 2;
+      pixels[i4]=r; pixels[i4+1]=g; pixels[i4+2]=b; pixels[i4+3]=255;
+    }
+  }
+  ctx.putImageData(new ImageData(pixels, cw, ch), 0, 0);
+
+  // Draw diff peak markers (yellow tick marks on the right edge)
+  if (compareDiffPeaks.length > 0) {
+    ctx.fillStyle = 'rgba(255, 220, 50, 0.75)';
+    for (const peak of compareDiffPeaks) {
+      const py2 = Math.floor(peak * ch);
+      ctx.fillRect(cw - Math.round(4 * dpr), py2, Math.round(4 * dpr), Math.max(2, Math.round(2 * dpr)));
+    }
+  }
+}
+
+function renderComparePanelDiff(
+  id: string,
+  densA: { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[] },
+  densB: { buckets: number; fatal?: number[]; error: number[]; warning: number[]; info: number[] }
+): void {
+  const canvas = document.getElementById(id) as HTMLCanvasElement | null;
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cw = Math.floor(canvas.offsetWidth * dpr) || Math.round(24 * dpr);
+  const ch = Math.floor(canvas.offsetHeight * dpr) || Math.round(300 * dpr);
+  if (cw === 0 || ch === 0) return;
+  canvas.width = cw; canvas.height = ch;
+  const ctx = canvas.getContext('2d')!;
+
+  const fDA = densA.fatal || [], fDB = densB.fatal || [];
+  let maxA = 1, maxB = 1;
+  for (let i = 0; i < densA.buckets; i++) { const t=(fDA[i]||0)+densA.error[i]+densA.warning[i]+densA.info[i]; if(t>maxA)maxA=t; }
+  for (let i = 0; i < densB.buckets; i++) { const t=(fDB[i]||0)+densB.error[i]+densB.warning[i]+densB.info[i]; if(t>maxB)maxB=t; }
+  const nA = (bi: number) => maxA > 1 ? Math.log1p((fDA[bi]||0)+densA.error[bi]+densA.warning[bi]+densA.info[bi]) / Math.log1p(maxA) : 0;
+  const nB = (bi: number) => maxB > 1 ? Math.log1p((fDB[bi]||0)+densB.error[bi]+densB.warning[bi]+densB.info[bi]) / Math.log1p(maxB) : 0;
+
+  const pixels = new Uint8ClampedArray(cw * ch * 4);
+  for (let py = 0; py < ch; py++) {
+    const biA = Math.min(densA.buckets-1, Math.floor((py/ch)*densA.buckets));
+    const biB = Math.min(densB.buckets-1, Math.floor((py/ch)*densB.buckets));
+    const na = nA(biA), nb = nB(biB);
+    const diff = Math.abs(na - nb);
+    let r = 22, g = 35, b = 50;
+    if (diff > 0.08) {
+      const d = Math.min(1, diff * 1.8);
+      r = Math.min(255, 40 + d * 210);
+      g = Math.min(255, 35 + (1-d) * 100);
+      b = Math.min(255, 50 + (1-d) * 40);
+    } else if (na > 0.05 || nb > 0.05) {
+      const act = Math.min(1, (na + nb) / 2);
+      g = Math.min(255, 35 + act * 120);
+      b = Math.min(255, 50 + act * 50);
+    }
+    const base = py * cw;
+    for (let px = 0; px < cw; px++) {
+      const i4 = (base + px) << 2;
+      pixels[i4]=r; pixels[i4+1]=g; pixels[i4+2]=b; pixels[i4+3]=255;
+    }
+  }
+  ctx.putImageData(new ImageData(pixels, cw, ch), 0, 0);
+
+  // Draw peak tick marks on diff strip
+  if (compareDiffPeaks.length > 0) {
+    ctx.fillStyle = 'rgba(255, 220, 50, 0.9)';
+    for (const peak of compareDiffPeaks) {
+      const py2 = Math.floor(peak * ch);
+      ctx.fillRect(0, py2, cw, Math.max(2, Math.round(2 * dpr)));
+    }
+  }
+}
+
+function navigateToCompareDiff(direction: 1 | -1): void {
+  if (compareDiffPeaks.length === 0) return;
+  compareDiffPeakIdx = Math.max(0, Math.min(
+    compareDiffPeaks.length - 1,
+    compareDiffPeakIdx + direction
+  ));
+  if (compareDiffPeakIdx < 0) compareDiffPeakIdx = direction > 0 ? 0 : compareDiffPeaks.length - 1;
+  jumpBothPanesToRatio(compareDiffPeaks[compareDiffPeakIdx]);
+}
+
+function jumpBothPanesToRatio(ratio: number): void {
+  // Primary viewer
+  const totalA = getTotalLines();
+  if (totalA > 0) {
+    const line = Math.floor(ratio * totalA);
+    goToLine(line);
+  }
+  // Secondary viewer
+  if (secondaryViewer) {
+    const totalB = secondaryGetTotalLines(secondaryViewer);
+    if (totalB > 0) {
+      const line = Math.floor(ratio * totalB);
+      const scrollTop = secondaryLineToScrollTop(secondaryViewer, line);
+      secondaryViewer.viewerElement.scrollTop = scrollTop;
+      secondaryHandleScroll(secondaryViewer);
+    }
+  }
 }
 
 // Split File

@@ -3345,11 +3345,11 @@ body.platform-darwin .titlebar {
   display: flex;
   gap: 2px;
   align-items: stretch;
-  height: 52px;
+  height: 44px;
   flex-shrink: 0;
 }
-.compare-mini-canvas { width: 50px; height: 52px; border-radius: 2px; }
-.compare-diff-canvas { width: 24px; height: 52px; border-radius: 2px; }
+.compare-mini-canvas { width: 36px; height: 44px; border-radius: 2px; }
+.compare-diff-canvas { width: 18px; height: 44px; border-radius: 2px; }
 .compare-close-btn {
   background: none;
   border: none;
@@ -6155,6 +6155,76 @@ kbd {
   overflow-anchor: none;
   overscroll-behavior: contain;
   scroll-behavior: auto;
+}
+
+/* ── Compare Mid-Panel ──────────────────────────────────────────────────── */
+.compare-mid-panel {
+  display: flex;
+  flex-direction: column;
+  width: 128px;
+  flex-shrink: 0;
+  min-height: 0;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border-color);
+  border-right: 1px solid var(--border-color);
+  overflow: hidden;
+  user-select: none;
+}
+
+.cmp-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 6px;
+  gap: 4px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.cmp-nav-btn {
+  background: none;
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+.cmp-nav-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.cmp-similarity {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-align: center;
+  flex: 1;
+}
+
+.cmp-strips {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  cursor: crosshair;
+  overflow: hidden;
+}
+
+.cmp-density-canvas {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: block;
+}
+
+.cmp-diff-strip {
+  width: 28px;
+  flex-shrink: 0;
+  height: 100%;
+  display: block;
+  border-left: 1px solid rgba(255,255,255,0.06);
+  border-right: 1px solid rgba(255,255,255,0.06);
 }
 
 /* Diff colors */
