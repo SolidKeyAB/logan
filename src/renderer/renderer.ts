@@ -3594,26 +3594,27 @@ function renderMinimapCanvas(): void {
     let r = 18, g = 18, b = 26;
 
     if (total > 0) {
-      const brightness = Math.min(1, Math.sqrt(total / globalMax));
+      // Log scale + 35% floor ensures sparse data stays visible
+      const brightness = 0.35 + 0.65 * (Math.log1p(total) / Math.log1p(globalMax));
       const denom = Math.max(total, 1);
       // Fatal: magenta (highest priority — drawn first, overrides error)
       const fr = (f / denom) * brightness;
-      r = Math.min(255, r + fr * 224);
-      g = Math.min(255, g + fr * 18);
-      b = Math.min(255, b + fr * 251);
+      r = Math.min(255, r + fr * 230);
+      g = Math.min(255, g + fr * 20);
+      b = Math.min(255, b + fr * 255);
       // Error: crimson
       const er = (e / denom) * brightness;
-      r = Math.min(255, r + er * 210);
-      g = Math.min(255, g + er * 28);
+      r = Math.min(255, r + er * 220);
+      g = Math.min(255, g + er * 32);
       b = Math.min(255, b + er * 28);
       // Warning: amber
       const wr = (w / denom) * brightness;
       r = Math.min(255, r + wr * 185);
       g = Math.min(255, g + wr * 110);
-      // Info: steel blue (subtle)
-      const ir = (inf / denom) * brightness * 0.45;
-      g = Math.min(255, g + ir * 75);
-      b = Math.min(255, b + ir * 135);
+      // Info: steel blue — more visible than before
+      const ir = (inf / denom) * brightness;
+      g = Math.min(255, g + ir * 90);
+      b = Math.min(255, b + ir * 170);
     }
 
     const rowBase = py * cw;
@@ -11583,24 +11584,31 @@ function renderCompareCanvas(id: string, density: { buckets: number; fatal?: num
     const t = (fD[i]||0) + error[i] + warning[i] + info[i];
     if (t > globalMax) globalMax = t;
   }
+  const hasData = globalMax > 1;
   const pixels = new Uint8ClampedArray(cw * ch * 4);
   for (let py = 0; py < ch; py++) {
     const bi = Math.min(buckets - 1, Math.floor((py / ch) * buckets));
     const f = fD[bi]||0, e = error[bi] || 0, w = warning[bi] || 0, inf = info[bi] || 0;
     const total = f + e + w + inf;
-    let r = 18, g = 18, b = 26;
-    if (total > 0) {
-      const br = Math.min(1, Math.sqrt(total / globalMax));
+    // Base: dark background
+    let r = 22, g = 22, b = 32;
+    if (!hasData) {
+      // No level data — show a subtle uniform tone so canvas isn't pitch-black
+      r = 38; g = 38; b = 52;
+    } else if (total > 0) {
+      // Log scale gives much better visibility for sparse data
+      const br = 0.35 + 0.65 * (Math.log1p(total) / Math.log1p(globalMax));
       const d = Math.max(total, 1);
-      r = Math.min(255, r + (f/d)*br*224); g = Math.min(255, g + (f/d)*br*18); b = Math.min(255, b + (f/d)*br*251);
-      r = Math.min(255, r + (e/d)*br*210);
-      g = Math.min(255, g + (e/d)*br*28);
-      b = Math.min(255, b + (e/d)*br*28);
-      r = Math.min(255, r + (w/d)*br*185);
-      g = Math.min(255, g + (w/d)*br*110);
-      const ir = (inf/d)*br*0.45;
-      g = Math.min(255, g + ir*75);
-      b = Math.min(255, b + ir*135);
+      r = Math.min(255, r + (f/d)*br*230); g = Math.min(255, g + (f/d)*br*20); b = Math.min(255, b + (f/d)*br*255);
+      r = Math.min(255, r + (e/d)*br*220);
+      g = Math.min(255, g + (e/d)*br*32);
+      b = Math.min(255, b + (e/d)*br*32);
+      r = Math.min(255, r + (w/d)*br*200);
+      g = Math.min(255, g + (w/d)*br*130);
+      // Info: steel blue, more visible
+      r = Math.min(255, r + (inf/d)*br*20);
+      g = Math.min(255, g + (inf/d)*br*100);
+      b = Math.min(255, b + (inf/d)*br*180);
     }
     const base = py * cw;
     for (let px = 0; px < cw; px++) {
@@ -11623,30 +11631,40 @@ function renderDiffCanvas(id: string,
   canvas.width = cw; canvas.height = ch;
   const ctx = canvas.getContext('2d')!;
 
-  // Normalise both to the same scale
+  // Build log-scaled normalised profiles for both files
   let maxA = 1, maxB = 1;
-  for (let i = 0; i < densA.buckets; i++) { const t = densA.error[i]+densA.warning[i]+densA.info[i]; if(t>maxA)maxA=t; }
-  for (let i = 0; i < densB.buckets; i++) { const t = densB.error[i]+densB.warning[i]+densB.info[i]; if(t>maxB)maxB=t; }
+  const fDA = densA.fatal || [], fDB = densB.fatal || [];
+  for (let i = 0; i < densA.buckets; i++) {
+    const t = (fDA[i]||0)+densA.error[i]+densA.warning[i]+densA.info[i];
+    if(t>maxA) maxA=t;
+  }
+  for (let i = 0; i < densB.buckets; i++) {
+    const t = (fDB[i]||0)+densB.error[i]+densB.warning[i]+densB.info[i];
+    if(t>maxB) maxB=t;
+  }
+
+  const normA = (i: number) => maxA > 1 ? Math.log1p((fDA[i]||0)+densA.error[i]+densA.warning[i]+densA.info[i]) / Math.log1p(maxA) : 0;
+  const normB = (i: number) => maxB > 1 ? Math.log1p((fDB[i]||0)+densB.error[i]+densB.warning[i]+densB.info[i]) / Math.log1p(maxB) : 0;
 
   const pixels = new Uint8ClampedArray(cw * ch * 4);
   for (let py = 0; py < ch; py++) {
     const biA = Math.min(densA.buckets-1, Math.floor((py/ch)*densA.buckets));
     const biB = Math.min(densB.buckets-1, Math.floor((py/ch)*densB.buckets));
+    const nA = normA(biA), nB = normB(biB);
+    const diff = Math.abs(nA - nB);
 
-    // Normalised [0,1] for each file
-    const eA = (densA.error[biA]||0)/maxA, wA = (densA.warning[biA]||0)/maxA;
-    const eB = (densB.error[biB]||0)/maxB, wB = (densB.warning[biB]||0)/maxB;
-
-    const diffE = Math.abs(eA - eB);
-    const diffW = Math.abs(wA - wB) * 0.6;
-    const diffTotal = Math.min(1, diffE + diffW);
-
-    // Colour: dark for similar, red/orange for different
-    let r = 18, g = 28, b = 42;
-    if (diffTotal > 0.05) {
-      r = Math.min(255, 30 + diffTotal * 220);
-      g = Math.min(255, 28 + (1-diffTotal) * 80);
-      b = Math.min(255, 42 + (1-diffTotal) * 60);
+    // Dark teal when similar, orange/red when different
+    let r = 22, g = 35, b = 48;
+    if (diff > 0.05) {
+      const d = Math.min(1, diff * 1.5);
+      r = Math.min(255, 40 + d * 210);
+      g = Math.min(255, 35 + (1-d) * 90);
+      b = Math.min(255, 48 + (1-d) * 40);
+    } else if (nA > 0.05 || nB > 0.05) {
+      // Both have activity here but they match — show dim green
+      const act = Math.min(1, (nA + nB) / 2);
+      g = Math.min(255, 35 + act * 100);
+      b = Math.min(255, 48 + act * 60);
     }
     const base = py * cw;
     for (let px = 0; px < cw; px++) {
