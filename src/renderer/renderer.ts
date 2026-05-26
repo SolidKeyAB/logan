@@ -2802,7 +2802,8 @@ function applyHighlights(text: string): string {
         pattern = `\\b${pattern}\\b`;
       }
 
-      const regex = new RegExp(pattern, flags || undefined);
+      const regex = tryRegExp(pattern, flags || undefined);
+      if (!regex) continue;
       let match;
 
       if (config.highlightAll) {
@@ -2948,7 +2949,8 @@ function applyHighlightsWithSearch(text: string, searchRanges: SearchRange[]): s
         pattern = `\\b${pattern}\\b`;
       }
 
-      const regex = new RegExp(pattern, flags || undefined);
+      const regex = tryRegExp(pattern, flags || undefined);
+      if (!regex) continue;
       let match;
 
       // Build inline style for this highlight
@@ -2998,7 +3000,8 @@ function applyHighlightsWithSearch(text: string, searchRanges: SearchRange[]): s
         pattern = `\\b${pattern}\\b`;
       }
 
-      const regex = new RegExp(pattern, flags);
+      const regex = tryRegExp(pattern, flags);
+      if (!regex) continue;
       let match;
       const style = `background-color: ${config.color}; ${config.textColor ? `color: ${config.textColor}` : 'color: #000'}`;
       while ((match = regex.exec(text)) !== null) {
@@ -3115,7 +3118,8 @@ function applyHighlightsWithSearchJson(text: string, searchRanges: SearchRange[]
         pattern = `\\b${pattern}\\b`;
       }
 
-      const regex = new RegExp(pattern, flags || undefined);
+      const regex = tryRegExp(pattern, flags || undefined);
+      if (!regex) continue;
       let match;
 
       const style = `background-color: ${config.backgroundColor}; ${
@@ -3162,7 +3166,8 @@ function applyHighlightsWithSearchJson(text: string, searchRanges: SearchRange[]
       if (scConfig.wholeWord) {
         pattern = `\\b${pattern}\\b`;
       }
-      const regex = new RegExp(pattern, flags);
+      const regex = tryRegExp(pattern, flags);
+      if (!regex) continue;
       let match;
       const style = `background-color: ${scConfig.color}; ${scConfig.textColor ? `color: ${scConfig.textColor}` : 'color: #000'}`;
       while ((match = regex.exec(text)) !== null) {
@@ -3334,6 +3339,14 @@ function sanitizeText(text: string): string {
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function tryRegExp(pattern: string, flags?: string): RegExp | null {
+  try {
+    return new RegExp(pattern, flags);
+  } catch {
+    return null;
+  }
 }
 
 // ─── Minimap ─────────────────────────────────────────────────────────────
