@@ -31,6 +31,18 @@
   --section-color-bookmarks: #d4785c;
   --section-color-highlights: #5cb8b2;
   --section-color-terminal: #8a8a8a;
+  /* Fatal & syntax highlighting */
+  --fatal-color: #e040fb;
+  --fatal-bg: rgba(224,64,251,0.15);
+  --tooltip-bg: rgba(10, 14, 20, 0.88);
+  --bg-hover-subtle: rgba(255,255,255,0.06);
+  /* JSON syntax colors */
+  --json-key: #9cdcfe;
+  --json-string: #ce9178;
+  --json-number: #b5cea8;
+  --json-keyword: #569cd6;
+  /* Monospace font stack */
+  --font-mono: 'SF Mono', 'Consolas', 'Monaco', 'Courier New', monospace;
 }
 
 /* Paper Theme (Eye Comfort) — override at :root level so variables cascade */
@@ -66,6 +78,18 @@
   --section-color-bookmarks: #d4785c;
   --section-color-highlights: #5cb8b2;
   --section-color-terminal: #8a8a8a;
+  /* Fatal & syntax highlighting */
+  --fatal-color: #b030c0;
+  --fatal-bg: rgba(176,48,192,0.12);
+  --tooltip-bg: rgba(30, 35, 40, 0.92);
+  --bg-hover-subtle: rgba(0,0,0,0.06);
+  /* JSON syntax colors (readable on light background) */
+  --json-key: #0451a5;
+  --json-string: #a31515;
+  --json-number: #098658;
+  --json-keyword: #0000ff;
+  /* Monospace font stack */
+  --font-mono: 'SF Mono', 'Consolas', 'Monaco', 'Courier New', monospace;
 }
 
 /* Reset & Base */
@@ -539,7 +563,7 @@ body.platform-darwin .titlebar {
 }
 .right-sidebar-btn:hover {
   color: var(--text-primary);
-  background: rgba(255,255,255,0.06);
+  background: var(--bg-hover-subtle);
 }
 .right-sidebar-btn.active {
   color: var(--accent-color);
@@ -1586,7 +1610,7 @@ body.platform-darwin .titlebar {
 .folder-search-results {
   max-height: 300px;
   overflow-y: auto;
-  font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
@@ -1759,8 +1783,8 @@ body.platform-darwin .titlebar {
 }
 
 .level-badge.fatal {
-  background-color: rgba(224, 64, 251, 0.2);
-  color: #e040fb;
+  background-color: var(--fatal-bg);
+  color: var(--fatal-color);
 }
 
 .level-badge.trace {
@@ -2425,7 +2449,7 @@ body.platform-darwin .titlebar {
   flex: 1;
   min-height: 0; /* Important for flex child to respect parent bounds */
   overflow: auto;
-  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.5;
   /* Optimize scroll performance */
@@ -2504,7 +2528,7 @@ body.platform-darwin .titlebar {
 
 /* Log Level Colors */
 .log-line.level-fatal .line-content {
-  color: #e040fb;
+  color: var(--fatal-color);
 }
 
 .log-line.level-error .line-content {
@@ -2549,25 +2573,25 @@ body.platform-darwin .titlebar {
 }
 
 .json-key {
-  color: #9cdcfe;
+  color: var(--json-key);
   font-weight: 500;
 }
 
 .json-string {
-  color: #ce9178;
+  color: var(--json-string);
 }
 
 .json-number {
-  color: #b5cea8;
+  color: var(--json-number);
 }
 
 .json-boolean {
-  color: #569cd6;
+  color: var(--json-keyword);
   font-weight: 500;
 }
 
 .json-null {
-  color: #569cd6;
+  color: var(--json-keyword);
   font-style: italic;
 }
 
@@ -2688,7 +2712,7 @@ body.platform-darwin .titlebar {
   user-select: none;
 }
 .lv-pill:hover { opacity: 1; background: rgba(255,255,255,0.08); }
-.lv-pill[data-level="fatal"] { color: #e040fb; }
+.lv-pill[data-level="fatal"] { color: var(--fatal-color); }
 .lv-pill[data-level="error"] { color: var(--error-color, #f14c4c); }
 .lv-pill[data-level="warning"] { color: var(--warning-color, #cca700); }
 .lv-pill[data-level="info"] { color: var(--info-color, #3794ff); }
@@ -3350,7 +3374,7 @@ body.platform-darwin .titlebar {
   border-radius: 3px;
   opacity: 0.85;
 }
-.cmp-lv.fatal   { color: #e040fb; background: rgba(224,64,251,0.15); }
+.cmp-lv.fatal   { color: var(--fatal-color); background: var(--fatal-bg); }
 .cmp-lv.error   { color: var(--error-color,#f14c4c); background: rgba(241,76,76,0.12); }
 .cmp-lv.warning { color: var(--warning-color,#cca700); background: rgba(204,167,0,0.12); }
 .cmp-lv.info    { color: var(--info-color,#3794ff); background: rgba(55,148,255,0.12); }
@@ -3422,7 +3446,7 @@ body.platform-darwin .titlebar {
   line-height: 16px;
   padding: 0 5px;
   text-align: center;
-  background: rgba(10, 14, 20, 0.88);
+  background: var(--tooltip-bg);
   color: rgba(255, 255, 255, 0.92);
   font-size: 10px;
   font-family: var(--font-mono, monospace);
@@ -3653,7 +3677,7 @@ body.platform-darwin .titlebar {
   font-size: 12px;
   transition: color 0.15s, background 0.15s;
 }
-.tab-bar-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.06); }
+.tab-bar-btn:hover { color: var(--text-primary); background: var(--bg-hover-subtle); }
 .tab-bar-btn:disabled { opacity: 0.4; cursor: default; }
 .tab-bar-btn:disabled:hover { background: none; color: var(--text-muted); }
 
@@ -3896,7 +3920,7 @@ body.platform-darwin .titlebar {
 kbd {
   display: inline-block;
   padding: 3px 6px;
-  font-family: 'Consolas', 'Monaco', monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-primary);
   background-color: var(--bg-tertiary);
@@ -4490,7 +4514,7 @@ kbd {
   color: #d4d4d4;
   border: none;
   padding: 12px;
-  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.5;
   resize: none;
@@ -4907,7 +4931,7 @@ kbd {
   flex: 1;
   overflow-y: auto;
   padding: 4px 0;
-  font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   min-height: 0;
 }
@@ -5178,7 +5202,7 @@ kbd {
   border-radius: 4px;
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 
@@ -5246,7 +5270,7 @@ kbd {
   flex: 1;
   overflow-y: auto;
   padding: 4px 0;
-  font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   min-height: 0;
 }
@@ -5409,7 +5433,7 @@ kbd {
   background: var(--bg-tertiary);
   padding: 0.2em 0.4em;
   border-radius: 3px;
-  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: 0.9em;
 }
 
@@ -6169,7 +6193,7 @@ kbd {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-family: var(--font-mono);
   overflow-anchor: none;
   overscroll-behavior: contain;
   scroll-behavior: auto;
@@ -6359,7 +6383,7 @@ kbd {
 .diff-stats {
   display: flex;
   gap: 8px;
-  font-family: 'Consolas', 'Monaco', monospace;
+  font-family: var(--font-mono);
   font-weight: 600;
 }
 
