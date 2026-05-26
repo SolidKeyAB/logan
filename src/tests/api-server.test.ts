@@ -407,7 +407,7 @@ function buildMockContext() {
     saveNotes: async (content: string) => { state.notes = content; return { success: true }; },
     detectTimeGaps: async () => ({ success: true, gaps: [], totalLines: 500 }),
     navigateToLine: (ln: number) => { state.navigatedLine = ln; },
-    investigateCrashes: async (opts: any) => ({ success: true, crashes: [{ lineNumber: 100, text: 'FATAL error', context: [] }], count: 1 }),
+    investigateCrashes: async (_opts: any) => ({ success: true, crashes: [{ lineNumber: 100, text: 'FATAL error', context: [] }], count: 1 }),
     investigateComponent: async (opts: any) => ({ success: true, component: opts.component, errorCount: 5, samples: [] }),
     investigateTimerange: async (opts: any) => ({ success: true, startTime: opts.startTime, endTime: opts.endTime, events: 42 }),
   };

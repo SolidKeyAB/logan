@@ -746,7 +746,7 @@ describe('BaselineStore edge cases', () => {
   });
 
   it('should handle large fingerprint data', () => {
-    const largeDensity = Array.from({ length: 1440 }, (_, i) => Math.floor(Math.random() * 100));
+    const largeDensity = Array.from({ length: 1440 }, () => Math.floor(Math.random() * 100));
     const fp = makeFingerprint({ timestampDensity: largeDensity });
     const id = store.save('large', '', [], fp);
     const record = store.get(id)!;

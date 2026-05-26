@@ -38,7 +38,7 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
 
   async analyze(
     filePath: string,
-    options: AnalyzerOptions,
+    _options: AnalyzerOptions,
     onProgress?: (progress: AnalyzeProgress) => void,
     signal?: { cancelled: boolean }
   ): Promise<AnalysisResult> {

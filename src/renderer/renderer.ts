@@ -6118,7 +6118,7 @@ function formatAgentText(raw: string): string {
   );
 
   // Step 6 — "line N" / "Line N" / "lines N-M" references
-  s = s.replace(/\b([Ll]ines?)\s+([\d,]+(?:\s*[-–]\s*[\d,]+)?)/g, (match, word, nums) => {
+  s = s.replace(/\b([Ll]ines?)\s+([\d,]+(?:\s*[-–]\s*[\d,]+)?)/g, (match, _word, nums) => {
     const first = nums.replace(/[,\s]/g, '').split(/[-–]/)[0];
     return `<span class="chat-link chat-line-link" data-action="goto-line" data-line="${first}" title="Go to line">${match}</span>`;
   });
@@ -6226,7 +6226,7 @@ function sendChatMessage(): void {
   });
 }
 
-function updateAgentConnectionStatus(connected: boolean, count: number, name?: string | null): void {
+function updateAgentConnectionStatus(connected: boolean, _count: number, name?: string | null): void {
   const dot = elements.chatAgentDot;
   const text = elements.chatAgentStatusText;
   if (connected) {

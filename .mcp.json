@@ -17,7 +17,8 @@
         "FIREBASE_UID": "kDuGnwCnBfWCRq7t1KKmPMz69K62",
         "WORKSPACE_NAME": "log-analyzer",
         "FIREBASE_CREDENTIALS": "/Users/storm/MY/REPOS/nexum/firebase-service-account.json",
-        "PERMISSION_PORT": "8792"
+        "PERMISSION_PORT": "8792",
+        "NEXUM_ORG_ID": "poc-acme"
       }
     },
     "lore": {

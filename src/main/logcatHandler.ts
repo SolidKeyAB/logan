@@ -17,7 +17,7 @@ export class LogcatHandler extends EventEmitter {
 
   async listDevices(): Promise<LogcatDeviceInfo[]> {
     return new Promise((resolve, reject) => {
-      execFile('adb', ['devices', '-l'], { timeout: 5000 }, (err, stdout, stderr) => {
+      execFile('adb', ['devices', '-l'], { timeout: 5000 }, (err, stdout, _stderr) => {
         if (err) {
           reject(new Error(`adb not found or failed: ${err.message}`));
           return;
@@ -79,7 +79,7 @@ export class LogcatHandler extends EventEmitter {
       this.emit('disconnected');
     });
 
-    this.process.on('close', (code) => {
+    this.process.on('close', (_code) => {
       this.process = null;
       this.config = null;
       this.connectedSince = null;
