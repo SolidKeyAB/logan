@@ -774,10 +774,17 @@ export function startApiServer(ctx: ApiContext): void {
           }
         );
         shutdownReq.on('error', () => {
-          // Old instance not responding — force kill via lsof
+          // Old instance not responding — force kill the process holding the port
           try {
             const { execSync } = require('child_process');
-            const pid = execSync(`lsof -ti:${API_PORT} 2>/dev/null`, { encoding: 'utf-8' }).trim();
+            let pid = '';
+            if (process.platform === 'win32') {
+              const out = execSync(`netstat -ano | findstr :${API_PORT} | findstr LISTENING`, { encoding: 'utf-8' }).trim();
+              const match = out.split('\n')[0]?.trim().split(/\s+/).pop();
+              if (match) pid = match;
+            } else {
+              pid = execSync(`lsof -ti:${API_PORT} 2>/dev/null`, { encoding: 'utf-8' }).trim();
+            }
             if (pid) {
               console.log(`Killing old process ${pid} on port ${API_PORT}`);
               process.kill(parseInt(pid), 'SIGTERM');

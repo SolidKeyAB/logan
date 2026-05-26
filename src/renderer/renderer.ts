@@ -4369,7 +4369,7 @@ async function toggleRecentFilesPopup(): Promise<void> {
   } else {
     html += `<div class="recent-files-list">`;
     for (const f of files) {
-      const name = f.path.split('/').pop() || f.path;
+      const name = f.path.split(/[\\/]/).pop() || f.path;
       const dir = f.path.substring(0, f.path.length - name.length - 1);
       const ageMs = Date.now() - f.lastOpened;
       let ageText: string;
@@ -4519,7 +4519,7 @@ async function openFolder(): Promise<void> {
 
   const result = await window.api.readFolder(folderPath);
   if (result.success && result.files) {
-    const folderName = folderPath.split('/').pop() || folderPath;
+    const folderName = folderPath.split(/[\\/]/).pop() || folderPath;
     state.folders.push({
       path: folderPath,
       name: folderName,
@@ -8407,7 +8407,7 @@ function loadVideoFromPath(videoPath: string): void {
   state.videoFilePath = videoPath;
   elements.videoElement.src = 'file://' + videoPath;
   elements.videoContainer.classList.add('has-video');
-  const fileName = videoPath.split('/').pop() || videoPath;
+  const fileName = videoPath.split(/[\\/]/).pop() || videoPath;
   elements.videoFileName.textContent = fileName;
   saveVideoState();
 }
@@ -13551,7 +13551,7 @@ function openImageInPanel(filePath: string): void {
   imageViewerImg.style.display = 'none';
   if (imageDropZone) imageDropZone.style.display = 'none';
 
-  const fileName = filePath.split('/').pop() || filePath;
+  const fileName = filePath.split(/[\\/]/).pop() || filePath;
   if (imageFileNameEl) imageFileNameEl.textContent = fileName;
 
   imageViewerImg.onload = () => {
@@ -13602,7 +13602,7 @@ let currentDiagramPath = '';
 function openDiagramInPanel(filePath: string): void {
   currentDiagramPath = filePath;
   const ext = filePath.toLowerCase().split('.').pop() || '';
-  const fileName = filePath.split('/').pop() || filePath;
+  const fileName = filePath.split(/[\\/]/).pop() || filePath;
 
   const contentEl = document.getElementById('diagram-content') as HTMLDivElement;
   const loadingEl = document.getElementById('diagram-loading') as HTMLDivElement;
@@ -14138,7 +14138,7 @@ function formatActivityDetails(entry: ActivityEntry): string {
     case 'highlight_cleared':
       return `${d.count} removed`;
     case 'diff_compared':
-      return `${(d.leftFile as string || '').split('/').pop()} vs ${(d.rightFile as string || '').split('/').pop()}`;
+      return `${(d.leftFile as string || '').split(/[\\/]/).pop()} vs ${(d.rightFile as string || '').split(/[\\/]/).pop()}`;
     case 'time_gap_analysis':
       return `${d.gapsFound} gaps (>${d.threshold}s)`;
     case 'analysis_run':

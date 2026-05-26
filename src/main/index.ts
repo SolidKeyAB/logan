@@ -745,6 +745,20 @@ app.whenReady().then(() => {
   ensureConfigDir();
   createWindow();
 
+  // On Linux, pre-warm the XDG desktop portal so the first file-open dialog
+  // is responsive immediately. Without this, the portal's D-Bus service may
+  // not be activated yet, causing the file chooser widget to appear but not
+  // accept clicks until the service finishes initializing.
+  if (process.platform === 'linux') {
+    try {
+      spawn('gdbus', [
+        'introspect', '--session',
+        '--dest', 'org.freedesktop.portal.Desktop',
+        '--object-path', '/org/freedesktop/portal/desktop',
+      ], { stdio: 'ignore' }).unref();
+    } catch { /* non-critical — dialog still works on retry */ }
+  }
+
   // Check if launched with a file path argument (e.g. `logan myfile.log`)
   const cliFilePath = extractFilePathFromArgv(process.argv);
   if (cliFilePath && mainWindow) {
@@ -1920,16 +1934,28 @@ ipcMain.handle(IPC.SSH_DOWNLOAD_FILE, async (_, remotePath: string) => {
 // On Linux, passing a parent BrowserWindow to dialog.show*Dialog causes the
 // dialog to attach modally via XDG portal / GTK, which can deadlock and leave
 // the window unresponsive. Calling the parentless overload avoids this entirely.
+// A re-entrancy guard prevents stacking multiple native dialogs (which on Linux
+// can leave a dialog visible but non-interactive until the earlier one resolves).
+let _dialogOpen = false;
+const _cancelledResult: Electron.OpenDialogReturnValue = { canceled: true, filePaths: [] };
+const _cancelledSaveResult: Electron.SaveDialogReturnValue = { canceled: true, filePath: '' };
+
 function showOpenDialog(options: Electron.OpenDialogOptions): Promise<Electron.OpenDialogReturnValue> {
-  return process.platform === 'linux' || !mainWindow
+  if (_dialogOpen) return Promise.resolve(_cancelledResult);
+  _dialogOpen = true;
+  const p = process.platform === 'linux' || !mainWindow
     ? dialog.showOpenDialog(options)
     : dialog.showOpenDialog(mainWindow, options);
+  return p.finally(() => { _dialogOpen = false; });
 }
 
 function showSaveDialog(options: Electron.SaveDialogOptions): Promise<Electron.SaveDialogReturnValue> {
-  return process.platform === 'linux' || !mainWindow
+  if (_dialogOpen) return Promise.resolve(_cancelledSaveResult);
+  _dialogOpen = true;
+  const p = process.platform === 'linux' || !mainWindow
     ? dialog.showSaveDialog(options)
     : dialog.showSaveDialog(mainWindow, options);
+  return p.finally(() => { _dialogOpen = false; });
 }
 
 ipcMain.handle(IPC.OPEN_FILE_DIALOG, async () => {
@@ -5115,21 +5141,24 @@ ipcMain.handle(IPC.TERMINAL_CREATE_LOCAL, async (_, sessionId: string, options?:
       return { success: true, label: 'Local' };
     }
 
-    // Fallback for Linux (no node-pty): use `script` to wrap the shell
-    // in a real PTY. `script -qfc <cmd> /dev/null` is portable across
-    // util-linux and BSD `script` implementations.
+    // Fallback (no node-pty): spawn the shell directly as a child process.
+    // On Linux, wrap with `script` for PTY emulation when available.
+    // On Windows, cmd.exe / powershell work fine without PTY wrapping.
     const env = { ...process.env, TERM: 'xterm-256color', COLUMNS: String(cols), LINES: String(rows) };
     let scriptCmd: string;
     let scriptArgs: string[];
-    try {
-      execSync('which script', { timeout: 1000 });
-      // util-linux script: -q quiet, -f flush, -c command, /dev/null = no typescript file
-      scriptCmd = 'script';
-      scriptArgs = ['-qfc', shellPath, '/dev/null'];
-    } catch {
-      // No `script` available — fall back to direct bash (will have echo issues but works)
+    if (process.platform === 'win32') {
       scriptCmd = shellPath;
-      scriptArgs = ['-i'];
+      scriptArgs = [];
+    } else {
+      try {
+        execSync('which script', { timeout: 1000 });
+        scriptCmd = 'script';
+        scriptArgs = ['-qfc', shellPath, '/dev/null'];
+      } catch {
+        scriptCmd = shellPath;
+        scriptArgs = ['-i'];
+      }
     }
     const child = spawn(scriptCmd, scriptArgs, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
 
@@ -5510,19 +5539,23 @@ function getBuiltinScriptPath(): string {
 }
 
 function findClaudeCli(): string | null {
-  // Try PATH first
+  const whichCmd = process.platform === 'win32' ? 'where claude' : 'which claude';
   try {
-    const result = execSync('which claude', { timeout: 3000, encoding: 'utf-8' }).trim();
+    const result = execSync(whichCmd, { timeout: 3000, encoding: 'utf-8' }).trim().split('\n')[0];
     if (result) return result;
   } catch { /* not in PATH */ }
-  // Common install locations
-  const candidates = [
-    path.join(os.homedir(), '.claude', 'bin', 'claude'),
-    '/usr/local/bin/claude',
-    '/opt/homebrew/bin/claude',
-  ];
+  const candidates = process.platform === 'win32'
+    ? [
+        path.join(os.homedir(), '.claude', 'bin', 'claude.exe'),
+        path.join(process.env.LOCALAPPDATA || '', 'Programs', 'claude', 'claude.exe'),
+      ]
+    : [
+        path.join(os.homedir(), '.claude', 'bin', 'claude'),
+        '/usr/local/bin/claude',
+        '/opt/homebrew/bin/claude',
+      ];
   for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
+    if (p && fs.existsSync(p)) return p;
   }
   return null;
 }
@@ -5723,7 +5756,9 @@ ipcMain.handle('agent-detect-environment', async () => {
         '/opt/homebrew/bin/claude',
         path.join(os.homedir(), '.nvm', 'versions', 'node', 'current', 'bin', 'claude'),
       ],
-      aider: ['/usr/local/bin/aider', path.join(os.homedir(), '.local', 'bin', 'aider')],
+      aider: process.platform === 'win32'
+        ? [path.join(os.homedir(), '.local', 'bin', 'aider.exe')]
+        : ['/usr/local/bin/aider', path.join(os.homedir(), '.local', 'bin', 'aider')],
     }[bin] ?? [];
     for (const p of extra) {
       if (!fs.existsSync(p)) continue;
@@ -5744,14 +5779,24 @@ ipcMain.handle('agent-detect-environment', async () => {
   const builtinPath = path.join(app.getAppPath(), 'examples', 'agent-node.mjs');
   const hasBuiltin = fs.existsSync(builtinPath);
 
-  // Detect local LLM services
+  // Detect local LLM services (use Node http instead of curl for cross-platform)
   let hasOllama = false;
   let ollamaModels: string[] = [];
   let hasLmStudio = false;
 
+  const httpGet = (url: string, timeoutMs: number): Promise<string> => new Promise((resolve, reject) => {
+    const req = require('http').get(url, { timeout: timeoutMs }, (res: any) => {
+      let body = '';
+      res.on('data', (chunk: string) => { body += chunk; });
+      res.on('end', () => resolve(body));
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+  });
+
   // Check Ollama (port 11434)
   try {
-    const ollamaResp = execSync('curl -sf http://localhost:11434/api/tags 2>/dev/null', { timeout: 3000, encoding: 'utf-8' });
+    const ollamaResp = await httpGet('http://localhost:11434/api/tags', 3000);
     const data = JSON.parse(ollamaResp);
     if (data.models?.length > 0) {
       hasOllama = true;
@@ -5761,7 +5806,7 @@ ipcMain.handle('agent-detect-environment', async () => {
 
   // Check LM Studio (port 1234)
   try {
-    const lmsResp = execSync('curl -sf http://localhost:1234/v1/models 2>/dev/null', { timeout: 3000, encoding: 'utf-8' });
+    const lmsResp = await httpGet('http://localhost:1234/v1/models', 3000);
     const data = JSON.parse(lmsResp);
     if (data.data?.length > 0) {
       hasLmStudio = true;
@@ -5943,7 +5988,7 @@ ipcMain.handle(IPC.READ_FILE_TEXT, async (_event, filePath: string) => {
 });
 
 ipcMain.handle('agent-browse-script', async () => {
-  const result = await dialog.showOpenDialog({
+  const result = await showOpenDialog({
     title: 'Select Agent Script',
     filters: [
       { name: 'Scripts', extensions: ['mjs', 'js', 'ts', 'sh', 'py'] },
