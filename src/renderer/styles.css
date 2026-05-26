@@ -7416,3 +7416,99 @@ kbd {
 .traceback-category-tag.cat-state-change { background: rgba(97,175,239,0.15); color: #61afef; }
 .traceback-category-tag.cat-related { background: rgba(152,195,121,0.15); color: #98c379; }
 .traceback-category-tag.cat-context { background: rgba(92,99,112,0.15); color: #5c6370; }
+
+/* ─── Diagram Viewer ──────────────────────────────────────────────────────── */
+.diagram-panel-body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.diagram-viewer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.diagram-type-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--accent-color);
+  color: #fff;
+  text-transform: uppercase;
+}
+
+.diagram-content {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary);
+}
+
+.diagram-content svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.diagram-content.zoomed {
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+
+.diagram-content .diagram-svg-wrapper {
+  transform-origin: top left;
+  transition: transform 0.1s ease;
+}
+
+.diagram-content iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #fff;
+}
+
+.diagram-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  z-index: 5;
+}
+
+.diagram-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--accent-color);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.diagram-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg-primary);
+  color: var(--error-color);
+  font-size: 13px;
+  text-align: center;
+  z-index: 5;
+}

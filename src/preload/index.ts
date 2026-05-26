@@ -67,6 +67,9 @@ const IPC = {
   TRACEBACK: 'traceback',
   // Time Align
   GET_LINE_TIMESTAMPS: 'get-line-timestamps',
+  // Diagram rendering
+  RENDER_DIAGRAM: 'render-diagram',
+  READ_FILE_TEXT: 'read-file-text',
   // Tabbed terminal
   TERMINAL_CREATE_LOCAL: 'terminal-create-local',
   TERMINAL_CREATE_SSH: 'terminal-create-ssh',
@@ -406,6 +409,12 @@ const api = {
 
   readFileContent: (filePath: string): Promise<{ success: boolean; content?: string; sizeMB?: number; error?: string }> =>
     ipcRenderer.invoke('read-file-content', filePath),
+
+  // Diagram rendering
+  renderDiagram: (filePath: string): Promise<{ success: boolean; type?: string; content?: string; fileName?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.RENDER_DIAGRAM, filePath),
+  readFileText: (filePath: string): Promise<{ success: boolean; content?: string; fileName?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.READ_FILE_TEXT, filePath),
 
   // Search configs
   searchConfigSave: (config: any): Promise<{ success: boolean }> =>

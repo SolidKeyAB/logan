@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src 'self' file:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src 'self' file:; frame-src blob:;">
   <title>LOGAN - Log Analyzer</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="lib/xterm.css">
@@ -387,6 +387,7 @@
           <button class="bottom-tab-btn" data-bottom-tab="contexts" data-help="Define must+clue patterns to find correlated log events.&#10;Example: must:&quot;ERROR&quot; + clue:&quot;timeout&quot; within 10 lines.&#10;Lanes view shows each context as a colored row for comparison.">Contexts</button>
           <button class="bottom-tab-btn" data-bottom-tab="video" data-help="Sync a video recording with log timestamps.&#10;Set a sync point to correlate video playback with log lines.">Video</button>
           <button class="bottom-tab-btn" data-bottom-tab="image" data-help="View images referenced in log files.&#10;Drag and drop or open image files for side-by-side analysis.">Image</button>
+          <button class="bottom-tab-btn" data-bottom-tab="diagram" data-help="View PlantUML and Draw.io diagrams.&#10;Double-click a .puml or .drawio file in the folder panel.">Diagrams</button>
           <button class="bottom-tab-btn" data-bottom-tab="live" data-help="Connect to live log sources: Serial ports, ADB logcat, or SSH.&#10;Up to 4 parallel connections with real-time streaming.">Live</button>
           <button class="bottom-tab-btn" data-bottom-tab="time-align" data-help="Visually align search config results by timestamp.&#10;Each enabled config becomes a draggable timeline lane.&#10;Drag lanes left/right to apply time offsets and correlate events.">Time Align</button>
           <button class="bottom-tab-btn" data-bottom-tab="traceback" data-help="Reverse timeline from any error line.&#10;Right-click a line → Traceback from here.&#10;Shows what led to the error: same component, warnings, escalations.">Traceback</button>
@@ -543,6 +544,34 @@
               </div>
               <img id="image-viewer-img" draggable="false" style="display:none" />
             </div>
+          </div>
+        </div>
+        <!-- Diagram tab -->
+        <div class="bottom-tab-view" data-bottom-tab="diagram">
+          <div class="diagram-panel-body">
+            <div class="diagram-viewer-toolbar">
+              <span id="diagram-file-name" class="image-file-name"></span>
+              <span id="diagram-type-badge" class="diagram-type-badge"></span>
+              <div style="flex:1"></div>
+              <button id="btn-diagram-zoom-in" class="image-viewer-btn" title="Zoom in" aria-label="Zoom in">+</button>
+              <span id="diagram-zoom-level" class="image-zoom-level">100%</span>
+              <button id="btn-diagram-zoom-out" class="image-viewer-btn" title="Zoom out" aria-label="Zoom out">&minus;</button>
+              <button id="btn-diagram-zoom-fit" class="image-viewer-btn" title="Fit to window" aria-label="Fit to window">Fit</button>
+              <button id="btn-diagram-refresh" class="image-viewer-btn" title="Re-render diagram" aria-label="Refresh diagram">&#8635;</button>
+            </div>
+            <div id="diagram-content" class="diagram-content">
+              <div class="video-drop-zone">
+                <div class="video-drop-zone-content">
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M12 18v-6"/><path d="M9 15l3-3 3 3"/></svg>
+                  <p>Open a .puml or .drawio file from the folder panel</p>
+                </div>
+              </div>
+            </div>
+            <div id="diagram-loading" class="diagram-loading hidden">
+              <div class="diagram-spinner"></div>
+              <span>Rendering diagram...</span>
+            </div>
+            <div id="diagram-error" class="diagram-error hidden"></div>
           </div>
         </div>
         <!-- Live tab -->

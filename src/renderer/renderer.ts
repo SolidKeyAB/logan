@@ -4810,6 +4810,8 @@ function renderFolderTree(): void {
         toggleBottomTab('video');
       } else if (fileType === 'image') {
         openImageInPanel(filePath);
+      } else if (isDiagramFile(filePath)) {
+        openDiagramInPanel(filePath);
       } else {
         await loadFile(filePath);
       }
@@ -9844,6 +9846,12 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
     return;
   }
 
+  // Handle diagram files in bottom panel
+  if (isDiagramFile(filePath)) {
+    openDiagramInPanel(filePath);
+    return;
+  }
+
   showProgress('Indexing file...');
 
   const unsubscribe = window.api.onIndexingProgress((progress) => {
@@ -13521,6 +13529,13 @@ function isImageFile(filePath: string): boolean {
   return IMAGE_EXTENSIONS.has(ext);
 }
 
+const DIAGRAM_EXTENSIONS = new Set(['puml', 'plantuml', 'pu', 'iuml', 'drawio', 'dio']);
+
+function isDiagramFile(filePath: string): boolean {
+  const ext = filePath.toLowerCase().split('.').pop() || '';
+  return DIAGRAM_EXTENSIONS.has(ext);
+}
+
 // Image viewer state (bottom panel)
 let imageZoom = 1;
 const imageViewerContainer = document.getElementById('image-viewer-container') as HTMLDivElement;
@@ -13579,6 +13594,138 @@ imageViewerContainer?.addEventListener('wheel', (e) => {
   const delta = e.deltaY > 0 ? 0.9 : 1.1;
   setImageZoom(imageZoom * delta);
 }, { passive: false });
+
+// ── Diagram Viewer ───────────────────────────────────────────────────────────
+let diagramZoom = 1;
+let currentDiagramPath = '';
+
+function openDiagramInPanel(filePath: string): void {
+  currentDiagramPath = filePath;
+  const ext = filePath.toLowerCase().split('.').pop() || '';
+  const fileName = filePath.split('/').pop() || filePath;
+
+  const contentEl = document.getElementById('diagram-content') as HTMLDivElement;
+  const loadingEl = document.getElementById('diagram-loading') as HTMLDivElement;
+  const errorEl = document.getElementById('diagram-error') as HTMLDivElement;
+  const fileNameEl = document.getElementById('diagram-file-name') as HTMLSpanElement;
+  const badgeEl = document.getElementById('diagram-type-badge') as HTMLSpanElement;
+  const zoomEl = document.getElementById('diagram-zoom-level') as HTMLSpanElement;
+
+  if (!contentEl) return;
+
+  // Reset
+  diagramZoom = 1;
+  if (zoomEl) zoomEl.textContent = '100%';
+  if (fileNameEl) fileNameEl.textContent = fileName;
+
+  // Set badge
+  if (badgeEl) {
+    if (ext === 'drawio' || ext === 'dio') {
+      badgeEl.textContent = 'Draw.io';
+      badgeEl.style.background = '#f08705';
+    } else {
+      badgeEl.textContent = 'PlantUML';
+      badgeEl.style.background = '#7b5ea7';
+    }
+  }
+
+  // Show loading
+  contentEl.innerHTML = '';
+  loadingEl?.classList.remove('hidden');
+  errorEl?.classList.add('hidden');
+
+  // Switch to diagram tab
+  toggleBottomTab('diagram');
+
+  // Render
+  (window as any).api.renderDiagram(filePath).then((result: any) => {
+    loadingEl?.classList.add('hidden');
+
+    if (!result.success) {
+      if (errorEl) {
+        errorEl.textContent = result.error || 'Failed to render diagram';
+        errorEl.classList.remove('hidden');
+      }
+      return;
+    }
+
+    if (result.type === 'svg') {
+      // PlantUML: inject SVG directly
+      const wrapper = document.createElement('div');
+      wrapper.className = 'diagram-svg-wrapper';
+      wrapper.innerHTML = result.content;
+      contentEl.innerHTML = '';
+      contentEl.appendChild(wrapper);
+    } else if (result.type === 'drawio') {
+      // Draw.io: create iframe with viewer
+      renderDrawioInIframe(contentEl, result.content);
+    }
+  }).catch((err: any) => {
+    loadingEl?.classList.add('hidden');
+    if (errorEl) {
+      errorEl.textContent = `Error: ${err.message || err}`;
+      errorEl.classList.remove('hidden');
+    }
+  });
+}
+
+function renderDrawioInIframe(container: HTMLDivElement, xmlContent: string): void {
+  // Create self-contained HTML with draw.io viewer
+  const escapedXml = xmlContent.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+  const html = `<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<style>
+  body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
+  .mxgraph { width: 100%; height: 100vh; }
+</style>
+</head><body>
+<div class="mxgraph" style="max-width:100%;border:none;" data-mxgraph='{"highlight":"#0000ff","nav":true,"resize":true,"xml":"${escapedXml}"}'></div>
+<script src="https://viewer.diagrams.net/js/viewer-static.min.js"><\/script>
+</body></html>`;
+
+  const blob = new Blob([html], { type: 'text/html' });
+  const blobUrl = URL.createObjectURL(blob);
+
+  const iframe = document.createElement('iframe');
+  iframe.src = blobUrl;
+  iframe.style.width = '100%';
+  iframe.style.height = '100%';
+  iframe.style.border = 'none';
+  iframe.style.background = '#fff';
+  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+  iframe.onload = () => URL.revokeObjectURL(blobUrl);
+
+  container.innerHTML = '';
+  container.appendChild(iframe);
+}
+
+// Diagram zoom controls
+function setupDiagramControls(): void {
+  const zoomIn = document.getElementById('btn-diagram-zoom-in');
+  const zoomOut = document.getElementById('btn-diagram-zoom-out');
+  const zoomFit = document.getElementById('btn-diagram-zoom-fit');
+  const refresh = document.getElementById('btn-diagram-refresh');
+  const zoomEl = document.getElementById('diagram-zoom-level');
+
+  function updateDiagramZoom(): void {
+    const wrapper = document.querySelector('.diagram-svg-wrapper') as HTMLElement;
+    if (wrapper && zoomEl) {
+      wrapper.style.transform = `scale(${diagramZoom})`;
+      zoomEl.textContent = `${Math.round(diagramZoom * 100)}%`;
+      const contentEl = document.getElementById('diagram-content');
+      if (contentEl) {
+        contentEl.classList.toggle('zoomed', diagramZoom > 1);
+      }
+    }
+  }
+
+  zoomIn?.addEventListener('click', () => { diagramZoom = Math.min(diagramZoom * 1.25, 5); updateDiagramZoom(); });
+  zoomOut?.addEventListener('click', () => { diagramZoom = Math.max(diagramZoom / 1.25, 0.1); updateDiagramZoom(); });
+  zoomFit?.addEventListener('click', () => { diagramZoom = 1; updateDiagramZoom(); });
+  refresh?.addEventListener('click', () => { if (currentDiagramPath) openDiagramInPanel(currentDiagramPath); });
+}
 
 // ─── File Display Mode System ────────────────────────────────────────────────
 //
@@ -15613,6 +15760,7 @@ function init(): void {
   setupSectionToggles();
   setupModalCloseHandlers();
   setupKeyboardShortcuts();
+  setupDiagramControls();
 
   // Load initial data
   loadBookmarks();
