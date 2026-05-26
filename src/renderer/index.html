@@ -29,10 +29,10 @@
     <div id="tab-bar" class="tab-bar">
       <div class="tab-bar-left">
         <div class="open-file-wrapper">
-          <button id="btn-open-file" class="tab-bar-btn" title="Open file (Ctrl+O)">
+          <button id="btn-open-file" class="tab-bar-btn" title="Open file (Ctrl+O)" aria-label="Open file">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
           </button>
-          <button id="btn-recent-files" class="tab-bar-btn recent-btn" title="Recent files">
+          <button id="btn-recent-files" class="tab-bar-btn recent-btn" title="Recent files" aria-label="Recent files">
             <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           </button>
           <div id="recent-files-popup" class="recent-files-popup hidden"></div>
@@ -41,17 +41,17 @@
       </div>
       <div id="tabs-container" class="tabs-container"></div>
       <div class="tab-bar-right">
-        <button id="btn-compare" class="tab-bar-btn" title="Compare two log files (Ctrl+Shift+C)">
+        <button id="btn-compare" class="tab-bar-btn" title="Compare two log files (Ctrl+Shift+C)" aria-label="Compare files">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="9" height="18" rx="1"/><rect x="13" y="3" width="9" height="18" rx="1"/></svg>
         </button>
         <div class="tab-bar-separator"></div>
-        <button id="btn-search-toggle" class="tab-bar-btn" title="Search (Ctrl+F)">
+        <button id="btn-search-toggle" class="tab-bar-btn" title="Search (Ctrl+F)" aria-label="Search">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         </button>
-        <button id="btn-filter" class="tab-bar-btn" title="Filter (Ctrl+Shift+F)">
+        <button id="btn-filter" class="tab-bar-btn" title="Filter (Ctrl+Shift+F)" aria-label="Filter">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
         </button>
-        <button id="btn-analyze" class="tab-bar-btn" title="Analyze" disabled>
+        <button id="btn-analyze" class="tab-bar-btn" title="Analyze" aria-label="Analyze" disabled>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2"/><path d="M8.5 2h7"/></svg>
         </button>
       </div>
@@ -62,52 +62,52 @@
       <!-- Activity Bar -->
       <div id="activity-bar" class="activity-bar">
         <div class="activity-bar-top">
-          <button class="activity-bar-btn" data-panel="folders" title="Folders (Ctrl+1)" data-help="Browse and open log files from recent folders.&#10;Double-click a file to open it.&#10;Shortcut: Ctrl+1">
+          <button class="activity-bar-btn" data-panel="folders" title="Folders (Ctrl+1)" aria-label="Folders" data-help="Browse and open log files from recent folders.&#10;Double-click a file to open it.&#10;Shortcut: Ctrl+1">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 19a4 4 0 0 1-2.24-7.32A3.5 3.5 0 0 1 9 6.03V6a3 3 0 1 1 6 0v.04a3.5 3.5 0 0 1 3.24 5.65A4 4 0 0 1 16 19Z"/><path d="M12 19v3"/></svg>
             <span class="activity-badge" id="badge-folders"></span>
           </button>
-          <button class="activity-bar-btn" data-panel="bookmarks" title="Bookmarks (Ctrl+2)" data-help="Mark important lines with labels and colors.&#10;Click a bookmark to jump to that line.&#10;Ctrl+B to bookmark current line. Shortcut: Ctrl+2">
+          <button class="activity-bar-btn" data-panel="bookmarks" title="Bookmarks (Ctrl+2)" aria-label="Bookmarks" data-help="Mark important lines with labels and colors.&#10;Click a bookmark to jump to that line.&#10;Ctrl+B to bookmark current line. Shortcut: Ctrl+2">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17l-5 3V7a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v13l-5-3z"/><line x1="12" y1="2" x2="12" y2="7"/><circle cx="12" cy="2" r="1" fill="currentColor"/></svg>
             <span class="activity-badge" id="badge-bookmarks"></span>
           </button>
-          <button class="activity-bar-btn" data-panel="highlights" title="Highlights (Ctrl+3)" data-help="Color-code log lines matching patterns.&#10;Add patterns with custom colors to visually scan logs.&#10;Supports regex. Highlight groups for quick toggling. Ctrl+3">
+          <button class="activity-bar-btn" data-panel="highlights" title="Highlights (Ctrl+3)" aria-label="Highlights" data-help="Color-code log lines matching patterns.&#10;Add patterns with custom colors to visually scan logs.&#10;Supports regex. Highlight groups for quick toggling. Ctrl+3">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l-6 6v3h9l3-3"/><path d="M22 12l-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>
             <span class="activity-badge" id="badge-highlights"></span>
           </button>
-          <button class="activity-bar-btn" data-panel="stats" title="Stats (Ctrl+4)" data-help="File statistics: size, line count, encoding, timestamps.&#10;Quick overview of the loaded log file. Ctrl+4">
+          <button class="activity-bar-btn" data-panel="stats" title="Stats (Ctrl+4)" aria-label="Stats" data-help="File statistics: size, line count, encoding, timestamps.&#10;Quick overview of the loaded log file. Ctrl+4">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="18" y="3" width="4" height="18"></rect><rect x="10" y="8" width="4" height="13"></rect><rect x="2" y="13" width="4" height="8"></rect></svg>
             <span class="activity-badge" id="badge-stats"></span>
           </button>
-          <button class="activity-bar-btn" data-panel="history" title="History (Ctrl+5)" data-help="Action history: searches, filters, bookmarks, analysis runs.&#10;Grouped by date, filterable by category.&#10;Undo or replay past actions. Ctrl+5">
+          <button class="activity-bar-btn" data-panel="history" title="History (Ctrl+5)" aria-label="History" data-help="Action history: searches, filters, bookmarks, analysis runs.&#10;Grouped by date, filterable by category.&#10;Undo or replay past actions. Ctrl+5">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="4.5" cy="5" r="1.5"/><path d="M6 6q2 3 2 8"/><path d="M8 14q0-5 5-5t6 5"/><line x1="8" y1="14" x2="19" y2="14"/><path d="M19 14q2-3 3-6"/><line x1="10" y1="14" x2="10" y2="20"/><line x1="17" y1="14" x2="17" y2="20"/></svg>
             <span class="activity-badge" id="badge-history"></span>
           </button>
-          <button class="activity-bar-btn" data-panel="annotations" title="AI Annotations" data-help="AI agent comments and findings, linked to specific log lines.&#10;Click an annotation to jump to the line.">
+          <button class="activity-bar-btn" data-panel="annotations" title="AI Annotations" aria-label="AI Annotations" data-help="AI agent comments and findings, linked to specific log lines.&#10;Click an annotation to jump to the line.">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="9" y1="10" x2="15" y2="10"/><line x1="9" y1="14" x2="13" y2="14"/></svg>
             <span class="activity-badge" id="badge-annotations"></span>
           </button>
           <div class="activity-bar-separator"></div>
-          <button class="activity-bar-btn" data-bottom-tab="analysis" title="Analysis (Ctrl+6)">
+          <button class="activity-bar-btn" data-bottom-tab="analysis" title="Analysis (Ctrl+6)" aria-label="Analysis">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>
             <span class="activity-badge" id="badge-analysis"></span>
           </button>
-          <button class="activity-bar-btn" data-bottom-tab="time-gaps" title="Time Gaps (Ctrl+7)">
+          <button class="activity-bar-btn" data-bottom-tab="time-gaps" title="Time Gaps (Ctrl+7)" aria-label="Time Gaps">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg>
             <span class="activity-badge" id="badge-time-gaps"></span>
           </button>
-          <button class="activity-bar-btn" id="btn-search-configs" data-bottom-tab="search-configs" title="Search Configs (Ctrl+8)">
+          <button class="activity-bar-btn" id="btn-search-configs" data-bottom-tab="search-configs" title="Search Configs (Ctrl+8)" aria-label="Search Configs">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
             <span class="activity-badge" id="badge-search-configs"></span>
           </button>
-          <button class="activity-bar-btn" id="btn-video-player" data-bottom-tab="video" title="Video Player (Ctrl+9)">
+          <button class="activity-bar-btn" id="btn-video-player" data-bottom-tab="video" title="Video Player (Ctrl+9)" aria-label="Video Player">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/><path d="M7 2v20"/><path d="M2 12h5"/><path d="M2 7h5"/><path d="M2 17h5"/><polygon points="14 8 19 12 14 16 14 8"/></svg>
             <span class="activity-badge" id="badge-video-player"></span>
           </button>
-          <button class="activity-bar-btn" id="btn-live" data-bottom-tab="live" title="Live (Ctrl+Shift+P)">
+          <button class="activity-bar-btn" id="btn-live" data-bottom-tab="live" title="Live (Ctrl+Shift+P)" aria-label="Live connections">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
             <span class="activity-badge" id="badge-live"></span>
           </button>
-          <button class="activity-bar-btn" id="btn-agent-chat" data-bottom-tab="chat" title="Agent Chat (Ctrl+Shift+C)">
+          <button class="activity-bar-btn" id="btn-agent-chat" data-bottom-tab="chat" title="Agent Chat (Ctrl+Shift+C)" aria-label="Agent Chat">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             <span class="activity-badge" id="badge-chat"></span>
           </button>
@@ -121,7 +121,7 @@
         <div class="panel-header">
           <span id="panel-title" class="panel-title">Folders</span>
           <div class="panel-header-actions">
-            <button id="btn-close-panel" class="panel-header-btn" title="Close panel">&times;</button>
+            <button id="btn-close-panel" class="panel-header-btn" title="Close panel" aria-label="Close panel">&times;</button>
           </div>
         </div>
         <!-- Panel Body -->
@@ -130,23 +130,23 @@
           <div class="panel-view" id="panel-folders" data-panel="folders">
             <div class="section-header-inline">
               <div class="open-folder-wrapper">
-                <button id="btn-add-folder" class="section-btn" title="Open local folder">
+                <button id="btn-add-folder" class="section-btn" title="Open local folder" aria-label="Open local folder">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
                 </button>
-                <button id="btn-recent-folders" class="section-btn recent-btn" title="Recent folders">
+                <button id="btn-recent-folders" class="section-btn recent-btn" title="Recent folders" aria-label="Recent folders">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                 </button>
                 <div id="recent-folders-popup" class="recent-files-popup hidden"></div>
               </div>
-              <button id="btn-open-ssh-folder" class="section-btn" title="Browse SSH remote files (requires active SSH connection in Live panel)">
+              <button id="btn-open-ssh-folder" class="section-btn" title="Browse SSH remote files (requires active SSH connection in Live panel)" aria-label="Browse SSH remote files">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2"/><path d="M7 8l4 4-4 4"/><line x1="13" y1="16" x2="17" y2="16"/></svg>
               </button>
             </div>
             <div class="folder-search-container">
               <input type="text" id="folder-search-input" class="folder-search-input" placeholder="Search in folders..." disabled>
-              <button id="btn-folder-search" class="folder-search-btn" title="Search" disabled>&#128269;</button>
-              <button id="btn-folder-search-cancel" class="folder-search-btn hidden" title="Cancel">&#10005;</button>
-              <button id="btn-folder-search-clear" class="folder-search-btn hidden" title="Clear search">&times;</button>
+              <button id="btn-folder-search" class="folder-search-btn" title="Search" aria-label="Search in folders" disabled>&#128269;</button>
+              <button id="btn-folder-search-cancel" class="folder-search-btn hidden" title="Cancel" aria-label="Cancel search">&#10005;</button>
+              <button id="btn-folder-search-clear" class="folder-search-btn hidden" title="Clear search" aria-label="Clear search">&times;</button>
             </div>
             <div id="folder-search-results" class="folder-search-results hidden"></div>
             <div id="folders-list" class="folders-content">
@@ -157,10 +157,10 @@
           <!-- Bookmarks Panel -->
           <div class="panel-view" id="panel-bookmarks" data-panel="bookmarks">
             <div class="section-header-inline">
-              <button id="btn-save-bookmark-set" class="icon-btn" title="Save as Bookmark Set">&#128230;</button>
-              <button id="btn-load-bookmark-set" class="icon-btn" title="Load Bookmark Set">&#128229;</button>
-              <button id="btn-export-bookmarks" class="icon-btn" title="Export Bookmarks">&#128190;</button>
-              <button id="btn-clear-bookmarks" class="section-btn" title="Clear all bookmarks">&#128465;</button>
+              <button id="btn-save-bookmark-set" class="icon-btn" title="Save as Bookmark Set" aria-label="Save as Bookmark Set">&#128230;</button>
+              <button id="btn-load-bookmark-set" class="icon-btn" title="Load Bookmark Set" aria-label="Load Bookmark Set">&#128229;</button>
+              <button id="btn-export-bookmarks" class="icon-btn" title="Export Bookmarks" aria-label="Export Bookmarks">&#128190;</button>
+              <button id="btn-clear-bookmarks" class="section-btn" title="Clear all bookmarks" aria-label="Clear all bookmarks">&#128465;</button>
             </div>
             <div id="bookmark-sets-bar" class="bookmark-sets-bar hidden">
               <div id="bookmark-sets-list" class="bookmark-sets-list"></div>
@@ -207,7 +207,7 @@
                 <option value="analysis">Analysis</option>
                 <option value="other">Other</option>
               </select>
-              <button id="btn-clear-history" class="section-btn" title="Clear history">&#128465;</button>
+              <button id="btn-clear-history" class="section-btn" title="Clear history" aria-label="Clear history">&#128465;</button>
             </div>
             <div id="history-list" class="history-content">
               <p class="placeholder">No activity recorded</p>
@@ -216,7 +216,7 @@
           <div class="panel-view" id="panel-annotations" data-panel="annotations">
             <div class="section-header-inline">
               <span class="section-title">AI Annotations</span>
-              <button id="btn-clear-annotations" class="section-btn" title="Clear all annotations">&#128465;</button>
+              <button id="btn-clear-annotations" class="section-btn" title="Clear all annotations" aria-label="Clear all annotations">&#128465;</button>
             </div>
             <div id="annotations-list" class="annotations-list-content">
               <p class="placeholder">No annotations yet</p>
@@ -244,7 +244,7 @@
       <div id="hidden-matches-popup" class="hidden-matches-popup hidden">
         <div class="hidden-matches-header">
           <span>Matches in filtered-out lines</span>
-          <button id="btn-close-hidden-matches" class="hidden-matches-close">&times;</button>
+          <button id="btn-close-hidden-matches" class="hidden-matches-close" aria-label="Close hidden matches">&times;</button>
         </div>
         <div id="hidden-matches-list" class="hidden-matches-list"></div>
       </div>
@@ -257,7 +257,7 @@
             <span id="peek-preview-title" class="peek-preview-title">Hidden Match Preview</span>
             <div class="peek-preview-actions">
               <button id="btn-peek-clear-filter" class="peek-action-btn" title="Clear filter and go to this line">Clear Filter &amp; Go To Line</button>
-              <button id="btn-peek-close" class="peek-close-btn">&times;</button>
+              <button id="btn-peek-close" class="peek-close-btn" aria-label="Close preview">&times;</button>
             </div>
           </div>
           <div id="peek-preview-content" class="peek-preview-content"></div>
@@ -266,17 +266,17 @@
           <span class="file-changed-icon">↻</span>
           <span class="file-changed-text">File modified externally</span>
           <button id="btn-reload-file" class="file-changed-reload-btn">Reload</button>
-          <button id="btn-dismiss-file-changed" class="file-changed-dismiss-btn">&times;</button>
+          <button id="btn-dismiss-file-changed" class="file-changed-dismiss-btn" aria-label="Dismiss file changed notification">&times;</button>
         </div>
         <div id="long-lines-warning" class="long-lines-warning hidden">
           <span class="warning-icon">&#9888;</span>
           <span class="warning-text">This file has very long lines which may cause slow scrolling. Click <strong>JSON</strong> in the toolbar to reformat for better performance.</span>
           <button id="btn-format-warning" class="warning-action-btn">Format Now</button>
-          <button id="btn-dismiss-warning" class="warning-close-btn">&times;</button>
+          <button id="btn-dismiss-warning" class="warning-close-btn" aria-label="Dismiss warning">&times;</button>
         </div>
         <div id="editor-container" class="editor-container">
           <!-- Search Panel (VS Code-style floating) -->
-          <div id="search-panel" class="search-panel hidden">
+          <div id="search-panel" class="search-panel hidden" role="search">
             <div class="search-panel-row">
               <input type="text" id="search-input" class="search-panel-input" placeholder="Search...">
               <label class="search-panel-toggle" title="Regex">
@@ -291,13 +291,13 @@
               <label class="search-panel-toggle" title="Whole Word">
                 <input type="checkbox" id="search-whole-word"> <span>ab</span>
               </label>
-              <button id="btn-search" class="search-panel-btn" title="Search">&#128269;</button>
-              <button id="btn-prev-result" class="search-panel-btn" title="Previous" disabled>&lt;</button>
-              <span id="search-result-count" class="search-panel-count"></span>
-              <button id="btn-next-result" class="search-panel-btn" title="Next" disabled>&gt;</button>
+              <button id="btn-search" class="search-panel-btn" title="Search" aria-label="Search">&#128269;</button>
+              <button id="btn-prev-result" class="search-panel-btn" title="Previous result" aria-label="Previous result" disabled>&lt;</button>
+              <span id="search-result-count" class="search-panel-count" aria-live="polite" aria-atomic="true"></span>
+              <button id="btn-next-result" class="search-panel-btn" title="Next result" aria-label="Next result" disabled>&gt;</button>
               <span id="search-engine-badge" class="search-engine-badge" title="Search engine"></span>
               <span id="hidden-matches-badge" class="hidden-matches-badge hidden"></span>
-              <button id="btn-search-panel-close" class="search-panel-close" title="Close (Esc)">&times;</button>
+              <button id="btn-search-panel-close" class="search-panel-close" title="Close (Esc)" aria-label="Close search panel">&times;</button>
             </div>
             <div class="search-panel-options">
               <div class="search-panel-option">
@@ -337,39 +337,39 @@
 
       <!-- Right Sidebar -->
       <div id="right-sidebar" class="right-sidebar">
-        <button id="btn-word-wrap" class="right-sidebar-btn" title="Word Wrap (Alt+Z)">
+        <button id="btn-word-wrap" class="right-sidebar-btn" title="Word Wrap (Alt+Z)" aria-label="Toggle word wrap">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><polyline points="13 16 11 18 13 20"/><path d="M3 18h4"/></svg>
         </button>
-        <button id="btn-json-format" class="right-sidebar-btn" title="Format JSON">
+        <button id="btn-json-format" class="right-sidebar-btn" title="Format JSON" aria-label="Format JSON">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H6a2 2 0 0 0-2 2v2"/><path d="M4 15v2a2 2 0 0 0 2 2h2"/><path d="M16 3h2a2 2 0 0 1 2 2v2"/><path d="M20 15v2a2 2 0 0 1-2 2h-2"/><path d="M9 10h.01"/><path d="M15 10h.01"/><path d="M9 14h6"/></svg>
         </button>
-        <button id="btn-columns" class="right-sidebar-btn" title="Columns" disabled>
+        <button id="btn-columns" class="right-sidebar-btn" title="Columns" aria-label="Column visibility" disabled>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
         </button>
-        <button id="btn-split" class="right-sidebar-btn" title="Split File" disabled>
+        <button id="btn-split" class="right-sidebar-btn" title="Split File" aria-label="Split file" disabled>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="M12 22V8"/><path d="M21 3l-9 9"/><path d="M3 3l9 9"/></svg>
         </button>
-        <button id="btn-datadog" class="right-sidebar-btn" title="Datadog">
+        <button id="btn-datadog" class="right-sidebar-btn" title="Datadog" aria-label="Datadog">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><text x="12" y="16" text-anchor="middle" font-size="10" fill="currentColor" stroke="none">DD</text></svg>
         </button>
         <div class="right-sidebar-separator"></div>
-        <button id="btn-annotations-toggle" class="right-sidebar-btn" title="Annotations (Ctrl+Shift+A)">
+        <button id="btn-annotations-toggle" class="right-sidebar-btn" title="Annotations (Ctrl+Shift+A)" aria-label="Toggle annotations">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="9" y1="10" x2="15" y2="10"/></svg>
         </button>
-        <button id="btn-notes-toggle" class="right-sidebar-btn" title="Notes (Ctrl+Shift+N)">
+        <button id="btn-notes-toggle" class="right-sidebar-btn" title="Notes (Ctrl+Shift+N)" aria-label="Toggle notes">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
         </button>
-        <button id="btn-terminal-toggle" class="right-sidebar-btn" title="Terminal (Ctrl+`)">
+        <button id="btn-terminal-toggle" class="right-sidebar-btn" title="Terminal (Ctrl+`)" aria-label="Toggle terminal">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
         </button>
         <div class="right-sidebar-separator"></div>
-        <button id="btn-minimap-toggle" class="right-sidebar-btn" title="Toggle Minimap">
+        <button id="btn-minimap-toggle" class="right-sidebar-btn" title="Toggle Minimap" aria-label="Toggle minimap">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><rect x="15" y="3" width="6" height="18" rx="1" fill="currentColor" opacity="0.3"/></svg>
         </button>
-        <button id="btn-activity-settings" class="right-sidebar-btn" title="Settings">
+        <button id="btn-activity-settings" class="right-sidebar-btn" title="Settings" aria-label="Settings">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         </button>
-        <button id="btn-help" class="right-sidebar-btn" title="Help (F1)">
+        <button id="btn-help" class="right-sidebar-btn" title="Help (F1)" aria-label="Help">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
         </button>
       </div>
@@ -397,7 +397,7 @@
           <span class="panel-color-dot"></span>
           <span>Color</span>
         </button>
-        <button id="btn-bottom-panel-close" class="bottom-panel-close-btn" title="Close panel">&times;</button>
+        <button id="btn-bottom-panel-close" class="bottom-panel-close-btn" title="Close panel" aria-label="Close panel">&times;</button>
       </div>
       <div class="bottom-panel-body">
         <!-- Analysis tab -->
@@ -426,9 +426,9 @@
             <button id="btn-clear-gaps" class="secondary-btn small">Clear</button>
           </div>
           <div id="time-gap-nav" class="nav-controls hidden">
-            <button id="btn-prev-gap" class="nav-btn" title="Previous gap">&#9664;</button>
-            <span id="gap-nav-position" class="nav-position">0/0</span>
-            <button id="btn-next-gap" class="nav-btn" title="Next gap">&#9654;</button>
+            <button id="btn-prev-gap" class="nav-btn" title="Previous gap" aria-label="Previous gap">&#9664;</button>
+            <span id="gap-nav-position" class="nav-position" aria-live="polite">0/0</span>
+            <button id="btn-next-gap" class="nav-btn" title="Next gap" aria-label="Next gap">&#9654;</button>
           </div>
           <div class="time-gap-range">
             <div class="range-row">
@@ -561,7 +561,7 @@
                 <select id="live-port-select" class="live-select">
                   <option value="">Select port...</option>
                 </select>
-                <button id="btn-live-refresh" class="live-ctrl-btn" title="Refresh ports">&#8635;</button>
+                <button id="btn-live-refresh" class="live-ctrl-btn" title="Refresh ports" aria-label="Refresh ports">&#8635;</button>
                 <label class="live-label">Baud:</label>
                 <select id="live-baud-select" class="live-select">
                   <option value="9600">9600</option>
@@ -579,7 +579,7 @@
                 <select id="live-device-select" class="live-select">
                   <option value="">Select device...</option>
                 </select>
-                <button id="btn-live-refresh-devices" class="live-ctrl-btn" title="Refresh devices">&#8635;</button>
+                <button id="btn-live-refresh-devices" class="live-ctrl-btn" title="Refresh devices" aria-label="Refresh devices">&#8635;</button>
                 <label class="live-label">Filter:</label>
                 <input type="text" id="live-filter-input" class="live-name-input" placeholder="*:E" style="width:80px">
               </span>
@@ -588,10 +588,10 @@
                 <select id="live-ssh-host-select" class="live-select">
                   <option value="">Select host...</option>
                 </select>
-                <button id="btn-live-ssh-refresh" class="live-ctrl-btn" title="Refresh hosts from SSH config">&#8635;</button>
+                <button id="btn-live-ssh-refresh" class="live-ctrl-btn" title="Refresh hosts from SSH config" aria-label="Refresh SSH hosts">&#8635;</button>
                 <label class="live-label">Path:</label>
                 <input type="text" id="live-ssh-path-input" class="live-name-input" placeholder="/var/log/syslog" style="width:200px">
-                <button id="btn-live-ssh-manage" class="live-ctrl-btn" title="Manage SSH profiles">&#9881;</button>
+                <button id="btn-live-ssh-manage" class="live-ctrl-btn" title="Manage SSH profiles" aria-label="Manage SSH profiles">&#9881;</button>
               </span>
               <button id="btn-live-connect" class="live-connect-btn">Connect</button>
             </div>
@@ -694,7 +694,7 @@
           <span class="status-filter-label">Filtered:</span>
           <span id="filtered-count">0</span>
           <span class="status-filter-lines-word">lines</span>
-          <button id="btn-status-clear-filter" class="status-filter-clear" title="Clear filter completely">×</button>
+          <button id="btn-status-clear-filter" class="status-filter-clear" title="Clear filter completely" aria-label="Clear filter">×</button>
         </span>
       </div>
       <div class="status-center">
@@ -720,19 +720,19 @@
         <span id="status-size">0 B</span>
         <span class="status-separator">|</span>
         <span class="zoom-controls">
-          <button id="btn-zoom-out" class="zoom-btn" title="Zoom Out (Ctrl+-)">−</button>
+          <button id="btn-zoom-out" class="zoom-btn" title="Zoom Out (Ctrl+-)" aria-label="Zoom out">−</button>
           <span id="status-zoom" title="Zoom level (Ctrl+0 to reset)">100%</span>
-          <button id="btn-zoom-in" class="zoom-btn" title="Zoom In (Ctrl++)">+</button>
+          <button id="btn-zoom-in" class="zoom-btn" title="Zoom In (Ctrl++)" aria-label="Zoom in">+</button>
         </span>
       </div>
     </footer>
 
     <!-- Filter Modal -->
-    <div id="filter-modal" class="modal hidden">
+    <div id="filter-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-content">
         <div class="modal-header">
           <h3>Filter Settings</h3>
-          <button class="modal-close" data-modal="filter-modal">&times;</button>
+          <button class="modal-close" data-modal="filter-modal" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
           <!-- Filter Presets -->
@@ -789,11 +789,11 @@
     </div>
 
     <!-- Advanced Filter Modal -->
-    <div id="advanced-filter-modal" class="modal hidden">
+    <div id="advanced-filter-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-content advanced-filter-modal-content">
         <div class="modal-header">
           <h3>Advanced Filter</h3>
-          <button class="modal-close" data-modal="advanced-filter-modal">&times;</button>
+          <button class="modal-close" data-modal="advanced-filter-modal" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
           <div class="advanced-filter-description">
@@ -822,11 +822,11 @@
     </div>
 
     <!-- Split Modal -->
-    <div id="split-modal" class="modal hidden">
+    <div id="split-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-content">
         <div class="modal-header">
           <h3>Split File</h3>
-          <button class="modal-close" data-modal="split-modal">&times;</button>
+          <button class="modal-close" data-modal="split-modal" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
           <div class="filter-group">
@@ -857,11 +857,11 @@
     </div>
 
     <!-- Highlight Modal -->
-    <div id="highlight-modal" class="modal hidden">
+    <div id="highlight-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-content">
         <div class="modal-header">
           <h3>Add Highlight Rule</h3>
-          <button class="modal-close" data-modal="highlight-modal">&times;</button>
+          <button class="modal-close" data-modal="highlight-modal" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
           <div class="filter-group">
@@ -905,11 +905,11 @@
     </div>
 
     <!-- Help Modal -->
-    <div id="help-modal" class="modal hidden">
+    <div id="help-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-content help-modal-content">
         <div class="modal-header">
           <h3>Keyboard Shortcuts & Tips</h3>
-          <button class="modal-close" data-modal="help-modal">&times;</button>
+          <button class="modal-close" data-modal="help-modal" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
           <div class="help-section">
@@ -1008,11 +1008,11 @@
     </div>
 
     <!-- Columns Modal -->
-    <div id="columns-modal" class="modal hidden">
+    <div id="columns-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-content" style="width: 600px; max-height: 80vh;">
         <div class="modal-header">
           <h3>Column Visibility</h3>
-          <button class="modal-close" data-modal="columns-modal">&times;</button>
+          <button class="modal-close" data-modal="columns-modal" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body" style="max-height: 60vh; overflow-y: auto;">
           <div id="columns-loading" class="placeholder">Analyzing columns...</div>
@@ -1037,11 +1037,11 @@
     </div>
 
     <!-- Bookmark Comment Modal -->
-    <div id="bookmark-modal" class="modal hidden">
+    <div id="bookmark-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-content" style="width: 400px;">
         <div class="modal-header">
           <h3 id="bookmark-modal-title">Add Bookmark</h3>
-          <button class="modal-close" data-modal="bookmark-modal">&times;</button>
+          <button class="modal-close" data-modal="bookmark-modal" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
           <div class="filter-group">
@@ -1062,11 +1062,11 @@
     </div>
 
     <!-- Save Snippet Modal (save selected lines to file) -->
-    <div id="notes-modal" class="modal hidden">
+    <div id="notes-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-content" style="width: 500px;">
         <div class="modal-header">
           <h3>Save Snippet</h3>
-          <button class="modal-close" data-modal="notes-modal">&times;</button>
+          <button class="modal-close" data-modal="notes-modal" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
           <div class="filter-group" id="notes-file-group">
@@ -1089,11 +1089,11 @@
     </div>
 
     <!-- Settings Modal -->
-    <div id="settings-modal" class="modal hidden">
+    <div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-content" style="width: 400px;">
         <div class="modal-header">
           <h3>Settings</h3>
-          <button class="modal-close" data-modal="settings-modal">&times;</button>
+          <button class="modal-close" data-modal="settings-modal" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
           <div class="settings-group">
@@ -1178,11 +1178,11 @@
       </div>
     </div>
     <!-- Datadog Query Modal -->
-    <div id="datadog-modal" class="modal hidden">
+    <div id="datadog-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-content" style="width: 450px;">
         <div class="modal-header">
           <h3>Fetch Datadog Logs</h3>
-          <button class="modal-close" data-modal="datadog-modal">&times;</button>
+          <button class="modal-close" data-modal="datadog-modal" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
           <div class="filter-group">
@@ -1224,11 +1224,11 @@
   </div>
 
     <!-- SSH Profile Manager Modal -->
-    <div id="ssh-profile-modal" class="modal hidden">
+    <div id="ssh-profile-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-content" style="width: 500px;">
         <div class="modal-header">
           <h3 id="ssh-profile-modal-title">Manage SSH Profiles</h3>
-          <button class="modal-close" data-modal="ssh-profile-modal">&times;</button>
+          <button class="modal-close" data-modal="ssh-profile-modal" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
           <div id="ssh-profile-list" class="ssh-profile-list"></div>
@@ -1265,11 +1265,11 @@
     </div>
 
     <!-- SSH Passphrase Modal -->
-    <div id="ssh-passphrase-modal" class="modal hidden">
+    <div id="ssh-passphrase-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-content" style="width: 380px;">
         <div class="modal-header">
           <h3>SSH Key Passphrase</h3>
-          <button class="modal-close" data-modal="ssh-passphrase-modal">&times;</button>
+          <button class="modal-close" data-modal="ssh-passphrase-modal" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
           <p class="hint">The SSH key requires a passphrase to unlock.</p>
@@ -1286,11 +1286,11 @@
     </div>
 
     <!-- SSH Connect & Browse Modal -->
-    <div id="ssh-connect-modal" class="modal hidden">
+    <div id="ssh-connect-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-content ssh-modal-content">
         <div class="modal-header">
           <h3>SSH Remote Browser</h3>
-          <button class="modal-close" data-modal="ssh-connect-modal">&times;</button>
+          <button class="modal-close" data-modal="ssh-connect-modal" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
           <!-- Saved profiles -->
@@ -1355,11 +1355,11 @@
     </div>
 
     <!-- Agent Setup Wizard Modal -->
-    <div id="agent-wizard-modal" class="modal hidden">
+    <div id="agent-wizard-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-content" style="width: 500px;">
         <div class="modal-header">
           <h3 id="agent-wizard-title">Agent Setup</h3>
-          <button class="modal-close" data-modal="agent-wizard-modal">&times;</button>
+          <button class="modal-close" data-modal="agent-wizard-modal" aria-label="Close">&times;</button>
         </div>
         <div id="agent-wizard-body" class="modal-body">
           <!-- Populated dynamically per step -->
@@ -1376,7 +1376,7 @@
   <div id="panel-color-picker" class="panel-color-picker hidden">
     <canvas id="panel-color-wheel" width="160" height="160"></canvas>
     <div class="panel-color-actions">
-      <button id="btn-panel-color-reset" class="panel-color-reset-btn" title="Reset to default">Reset</button>
+      <button id="btn-panel-color-reset" class="panel-color-reset-btn" title="Reset to default" aria-label="Reset panel color">Reset</button>
     </div>
   </div>
   <script src="renderer.js"></script>
