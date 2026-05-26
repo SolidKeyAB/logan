@@ -155,8 +155,6 @@ describe('Logan Benchmark', () => {
       it(`should index ${size.label}`, async () => {
         const filePath = path.join(BENCH_DIR, `bench_${size.lines}.log`);
         const handler = new FileHandler();
-        const stat = fs.statSync(filePath);
-
         global.gc?.(); // Optional GC before measuring
         const memBefore = getMemoryMB();
         const start = performance.now();

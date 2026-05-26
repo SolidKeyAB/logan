@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { Client, SFTPWrapper } from 'ssh2';
 import type { FileEntry } from 'ssh2';
-import { SshProfile, SshStatus } from '../shared/types';
+import { SshStatus } from '../shared/types';
 import { wallClockPrefix } from './serialHandler';
 
 export interface SshHostEntry {

@@ -83,7 +83,7 @@ describe('FileHandler.indexNewLines', () => {
 
     // Append the rest + a new line
     fs.appendFileSync(tempFile, '-complete\nline3\n');
-    const newLines = handler.indexNewLines();
+    handler.indexNewLines();
     // The previous 'partial' line gets extended to 'partial-complete', plus 'line3'
     // So net new lines = 2 (re-parsed partial + new line3), but since the old 'partial'
     // was already counted, the total should be 3
@@ -446,7 +446,6 @@ describe('Wall clock timestamp prepending in serial data', () => {
   });
 
   it('should produce timestamps that time-gap detection can parse', async () => {
-    const buf = { value: '' };
     const handler = new FileHandler();
 
     try {

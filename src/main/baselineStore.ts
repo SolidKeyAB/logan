@@ -147,7 +147,6 @@ export function buildFingerprint(
 
   // Single pass through the file
   let startTime: Date | null = null;
-  let endTime: Date | null = null;
   const minuteBuckets = new Map<number, number>(); // minute offset -> count
 
   const batchSize = 10000;
@@ -159,7 +158,6 @@ export function buildFingerprint(
       const ts = parseTimestamp(line.text);
       if (ts) {
         if (!startTime) startTime = ts;
-        endTime = ts;
         if (startTime) {
           const minuteOffset = Math.floor((ts.getTime() - startTime.getTime()) / 60000);
           if (minuteOffset >= 0 && minuteOffset < 1440) {

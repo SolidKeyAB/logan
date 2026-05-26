@@ -4913,7 +4913,6 @@ function renderFolderSearchResults(pattern: string, cancelled?: boolean): void {
   `;
 
   const items = matches.map((match, index) => {
-    const relPath = match.filePath;
     const lineText = match.lineText.length > 200 ? match.lineText.substring(0, 200) + '...' : match.lineText;
 
     return `

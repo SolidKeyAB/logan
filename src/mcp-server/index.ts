@@ -91,8 +91,6 @@ interface ChatMessage {
 
 let sseBuffer: ChatMessage[] = [];
 let sseWaiters: Array<(msg: ChatMessage) => void> = [];
-let sseConnected = false;
-let sseReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -108,14 +106,13 @@ function connectSSE(): void {
   const port = getApiPort();
   if (!port) {
     // Retry after a delay
-    sseReconnectTimer = setTimeout(connectSSE, 5000);
+    setTimeout(connectSSE, 5000);
     return;
   }
 
   startKeepAlive(port);
 
   const req = http.get(`http://127.0.0.1:${port}/api/events`, (res) => {
-    sseConnected = true;
     let buffer = '';
 
     res.on('data', (chunk: Buffer) => {
@@ -150,14 +147,12 @@ function connectSSE(): void {
     });
 
     res.on('end', () => {
-      sseConnected = false;
-      sseReconnectTimer = setTimeout(connectSSE, 3000);
+      setTimeout(connectSSE, 3000);
     });
   });
 
   req.on('error', () => {
-    sseConnected = false;
-    sseReconnectTimer = setTimeout(connectSSE, 5000);
+    setTimeout(connectSSE, 5000);
   });
 }
 

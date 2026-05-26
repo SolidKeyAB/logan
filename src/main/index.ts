@@ -15,7 +15,7 @@ if (process.platform !== 'linux') {
   console.warn('node-pty not available on Linux — using child_process fallback for terminal');
 }
 import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
-import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, LiveConnectionInfo, ContextDefinition, ContextPattern, ContextMatchGroup, Annotation } from '../shared/types';
+import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation } from '../shared/types';
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
@@ -1348,7 +1348,6 @@ app.whenReady().then(() => {
       // Scan the range
       const levelCounts: Record<string, number> = {};
       const crashes: { lineNumber: number; keyword: string; text: string }[] = [];
-      const componentMentions: Record<string, { lineCount: number; errorCount: number }> = {};
       const CRASH_KEYWORDS = ['fatal', 'panic', 'crash', 'exception', 'segfault', 'abort', 'oom', 'killed', 'core dump'];
       const timeGaps: { lineNumber: number; gapSeconds: number; prevTimestamp: string; currTimestamp: string }[] = [];
       let prevTimestamp: Date | null = null;
@@ -2593,7 +2592,6 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
 
     // Check for hidden column matches (matches in columns that are filtered out)
     if (options.columnConfig) {
-      const visibleCols = options.columnConfig.columns.filter(c => c.visible).map(c => c.index);
       const hiddenCols = options.columnConfig.columns.filter(c => !c.visible).map(c => c.index);
       if (hiddenCols.length > 0) {
         // Do a full-text search (without column config) to find matches in hidden columns
@@ -4521,69 +4519,10 @@ interface TimeGap {
   linePreview: string;
 }
 
-// Timestamp patterns for parsing
-const TIME_GAP_PATTERNS = [
-  // ISO format: 2024-01-25T10:00:01 or 2024-01-25 10:00:01
-  /(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/,
-  // European format: DD.MM.YYYY HH:mm:ss (e.g., 02.01.2026 18:16:01.061)
-  /(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/,
-  // Syslog format: Jan 25 10:00:01 (assumes current year)
-  /([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})/,
-];
-
 const MONTH_MAP: Record<string, number> = {
   'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5,
   'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11
 };
-
-function parseTimestamp(text: string): Date | null {
-  const sample = text.length > 100 ? text.substring(0, 100) : text;
-
-  // Try ISO format first
-  const isoMatch = sample.match(TIME_GAP_PATTERNS[0]);
-  if (isoMatch) {
-    const [, year, month, day, hour, min, sec] = isoMatch;
-    return new Date(
-      parseInt(year), parseInt(month) - 1, parseInt(day),
-      parseInt(hour), parseInt(min), parseInt(sec)
-    );
-  }
-
-  // Try European format: DD.MM.YYYY HH:mm:ss
-  const euroMatch = sample.match(TIME_GAP_PATTERNS[1]);
-  if (euroMatch) {
-    const [, day, month, year, hour, min, sec] = euroMatch;
-    return new Date(
-      parseInt(year), parseInt(month) - 1, parseInt(day),
-      parseInt(hour), parseInt(min), parseInt(sec)
-    );
-  }
-
-  // Try syslog format
-  const syslogMatch = sample.match(TIME_GAP_PATTERNS[2]);
-  if (syslogMatch) {
-    const [, monthStr, day, hour, min, sec] = syslogMatch;
-    const month = MONTH_MAP[monthStr];
-    if (month !== undefined) {
-      const now = new Date();
-      return new Date(
-        now.getFullYear(), month, parseInt(day),
-        parseInt(hour), parseInt(min), parseInt(sec)
-      );
-    }
-  }
-
-  return null;
-}
-
-function extractTimestampString(text: string): string | null {
-  const sample = text.length > 100 ? text.substring(0, 100) : text;
-  for (const pattern of TIME_GAP_PATTERNS) {
-    const match = sample.match(pattern);
-    if (match) return match[0];
-  }
-  return null;
-}
 
 interface TimeGapOptions {
   thresholdSeconds: number;

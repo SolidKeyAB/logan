@@ -165,8 +165,6 @@ describe('BaselineStore', () => {
       const id = store.save('test', '', [], fp);
       const before = store.get(id)!.updatedAt;
 
-      // Small delay to ensure different timestamp
-      const future = Date.now() + 100;
       store.update(id, { name: 'updated' });
       const after = store.get(id)!.updatedAt;
       expect(after).toBeGreaterThanOrEqual(before);
