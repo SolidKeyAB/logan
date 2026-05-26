@@ -93,6 +93,21 @@ body {
   user-select: none;
 }
 
+/* Focus-visible — visible keyboard focus ring on all interactive elements */
+:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
+}
+
+button:focus-visible {
+  outline-offset: 1px;
+}
+
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 0;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 10px;
