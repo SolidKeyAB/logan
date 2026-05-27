@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -46,6 +46,12 @@ if (process.platform !== 'linux') {
 }
 try { LogcatHandler = require('./logcatHandler').LogcatHandler; } catch { console.warn('logcatHandler not available'); }
 import { SshProfile, SavedConnection } from '../shared/types';
+
+// Tell Electron + GTK that we're a dark-themed app so native dialogs match
+nativeTheme.themeSource = 'dark';
+if (process.platform === 'linux' && !process.env.GTK_THEME) {
+  process.env.GTK_THEME = 'Adwaita:dark';
+}
 
 let mainWindow: BrowserWindow | null = null;
 let searchSignal: { cancelled: boolean } = { cancelled: false };
