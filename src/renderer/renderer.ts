@@ -6090,14 +6090,14 @@ function formatAgentText(raw: string): string {
   let s = raw.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     const cls = lang ? ` class="lang-${escapeHtml(lang)}"` : '';
     blocks.push(`<pre class="chat-code-block"><code${cls}>${escapeHtml(code.trim())}</code></pre>`);
-    return `\x00B${blocks.length - 1}\x00`;
+    return `%%CBLK${blocks.length - 1}%%`;
   });
 
   // Step 2 — pull inline code
   const inlines: string[] = [];
   s = s.replace(/`([^`\n]+)`/g, (_, c) => {
     inlines.push(`<code class="chat-inline-code">${escapeHtml(c)}</code>`);
-    return `\x00I${inlines.length - 1}\x00`;
+    return `%%CINL${inlines.length - 1}%%`;
   });
 
   // Step 3 — escape remaining HTML so we can safely inject markup
@@ -6153,8 +6153,8 @@ function formatAgentText(raw: string): string {
   s = s.replace(/\n/g, '<br>');
 
   // Step 12 — restore code blocks and inline code
-  s = s.replace(/\x00B(\d+)\x00/g, (_, i) => blocks[+i]);
-  s = s.replace(/\x00I(\d+)\x00/g, (_, i) => inlines[+i]);
+  s = s.replace(/%%CBLK(\d+)%%/g, (_, i) => blocks[+i]);
+  s = s.replace(/%%CINL(\d+)%%/g, (_, i) => inlines[+i]);
 
   return s;
 }
