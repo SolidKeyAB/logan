@@ -2,9 +2,11 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as protobuf from 'protobufjs';
 import {
   TextAdapter,
   JsonlAdapter,
+  ProtobufAdapter,
   pickAdapter,
   openWithAdapter,
   adapterRegistry,
@@ -96,6 +98,108 @@ describe('pickAdapter', () => {
       expect(pickAdapter(p).id).toBe('text');
     } finally {
       fs.unlinkSync(p);
+    }
+  });
+});
+
+describe('ProtobufAdapter', () => {
+  const PROTO_SRC = `
+    syntax = "proto3";
+    message LogEntry {
+      string timestamp = 1;
+      string level = 2;
+      string message = 3;
+      int32 code = 4;
+    }
+  `;
+
+  // Build a .proto file, a length-delimited .pb log, and the sidecar config.
+  function makeProtoFixture(records: Array<Record<string, unknown>>): {
+    pbPath: string; protoPath: string; sidecarPath: string; cleanup: () => void;
+  } {
+    const stamp = `${process.pid}-${Math.random().toString(36).slice(2)}`;
+    const protoPath = path.join(os.tmpdir(), `logan-schema-${stamp}.proto`);
+    const pbPath = path.join(os.tmpdir(), `logan-log-${stamp}.pb`);
+    const sidecarPath = pbPath + '.proto.json';
+    fs.writeFileSync(protoPath, PROTO_SRC);
+
+    const root = protobuf.parse(PROTO_SRC).root;
+    const LogEntry = root.lookupType('LogEntry');
+    let writer: protobuf.Writer | undefined;
+    for (const r of records) {
+      writer = LogEntry.encodeDelimited(LogEntry.create(r), writer);
+    }
+    fs.writeFileSync(pbPath, writer ? Buffer.from(writer.finish()) : Buffer.alloc(0));
+    fs.writeFileSync(sidecarPath, JSON.stringify({ protoPath, messageType: 'LogEntry' }));
+
+    return {
+      pbPath, protoPath, sidecarPath,
+      cleanup: () => {
+        for (const p of [protoPath, pbPath, sidecarPath]) {
+          try { fs.unlinkSync(p); } catch { /* ignore */ }
+        }
+      },
+    };
+  }
+
+  it('detect() requires a protobuf extension AND a resolvable schema', () => {
+    const fx = makeProtoFixture([{ message: 'x' }]);
+    try {
+      const adapter = new ProtobufAdapter();
+      expect(adapter.detect(fx.pbPath)).toBe(true);
+      // schema present but wrong extension → not claimed
+      expect(adapter.detect('/tmp/whatever.log')).toBe(false);
+      // right extension but no sidecar → falls through to text
+      fs.unlinkSync(fx.sidecarPath);
+      expect(adapter.detect(fx.pbPath)).toBe(false);
+      expect(pickAdapter(fx.pbPath).id).toBe('text');
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  it('pickAdapter routes a schema-configured .pb to the protobuf adapter', () => {
+    const fx = makeProtoFixture([{ message: 'x' }]);
+    try {
+      expect(pickAdapter(fx.pbPath).id).toBe('protobuf');
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  it('normalize() decodes length-delimited frames into readable log lines', async () => {
+    const fx = makeProtoFixture([
+      { timestamp: '2026-06-03T10:00:00Z', level: 'info', message: 'started', code: 0 },
+      { timestamp: '2026-06-03T10:00:01Z', level: 'error', message: 'boom', code: 42 },
+    ]);
+    try {
+      const adapter = new ProtobufAdapter();
+      let last = 0;
+      const source = await adapter.normalize(fx.pbPath, (p) => { last = p; });
+      try {
+        expect(source.capabilities.isBinary).toBe(true);
+        expect(last).toBe(100);
+        const lines = fs.readFileSync(source.path, 'utf-8').split('\n');
+        expect(lines).toHaveLength(2);
+        // code:0 is a proto3 default → omitted (defaults:false)
+        expect(lines[0]).toBe('2026-06-03T10:00:00Z INFO started');
+        expect(lines[1]).toBe('2026-06-03T10:00:01Z ERROR boom code=42');
+      } finally {
+        source.cleanup?.();
+        expect(fs.existsSync(source.path)).toBe(false);
+      }
+    } finally {
+      fx.cleanup();
+    }
+  });
+
+  it('normalize() throws a clear error when no schema is configured', async () => {
+    const fx = makeProtoFixture([{ message: 'x' }]);
+    fs.unlinkSync(fx.sidecarPath);
+    try {
+      await expect(new ProtobufAdapter().normalize(fx.pbPath)).rejects.toThrow(/schema not configured/i);
+    } finally {
+      fx.cleanup();
     }
   });
 });

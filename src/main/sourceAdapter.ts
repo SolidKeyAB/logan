@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as readline from 'readline';
+import * as protobuf from 'protobufjs';
 import { FileInfo } from '../shared/types';
 
 /**
@@ -242,8 +243,129 @@ export class JsonlAdapter implements SourceAdapter {
   }
 }
 
+/** Where a protobuf file's decoding schema lives. */
+export interface ProtoSchemaConfig {
+  /** Path to the .proto definition (absolute, or relative to the log file). */
+  protoPath: string;
+  /** Fully-qualified message type to decode each frame as, e.g. "mypkg.LogEntry". */
+  messageType: string;
+}
+
+/**
+ * Resolve the protobuf schema for a file from a sidecar `<file>.proto.json`:
+ *   { "protoPath": "schema.proto", "messageType": "mypkg.LogEntry" }
+ * Returns null when absent/invalid (the "Open as…" schema picker — a later UI
+ * task — will write this sidecar). protoPath is resolved relative to the log file.
+ */
+export function resolveProtoSchema(filePath: string): ProtoSchemaConfig | null {
+  const sidecar = filePath + '.proto.json';
+  try {
+    if (!fs.existsSync(sidecar)) return null;
+    const cfg = JSON.parse(fs.readFileSync(sidecar, 'utf-8'));
+    if (!cfg || typeof cfg.protoPath !== 'string' || typeof cfg.messageType !== 'string') {
+      return null;
+    }
+    const protoPath = path.isAbsolute(cfg.protoPath)
+      ? cfg.protoPath
+      : path.resolve(path.dirname(filePath), cfg.protoPath);
+    return { protoPath, messageType: cfg.messageType };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Protobuf adapter. Protobuf is binary and NOT self-describing, so it needs a
+ * schema (needsSchema:true) supplied via resolveProtoSchema(). The file is a
+ * sequence of length-delimited frames (varint length prefix + message bytes);
+ * normalize() decodes each frame with protobufjs and renders it as a readable log
+ * line into a derived temp file, reusing the same field-surfacing as JSONL.
+ *
+ * Batch decode (supportsAppend:false). detect() claims a file only when it has a
+ * protobuf-ish extension AND a resolvable schema — otherwise it falls through to
+ * the text fallback (raw bytes) rather than failing the open.
+ */
+export class ProtobufAdapter implements SourceAdapter {
+  readonly id = 'protobuf';
+  readonly label = 'Protobuf (length-delimited)';
+  readonly capabilities: AdapterCapabilities = {
+    isBinary: true,
+    supportsAppend: false,
+    needsSchema: true,
+    supportsColumnFilter: false,
+  };
+
+  detect(filePath: string): boolean {
+    if (!/\.(pb|binpb|protobuf)$/i.test(filePath)) return false;
+    return resolveProtoSchema(filePath) !== null;
+  }
+
+  async normalize(
+    filePath: string,
+    onProgress?: (percent: number) => void
+  ): Promise<NormalizedSource> {
+    const cfg = resolveProtoSchema(filePath);
+    if (!cfg) {
+      throw new Error(
+        `Protobuf schema not configured for ${path.basename(filePath)} ` +
+        `(expected sidecar ${path.basename(filePath)}.proto.json with protoPath + messageType)`
+      );
+    }
+    const root = await protobuf.load(cfg.protoPath);
+    const type = root.lookupType(cfg.messageType);
+
+    const buffer = fs.readFileSync(filePath);
+    const reader = protobuf.Reader.create(buffer);
+    const total = Math.max(1, reader.len);
+
+    const outPath = path.join(
+      os.tmpdir(),
+      `logan-protobuf-${process.pid}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}.norm`
+    );
+
+    await new Promise<void>((resolve, reject) => {
+      const out = fs.createWriteStream(outPath, { encoding: 'utf-8' });
+      out.on('error', reject);
+      let first = true;
+      let count = 0;
+      const writeLine = (line: string) => {
+        out.write(first ? line : '\n' + line);
+        first = false;
+      };
+      try {
+        while (reader.pos < reader.len) {
+          const message = type.decodeDelimited(reader);
+          const obj = type.toObject(message, {
+            longs: String,
+            bytes: String,
+            enums: String,
+            defaults: false,
+          });
+          writeLine(formatJsonRecord(obj));
+          if (++count % 1000 === 0 && onProgress) {
+            onProgress(Math.min(99, Math.round((reader.pos / total) * 100)));
+          }
+        }
+      } catch (err) {
+        // Truncated/malformed frame — surface it inline and stop decoding rather
+        // than discarding the records we already recovered.
+        writeLine(`[protobuf] decode stopped at byte ${reader.pos}/${reader.len}: ${String(err)}`);
+      }
+      out.end(() => resolve());
+    });
+
+    onProgress?.(100);
+    return {
+      path: outPath,
+      capabilities: this.capabilities,
+      cleanup: () => { try { fs.unlinkSync(outPath); } catch { /* already gone */ } },
+    };
+  }
+}
+
 const textAdapter = new TextAdapter();
 const jsonlAdapter = new JsonlAdapter();
+const protobufAdapter = new ProtobufAdapter();
 
 /**
  * Adapters in priority order, most-specific first; TextAdapter is the final
@@ -252,7 +374,7 @@ const jsonlAdapter = new JsonlAdapter();
  */
 export const adapterRegistry: SourceAdapter[] = [
   jsonlAdapter,
-  // ProtobufAdapter, … (most specific first)
+  protobufAdapter,
   textAdapter,
 ];
 
