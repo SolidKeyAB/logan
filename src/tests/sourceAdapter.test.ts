@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import {
   TextAdapter,
+  JsonlAdapter,
   pickAdapter,
   openWithAdapter,
   adapterRegistry,
@@ -61,8 +62,69 @@ describe('pickAdapter', () => {
     }
   });
 
-  it('only the text fallback is registered in Phase 1', () => {
-    expect(adapterRegistry.map(a => a.id)).toEqual(['text']);
+  it('text fallback is always consulted last', () => {
+    const ids = adapterRegistry.map(a => a.id);
+    expect(ids[ids.length - 1]).toBe('text');
+    expect(ids).toContain('jsonl');
+  });
+
+  it('detects .jsonl / .ndjson by extension', () => {
+    const jl = path.join(os.tmpdir(), `logan-x-${process.pid}.jsonl`);
+    const nd = path.join(os.tmpdir(), `logan-x-${process.pid}.ndjson`);
+    fs.writeFileSync(jl, '{"a":1}\n');
+    fs.writeFileSync(nd, '{"a":1}\n');
+    try {
+      expect(pickAdapter(jl).id).toBe('jsonl');
+      expect(pickAdapter(nd).id).toBe('jsonl');
+    } finally {
+      fs.unlinkSync(jl); fs.unlinkSync(nd);
+    }
+  });
+
+  it('detects JSONL by content (first line is a complete JSON object)', () => {
+    const p = tmpFile('{"level":"info","msg":"hi"}\n{"level":"warn","msg":"bye"}\n');
+    try {
+      expect(pickAdapter(p).id).toBe('jsonl');
+    } finally {
+      fs.unlinkSync(p);
+    }
+  });
+
+  it('does NOT misdetect a pretty-printed .json object as JSONL', () => {
+    const p = tmpFile('{\n  "level": "info",\n  "msg": "hi"\n}\n');
+    try {
+      expect(pickAdapter(p).id).toBe('text');
+    } finally {
+      fs.unlinkSync(p);
+    }
+  });
+});
+
+describe('JsonlAdapter.normalize', () => {
+  it('reformats records into readable log lines, 1:1 with input lines', async () => {
+    const p = tmpFile(
+      '{"timestamp":"2026-06-03T10:00:00Z","level":"info","msg":"started","port":8080}\n' +
+      '{"level":"error","message":"boom","code":42}\n' +
+      'not json at all\n'
+    );
+    const adapter = new JsonlAdapter();
+    let last = 0;
+    const source = await adapter.normalize(p, (pct) => { last = pct; });
+    try {
+      expect(source.path).not.toBe(p); // derived file
+      expect(source.cleanup).toBeTypeOf('function');
+      expect(last).toBe(100);
+      const out = fs.readFileSync(source.path, 'utf-8');
+      const lines = out.split('\n');
+      expect(lines).toHaveLength(3); // same line count as input
+      expect(lines[0]).toBe('2026-06-03T10:00:00Z INFO started port=8080');
+      expect(lines[1]).toBe('ERROR boom code=42');
+      expect(lines[2]).toBe('not json at all'); // passthrough for non-JSON
+    } finally {
+      source.cleanup?.();
+      expect(fs.existsSync(source.path)).toBe(false); // cleanup removes the temp file
+      fs.unlinkSync(p);
+    }
   });
 });
 
