@@ -15,6 +15,7 @@ if (process.platform !== 'linux') {
   console.warn('node-pty not available on Linux — using child_process fallback for terminal');
 }
 import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
+import { openWithAdapter, NormalizedSource } from './sourceAdapter';
 import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation } from '../shared/types';
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
@@ -109,6 +110,24 @@ function getFilteredLines(): number[] | null {
 
 // Cache FileHandlers by path to avoid re-indexing when switching tabs
 const fileHandlerCache = new Map<string, FileHandler>();
+
+// Resolved source (normalized path, format capabilities, lineMap, cache cleanup)
+// per opened file. Populated when a file is opened through the adapter layer;
+// kept in lockstep with fileHandlerCache so cleanup() runs on eviction/close.
+const sourceRegistry = new Map<string, NormalizedSource>();
+
+function releaseSource(filePath: string): void {
+  const source = sourceRegistry.get(filePath);
+  if (source) {
+    try { source.cleanup?.(); } catch { /* best-effort cache cleanup */ }
+    sourceRegistry.delete(filePath);
+  }
+}
+
+/** Capabilities of the format backing an open file (text fallback if unknown). */
+export function getSourceCapabilities(filePath: string): NormalizedSource['capabilities'] | null {
+  return sourceRegistry.get(filePath)?.capabilities ?? null;
+}
 const MAX_CACHED_FILES = 10; // Limit cache size to prevent memory issues
 
 // File watchers — one per open file path, notifies renderer when content changes
@@ -161,6 +180,7 @@ function addToCache(filePath: string, handler: FileHandler): void {
       const evicted = fileHandlerCache.get(firstKey);
       if (evicted) evicted.close();
       fileHandlerCache.delete(firstKey);
+      releaseSource(firstKey);
       stopWatchingFile(firstKey);
     }
   }
@@ -171,6 +191,7 @@ function addToCache(filePath: string, handler: FileHandler): void {
 function evictFromCache(filePath: string): void {
   const handler = fileHandlerCache.get(filePath);
   if (handler) { handler.close(); fileHandlerCache.delete(filePath); }
+  releaseSource(filePath);
   stopWatchingFile(filePath);
 }
 
@@ -708,6 +729,7 @@ function createWindow() {
       handler.close();
     }
     fileHandlerCache.clear();
+    for (const filePath of [...sourceRegistry.keys()]) releaseSource(filePath);
   });
 }
 
@@ -794,7 +816,9 @@ app.whenReady().then(() => {
         info = fileHandler.getFileInfo();
       } else {
         fileHandler = new FileHandler();
-        info = await fileHandler.open(filePath, () => {});
+        const opened = await openWithAdapter(fileHandler, filePath, () => {});
+        info = opened.info;
+        sourceRegistry.set(filePath, opened.source);
         addToCache(filePath, fileHandler);
         currentFilePath = filePath;
       }
@@ -2417,11 +2441,14 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
       // Send 100% progress immediately since no indexing needed
       mainWindow?.webContents.send('indexing-progress', 100);
     } else {
-      // New file - index it
+      // New file - pick a format adapter, normalize, then index.
+      // Text is a zero-overhead passthrough (original path, no copy/decode).
       fileHandler = new FileHandler();
-      info = await fileHandler.open(filePath, (percent) => {
+      const opened = await openWithAdapter(fileHandler, filePath, (percent) => {
         mainWindow?.webContents.send('indexing-progress', percent);
       });
+      info = opened.info;
+      sourceRegistry.set(filePath, opened.source);
       addToCache(filePath, fileHandler);
       currentFilePath = filePath;
     }
