@@ -2149,8 +2149,16 @@ function createLogViewer(): void {
       loadVisibleLines();
     }
     renderMinimapCanvas();
+    // Keep annotation ticks correctly positioned when the viewer resizes
+    // (e.g. the bottom panel opening/closing changes the viewer height).
+    renderAnnotationBar();
   });
   resizeObserver.observe(logViewerElement);
+
+  // The viewer (and its annotation bar) is rebuilt from scratch on every tab
+  // switch / view-mode change. Repopulate the bar so existing annotations don't
+  // vanish when the freshly-created empty bar replaces the old one.
+  renderAnnotationBar();
 }
 
 function getVirtualHeight(): number {
@@ -16179,6 +16187,13 @@ async function switchToTab(tabId: string): Promise<void> {
       updateAnalysisUI();
       updateLevelBadgeStyles();
 
+      // Re-render annotations now that the viewer is laid out — the main process
+      // pushed this file's annotations via 'annotations-changed' during openFile,
+      // but the bar was rebuilt empty by createLogViewer afterwards.
+      renderAnnotationBar();
+      renderAnnotationsPanel();
+      renderMinimapMarkers();
+
       // Mark as loaded
       tab.isLoaded = true;
 
@@ -16305,7 +16320,13 @@ function showFolderContextMenu(e: MouseEvent, folderPath: string): void {
     navigator.clipboard.writeText(folderPath);
     menu.remove();
   });
-  const close = () => { menu.remove(); document.removeEventListener('mousedown', close); };
+  // Close on click outside — must NOT fire on the menu itself, otherwise the
+  // mousedown would tear the menu down before its item click handler runs.
+  const close = (ev: MouseEvent) => {
+    if (menu.contains(ev.target as Node)) return;
+    menu.remove();
+    document.removeEventListener('mousedown', close);
+  };
   setTimeout(() => document.addEventListener('mousedown', close), 0);
 }
 
