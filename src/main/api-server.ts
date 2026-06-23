@@ -220,6 +220,10 @@ export interface ApiContext {
   investigateCrashes(options: { contextLines?: number; maxCrashes?: number; autoBookmark?: boolean; autoHighlight?: boolean }): Promise<any>;
   investigateComponent(options: { component: string; maxSamplesPerLevel?: number; includeErrorContext?: boolean; contextLines?: number }): Promise<any>;
   investigateTimerange(options: { startTime: string; endTime: string; maxSamples?: number }): Promise<any>;
+  trendDiscoverFields(options: { startLine?: number; endLine?: number; sampleSize?: number }): Promise<any>;
+  trendSeries(options: { field: string; startLine?: number; endLine?: number; bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string }): Promise<any>;
+  trendTransitions(options: { field: string; startLine?: number; endLine?: number; maxTransitions?: number; pattern?: string; patternFlags?: string }): Promise<any>;
+  trendCorrelate(options: { field: string; event: string; startLine?: number; endLine?: number; pattern?: string; patternFlags?: string }): Promise<any>;
   getAnnotations(): Map<string, Annotation>;
   addAnnotation(annotation: Annotation): any;
   removeAnnotation(id: string): any;
@@ -727,6 +731,59 @@ export function startApiServer(ctx: ApiContext): void {
             startTime: body.startTime,
             endTime: body.endTime,
             maxSamples: body.maxSamples,
+          });
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/trend-fields') {
+          const result = await ctx.trendDiscoverFields({
+            startLine: body.startLine,
+            endLine: body.endLine,
+            sampleSize: body.sampleSize,
+          });
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/trend-series') {
+          if (!body.field) return sendError(res, 'field required');
+          const result = await ctx.trendSeries({
+            field: body.field,
+            startLine: body.startLine,
+            endLine: body.endLine,
+            bucketCount: body.bucketCount,
+            maxPoints: body.maxPoints,
+            pattern: body.pattern,
+            patternFlags: body.patternFlags,
+          });
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/trend-transitions') {
+          if (!body.field) return sendError(res, 'field required');
+          const result = await ctx.trendTransitions({
+            field: body.field,
+            startLine: body.startLine,
+            endLine: body.endLine,
+            maxTransitions: body.maxTransitions,
+            pattern: body.pattern,
+            patternFlags: body.patternFlags,
+          });
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/trend-correlate') {
+          if (!body.field || !body.event) return sendError(res, 'field and event required');
+          const result = await ctx.trendCorrelate({
+            field: body.field,
+            event: body.event,
+            startLine: body.startLine,
+            endLine: body.endLine,
+            pattern: body.pattern,
+            patternFlags: body.patternFlags,
           });
           sendJson(res, result);
           return;

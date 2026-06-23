@@ -391,6 +391,118 @@ server.tool(
   }
 );
 
+// === Tool: logan_trend_fields ===
+server.tool(
+  'logan_trend_fields',
+  'Statically discover the VARIABLES in the open log (key=value, key: value, JSON fields). Returns each field with its inferred type (numeric/boolean/string/array), how often it occurs, distinct-value count, and example values. Start here to see what is worth trending — no AI, instant.',
+  {
+    startLine: z.number().int().min(1).optional().describe('1-based viewer line to start sampling from (omit for whole file)'),
+    endLine: z.number().int().min(1).optional().describe('1-based viewer line to stop sampling at (omit for whole file)'),
+    sampleSize: z.number().int().min(100).max(20000).optional().describe('How many lines to sample (default 3000)'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+  },
+  async ({ startLine, endLine, sampleSize, redact }) => {
+    try {
+      const result = await apiCall('POST', '/api/trend-fields', {
+        startLine: startLine !== undefined ? startLine - 1 : undefined,
+        endLine: endLine !== undefined ? endLine - 1 : undefined,
+        sampleSize,
+      });
+      const output = redact ? maybeRedact(result, true) : result;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_trend_series ===
+server.tool(
+  'logan_trend_series',
+  'Trend ONE field over time. Returns adaptive time buckets (count, plus sum/min/max/avg for numeric fields, or top categorical values per bucket) and a sampled set of raw points with viewerLine for click-to-navigate. Use for "how did value X change over time" and to spot when it went bad.',
+  {
+    field: z.string().describe('Field name to trend (from logan_trend_fields), or a label for the regex pattern'),
+    pattern: z.string().optional().describe('ADVANCED: regex to extract an unlabeled value; the first capture group is the value (e.g. "in (\\\\d+)ms"). Overrides keyed lookup.'),
+    startLine: z.number().int().min(1).optional().describe('1-based viewer line to start at (omit for whole file)'),
+    endLine: z.number().int().min(1).optional().describe('1-based viewer line to end at (omit for whole file)'),
+    bucketCount: z.number().int().min(10).max(2000).optional().describe('Number of time buckets (default 200)'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+  },
+  async ({ field, pattern, startLine, endLine, bucketCount, redact }) => {
+    try {
+      const result = await apiCall('POST', '/api/trend-series', {
+        field,
+        pattern,
+        startLine: startLine !== undefined ? startLine - 1 : undefined,
+        endLine: endLine !== undefined ? endLine - 1 : undefined,
+        bucketCount,
+      });
+      const output = redact ? maybeRedact(result, true) : result;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_trend_transitions ===
+server.tool(
+  'logan_trend_transitions',
+  'Detect every point where a field\'s value CHANGES (a "flip") from one occurrence to the next — works for any type (string/bool/enum/array). Returns each transition with fromValue, toValue, and viewerLine. Ideal for "what changed right before the bug" / state-machine tracking.',
+  {
+    field: z.string().describe('Field name to watch for changes (from logan_trend_fields), or a label for the regex pattern'),
+    pattern: z.string().optional().describe('ADVANCED: regex to extract an unlabeled value; the first capture group is the value. Overrides keyed lookup.'),
+    startLine: z.number().int().min(1).optional().describe('1-based viewer line to start at (omit for whole file)'),
+    endLine: z.number().int().min(1).optional().describe('1-based viewer line to end at (omit for whole file)'),
+    maxTransitions: z.number().int().min(1).max(10000).optional().describe('Cap on transitions returned (default 2000)'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+  },
+  async ({ field, pattern, startLine, endLine, maxTransitions, redact }) => {
+    try {
+      const result = await apiCall('POST', '/api/trend-transitions', {
+        field,
+        pattern,
+        startLine: startLine !== undefined ? startLine - 1 : undefined,
+        endLine: endLine !== undefined ? endLine - 1 : undefined,
+        maxTransitions,
+      });
+      const output = redact ? maybeRedact(result, true) : result;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_trend_correlate ===
+server.tool(
+  'logan_trend_correlate',
+  'Cross-tab a field against an EVENT to answer "when X happens, what is field v? when it does not, what is v?". For lines containing `event` (case-insensitive substring) vs not, summarizes the field — numeric: count/min/max/mean per group; categorical: value distribution per group. Use to find what correlates with a failure.',
+  {
+    field: z.string().describe('Field whose values to compare (from logan_trend_fields), or a label for the regex pattern'),
+    event: z.string().describe('Substring identifying the event line (e.g. an error message or event name)'),
+    pattern: z.string().optional().describe('ADVANCED: regex to extract an unlabeled value; the first capture group is the value. Overrides keyed lookup.'),
+    startLine: z.number().int().min(1).optional().describe('1-based viewer line to start at (omit for whole file)'),
+    endLine: z.number().int().min(1).optional().describe('1-based viewer line to end at (omit for whole file)'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+  },
+  async ({ field, event, pattern, startLine, endLine, redact }) => {
+    try {
+      const result = await apiCall('POST', '/api/trend-correlate', {
+        field,
+        event,
+        pattern,
+        startLine: startLine !== undefined ? startLine - 1 : undefined,
+        endLine: endLine !== undefined ? endLine - 1 : undefined,
+      });
+      const output = redact ? maybeRedact(result, true) : result;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_navigate ===
 server.tool(
   'logan_navigate',

@@ -381,6 +381,7 @@
       <div class="bottom-panel-header">
         <div class="bottom-panel-tabs">
           <button class="bottom-tab-btn" data-bottom-tab="analysis" data-help="Log level distribution, crash detection, component breakdown, and timestamp analysis.&#10;Click Run Analysis to scan the entire file.">Analysis</button>
+          <button class="bottom-tab-btn" data-bottom-tab="trends" data-help="Trend any field over time. Click Discover to auto-find log variables (key=value, JSON), then chart a field as value-over-time, value flips, or correlation.&#10;Click a chart point to jump to that line.">Trends</button>
           <button class="bottom-tab-btn" data-bottom-tab="time-gaps" data-help="Find gaps in log timestamps where no events were recorded.&#10;Useful for detecting hangs, freezes, or missing data periods.">Time Gaps</button>
           <button class="bottom-tab-btn" data-bottom-tab="search-results" data-help="Results from Ctrl+F search. Click a result to jump to that line.&#10;Supports regex, wildcard, case-sensitive, and whole-word modes.">Search Results</button>
           <button class="bottom-tab-btn" data-bottom-tab="search-configs" data-help="Save and reuse complex search patterns across files.&#10;Each config stores pattern, regex/case/word flags, and a label.">Search Configs</button>
@@ -413,6 +414,27 @@
             <div class="section-divider">Baselines</div>
             <div id="baseline-controls"></div>
             <div id="baseline-comparison-results"></div>
+          </div>
+        </div>
+        <!-- Trends tab (notebook) -->
+        <div class="bottom-tab-view" data-bottom-tab="trends">
+          <div class="bottom-tab-sub-header trends-toolbar">
+            <button id="btn-discover-fields" class="secondary-btn small">Discover Fields</button>
+            <select id="trends-field-select" class="trends-input" title="Field to trend" disabled>
+              <option value="">Discover or pick a field…</option>
+            </select>
+            <select id="trends-cell-type" class="trends-input" title="Cell type">
+              <option value="series">Value over time</option>
+              <option value="transitions">Value flips</option>
+              <option value="correlate">Correlate with event</option>
+            </select>
+            <input id="trends-event-input" class="trends-input trends-event hidden" type="text" placeholder="event substring (e.g. ERROR)">
+            <input id="trends-pattern-input" class="trends-input trends-pattern" type="text" placeholder="regex pattern (optional, 1st group = value)">
+            <button id="btn-add-trend-cell" class="secondary-btn small" disabled>Add cell</button>
+          </div>
+          <div id="trends-fields-bar" class="trends-fields-bar hidden"></div>
+          <div id="trends-results" class="trends-content">
+            <p class="placeholder">Click <strong>Discover Fields</strong> to scan the log for variables, then add a cell to chart one over time.</p>
           </div>
         </div>
         <!-- Time Gaps tab -->

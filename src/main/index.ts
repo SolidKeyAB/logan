@@ -22,6 +22,7 @@ import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
 import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession } from './api-server';
 import { BaselineStore, buildFingerprint } from './baselineStore';
+import { discoverFields, extractSeries, detectTransitions, correlate } from './trendEngine';
 // Native-dependent modules — lazy-loaded to prevent SIGSEGV if bindings aren't built
 let SerialHandler: any = null;
 let LogcatHandler: any = null;
@@ -1496,6 +1497,55 @@ app.whenReady().then(() => {
           lastLines,
         },
       };
+    },
+    trendDiscoverFields: async (options) => {
+      const handler = getFileHandler();
+      if (!handler) return { success: false, error: 'No file open' };
+      const fields = discoverFields(handler, {
+        startLine: options?.startLine,
+        endLine: options?.endLine,
+        sampleSize: options?.sampleSize,
+      });
+      return { success: true, fields };
+    },
+    trendSeries: async (options) => {
+      const handler = getFileHandler();
+      if (!handler) return { success: false, error: 'No file open' };
+      if (!options?.field) return { success: false, error: 'field required' };
+      const result = extractSeries(handler, parseTimestampFast, options.field, {
+        startLine: options.startLine,
+        endLine: options.endLine,
+        bucketCount: options.bucketCount,
+        maxPoints: options.maxPoints,
+        pattern: options.pattern,
+        patternFlags: options.patternFlags,
+      });
+      return { success: true, ...result };
+    },
+    trendTransitions: async (options) => {
+      const handler = getFileHandler();
+      if (!handler) return { success: false, error: 'No file open' };
+      if (!options?.field) return { success: false, error: 'field required' };
+      const result = detectTransitions(handler, parseTimestampFast, options.field, {
+        startLine: options.startLine,
+        endLine: options.endLine,
+        maxTransitions: options.maxTransitions,
+        pattern: options.pattern,
+        patternFlags: options.patternFlags,
+      });
+      return { success: true, ...result };
+    },
+    trendCorrelate: async (options) => {
+      const handler = getFileHandler();
+      if (!handler) return { success: false, error: 'No file open' };
+      if (!options?.field || !options?.event) return { success: false, error: 'field and event required' };
+      const result = correlate(handler, options.field, options.event, {
+        startLine: options.startLine,
+        endLine: options.endLine,
+        pattern: options.pattern,
+        patternFlags: options.patternFlags,
+      });
+      return { success: true, ...result };
     },
   };
   loadPersistedSession(); // restore last 24h of chat history
@@ -4208,6 +4258,76 @@ ipcMain.handle('analyze-file-path', async (_, filePath: string) => {
     );
     cacheAnalysisResult(filePath, result);
     return { success: true, result };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// ── Trends notebook (renderer path; mirrors the ApiContext trend* methods) ──
+ipcMain.handle(IPC.TREND_DISCOVER_FIELDS, async (_, options) => {
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+  try {
+    const fields = discoverFields(handler, {
+      startLine: options?.startLine,
+      endLine: options?.endLine,
+      sampleSize: options?.sampleSize,
+    });
+    return { success: true, fields };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.TREND_SERIES, async (_, options) => {
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+  if (!options?.field) return { success: false, error: 'field required' };
+  try {
+    const result = extractSeries(handler, parseTimestampFast, options.field, {
+      startLine: options.startLine,
+      endLine: options.endLine,
+      bucketCount: options.bucketCount,
+      maxPoints: options.maxPoints,
+      pattern: options.pattern,
+      patternFlags: options.patternFlags,
+    });
+    return { success: true, ...result };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.TREND_TRANSITIONS, async (_, options) => {
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+  if (!options?.field) return { success: false, error: 'field required' };
+  try {
+    const result = detectTransitions(handler, parseTimestampFast, options.field, {
+      startLine: options.startLine,
+      endLine: options.endLine,
+      maxTransitions: options.maxTransitions,
+      pattern: options.pattern,
+      patternFlags: options.patternFlags,
+    });
+    return { success: true, ...result };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.TREND_CORRELATE, async (_, options) => {
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+  if (!options?.field || !options?.event) return { success: false, error: 'field and event required' };
+  try {
+    const result = correlate(handler, options.field, options.event, {
+      startLine: options.startLine,
+      endLine: options.endLine,
+      pattern: options.pattern,
+      patternFlags: options.patternFlags,
+    });
+    return { success: true, ...result };
   } catch (error) {
     return { success: false, error: String(error) };
   }
