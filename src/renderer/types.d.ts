@@ -282,6 +282,80 @@ interface ContextMatchGroupDef {
   score: number;
 }
 
+// ── Trends notebook ──────────────────────────────────────────────────────────
+type TrendFieldType = 'numeric' | 'boolean' | 'string' | 'array' | 'timestamp';
+
+interface TrendFieldSpec {
+  name: string;
+  type: TrendFieldType;
+  occurrences: number;
+  distinct: number;
+  examples: string[];
+}
+
+interface TrendPoint {
+  lineNumber: number;
+  viewerLine: number;
+  epochMs: number | null;
+  raw: string;
+  num: number | null;
+}
+
+interface TrendTimeBucket {
+  startMs: number;
+  endMs: number;
+  count: number;
+  sum?: number;
+  min?: number;
+  max?: number;
+  avg?: number;
+  values?: Record<string, number>;
+}
+
+interface TrendSeriesResult {
+  field: string;
+  type: TrendFieldType;
+  totalPoints: number;
+  withTimestamp: number;
+  truncated: boolean;
+  timeRange: { startMs: number; endMs: number } | null;
+  buckets: TrendTimeBucket[];
+  points: TrendPoint[];
+}
+
+interface TrendTransition {
+  lineNumber: number;
+  viewerLine: number;
+  epochMs: number | null;
+  fromValue: string;
+  toValue: string;
+}
+
+interface TrendTransitionsResult {
+  field: string;
+  type: TrendFieldType;
+  transitions: TrendTransition[];
+  totalTransitions: number;
+  truncated: boolean;
+}
+
+interface TrendCorrelateResult {
+  field: string;
+  fieldType: TrendFieldType;
+  event: string;
+  matchedLines: number;
+  unmatchedLines: number;
+  truncated: boolean;
+  numericStats?: {
+    matched: { n: number; min: number; max: number; mean: number } | null;
+    unmatched: { n: number; min: number; max: number; mean: number } | null;
+  };
+  categorical?: {
+    matched: Record<string, number>;
+    unmatched: Record<string, number>;
+  };
+}
+
 interface Api {
   // File operations
   openFileDialog: () => Promise<string | null>;
@@ -541,6 +615,12 @@ interface Api {
     summary?: { total: number; errors: number; warnings: number; stateChanges: number; related: number; context: number };
     error?: string;
   }>;
+
+  // Trends notebook
+  trendDiscoverFields: (options?: { startLine?: number; endLine?: number; sampleSize?: number }) => Promise<{ success: boolean; fields?: TrendFieldSpec[]; error?: string }>;
+  trendSeries: (options: { field: string; startLine?: number; endLine?: number; bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string }) => Promise<{ success: boolean; error?: string } & Partial<TrendSeriesResult>>;
+  trendTransitions: (options: { field: string; startLine?: number; endLine?: number; maxTransitions?: number; pattern?: string; patternFlags?: string }) => Promise<{ success: boolean; error?: string } & Partial<TrendTransitionsResult>>;
+  trendCorrelate: (options: { field: string; event: string; startLine?: number; endLine?: number; pattern?: string; patternFlags?: string }) => Promise<{ success: boolean; error?: string } & Partial<TrendCorrelateResult>>;
 
   // Window controls
   windowMinimize: () => Promise<void>;

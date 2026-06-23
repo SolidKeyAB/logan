@@ -5482,6 +5482,9 @@ function openBottomTab(tabId: string): void {
   if (tabId === 'contexts') {
     loadContextDefinitions();
   }
+  if (tabId === 'trends') {
+    initTrendsPanel();
+  }
   if (tabId === 'time-align') {
     if (state.timeAlignTimestamps.size === 0 && state.searchConfigResults.size > 0) {
       buildTimeAlignData();
@@ -5489,6 +5492,398 @@ function openBottomTab(tabId: string): void {
   }
 
   saveBottomPanelState();
+}
+
+// ─── Trends Notebook ─────────────────────────────────────────────────────────
+// Discover log variables (key=value / JSON / regex) and chart them over time.
+// Backend lives in src/main/trendEngine.ts; reached via window.api.trend*.
+
+let trendsPanelInited = false;
+let trendCellSeq = 0;
+
+function trendEl<T extends HTMLElement>(id: string): T | null {
+  return document.getElementById(id) as T | null;
+}
+
+function initTrendsPanel(): void {
+  if (trendsPanelInited) return;
+  trendsPanelInited = true;
+
+  const btnDiscover = trendEl<HTMLButtonElement>('btn-discover-fields');
+  const btnAdd = trendEl<HTMLButtonElement>('btn-add-trend-cell');
+  const cellType = trendEl<HTMLSelectElement>('trends-cell-type');
+  const eventInput = trendEl<HTMLInputElement>('trends-event-input');
+  const fieldSelect = trendEl<HTMLSelectElement>('trends-field-select');
+  const patternInput = trendEl<HTMLInputElement>('trends-pattern-input');
+
+  const refreshAddEnabled = () => {
+    if (!btnAdd) return;
+    const hasField = !!fieldSelect?.value.trim();
+    const hasPattern = !!patternInput?.value.trim();
+    btnAdd.disabled = !hasField && !hasPattern;
+  };
+
+  btnDiscover?.addEventListener('click', () => { void discoverTrendFields(); });
+  btnAdd?.addEventListener('click', () => { void addTrendCell(); });
+  cellType?.addEventListener('change', () => {
+    eventInput?.classList.toggle('hidden', cellType.value !== 'correlate');
+  });
+  fieldSelect?.addEventListener('change', refreshAddEnabled);
+  patternInput?.addEventListener('input', refreshAddEnabled);
+}
+
+async function discoverTrendFields(): Promise<void> {
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  const btn = trendEl<HTMLButtonElement>('btn-discover-fields');
+  const results = trendEl<HTMLDivElement>('trends-results');
+  if (btn) { btn.disabled = true; btn.textContent = 'Discovering…'; }
+  try {
+    const res = await window.api.trendDiscoverFields({});
+    if (!res.success) { showToast(res.error || 'Discover failed'); return; }
+    const fields = res.fields || [];
+    populateTrendFieldPicker(fields);
+    renderTrendFieldsBar(fields);
+    if (fields.length === 0 && results && results.querySelector('.placeholder')) {
+      results.innerHTML = '<p class="placeholder">No <code>key=value</code> or JSON fields found in the sample. You can still trend an unlabeled value with a regex pattern (first capture group = value).</p>';
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Discover Fields'; }
+  }
+}
+
+function populateTrendFieldPicker(fields: TrendFieldSpec[]): void {
+  const sel = trendEl<HTMLSelectElement>('trends-field-select');
+  if (!sel) return;
+  sel.innerHTML = '';
+  const def = document.createElement('option');
+  def.value = '';
+  def.textContent = fields.length ? 'Pick a field…' : 'No fields — use a regex pattern';
+  sel.appendChild(def);
+  for (const f of fields) {
+    const o = document.createElement('option');
+    o.value = f.name;
+    o.textContent = `${f.name} · ${f.type} · ${f.occurrences}×`;
+    sel.appendChild(o);
+  }
+  sel.disabled = fields.length === 0;
+}
+
+function renderTrendFieldsBar(fields: TrendFieldSpec[]): void {
+  const bar = trendEl<HTMLDivElement>('trends-fields-bar');
+  if (!bar) return;
+  bar.innerHTML = '';
+  if (fields.length === 0) { bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+  for (const f of fields) {
+    const chip = document.createElement('button');
+    chip.className = `trend-field-chip type-${f.type}`;
+    chip.title = `${f.type} · seen ${f.occurrences}× · ${f.distinct} distinct${f.examples.length ? `\ne.g. ${f.examples.join(', ')}` : ''}\nClick to chart over time`;
+    chip.innerHTML = `<span class="trend-chip-name">${escapeHtml(f.name)}</span><span class="trend-chip-type">${f.type}</span>`;
+    chip.addEventListener('click', () => {
+      const sel = trendEl<HTMLSelectElement>('trends-field-select');
+      const cellType = trendEl<HTMLSelectElement>('trends-cell-type');
+      const eventInput = trendEl<HTMLInputElement>('trends-event-input');
+      if (sel) sel.value = f.name;
+      if (cellType) { cellType.value = 'series'; eventInput?.classList.add('hidden'); }
+      void addTrendCell();
+    });
+    bar.appendChild(chip);
+  }
+}
+
+interface TrendCellShell {
+  body: HTMLDivElement;
+  error: (msg: string) => void;
+}
+
+function createTrendCellShell(type: string, label: string): TrendCellShell {
+  const results = trendEl<HTMLDivElement>('trends-results');
+  if (results) {
+    const ph = results.querySelector('.placeholder');
+    if (ph) ph.remove();
+  }
+  const typeLabels: Record<string, string> = { series: 'over time', transitions: 'value flips', correlate: 'correlation' };
+  const cell = document.createElement('div');
+  cell.className = 'trend-cell';
+  cell.id = `trend-cell-${++trendCellSeq}`;
+
+  const header = document.createElement('div');
+  header.className = 'trend-cell-header';
+  header.innerHTML = `<span class="trend-cell-label">${escapeHtml(label)}</span><span class="trend-cell-kind">${typeLabels[type] || type}</span>`;
+  const remove = document.createElement('button');
+  remove.className = 'trend-cell-remove';
+  remove.title = 'Remove cell';
+  remove.textContent = '×';
+  remove.addEventListener('click', () => cell.remove());
+  header.appendChild(remove);
+
+  const body = document.createElement('div');
+  body.className = 'trend-cell-body';
+  body.innerHTML = '<p class="placeholder">Computing…</p>';
+
+  cell.appendChild(header);
+  cell.appendChild(body);
+  results?.insertBefore(cell, results.firstChild);
+
+  return {
+    body,
+    error: (msg: string) => { body.innerHTML = `<p class="placeholder trend-error">${escapeHtml(msg)}</p>`; },
+  };
+}
+
+async function addTrendCell(): Promise<void> {
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  const fieldSelect = trendEl<HTMLSelectElement>('trends-field-select');
+  const cellTypeSel = trendEl<HTMLSelectElement>('trends-cell-type');
+  const eventInput = trendEl<HTMLInputElement>('trends-event-input');
+  const patternInput = trendEl<HTMLInputElement>('trends-pattern-input');
+
+  const field = fieldSelect?.value.trim() || '';
+  const pattern = patternInput?.value.trim() || '';
+  if (!field && !pattern) { showToast('Pick a field or enter a regex pattern'); return; }
+
+  const type = cellTypeSel?.value || 'series';
+  // The engine's makeExtractor prefers `pattern` when present, so for pattern-only
+  // mode we still pass a non-empty `field` (the label) to satisfy the IPC guard.
+  const fieldArg = field || pattern;
+  const label = field || `/${pattern}/`;
+  const patternOpt = pattern || undefined;
+
+  const cell = createTrendCellShell(type, label);
+  try {
+    if (type === 'series') {
+      const res = await window.api.trendSeries({ field: fieldArg, pattern: patternOpt });
+      if (!res.success) { cell.error(res.error || 'Failed'); return; }
+      renderSeriesCell(cell.body, res as TrendSeriesResult);
+    } else if (type === 'transitions') {
+      const res = await window.api.trendTransitions({ field: fieldArg, pattern: patternOpt });
+      if (!res.success) { cell.error(res.error || 'Failed'); return; }
+      renderTransitionsCell(cell.body, res as TrendTransitionsResult);
+    } else if (type === 'correlate') {
+      const event = eventInput?.value.trim() || '';
+      if (!event) { cell.error('Enter an event substring to correlate against'); return; }
+      const res = await window.api.trendCorrelate({ field: fieldArg, pattern: patternOpt, event });
+      if (!res.success) { cell.error(res.error || 'Failed'); return; }
+      renderCorrelateCell(cell.body, res as TrendCorrelateResult);
+    }
+  } catch (e) {
+    cell.error(String(e));
+  }
+}
+
+function jumpToTrendLine(lineNumber0: number): void {
+  if (lineNumber0 < 0 || lineNumber0 >= getTotalLines()) return;
+  goToLine(lineNumber0);
+  state.selectedLine = lineNumber0;
+  renderVisibleLines();
+}
+
+function trendCssVar(name: string, fallback: string): string {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  let h = hex.replace('#', '');
+  if (h.length === 3) h = h.split('').map(c => c + c).join('');
+  const n = parseInt(h, 16);
+  if (Number.isNaN(n) || h.length !== 6) return `rgba(120,120,120,${alpha})`;
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function renderSeriesCell(body: HTMLDivElement, series: TrendSeriesResult): void {
+  body.innerHTML = '';
+  const stats = document.createElement('div');
+  stats.className = 'trend-cell-stats';
+  stats.textContent = `${series.totalPoints} values · ${series.withTimestamp} timestamped · ${series.type}${series.truncated ? ' · scan truncated' : ''}`;
+  body.appendChild(stats);
+
+  if (series.totalPoints === 0) {
+    const p = document.createElement('p');
+    p.className = 'placeholder';
+    p.textContent = 'No values matched this field/pattern.';
+    body.appendChild(p);
+    return;
+  }
+
+  if (series.timeRange && series.buckets.length > 0) {
+    const canvas = document.createElement('canvas');
+    canvas.className = 'trend-cell-canvas';
+    body.appendChild(canvas);
+    requestAnimationFrame(() => drawTrendChart(canvas, series));
+    canvas.title = 'Click to jump to the nearest line';
+    canvas.addEventListener('click', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const tr = series.timeRange!;
+      const t = tr.startMs + frac * (tr.endMs - tr.startMs);
+      let best: TrendPoint | null = null, bestD = Infinity;
+      for (const pt of series.points) {
+        if (pt.epochMs == null) continue;
+        const d = Math.abs(pt.epochMs - t);
+        if (d < bestD) { bestD = d; best = pt; }
+      }
+      if (best) jumpToTrendLine(best.lineNumber);
+    });
+  } else {
+    const p = document.createElement('p');
+    p.className = 'placeholder';
+    p.textContent = 'No parseable timestamps — showing sample points below.';
+    body.appendChild(p);
+  }
+
+  // A few clickable sample points so the cell is useful even without timestamps.
+  const sample = document.createElement('div');
+  sample.className = 'trend-point-list';
+  const pts = series.points.slice(0, 12);
+  for (const pt of pts) {
+    const row = document.createElement('div');
+    row.className = 'trend-point-row';
+    row.innerHTML = `<span class="trend-point-line">L${pt.viewerLine}</span><span class="trend-point-val">${escapeHtml(pt.raw)}</span>`;
+    row.addEventListener('click', () => jumpToTrendLine(pt.lineNumber));
+    sample.appendChild(row);
+  }
+  body.appendChild(sample);
+}
+
+function drawTrendChart(canvas: HTMLCanvasElement, series: TrendSeriesResult): void {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.offsetWidth || 600;
+  const cssH = 150;
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  canvas.style.height = cssH + 'px';
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const padL = 4, padR = 4, padT = 10, padB = 10;
+  const w = cssW - padL - padR, h = cssH - padT - padB;
+  const buckets = series.buckets;
+  if (buckets.length === 0) return;
+
+  const accent = trendCssVar('--accent-hover', '#1177bb');
+  const muted = trendCssVar('--text-muted', '#666666');
+  const bw = w / buckets.length;
+  const maxCount = Math.max(1, ...buckets.map(b => b.count));
+
+  // Faint activity bars (count per bucket) — works for any field type.
+  ctx.fillStyle = hexToRgba(muted, 0.30);
+  buckets.forEach((b, i) => {
+    if (b.count === 0) return;
+    const bh = (b.count / maxCount) * h;
+    ctx.fillRect(padL + i * bw, padT + h - bh, Math.max(1, bw - 1), bh);
+  });
+
+  // Numeric fields: overlay an average line.
+  if (series.type === 'numeric') {
+    const avgs = buckets.map(b => (b.avg !== undefined ? b.avg : null));
+    const valid = avgs.filter((v): v is number => v != null);
+    if (valid.length > 0) {
+      const mn = Math.min(...valid), mx = Math.max(...valid);
+      const range = mx - mn || 1;
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      let started = false;
+      buckets.forEach((b, i) => {
+        if (b.avg === undefined) return;
+        const x = padL + i * bw + bw / 2;
+        const y = padT + h - ((b.avg - mn) / range) * h;
+        if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+      });
+      ctx.stroke();
+    }
+  }
+}
+
+function renderTransitionsCell(body: HTMLDivElement, res: TrendTransitionsResult): void {
+  body.innerHTML = '';
+  const stats = document.createElement('div');
+  stats.className = 'trend-cell-stats';
+  const shown = res.transitions.length;
+  stats.textContent = `${res.totalTransitions} flips${res.truncated && res.totalTransitions > shown ? ` (showing first ${shown})` : ''} · ${res.type}`;
+  body.appendChild(stats);
+
+  if (shown === 0) {
+    const p = document.createElement('p');
+    p.className = 'placeholder';
+    p.textContent = 'No value changes detected — this field stays constant.';
+    body.appendChild(p);
+    return;
+  }
+
+  const list = document.createElement('div');
+  list.className = 'trend-flip-list';
+  for (const t of res.transitions) {
+    const row = document.createElement('div');
+    row.className = 'trend-flip-row';
+    row.innerHTML = `<span class="trend-flip-line">L${t.viewerLine}</span>` +
+      `<span class="trend-flip-from">${escapeHtml(t.fromValue)}</span>` +
+      `<span class="trend-flip-arrow">→</span>` +
+      `<span class="trend-flip-to">${escapeHtml(t.toValue)}</span>`;
+    row.title = 'Jump to this line';
+    row.addEventListener('click', () => jumpToTrendLine(t.lineNumber));
+    list.appendChild(row);
+  }
+  body.appendChild(list);
+}
+
+function renderCorrelateCell(body: HTMLDivElement, res: TrendCorrelateResult): void {
+  body.innerHTML = '';
+  const stats = document.createElement('div');
+  stats.className = 'trend-cell-stats';
+  stats.textContent = `event "${res.event}": ${res.matchedLines} matched · ${res.unmatchedLines} other · ${res.fieldType}${res.truncated ? ' · truncated' : ''}`;
+  body.appendChild(stats);
+
+  const grid = document.createElement('div');
+  grid.className = 'trend-corr-grid';
+
+  const numCol = (title: string, s: { n: number; min: number; max: number; mean: number } | null): HTMLDivElement => {
+    const col = document.createElement('div');
+    col.className = 'trend-corr-col';
+    if (!s) {
+      col.innerHTML = `<div class="trend-corr-title">${escapeHtml(title)}</div><div class="trend-corr-empty">no numeric values</div>`;
+    } else {
+      col.innerHTML = `<div class="trend-corr-title">${escapeHtml(title)}</div>` +
+        `<div class="trend-corr-stat"><span>mean</span><b>${s.mean.toFixed(2)}</b></div>` +
+        `<div class="trend-corr-stat"><span>min</span><b>${s.min}</b></div>` +
+        `<div class="trend-corr-stat"><span>max</span><b>${s.max}</b></div>` +
+        `<div class="trend-corr-stat"><span>n</span><b>${s.n}</b></div>`;
+    }
+    return col;
+  };
+
+  const catCol = (title: string, rec: Record<string, number>): HTMLDivElement => {
+    const col = document.createElement('div');
+    col.className = 'trend-corr-col';
+    const entries = Object.entries(rec).sort((a, b) => b[1] - a[1]);
+    let rows = `<div class="trend-corr-title">${escapeHtml(title)}</div>`;
+    if (entries.length === 0) {
+      rows += `<div class="trend-corr-empty">no values</div>`;
+    } else {
+      const max = entries[0][1] || 1;
+      for (const [val, count] of entries) {
+        const pct = Math.round((count / max) * 100);
+        rows += `<div class="trend-corr-bar-row"><span class="trend-corr-val">${escapeHtml(val)}</span>` +
+          `<span class="trend-corr-bar"><span class="trend-corr-bar-fill" style="width:${pct}%"></span></span>` +
+          `<span class="trend-corr-count">${count}</span></div>`;
+      }
+    }
+    col.innerHTML = rows;
+    return col;
+  };
+
+  if (res.fieldType === 'numeric' && res.numericStats) {
+    grid.appendChild(numCol('When event present', res.numericStats.matched));
+    grid.appendChild(numCol('When event absent', res.numericStats.unmatched));
+  } else if (res.categorical) {
+    grid.appendChild(catCol('When event present', res.categorical.matched));
+    grid.appendChild(catCol('When event absent', res.categorical.unmatched));
+  }
+  body.appendChild(grid);
 }
 
 // ─── Bottom Panel Color Picker ───────────────────────────────────────────────
