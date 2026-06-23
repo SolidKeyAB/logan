@@ -83,6 +83,11 @@ const IPC = {
   CONNECTION_SAVE: 'connection-save',
   CONNECTION_DELETE: 'connection-delete',
   CONNECTION_UPDATE: 'connection-update',
+  // Trends notebook
+  TREND_DISCOVER_FIELDS: 'trend-discover-fields',
+  TREND_SERIES: 'trend-series',
+  TREND_TRANSITIONS: 'trend-transitions',
+  TREND_CORRELATE: 'trend-correlate',
 } as const;
 
 // API exposed to renderer
@@ -676,6 +681,16 @@ const api = {
   // Traceback
   traceback: (request: { targetLine: number; windowLines?: number; windowSeconds?: number; maxResults?: number }): Promise<any> =>
     ipcRenderer.invoke(IPC.TRACEBACK, request),
+
+  // Trends notebook
+  trendDiscoverFields: (options?: { startLine?: number; endLine?: number; sampleSize?: number }): Promise<{ success: boolean; fields?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.TREND_DISCOVER_FIELDS, options),
+  trendSeries: (options: { field: string; startLine?: number; endLine?: number; bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string }): Promise<{ success: boolean; [key: string]: any }> =>
+    ipcRenderer.invoke(IPC.TREND_SERIES, options),
+  trendTransitions: (options: { field: string; startLine?: number; endLine?: number; maxTransitions?: number; pattern?: string; patternFlags?: string }): Promise<{ success: boolean; [key: string]: any }> =>
+    ipcRenderer.invoke(IPC.TREND_TRANSITIONS, options),
+  trendCorrelate: (options: { field: string; event: string; startLine?: number; endLine?: number; pattern?: string; patternFlags?: string }): Promise<{ success: boolean; [key: string]: any }> =>
+    ipcRenderer.invoke(IPC.TREND_CORRELATE, options),
 
   // Window controls
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),

@@ -374,4 +374,9 @@ export const IPC = {
   // Diagram rendering
   RENDER_DIAGRAM: 'render-diagram',
   READ_FILE_TEXT: 'read-file-text',
+  // Trends notebook
+  TREND_DISCOVER_FIELDS: 'trend-discover-fields',
+  TREND_SERIES: 'trend-series',
+  TREND_TRANSITIONS: 'trend-transitions',
+  TREND_CORRELATE: 'trend-correlate',
 } as const;
