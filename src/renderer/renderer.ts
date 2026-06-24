@@ -9220,6 +9220,7 @@ function hideSearchConfigForm(): void {
 async function addSearchConfig(): Promise<void> {
   const pattern = elements.scPatternInput.value.trim();
   if (!pattern) return;
+  searchConfigHistory?.add(pattern);
 
   const config: SearchConfigDef = {
     id: editingSearchConfigId || `sc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
@@ -9921,6 +9922,7 @@ function showContextForm(existingDef?: ContextDefinitionDef): void {
     patternInput.className = 'ctx-pattern-input';
     patternInput.value = pat.pattern;
     patternInput.placeholder = 'Pattern...';
+    createInputHistory(patternInput, HK_CONTEXT_PATTERN); // Up/Down recall of past context patterns
 
     const regexBtn = document.createElement('button');
     regexBtn.className = `ctx-pattern-toggle${pat.isRegex ? ' active' : ''}`;
@@ -10024,6 +10026,7 @@ function showContextForm(existingDef?: ContextDefinitionDef): void {
       const toggles = r.querySelectorAll('.ctx-pattern-toggle');
       const matchCase = toggles[1]?.classList.contains('active') || false;
       const distVal = (r.querySelector('.ctx-pattern-dist') as HTMLInputElement).value;
+      pushInputHistory(HK_CONTEXT_PATTERN, pattern);
       patterns.push({
         id: r.dataset.patId || `cp-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
         pattern,
@@ -10920,26 +10923,31 @@ function navigateSearchHistory(direction: 'up' | 'down'): void {
 }
 
 // Reusable VSCode-style input history: gives any text input persistent Up/Down
-// recall (the main search box has its own copy above). Returns { add } to push
-// a submitted value. Self-wires the keydown/input listeners on the element.
+// recall (the main search box has its own copy above). Storage is keyed in
+// localStorage and read fresh on each navigation, so several inputs that share a
+// key (e.g. the dynamically-created filter rows) stay in sync.
 interface InputHistory { add: (value: string) => void; }
+
+function loadInputHistory(key: string): string[] {
+  try { const v = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(v) ? v : []; }
+  catch { return []; }
+}
+
+// Push a used value to a history list (de-duped, most-recent-first, capped).
+function pushInputHistory(key: string, value: string, max = 50): void {
+  if (!value.trim()) return;
+  let h = loadInputHistory(key).filter(p => p !== value);
+  h.unshift(value);
+  if (h.length > max) h = h.slice(0, max);
+  try { localStorage.setItem(key, JSON.stringify(h)); } catch { /* quota */ }
+}
+
 function createInputHistory(input: HTMLInputElement, storageKey: string, max = 50): InputHistory {
-  let history: string[] = (() => {
-    try { return JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch { return []; }
-  })();
   let idx = -1;      // -1 = not navigating (showing live input)
   let stash = '';    // what was typed before navigation started
 
-  function add(value: string): void {
-    if (!value.trim()) return;
-    history = history.filter(p => p !== value);
-    history.unshift(value);
-    if (history.length > max) history = history.slice(0, max);
-    try { localStorage.setItem(storageKey, JSON.stringify(history)); } catch { /* quota */ }
-    idx = -1;
-  }
-
   function navigate(direction: 'up' | 'down'): void {
+    const history = loadInputHistory(storageKey);
     if (history.length === 0) return;
     if (direction === 'up') {
       if (idx === -1) { stash = input.value; idx = 0; }
@@ -10963,10 +10971,21 @@ function createInputHistory(input: HTMLInputElement, storageKey: string, max = 5
   // Manual typing resets the navigation pointer
   input.addEventListener('input', () => { idx = -1; });
 
-  return { add };
+  return { add: (value: string) => { pushInputHistory(storageKey, value, max); idx = -1; } };
 }
 
+// Shared history-key constants for the query boxes that have Up/Down recall.
+const HK_FOLDER_SEARCH = 'logan-folder-search-history';
+const HK_SEARCH_CONFIG = 'logan-search-config-history';
+const HK_TIMEGAP_START = 'logan-timegap-start-history';
+const HK_TIMEGAP_END = 'logan-timegap-end-history';
+const HK_FILTER_INCLUDE = 'logan-filter-include-history';
+const HK_CONTEXT_PATTERN = 'logan-context-pattern-history';
+
 let folderSearchHistory: InputHistory | null = null;
+let searchConfigHistory: InputHistory | null = null;
+let timeGapStartHistory: InputHistory | null = null;
+let timeGapEndHistory: InputHistory | null = null;
 
 async function performSearch(): Promise<void> {
   const pattern = elements.searchInput.value;
@@ -11272,6 +11291,7 @@ function addIncludePatternRow(pattern = '', caseSensitive = true): void {
   input.type = 'text';
   input.value = pattern;
   input.placeholder = 'e.g., error';
+  createInputHistory(input, HK_FILTER_INCLUDE); // Up/Down recall of past filter patterns
 
   const caseBtn = document.createElement('button');
   caseBtn.className = 'include-pattern-case-btn' + (caseSensitive ? ' active' : '');
@@ -11417,9 +11437,11 @@ async function applyFilter(providedConfig?: FilterConfig): Promise<void> {
     );
     const levels = Array.from(levelCheckboxes).map((cb) => cb.value);
 
+    const includePatterns = getIncludePatterns();
+    includePatterns.forEach((p) => pushInputHistory(HK_FILTER_INCLUDE, p.pattern));
     config = {
       levels,
-      includePatterns: getIncludePatterns(),
+      includePatterns,
       excludePatterns: elements.excludePatterns.value
         .split('\n')
         .filter((p) => p.trim()),
@@ -11995,8 +12017,8 @@ async function detectTimeGaps(): Promise<void> {
   // Get optional pattern range
   const startPattern = elements.timeGapStartPattern.value.trim();
   const endPattern = elements.timeGapEndPattern.value.trim();
-  if (startPattern) options.startPattern = startPattern;
-  if (endPattern) options.endPattern = endPattern;
+  if (startPattern) { options.startPattern = startPattern; timeGapStartHistory?.add(startPattern); }
+  if (endPattern) { options.endPattern = endPattern; timeGapEndHistory?.add(endPattern); }
 
   // Show progress UI
   elements.timeGapsList.innerHTML = '<p class="placeholder">Detecting time gaps...</p>';
@@ -15549,7 +15571,10 @@ function init(): void {
   elements.btnFolderSearch.addEventListener('click', performFolderSearch);
   elements.btnFolderSearchCancel.addEventListener('click', cancelFolderSearch);
   elements.btnFolderSearchClear.addEventListener('click', closeFolderSearchResults);
-  folderSearchHistory = createInputHistory(elements.folderSearchInput, 'logan-folder-search-history');
+  folderSearchHistory = createInputHistory(elements.folderSearchInput, HK_FOLDER_SEARCH);
+  searchConfigHistory = createInputHistory(elements.scPatternInput, HK_SEARCH_CONFIG);
+  timeGapStartHistory = createInputHistory(elements.timeGapStartPattern, HK_TIMEGAP_START);
+  timeGapEndHistory = createInputHistory(elements.timeGapEndPattern, HK_TIMEGAP_END);
   elements.folderSearchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       performFolderSearch();
