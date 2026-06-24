@@ -2600,9 +2600,17 @@ function renderVisibleLines(): void {
           if (isStart || isActive) {
             const colors = getAnnColor(matchAnn.severity);
             const bg = isActive ? colors.active : colors.stripe;
-            const hl = document.createElement('div');
-            hl.style.cssText = `position:absolute;left:0;right:0;top:${top}px;height:${getLineHeight()}px;background:${bg};border-left:3px solid ${colors.tick};pointer-events:none;z-index:1;`;
-            fragment.appendChild(hl);
+            if (wordWrapEnabled || jsonFormattingEnabled) {
+              // Relative-flow mode: lines have variable heights and aren't absolutely
+              // positioned, so an overlay at line*lineHeight would drift off its line.
+              // Style the line element itself so the highlight always tracks the line.
+              lineElement.style.background = bg;
+              lineElement.style.borderLeft = `3px solid ${colors.tick}`;
+            } else {
+              const hl = document.createElement('div');
+              hl.style.cssText = `position:absolute;left:0;right:0;top:${top}px;height:${getLineHeight()}px;background:${bg};border-left:3px solid ${colors.tick};pointer-events:none;z-index:1;`;
+              fragment.appendChild(hl);
+            }
           }
         }
       }
@@ -4818,8 +4826,6 @@ function renderFolderTree(): void {
         toggleBottomTab('video');
       } else if (fileType === 'image') {
         openImageInPanel(filePath);
-      } else if (isDiagramFile(filePath)) {
-        openDiagramInPanel(filePath);
       } else {
         await loadFile(filePath);
       }
@@ -4971,7 +4977,9 @@ function renderFolderSearchResults(pattern: string, cancelled?: boolean): void {
 // === Terminal (tabbed, multi-session) ===
 
 const TERMINAL_THEME = {
-  background: 'rgba(30, 30, 30, 0)',
+  // Opaque background: a transparent bg + allowTransparency makes the xterm DOM
+  // renderer smear/ghost text when the cursor moves or on selection/copy.
+  background: '#1e1e1e',
   foreground: '#cccccc',
   cursor: '#cccccc',
   cursorAccent: '#1e1e1e',
@@ -5058,7 +5066,7 @@ async function createTerminalTab(
     fontSize: 12,
     fontFamily: "'SF Mono', 'Consolas', 'Monaco', monospace",
     allowProposedApi: true,
-    allowTransparency: true,
+    allowTransparency: false,
     theme: TERMINAL_THEME,
   });
 
@@ -5494,6 +5502,98 @@ function openBottomTab(tabId: string): void {
   saveBottomPanelState();
 }
 
+// ─── Optional Features (toggleable "plugins") ────────────────────────────────
+// Core log-analysis surfaces are always on. These optional panels can be turned
+// off to declutter; disabled ones drop their tab/icon. State persists in
+// localStorage. Default-off ones keep the first-run UI focused.
+
+interface OptionalFeatureDef {
+  id: string;
+  label: string;
+  description: string;
+  defaultEnabled: boolean;
+  bottomTab?: string;   // data-bottom-tab value to gate
+  panel?: string;       // activity-bar data-panel value to gate
+  buttonId?: string;    // a specific element id to gate (e.g. terminal toggle)
+}
+
+const OPTIONAL_FEATURES: OptionalFeatureDef[] = [
+  { id: 'video',      label: 'Video Player', description: 'Sync a screen recording with log timestamps (great for bug reports).', defaultEnabled: true,  bottomTab: 'video' },
+  { id: 'terminal',   label: 'Terminal',     description: 'Embedded drop-down terminal (Ctrl+`).',                                  defaultEnabled: true,  buttonId: 'btn-terminal-toggle' },
+  { id: 'image',      label: 'Image Viewer', description: 'View image files referenced in a log or bug report.',                   defaultEnabled: false, bottomTab: 'image' },
+  { id: 'time-align', label: 'Time Align',   description: 'Align search-config results on draggable timeline lanes.',              defaultEnabled: false, bottomTab: 'time-align' },
+  { id: 'history',    label: 'History',      description: 'Action history (searches, filters, runs) with replay.',                defaultEnabled: false, panel: 'history' },
+];
+
+const FEATURES_LS_KEY = 'logan-features';
+
+function loadFeatureState(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(FEATURES_LS_KEY);
+    if (raw) return JSON.parse(raw) as Record<string, boolean>;
+  } catch { /* ignore malformed */ }
+  return {};
+}
+
+function isFeatureEnabled(id: string): boolean {
+  const def = OPTIONAL_FEATURES.find(f => f.id === id);
+  if (!def) return true;
+  const saved = loadFeatureState();
+  return id in saved ? !!saved[id] : def.defaultEnabled;
+}
+
+function setFeatureEnabled(id: string, enabled: boolean): void {
+  const saved = loadFeatureState();
+  saved[id] = enabled;
+  localStorage.setItem(FEATURES_LS_KEY, JSON.stringify(saved));
+}
+
+// Show/hide each optional feature's tab button + activity-bar icon based on state.
+function applyFeatureVisibility(): void {
+  for (const def of OPTIONAL_FEATURES) {
+    const on = isFeatureEnabled(def.id);
+    if (def.bottomTab) {
+      document
+        .querySelectorAll(`.bottom-tab-btn[data-bottom-tab="${def.bottomTab}"], .activity-bar-btn[data-bottom-tab="${def.bottomTab}"]`)
+        .forEach(el => (el as HTMLElement).classList.toggle('feature-hidden', !on));
+      if (!on && state.activeBottomTab === def.bottomTab) closeBottomPanel();
+    }
+    if (def.panel) {
+      document
+        .querySelectorAll(`.activity-bar-btn[data-panel="${def.panel}"]`)
+        .forEach(el => (el as HTMLElement).classList.toggle('feature-hidden', !on));
+    }
+    if (def.buttonId) {
+      document.getElementById(def.buttonId)?.classList.toggle('feature-hidden', !on);
+      if (!on && def.id === 'terminal') hideTerminalOverlay();
+    }
+  }
+}
+
+function openFeaturesModal(): void {
+  const list = document.getElementById('features-list');
+  if (!list) return;
+  list.innerHTML = '';
+  for (const def of OPTIONAL_FEATURES) {
+    const on = isFeatureEnabled(def.id);
+    const row = document.createElement('label');
+    row.className = 'features-row';
+    row.innerHTML =
+      `<input type="checkbox" data-feature="${def.id}"${on ? ' checked' : ''}>` +
+      `<span class="features-row-text">` +
+      `<span class="features-row-label">${escapeHtml(def.label)}</span>` +
+      `<span class="features-row-desc">${escapeHtml(def.description)}</span>` +
+      `</span>`;
+    const cb = row.querySelector('input') as HTMLInputElement;
+    cb.addEventListener('change', () => {
+      setFeatureEnabled(def.id, cb.checked);
+      applyFeatureVisibility();
+    });
+    list.appendChild(row);
+  }
+  document.getElementById('features-modal')?.classList.remove('hidden');
+}
+
 // ─── Trends Notebook ─────────────────────────────────────────────────────────
 // Discover log variables (key=value / JSON / regex) and chart them over time.
 // Backend lives in src/main/trendEngine.ts; reached via window.api.trend*.
@@ -5891,8 +5991,23 @@ function renderCorrelateCell(body: HTMLDivElement, res: TrendCorrelateResult): v
 const PANEL_COLOR_DEFAULT = 'rgba(30, 30, 30, 0.95)';
 const PANEL_COLOR_KEY = 'logan-panel-bg-color';
 
+// WCAG relative luminance — decides whether a panel bg is "light" enough that the
+// panel's (default light-on-dark) text needs to flip to dark for readability.
+function isLightPanelColor(color: string): boolean {
+  const m = color.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+  if (!m) return false;
+  const lin = (v: number): number => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const L = 0.2126 * lin(+m[1]) + 0.7152 * lin(+m[2]) + 0.0722 * lin(+m[3]);
+  return L > 0.5;
+}
+
 function applyPanelBgColor(color: string): void {
   elements.bottomPanel.style.background = color;
+  // Flip panel text to a contrasting set when the chosen bg is light (handled in CSS).
+  elements.bottomPanel.classList.toggle('panel-light-bg', isLightPanelColor(color));
   // Keep the dot in sync
   const dot = document.querySelector('.panel-color-dot') as HTMLElement | null;
   if (dot) dot.style.background = color;
@@ -6562,7 +6677,7 @@ function formatAgentText(raw: string): string {
   return s;
 }
 
-function addChatMessage(msg: { id?: string; from: string; text: string; timestamp: number }): void {
+function addChatMessage(msg: { id?: string; from: string; text: string; timestamp: number }): HTMLDivElement {
   if (msg.from === 'agent') hideTypingIndicator();
   const el = document.createElement('div');
   el.className = `chat-message from-${msg.from}`;
@@ -6591,6 +6706,7 @@ function addChatMessage(msg: { id?: string; from: string; text: string; timestam
   elements.chatMessages.appendChild(el);
 
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+  return el;
 }
 
 let chatTypingIndicator: HTMLElement | null = null;
@@ -6618,20 +6734,57 @@ function hideTypingIndicator(): void {
 function sendChatMessage(): void {
   const text = elements.chatInput.value.trim();
   if (!text) return;
-
-  // Optimistically show in UI
-  const msg = { from: 'user', text, timestamp: Date.now() };
-  addChatMessage(msg);
   elements.chatInput.value = '';
-  showTypingIndicator();
+  deliverChatMessage(text);
+}
 
-  // Send to main process
+// Add the user message to the UI and deliver it — but only actually send to the
+// agent when one is connected. When disconnected (or the send fails), the message
+// is kept on screen with a disconnection indicator and a Resend button instead of
+// being silently dropped.
+function deliverChatMessage(text: string): void {
+  const el = addChatMessage({ from: 'user', text, timestamp: Date.now() });
+
+  if (!agentConnected) {
+    markUserMessageFailed(el, text);
+    return;
+  }
+
+  showTypingIndicator();
   window.api.sendAgentMessage(text).catch(() => {
-    // Message already shown; ignore send failure silently
+    hideTypingIndicator();
+    markUserMessageFailed(el, text);
   });
 }
 
+// Turn a user message bubble into an undelivered state: disconnection note + Resend.
+function markUserMessageFailed(el: HTMLElement, text: string): void {
+  el.classList.add('failed');
+  if (el.querySelector('.chat-msg-failed')) return; // already marked
+
+  const footer = document.createElement('div');
+  footer.className = 'chat-msg-failed';
+
+  const note = document.createElement('span');
+  note.className = 'chat-msg-failed-note';
+  note.textContent = '⚠ Not delivered — agent disconnected';
+
+  const resend = document.createElement('button');
+  resend.className = 'chat-msg-resend';
+  resend.textContent = 'Resend';
+  resend.addEventListener('click', () => {
+    el.remove();
+    deliverChatMessage(text);
+  });
+
+  footer.appendChild(note);
+  footer.appendChild(resend);
+  el.appendChild(footer);
+  elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+}
+
 function updateAgentConnectionStatus(connected: boolean, _count: number, name?: string | null): void {
+  agentConnected = connected;
   const dot = elements.chatAgentDot;
   const text = elements.chatAgentStatusText;
   if (connected) {
@@ -6667,6 +6820,7 @@ function formatTimeAgo(ts: number): string {
 }
 
 let agentRunning = false;
+let agentConnected = false;
 
 function updateLaunchButton(): void {
   const btn = elements.chatLaunchAgent;
@@ -7143,7 +7297,9 @@ function getAnnColor(sev: string | undefined) {
 function renderAnnotationBar(): void {
   if (!annotationBarElement) return;
 
-  const totalLines = state.totalLines;
+  // Use the *visible* line count (filtered when a filter is active) so tick
+  // positions line up with the scroll area the bar sits next to.
+  const totalLines = getTotalLines();
   const hasAnns = state.showAnnotations && state.annotations.length > 0 && totalLines > 0;
 
   if (!hasAnns) {
@@ -7154,7 +7310,14 @@ function renderAnnotationBar(): void {
 
   annotationBarElement.classList.remove('hidden');
 
-  const sorted = [...state.annotations].sort((a, b) => a.lineNumber - b.lineNumber);
+  // Map each annotation's physical line to its position in the current view.
+  // When filtered, annotations whose line isn't in the filtered set are hidden.
+  const barLine = (ann: any): number =>
+    state.isFiltered ? getFilteredDisplayIndex(ann.lineNumber) : ann.lineNumber;
+
+  const sorted = [...state.annotations]
+    .filter((a) => barLine(a) >= 0)
+    .sort((a, b) => barLine(a) - barLine(b));
 
   // Compact tick height: 14px fixed. MIN_GAP ensures no two ticks overlap.
   // We work in px against the bar's clientHeight; fall back to 600 if not yet laid out.
@@ -7165,7 +7328,7 @@ function renderAnnotationBar(): void {
   const posPx: number[] = [];
   let prevBottom = -MIN_GAP;
   for (const ann of sorted) {
-    const ideal = (ann.lineNumber / totalLines) * barH;
+    const ideal = (barLine(ann) / totalLines) * barH;
     const top = Math.max(ideal, prevBottom + MIN_GAP);
     posPx.push(top);
     prevBottom = top + TICK_H;
@@ -7180,8 +7343,9 @@ function renderAnnotationBar(): void {
 
     // Range stripe (thin color band showing the span)
     if (ann.endLine !== undefined && ann.endLine > ann.lineNumber) {
-      const stripeTop = (ann.lineNumber / totalLines) * barH;
-      const stripeBot = (ann.endLine / totalLines) * barH;
+      const endBarLine = state.isFiltered ? getFilteredDisplayIndex(ann.endLine) : ann.endLine;
+      const stripeTop = (barLine(ann) / totalLines) * barH;
+      const stripeBot = ((endBarLine >= 0 ? endBarLine : barLine(ann)) / totalLines) * barH;
       const stripe = document.createElement('div');
       stripe.className = 'ann-bar-stripe';
       stripe.style.cssText = `top:${stripeTop.toFixed(1)}px;height:${Math.max(3, stripeBot - stripeTop).toFixed(1)}px;background:${isActive ? colors.active : colors.stripe};border-left:2px solid ${colors.tick};`;
@@ -10246,12 +10410,6 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
   // Handle image files in bottom panel (like video)
   if (isImageFile(filePath)) {
     openImageInPanel(filePath);
-    return;
-  }
-
-  // Handle diagram files in bottom panel
-  if (isDiagramFile(filePath)) {
-    openDiagramInPanel(filePath);
     return;
   }
 
@@ -13932,13 +14090,6 @@ function isImageFile(filePath: string): boolean {
   return IMAGE_EXTENSIONS.has(ext);
 }
 
-const DIAGRAM_EXTENSIONS = new Set(['puml', 'plantuml', 'pu', 'iuml', 'drawio', 'dio']);
-
-function isDiagramFile(filePath: string): boolean {
-  const ext = filePath.toLowerCase().split('.').pop() || '';
-  return DIAGRAM_EXTENSIONS.has(ext);
-}
-
 // Image viewer state (bottom panel)
 let imageZoom = 1;
 const imageViewerContainer = document.getElementById('image-viewer-container') as HTMLDivElement;
@@ -13997,138 +14148,6 @@ imageViewerContainer?.addEventListener('wheel', (e) => {
   const delta = e.deltaY > 0 ? 0.9 : 1.1;
   setImageZoom(imageZoom * delta);
 }, { passive: false });
-
-// ── Diagram Viewer ───────────────────────────────────────────────────────────
-let diagramZoom = 1;
-let currentDiagramPath = '';
-
-function openDiagramInPanel(filePath: string): void {
-  currentDiagramPath = filePath;
-  const ext = filePath.toLowerCase().split('.').pop() || '';
-  const fileName = filePath.split(/[\\/]/).pop() || filePath;
-
-  const contentEl = document.getElementById('diagram-content') as HTMLDivElement;
-  const loadingEl = document.getElementById('diagram-loading') as HTMLDivElement;
-  const errorEl = document.getElementById('diagram-error') as HTMLDivElement;
-  const fileNameEl = document.getElementById('diagram-file-name') as HTMLSpanElement;
-  const badgeEl = document.getElementById('diagram-type-badge') as HTMLSpanElement;
-  const zoomEl = document.getElementById('diagram-zoom-level') as HTMLSpanElement;
-
-  if (!contentEl) return;
-
-  // Reset
-  diagramZoom = 1;
-  if (zoomEl) zoomEl.textContent = '100%';
-  if (fileNameEl) fileNameEl.textContent = fileName;
-
-  // Set badge
-  if (badgeEl) {
-    if (ext === 'drawio' || ext === 'dio') {
-      badgeEl.textContent = 'Draw.io';
-      badgeEl.style.background = '#f08705';
-    } else {
-      badgeEl.textContent = 'PlantUML';
-      badgeEl.style.background = '#7b5ea7';
-    }
-  }
-
-  // Show loading
-  contentEl.innerHTML = '';
-  loadingEl?.classList.remove('hidden');
-  errorEl?.classList.add('hidden');
-
-  // Switch to diagram tab
-  toggleBottomTab('diagram');
-
-  // Render
-  (window as any).api.renderDiagram(filePath).then((result: any) => {
-    loadingEl?.classList.add('hidden');
-
-    if (!result.success) {
-      if (errorEl) {
-        errorEl.textContent = result.error || 'Failed to render diagram';
-        errorEl.classList.remove('hidden');
-      }
-      return;
-    }
-
-    if (result.type === 'svg') {
-      // PlantUML: inject SVG directly
-      const wrapper = document.createElement('div');
-      wrapper.className = 'diagram-svg-wrapper';
-      wrapper.innerHTML = result.content;
-      contentEl.innerHTML = '';
-      contentEl.appendChild(wrapper);
-    } else if (result.type === 'drawio') {
-      // Draw.io: create iframe with viewer
-      renderDrawioInIframe(contentEl, result.content);
-    }
-  }).catch((err: any) => {
-    loadingEl?.classList.add('hidden');
-    if (errorEl) {
-      errorEl.textContent = `Error: ${err.message || err}`;
-      errorEl.classList.remove('hidden');
-    }
-  });
-}
-
-function renderDrawioInIframe(container: HTMLDivElement, xmlContent: string): void {
-  // Create self-contained HTML with draw.io viewer
-  const escapedXml = xmlContent.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-
-  const html = `<!DOCTYPE html>
-<html><head>
-<meta charset="UTF-8">
-<style>
-  body { margin: 0; padding: 0; overflow: hidden; background: #fff; }
-  .mxgraph { width: 100%; height: 100vh; }
-</style>
-</head><body>
-<div class="mxgraph" style="max-width:100%;border:none;" data-mxgraph='{"highlight":"#0000ff","nav":true,"resize":true,"xml":"${escapedXml}"}'></div>
-<script src="https://viewer.diagrams.net/js/viewer-static.min.js"><\/script>
-</body></html>`;
-
-  const blob = new Blob([html], { type: 'text/html' });
-  const blobUrl = URL.createObjectURL(blob);
-
-  const iframe = document.createElement('iframe');
-  iframe.src = blobUrl;
-  iframe.style.width = '100%';
-  iframe.style.height = '100%';
-  iframe.style.border = 'none';
-  iframe.style.background = '#fff';
-  iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
-  iframe.onload = () => URL.revokeObjectURL(blobUrl);
-
-  container.innerHTML = '';
-  container.appendChild(iframe);
-}
-
-// Diagram zoom controls
-function setupDiagramControls(): void {
-  const zoomIn = document.getElementById('btn-diagram-zoom-in');
-  const zoomOut = document.getElementById('btn-diagram-zoom-out');
-  const zoomFit = document.getElementById('btn-diagram-zoom-fit');
-  const refresh = document.getElementById('btn-diagram-refresh');
-  const zoomEl = document.getElementById('diagram-zoom-level');
-
-  function updateDiagramZoom(): void {
-    const wrapper = document.querySelector('.diagram-svg-wrapper') as HTMLElement;
-    if (wrapper && zoomEl) {
-      wrapper.style.transform = `scale(${diagramZoom})`;
-      zoomEl.textContent = `${Math.round(diagramZoom * 100)}%`;
-      const contentEl = document.getElementById('diagram-content');
-      if (contentEl) {
-        contentEl.classList.toggle('zoomed', diagramZoom > 1);
-      }
-    }
-  }
-
-  zoomIn?.addEventListener('click', () => { diagramZoom = Math.min(diagramZoom * 1.25, 5); updateDiagramZoom(); });
-  zoomOut?.addEventListener('click', () => { diagramZoom = Math.max(diagramZoom / 1.25, 0.1); updateDiagramZoom(); });
-  zoomFit?.addEventListener('click', () => { diagramZoom = 1; updateDiagramZoom(); });
-  refresh?.addEventListener('click', () => { if (currentDiagramPath) openDiagramInPanel(currentDiagramPath); });
-}
 
 // ─── File Display Mode System ────────────────────────────────────────────────
 //
@@ -16163,7 +16182,10 @@ function init(): void {
   setupSectionToggles();
   setupModalCloseHandlers();
   setupKeyboardShortcuts();
-  setupDiagramControls();
+
+  // Optional features (toggleable panels) — wire gear + apply saved visibility
+  document.getElementById('btn-features')?.addEventListener('click', openFeaturesModal);
+  applyFeatureVisibility();
 
   // Load initial data
   loadBookmarks();
