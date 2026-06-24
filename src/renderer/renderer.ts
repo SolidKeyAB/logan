@@ -4862,6 +4862,7 @@ function updateFolderSearchState(): void {
 async function performFolderSearch(): Promise<void> {
   const pattern = elements.folderSearchInput.value.trim();
   if (!pattern || state.folders.length === 0) return;
+  folderSearchHistory?.add(pattern);
 
   state.isFolderSearching = true;
   state.folderSearchResults = [];
@@ -10918,6 +10919,55 @@ function navigateSearchHistory(direction: 'up' | 'down'): void {
   elements.searchInput.setSelectionRange(len, len);
 }
 
+// Reusable VSCode-style input history: gives any text input persistent Up/Down
+// recall (the main search box has its own copy above). Returns { add } to push
+// a submitted value. Self-wires the keydown/input listeners on the element.
+interface InputHistory { add: (value: string) => void; }
+function createInputHistory(input: HTMLInputElement, storageKey: string, max = 50): InputHistory {
+  let history: string[] = (() => {
+    try { return JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch { return []; }
+  })();
+  let idx = -1;      // -1 = not navigating (showing live input)
+  let stash = '';    // what was typed before navigation started
+
+  function add(value: string): void {
+    if (!value.trim()) return;
+    history = history.filter(p => p !== value);
+    history.unshift(value);
+    if (history.length > max) history = history.slice(0, max);
+    try { localStorage.setItem(storageKey, JSON.stringify(history)); } catch { /* quota */ }
+    idx = -1;
+  }
+
+  function navigate(direction: 'up' | 'down'): void {
+    if (history.length === 0) return;
+    if (direction === 'up') {
+      if (idx === -1) { stash = input.value; idx = 0; }
+      else if (idx < history.length - 1) idx++;
+      input.value = history[idx];
+    } else {
+      if (idx === -1) return;
+      if (idx === 0) { idx = -1; input.value = stash; }
+      else { idx--; input.value = history[idx]; }
+    }
+    const len = input.value.length;
+    input.setSelectionRange(len, len);
+  }
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      navigate(e.key === 'ArrowUp' ? 'up' : 'down');
+    }
+  });
+  // Manual typing resets the navigation pointer
+  input.addEventListener('input', () => { idx = -1; });
+
+  return { add };
+}
+
+let folderSearchHistory: InputHistory | null = null;
+
 async function performSearch(): Promise<void> {
   const pattern = elements.searchInput.value;
   if (!pattern || !state.filePath) return;
@@ -15499,6 +15549,7 @@ function init(): void {
   elements.btnFolderSearch.addEventListener('click', performFolderSearch);
   elements.btnFolderSearchCancel.addEventListener('click', cancelFolderSearch);
   elements.btnFolderSearchClear.addEventListener('click', closeFolderSearchResults);
+  folderSearchHistory = createInputHistory(elements.folderSearchInput, 'logan-folder-search-history');
   elements.folderSearchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       performFolderSearch();
