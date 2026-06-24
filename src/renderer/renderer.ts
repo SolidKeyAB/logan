@@ -5986,6 +5986,48 @@ function renderCorrelateCell(body: HTMLDivElement, res: TrendCorrelateResult): v
   body.appendChild(grid);
 }
 
+// ─── Bottom Panel Content Zoom ───────────────────────────────────────────────
+// Independent of the log-area zoom: scales just the bottom panel body content
+// (Analysis/Trends/Chat/etc.) via CSS `zoom`, which keeps text crisp and the
+// proportions intact. The tab bar / header chrome stays fixed.
+
+const PANEL_ZOOM_MIN = 50;
+const PANEL_ZOOM_MAX = 200;
+const PANEL_ZOOM_STEP = 10;
+const PANEL_ZOOM_KEY = 'logan-panel-zoom';
+let bottomPanelZoom = 100; // percent
+
+function applyBottomPanelZoom(): void {
+  const body = document.querySelector('.bottom-panel-body') as HTMLElement | null;
+  if (body) (body.style as any).zoom = String(bottomPanelZoom / 100);
+  const label = document.getElementById('panel-zoom-level');
+  if (label) label.textContent = `${bottomPanelZoom}%`;
+}
+
+function setBottomPanelZoom(zoom: number, persist = true): void {
+  bottomPanelZoom = Math.max(PANEL_ZOOM_MIN, Math.min(PANEL_ZOOM_MAX, Math.round(zoom)));
+  applyBottomPanelZoom();
+  if (persist) localStorage.setItem(PANEL_ZOOM_KEY, String(bottomPanelZoom));
+}
+
+function initBottomPanelZoom(): void {
+  const saved = parseInt(localStorage.getItem(PANEL_ZOOM_KEY) || '', 10);
+  if (!Number.isNaN(saved)) bottomPanelZoom = Math.max(PANEL_ZOOM_MIN, Math.min(PANEL_ZOOM_MAX, saved));
+  applyBottomPanelZoom();
+
+  document.getElementById('btn-panel-zoom-in')?.addEventListener('click', () => setBottomPanelZoom(bottomPanelZoom + PANEL_ZOOM_STEP));
+  document.getElementById('btn-panel-zoom-out')?.addEventListener('click', () => setBottomPanelZoom(bottomPanelZoom - PANEL_ZOOM_STEP));
+  document.getElementById('panel-zoom-level')?.addEventListener('click', () => setBottomPanelZoom(100));
+
+  // Ctrl/Cmd + wheel over the panel body zooms it (matching the log area's feel).
+  const body = document.querySelector('.bottom-panel-body') as HTMLElement | null;
+  body?.addEventListener('wheel', (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    setBottomPanelZoom(bottomPanelZoom + (e.deltaY < 0 ? PANEL_ZOOM_STEP : -PANEL_ZOOM_STEP));
+  }, { passive: false });
+}
+
 // ─── Bottom Panel Color Picker ───────────────────────────────────────────────
 
 const PANEL_COLOR_DEFAULT = 'rgba(30, 30, 30, 0.95)';
@@ -15497,6 +15539,7 @@ function init(): void {
   // Bottom panel (tabbed) events
   elements.btnBottomPanelClose.addEventListener('click', closeBottomPanel);
   initBottomPanelColorPicker();
+  initBottomPanelZoom();
   // Right sidebar buttons
   elements.btnAnnotationsToggle.addEventListener('click', toggleAnnotations);
   elements.btnNotesToggle.addEventListener('click', () => toggleBottomTab('notes'));
