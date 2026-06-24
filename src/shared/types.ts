@@ -371,8 +371,6 @@ export const IPC = {
   TRACEBACK: 'traceback',
   // Time Align (batch timestamp fetch)
   GET_LINE_TIMESTAMPS: 'get-line-timestamps',
-  // Diagram rendering
-  RENDER_DIAGRAM: 'render-diagram',
   READ_FILE_TEXT: 'read-file-text',
   // Trends notebook
   TREND_DISCOVER_FIELDS: 'trend-discover-fields',
