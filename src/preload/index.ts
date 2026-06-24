@@ -472,6 +472,13 @@ const api = {
     return () => ipcRenderer.removeListener('open-file-from-cli', handler);
   },
 
+  // CLI folder open (launch with a directory as initial context)
+  onOpenFolderFromCli: (callback: (folderPath: string) => void): (() => void) => {
+    const handler = (_: any, folderPath: string) => callback(folderPath);
+    ipcRenderer.on('open-folder-from-cli', handler);
+    return () => ipcRenderer.removeListener('open-folder-from-cli', handler);
+  },
+
   onFileChanged: (callback: (filePath: string) => void): (() => void) => {
     const handler = (_: any, filePath: string) => callback(filePath);
     ipcRenderer.on('file-changed', handler);

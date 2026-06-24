@@ -745,27 +745,40 @@ if (process.platform !== 'linux') {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
     }
-    const filePath = extractFilePathFromArgv(argv);
-    if (filePath && mainWindow) {
-      mainWindow.webContents.send('open-file-from-cli', filePath);
+    const target = extractPathFromArgv(argv);
+    if (target && mainWindow) {
+      mainWindow.webContents.send(target.isDirectory ? 'open-folder-from-cli' : 'open-file-from-cli', target.path);
     }
   });
 }
 
-function extractFilePathFromArgv(argv: string[]): string | null {
-  // argv layout: [electron, app-path, ...flags, --, filePath]
-  // or: [electron, app-path, filePath] (no --)
+// Resolve a launch argument to a file OR directory to open as initial context.
+// e.g. `logan myfile.log` (file) or `logan ./logs/` (folder).
+function extractPathFromArgv(argv: string[]): { path: string; isDirectory: boolean } | null {
+  const classify = (p: string): { path: string; isDirectory: boolean } | null => {
+    try {
+      const st = fs.statSync(p);
+      if (st.isDirectory()) return { path: p, isDirectory: true };
+      if (st.isFile()) return { path: p, isDirectory: false };
+    } catch { /* not a real path */ }
+    return null;
+  };
+
+  // argv layout: [electron, app-path, ...flags, --, path]
+  // or: [electron, app-path, path] (no --)
   const dashDashIdx = argv.indexOf('--');
   if (dashDashIdx !== -1 && dashDashIdx + 1 < argv.length) {
-    return argv[dashDashIdx + 1];
+    const c = classify(argv[dashDashIdx + 1]);
+    if (c) return c;
   }
-  // Fallback: last arg that looks like a file path (not a flag, not electron path)
+  // Fallback: last arg that resolves to a real file or directory.
   for (let i = argv.length - 1; i >= 1; i--) {
     const arg = argv[i];
     if (arg.startsWith('-')) continue;
     // Skip the electron binary and app directory
     if (arg.includes('electron') || arg.includes('node_modules')) continue;
-    if (fs.existsSync(arg) && fs.statSync(arg).isFile()) return arg;
+    const c = classify(arg);
+    if (c) return c;
   }
   return null;
 }
@@ -788,13 +801,17 @@ app.whenReady().then(() => {
     } catch { /* non-critical — dialog still works on retry */ }
   }
 
-  // Check if launched with a file path argument (e.g. `logan myfile.log`)
-  const cliFilePath = extractFilePathFromArgv(process.argv);
-  if (cliFilePath && mainWindow) {
+  // Check if launched with a file OR folder argument
+  // (e.g. `logan myfile.log` or `logan ./logs/`).
+  const cliTarget = extractPathFromArgv(process.argv);
+  if (cliTarget && mainWindow) {
     mainWindow.once('ready-to-show', () => {
       // Small delay to let renderer finish init
       setTimeout(() => {
-        mainWindow?.webContents.send('open-file-from-cli', cliFilePath);
+        mainWindow?.webContents.send(
+          cliTarget.isDirectory ? 'open-folder-from-cli' : 'open-file-from-cli',
+          cliTarget.path,
+        );
       }, 300);
     });
   }
