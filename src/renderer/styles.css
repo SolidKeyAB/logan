@@ -4243,6 +4243,36 @@ kbd {
   display: none;
 }
 
+/* Auto-contrast: when the user picks a light panel background, renderer.ts adds
+   .panel-light-bg (from the colour's WCAG luminance). We re-point the panel's text
+   variables to dark values so everything using var(--text-*) flips automatically,
+   plus fix the few hardcoded light-on-transparent spots. Dark backgrounds keep the
+   default light text untouched (no .panel-light-bg class → zero change). */
+.bottom-panel.panel-light-bg {
+  --text-primary: #1a1a1a;
+  --text-secondary: #3a3a3a;
+  --text-muted: #585858;
+  --text-muted-bright: #404040;
+  color: #1a1a1a;
+}
+
+.bottom-panel.panel-light-bg .bottom-tab-btn.active {
+  color: #000000;
+}
+
+.bottom-panel.panel-light-bg .bottom-panel-header {
+  border-bottom-color: rgba(0, 0, 0, 0.18);
+}
+
+/* Notes textarea is transparent over the panel bg with hardcoded light text. */
+.bottom-panel.panel-light-bg .notes-textarea {
+  color: #1a1a1a;
+}
+
+.bottom-panel.panel-light-bg .notes-textarea::placeholder {
+  color: #5a5a5a;
+}
+
 .bottom-panel-resize-handle {
   height: 6px;
   cursor: ns-resize;
@@ -4712,6 +4742,47 @@ kbd {
   font-weight: 600;
   opacity: 0.7;
   margin-bottom: 2px;
+}
+
+/* Undelivered user message (agent disconnected) */
+.chat-message.from-user.failed {
+  background: #5a3a3a;
+  opacity: 0.92;
+  border: 1px solid #a05050;
+}
+
+.chat-msg-failed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 5px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.chat-msg-failed-note {
+  font-size: 10px;
+  color: #ffbdbd;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-msg-resend {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: #a05050;
+  border: none;
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.chat-msg-resend:hover {
+  background: #b86060;
 }
 
 .chat-message .chat-text {
@@ -7417,100 +7488,58 @@ kbd {
 .traceback-category-tag.cat-related { background: rgba(152,195,121,0.15); color: #98c379; }
 .traceback-category-tag.cat-context { background: rgba(92,99,112,0.15); color: #5c6370; }
 
-/* ─── Diagram Viewer ──────────────────────────────────────────────────────── */
-.diagram-panel-body {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  overflow: hidden;
+/* ─── Optional Features (toggleable) ──────────────────────────────────────── */
+.feature-hidden {
+  display: none !important;
 }
 
-.diagram-viewer-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--border-color);
-  flex-shrink: 0;
+.features-modal-content {
+  max-width: 460px;
+  width: 92%;
 }
-
-.diagram-type-badge {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: var(--accent-color);
-  color: #fff;
-  text-transform: uppercase;
-}
-
-.diagram-content {
-  flex: 1;
-  overflow: auto;
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-primary);
-}
-
-.diagram-content svg {
-  max-width: 100%;
-  height: auto;
-}
-
-.diagram-content.zoomed {
-  align-items: flex-start;
-  justify-content: flex-start;
-}
-
-.diagram-content .diagram-svg-wrapper {
-  transform-origin: top left;
-  transition: transform 0.1s ease;
-}
-
-.diagram-content iframe {
-  width: 100%;
-  height: 100%;
-  border: none;
-  background: #fff;
-}
-
-.diagram-loading {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  background: var(--bg-primary);
+.features-modal-intro {
+  font-size: 12px;
   color: var(--text-secondary);
-  font-size: 13px;
-  z-index: 5;
+  margin: 0 0 12px 0;
+  line-height: 1.5;
 }
-
-.diagram-spinner {
-  width: 32px;
-  height: 32px;
-  border: 3px solid var(--border-color);
-  border-top-color: var(--accent-color);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-.diagram-error {
-  position: absolute;
-  inset: 0;
+.features-list {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: var(--bg-primary);
-  color: var(--error-color);
+  flex-direction: column;
+  gap: 4px;
+}
+.features-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  cursor: pointer;
+}
+.features-row:hover {
+  border-color: var(--accent-hover);
+}
+.features-row input[type="checkbox"] {
+  margin-top: 2px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.features-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.features-row-label {
   font-size: 13px;
-  text-align: center;
-  z-index: 5;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.features-row-desc {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
 }
 
 /* ─── Trends Notebook ─────────────────────────────────────────────────────── */
