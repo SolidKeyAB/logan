@@ -513,6 +513,7 @@ interface Api {
 
   // CLI file open
   onOpenFileFromCli: (callback: (filePath: string) => void) => () => void;
+  onOpenFolderFromCli: (callback: (folderPath: string) => void) => () => void;
   onFileChanged: (callback: (filePath: string) => void) => () => void;
   reloadFile: (filePath: string) => Promise<{ success: boolean }>;
 

@@ -4527,12 +4527,14 @@ function mapFolderEntries(entries: any[]): LocalFolderFile[] {
   }));
 }
 
-async function openFolder(): Promise<void> {
-  const folderPath = await window.api.openFolderDialog();
+// Add a folder to the folders panel by path (reused by the open dialog and the
+// `logan <folder>` CLI launch path). Reveals the folders panel when done.
+async function addFolderByPath(folderPath: string): Promise<void> {
   if (!folderPath) return;
-
-  if (state.folders.some((f) => f.path === folderPath)) return;
-
+  if (state.folders.some((f) => f.path === folderPath)) {
+    if (activePanel !== 'folders') openPanel('folders');
+    return;
+  }
   const result = await window.api.readFolder(folderPath);
   if (result.success && result.files) {
     const folderName = folderPath.split(/[\\/]/).pop() || folderPath;
@@ -4544,7 +4546,14 @@ async function openFolder(): Promise<void> {
     });
     renderFolderTree();
     updateFolderSearchState();
+    if (activePanel !== 'folders') openPanel('folders');
   }
+}
+
+async function openFolder(): Promise<void> {
+  const folderPath = await window.api.openFolderDialog();
+  if (!folderPath) return;
+  await addFolderByPath(folderPath);
 }
 
 function removeFolder(folderPath: string): void {
@@ -15419,6 +15428,11 @@ function init(): void {
   // CLI file open — allow main process to open a file (from `logan myfile.log` or API)
   window.api.onOpenFileFromCli((filePath: string) => {
     loadFile(filePath);
+  });
+
+  // CLI folder open — launch with a directory as initial context (`logan ./logs/`)
+  window.api.onOpenFolderFromCli((folderPath: string) => {
+    void addFolderByPath(folderPath);
   });
 
   // File changed externally — show banner or auto-reload markdown

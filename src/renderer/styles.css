@@ -5487,8 +5487,12 @@ kbd {
 
 /* Markdown Preview */
 /* When markdown preview is active, the log viewer wrapper is hidden via CSS class
-   (not inline style) so there is no risk of it leaking across file loads */
-.editor-container.markdown-active .log-viewer-wrapper { display: none !important; }
+   (not inline style) so there is no risk of it leaking across file loads.
+   Also hide the welcome/empty-state overlay (logo + Open File) — it's only
+   cleared on the log-file path, so opening a .md as the first file would
+   otherwise leave it floating on top of the rendered markdown. */
+.editor-container.markdown-active .log-viewer-wrapper,
+.editor-container.markdown-active #welcome-message { display: none !important; }
 
 .markdown-preview {
   position: absolute;
