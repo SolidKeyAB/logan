@@ -363,9 +363,215 @@ export class ProtobufAdapter implements SourceAdapter {
   }
 }
 
+/**
+ * ── ASAM MDF4 (MF4) ──────────────────────────────────────────────────────────
+ * MF4 is a binary automotive measurement format: channel groups of named numeric
+ * signals sampled against a time master. There's no self-describing schema needed
+ * (the block tree carries channel metadata), so needsSchema:false.
+ *
+ * This is a MINIMAL, dependency-free MDF 4.x reader for the COMMON case:
+ *   • uncompressed data (##DT — not ##DZ/##DL/##HL compressed/linked blocks),
+ *   • sorted groups (one channel group per data group),
+ *   • fixed-length numeric channels (int/uint/float, LE/BE),
+ *   • raw values (channel conversions/##CC are NOT applied yet).
+ * Anything outside that is reported inline (a `[mf4] …` line) and skipped rather
+ * than producing wrong numbers — validate against a real .mf4 before relying on it.
+ *
+ * Each record becomes a synthetic line `t=<master> <name>=<value> …` so the
+ * existing viewer + Trends field-discovery chart the signals with zero new UI.
+ */
+
+interface Mdf4Block { id: string; links: number[]; dataStart: number; dataEnd: number; }
+
+function readMdf4Block(buf: Buffer, offset: number): Mdf4Block {
+  const id = buf.toString('latin1', offset, offset + 4); // e.g. "##HD"
+  const length = Number(buf.readBigUInt64LE(offset + 8));
+  const linkCount = Number(buf.readBigUInt64LE(offset + 16));
+  const links: number[] = [];
+  let p = offset + 24;
+  for (let i = 0; i < linkCount; i++) { links.push(Number(buf.readBigUInt64LE(p))); p += 8; }
+  return { id, links, dataStart: p, dataEnd: offset + length };
+}
+
+/** Read a ##TX/##MD block's text (null-terminated UTF-8). 0 link → ''. */
+function readMdf4Text(buf: Buffer, offset: number): string {
+  if (!offset) return '';
+  try {
+    const b = readMdf4Block(buf, offset);
+    if (b.id !== '##TX' && b.id !== '##MD') return '';
+    let s = buf.toString('utf8', b.dataStart, b.dataEnd);
+    const nul = s.indexOf('\0');
+    if (nul >= 0) s = s.slice(0, nul);
+    return s.trim();
+  } catch { return ''; }
+}
+
+interface Mdf4Channel { name: string; type: number; dataType: number; bitOffset: number; byteOffset: number; bitCount: number; }
+
+/** Decode one channel's value from a record slice. Returns null if unsupported. */
+function decodeMdf4Value(rec: Buffer, base: number, cn: Mdf4Channel): number | null {
+  const off = base + cn.byteOffset;
+  const { dataType: dt, bitCount: bits, bitOffset } = cn;
+  if (off < 0 || off >= rec.length) return null;
+
+  // Byte-aligned, whole-byte fields → use Buffer's native readers.
+  if (bitOffset === 0 && bits % 8 === 0) {
+    const n = bits / 8;
+    if (off + n > rec.length) return null;
+    try {
+      switch (dt) {
+        case 0: return n <= 6 ? rec.readUIntLE(off, n) : Number(rec.readBigUInt64LE(off)); // uint LE
+        case 1: return n <= 6 ? rec.readUIntBE(off, n) : Number(rec.readBigUInt64BE(off)); // uint BE
+        case 2: return n <= 6 ? rec.readIntLE(off, n) : Number(rec.readBigInt64LE(off));   // int LE
+        case 3: return n <= 6 ? rec.readIntBE(off, n) : Number(rec.readBigInt64BE(off));   // int BE
+        case 4: return n === 4 ? rec.readFloatLE(off) : n === 8 ? rec.readDoubleLE(off) : null; // float LE
+        case 5: return n === 4 ? rec.readFloatBE(off) : n === 8 ? rec.readDoubleBE(off) : null; // float BE
+        default: return null; // strings/bytes/complex — not charted
+      }
+    } catch { return null; }
+  }
+
+  // Non-aligned integer bit-field (little-endian only).
+  if (dt === 0 || dt === 2) {
+    const totalBits = bitOffset + bits;
+    const n = Math.ceil(totalBits / 8);
+    if (n > 8 || off + n > rec.length) return null;
+    let v = 0n;
+    for (let i = 0; i < n; i++) v |= BigInt(rec[off + i]) << BigInt(8 * i);
+    v = (v >> BigInt(bitOffset)) & ((1n << BigInt(bits)) - 1n);
+    if (dt === 2 && (v & (1n << BigInt(bits - 1)))) v -= (1n << BigInt(bits)); // sign-extend
+    return Number(v);
+  }
+  return null;
+}
+
+export class Mf4Adapter implements SourceAdapter {
+  readonly id = 'mf4';
+  readonly label = 'ASAM MDF4 (MF4)';
+  readonly capabilities: AdapterCapabilities = {
+    isBinary: true,
+    supportsAppend: false,
+    needsSchema: false,
+    supportsColumnFilter: false,
+  };
+
+  detect(filePath: string, headBytes: Buffer): boolean {
+    if (!/\.(mf4|mdf)$/i.test(filePath)) return false;
+    // MDF IDBLOCK starts with the 8-char file id "MDF     ".
+    return headBytes.length >= 8 && headBytes.toString('latin1', 0, 3) === 'MDF';
+  }
+
+  async normalize(
+    filePath: string,
+    onProgress?: (percent: number) => void
+  ): Promise<NormalizedSource> {
+    const buf = fs.readFileSync(filePath);
+    if (buf.length < 64 || buf.toString('latin1', 0, 3) !== 'MDF') {
+      throw new Error(`Not an MDF/MF4 file: ${path.basename(filePath)}`);
+    }
+
+    const outPath = path.join(
+      os.tmpdir(),
+      `logan-mf4-${process.pid}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}.norm`
+    );
+
+    await new Promise<void>((resolve, reject) => {
+      const out = fs.createWriteStream(outPath, { encoding: 'utf-8' });
+      out.on('error', reject);
+      let first = false;
+      const writeLine = (line: string) => { out.write(first ? '\n' + line : line); first = true; };
+
+      try {
+        const hd = readMdf4Block(buf, 64); // HDBLOCK directly after the 64-byte IDBLOCK
+        let dgOff = hd.links[0] || 0;       // hd_dg_first
+        let totalRecords = 0;
+
+        while (dgOff) {
+          const dg = readMdf4Block(buf, dgOff);
+          const recIdSize = buf.readUInt8(dg.dataStart);
+          const cgFirst = dg.links[1];
+          const dgData = dg.links[2];
+
+          if (cgFirst) {
+            const cg = readMdf4Block(buf, cgFirst);
+            if (cg.links[0]) writeLine('[mf4] note: data group has multiple channel groups; reading the first only');
+            const cycleCount = Number(buf.readBigUInt64LE(cg.dataStart + 8));
+            const cgFlags = buf.readUInt16LE(cg.dataStart + 16);
+            const dataBytes = buf.readUInt32LE(cg.dataStart + 24);
+            const invalBytes = buf.readUInt32LE(cg.dataStart + 28);
+
+            if (cgFlags & 0x1) {
+              writeLine('[mf4] variable-length (VLSD) channel group not supported — skipped');
+            } else {
+              // Collect channels.
+              const channels: Mdf4Channel[] = [];
+              let master: Mdf4Channel | null = null;
+              let cnOff = cg.links[1]; // cg_cn_first
+              while (cnOff) {
+                const cn = readMdf4Block(buf, cnOff);
+                const d = cn.dataStart;
+                const ch: Mdf4Channel = {
+                  name: readMdf4Text(buf, cn.links[2]) || `ch${buf.readUInt32LE(d + 4)}`,
+                  type: buf.readUInt8(d),
+                  dataType: buf.readUInt8(d + 2),
+                  bitOffset: buf.readUInt8(d + 3),
+                  byteOffset: buf.readUInt32LE(d + 4),
+                  bitCount: buf.readUInt32LE(d + 8),
+                };
+                if (ch.type === 2 || ch.type === 3) master = ch; // master / virtual master
+                else channels.push(ch);
+                cnOff = cn.links[0]; // cn_cn_next
+              }
+
+              const dataBlock = dgData ? readMdf4Block(buf, dgData) : null;
+              if (!dataBlock || dataBlock.id !== '##DT') {
+                writeLine(`[mf4] data block ${dataBlock ? dataBlock.id : 'missing'} not supported (only uncompressed ##DT) — skipped`);
+              } else {
+                const recSize = recIdSize + dataBytes + invalBytes;
+                for (let i = 0; i < cycleCount; i++) {
+                  const base = dataBlock.dataStart + i * recSize + recIdSize;
+                  if (base + dataBytes > dataBlock.dataEnd) break;
+                  const rec = buf;
+                  const parts: string[] = [];
+                  if (master) {
+                    const mv = decodeMdf4Value(rec, base, master);
+                    if (mv !== null) parts.push(`t=${mv}`);
+                  }
+                  for (const ch of channels) {
+                    const v = decodeMdf4Value(rec, base, ch);
+                    if (v !== null) parts.push(`${ch.name}=${v}`);
+                  }
+                  if (parts.length) writeLine(parts.join(' '));
+                  if (++totalRecords % 5000 === 0 && onProgress) {
+                    onProgress(Math.min(99, Math.round((dgOff / buf.length) * 100)));
+                  }
+                }
+              }
+            }
+          }
+          dgOff = dg.links[0]; // dg_dg_next
+        }
+
+        if (!first) writeLine('[mf4] no readable records found (file may use compression or an unsupported layout)');
+      } catch (err) {
+        writeLine(`[mf4] parse stopped: ${String(err)}`);
+      }
+      out.end(() => resolve());
+    });
+
+    onProgress?.(100);
+    return {
+      path: outPath,
+      capabilities: this.capabilities,
+      cleanup: () => { try { fs.unlinkSync(outPath); } catch { /* already gone */ } },
+    };
+  }
+}
+
 const textAdapter = new TextAdapter();
 const jsonlAdapter = new JsonlAdapter();
 const protobufAdapter = new ProtobufAdapter();
+const mf4Adapter = new Mf4Adapter();
 
 /**
  * Adapters in priority order, most-specific first; TextAdapter is the final
@@ -375,6 +581,7 @@ const protobufAdapter = new ProtobufAdapter();
 export const adapterRegistry: SourceAdapter[] = [
   jsonlAdapter,
   protobufAdapter,
+  mf4Adapter,
   textAdapter,
 ];
 
