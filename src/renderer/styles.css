@@ -4374,6 +4374,57 @@ kbd {
   color: #fff;
 }
 
+/* ── Bottom panel content zoom ──────────────────────────────────────────── */
+.bottom-panel-zoom {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin: 0 2px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.bottom-panel-zoom-btn,
+.bottom-panel-zoom-level {
+  background: none;
+  border: none;
+  color: #aaa;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 6px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.bottom-panel-zoom-level {
+  font-size: 11px;
+  min-width: 38px;
+  text-align: center;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.bottom-panel-zoom-btn:hover,
+.bottom-panel-zoom-level:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Light-bg auto-contrast for the zoom controls */
+.bottom-panel.panel-light-bg .bottom-panel-zoom {
+  border-color: rgba(0, 0, 0, 0.22);
+}
+.bottom-panel.panel-light-bg .bottom-panel-zoom-btn,
+.bottom-panel.panel-light-bg .bottom-panel-zoom-level {
+  color: #2a2a2a;
+}
+.bottom-panel.panel-light-bg .bottom-panel-zoom-btn:hover,
+.bottom-panel.panel-light-bg .bottom-panel-zoom-level:hover {
+  color: #000;
+  background: rgba(0, 0, 0, 0.08);
+}
+
 /* ── Panel color picker ─────────────────────────────────────────────────── */
 .bottom-panel-color-btn {
   background: none;
@@ -5452,6 +5503,10 @@ kbd {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
   font-size: 15px;
   line-height: 1.6;
+  /* body sets user-select:none; re-enable so rendered markdown is selectable/copyable */
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
 }
 
 .markdown-preview.hidden {
