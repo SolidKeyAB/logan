@@ -623,6 +623,9 @@ interface Api {
   trendTransitions: (options: { field: string; startLine?: number; endLine?: number; maxTransitions?: number; pattern?: string; patternFlags?: string }) => Promise<{ success: boolean; error?: string } & Partial<TrendTransitionsResult>>;
   trendCorrelate: (options: { field: string; event: string; startLine?: number; endLine?: number; pattern?: string; patternFlags?: string }) => Promise<{ success: boolean; error?: string } & Partial<TrendCorrelateResult>>;
 
+  // Guided triage
+  triageRecipe: (options: { symptom: string; domain?: string; component?: string; sinceLine?: number; field?: string; baselineId?: string; maxFindings?: number; pin?: boolean }) => Promise<{ success: boolean; error?: string; [key: string]: any }>;
+
   // Window controls
   windowMinimize: () => Promise<void>;
   windowMaximize: () => Promise<void>;

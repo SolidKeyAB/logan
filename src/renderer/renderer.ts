@@ -5503,6 +5503,9 @@ function openBottomTab(tabId: string): void {
   if (tabId === 'trends') {
     initTrendsPanel();
   }
+  if (tabId === 'investigate') {
+    initInvestigatePanel();
+  }
   if (tabId === 'time-align') {
     if (state.timeAlignTimestamps.size === 0 && state.searchConfigResults.size > 0) {
       buildTimeAlignData();
@@ -5602,6 +5605,120 @@ function openFeaturesModal(): void {
     list.appendChild(row);
   }
   document.getElementById('features-modal')?.classList.remove('hidden');
+}
+
+// ─── Investigate (Guided Triage) ─────────────────────────────────────────────
+// Symptom-first root-cause finding. Each symptom runs the shared recipe engine
+// (src/mcp-server/recipes.ts via window.api.triageRecipe) which composes existing
+// LOGAN primitives, pins findings, and returns a compact result — the SAME engine
+// the MCP agent uses, so panel and agent never diverge. Spec: docs/TRIAGE_GUIDE.md.
+
+interface SymptomDef { id: string; label: string; icon: string; hint: string; }
+const INVESTIGATE_SYMPTOMS: SymptomDef[] = [
+  { id: 'crash', label: 'It crashed', icon: '💥', hint: 'fatal errors, exceptions, stack traces' },
+  { id: 'hang', label: 'It froze', icon: '🧊', hint: 'biggest time gaps / silences' },
+  { id: 'slow', label: "It's slow", icon: '🐢', hint: 'latency / duration spikes' },
+  { id: 'error-storm', label: 'Error storm', icon: '🌩️', hint: 'failing components, error bursts' },
+  { id: 'wont-start', label: "Won't start", icon: '🚫', hint: 'config / init / startup failures' },
+  { id: 'conn-drops', label: 'Connection drops', icon: '🔌', hint: 'disconnect / retry / timeout' },
+  { id: 'flaky', label: 'Intermittent', icon: '🎲', hint: 'a value that flips (needs a field)' },
+  { id: 'wrong-value', label: 'Wrong value', icon: '❓', hint: 'where a value changed (needs a field)' },
+];
+
+let investigatePanelInited = false;
+
+function initInvestigatePanel(): void {
+  if (investigatePanelInited) return;
+  investigatePanelInited = true;
+  const bar = document.getElementById('investigate-symptoms');
+  if (!bar) return;
+  for (const s of INVESTIGATE_SYMPTOMS) {
+    const btn = document.createElement('button');
+    btn.className = 'investigate-symptom-btn secondary-btn small';
+    btn.dataset.symptom = s.id;
+    btn.title = s.hint;
+    btn.innerHTML = `<span class="sym-icon">${s.icon}</span> ${escapeHtml(s.label)}`;
+    btn.addEventListener('click', () => { void runInvestigateRecipe(s.id); });
+    bar.appendChild(btn);
+  }
+}
+
+async function runInvestigateRecipe(symptom: string, opts: { field?: string; component?: string } = {}): Promise<void> {
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  const results = document.getElementById('investigate-results');
+  if (results) results.innerHTML = '<p class="placeholder">Running recipe…</p>';
+  document.querySelectorAll('.investigate-symptom-btn').forEach(b => {
+    b.classList.toggle('active', (b as HTMLElement).dataset.symptom === symptom);
+  });
+  try {
+    const res = await window.api.triageRecipe({ symptom, pin: true, ...opts });
+    if (!res.success) {
+      if (results) results.innerHTML = `<p class="placeholder">${escapeHtml(res.error || 'Recipe failed')}</p>`;
+      return;
+    }
+    renderInvestigateResult(res);
+  } catch (e) {
+    if (results) results.innerHTML = `<p class="placeholder">${escapeHtml(String(e))}</p>`;
+  }
+}
+
+function renderInvestigateResult(res: any): void {
+  const container = document.getElementById('investigate-results');
+  if (!container) return;
+  const findings: any[] = res.findings || [];
+  const nextQuestions: any[] = res.nextQuestions || [];
+  const sevClass = (s: string) => s === 'error' ? 'sev-error' : s === 'warning' ? 'sev-warning' : 'sev-info';
+
+  let html = `<div class="investigate-summary">${escapeHtml(res.summary || '')} <span class="investigate-domain">domain: ${escapeHtml(res.domain || 'generic')}</span></div>`;
+
+  if (findings.length === 0) {
+    html += '<p class="placeholder">No findings for this symptom.</p>';
+  } else {
+    html += '<ul class="investigate-findings">';
+    for (const f of findings) {
+      const range = f.endLine && f.endLine > f.lineNumber ? `${f.lineNumber}–${f.endLine}` : `${f.lineNumber}`;
+      html += `<li class="investigate-finding ${sevClass(f.severity)}" data-line="${f.lineNumber}">`
+        + `<span class="finding-line">L${escapeHtml(range)}</span>`
+        + `<span class="finding-title">${escapeHtml(f.title || '')}</span>`
+        + (f.sample ? `<span class="finding-sample">${escapeHtml(f.sample)}</span>` : '')
+        + '</li>';
+    }
+    html += '</ul>';
+  }
+
+  // Surface the ONE narrowing question; field/component get an inline re-run input.
+  for (const q of nextQuestions) {
+    if (q.id === 'field' || q.id === 'component') {
+      html += `<div class="investigate-question"><label>${escapeHtml(q.ask)}</label>`
+        + `<input class="investigate-q-input trends-input" data-qid="${escapeHtml(q.id)}" data-symptom="${escapeHtml(res.symptom)}" type="text" placeholder="type a value, Enter to re-run">`
+        + '</div>';
+    } else {
+      html += `<div class="investigate-question"><span class="q-text">${escapeHtml(q.ask)}</span>${q.hint ? ` <span class="q-hint">${escapeHtml(q.hint)}</span>` : ''}</div>`;
+    }
+  }
+
+  container.innerHTML = html;
+
+  // Click a finding → jump to that line (findings are 1-based viewer lines).
+  container.querySelectorAll('.investigate-finding').forEach(el => {
+    el.addEventListener('click', () => {
+      const line1 = parseInt((el as HTMLElement).dataset.line || '0', 10);
+      if (line1 > 0) jumpToTrendLine(line1 - 1);
+    });
+  });
+
+  // Field/component input → re-run the recipe narrowed.
+  container.querySelectorAll('.investigate-q-input').forEach(inp => {
+    inp.addEventListener('keydown', (ev) => {
+      if ((ev as KeyboardEvent).key !== 'Enter') return;
+      const el = inp as HTMLInputElement;
+      const val = el.value.trim();
+      if (!val) return;
+      const symptom = el.dataset.symptom || res.symptom;
+      const narrow = el.dataset.qid === 'field' ? { field: val } : { component: val };
+      void runInvestigateRecipe(symptom, narrow);
+    });
+  });
 }
 
 // ─── Trends Notebook ─────────────────────────────────────────────────────────

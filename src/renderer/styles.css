@@ -7671,6 +7671,116 @@ kbd {
   overflow-y: auto;
 }
 
+/* ─── Investigate (Guided Triage) panel ─── */
+.investigate-toolbar {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.investigate-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-right: 4px;
+}
+.investigate-symptoms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.investigate-symptom-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.investigate-symptom-btn.active {
+  border-color: var(--accent-hover);
+  background: var(--bg-hover);
+}
+.investigate-symptom-btn .sym-icon {
+  font-size: 12px;
+}
+.investigate-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-top: 6px;
+}
+.investigate-summary {
+  font-size: 12px;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+.investigate-domain {
+  font-size: 10px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-left: 6px;
+}
+.investigate-findings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.investigate-finding {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 6px;
+  border-left: 3px solid var(--border-color);
+  border-radius: 3px;
+  cursor: pointer;
+  margin-bottom: 3px;
+}
+.investigate-finding:hover {
+  background: var(--bg-hover);
+}
+.investigate-finding.sev-error { border-left-color: #f48771; }
+.investigate-finding.sev-warning { border-left-color: #cca700; }
+.investigate-finding.sev-info { border-left-color: #569cd6; }
+.investigate-finding .finding-line {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  min-width: 56px;
+}
+.investigate-finding .finding-title {
+  font-size: 11px;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+.investigate-finding .finding-sample {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.investigate-question {
+  margin-top: 8px;
+  padding: 6px 8px;
+  background: var(--bg-secondary);
+  border: 1px dashed var(--border-color);
+  border-radius: 5px;
+  font-size: 11px;
+  color: var(--text-primary);
+}
+.investigate-question label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-secondary);
+}
+.investigate-question .q-hint {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.investigate-q-input {
+  width: 100%;
+  max-width: 280px;
+}
+
 .trend-cell {
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);

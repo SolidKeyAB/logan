@@ -1305,7 +1305,8 @@ server.tool(
 // Designed so the agent can guide the user with clear inputs/outputs and minimal tokens.
 server.tool(
   'logan_triage_recipe',
-  'Guided root-cause triage. Pick a SYMPTOM and LOGAN runs the matching recipe (a fixed chain of search/time-gaps/analyze/trends), pins findings in the viewer, and returns a compact result: findings (capped), the next question to ask the user, and 5-Whys drill-down moves. Use this to lead a non-expert from symptom → root cause without many manual tool calls. Symptoms: crash (it died), hang (it froze), slow, error-storm, wont-start, conn-drops, flaky, wrong-value.',
+  'Guided root-cause triage. Pick a SYMPTOM and LOGAN runs the matching recipe (a fixed chain of search/time-gaps/analyze/trends), pins findings in the viewer, and returns a compact result: findings (capped), the next question to ask the user, and 5-Whys drill-down moves. Symptoms: crash (it died), hang (it froze), slow, error-storm, wont-start, conn-drops, flaky, wrong-value. ' +
+    'HOW TO DRIVE IT: do not interrogate the user up front. Infer the symptom from what they already gave you — a chat sentence ("app froze after the update" → hang) or pasted ticket/bug text — and call this with that symptom. If you have nothing to go on, run logan_triage first and pick the symptom from the result, or ask ONE short question. Then read the returned "nextQuestions": ask the user only that one narrowing question (e.g. which component, or which field for flaky/wrong-value) and call again with the answer. Use "drillDown" to go deeper after a hit. This keeps it a short guided loop, not a questionnaire.',
   {
     symptom: z.enum(RECIPE_SYMPTOMS).describe('The user-reported symptom to investigate'),
     domain: z.enum(['auto', ...DOMAIN_IDS]).default('auto').describe('Log domain (auto-detects from content if "auto"). Changes only the keyword/field vocabulary, not the recipe.'),

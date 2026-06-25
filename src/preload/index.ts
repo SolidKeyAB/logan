@@ -86,6 +86,8 @@ const IPC = {
   TREND_SERIES: 'trend-series',
   TREND_TRANSITIONS: 'trend-transitions',
   TREND_CORRELATE: 'trend-correlate',
+  // Guided triage
+  TRIAGE_RECIPE: 'triage-recipe',
 } as const;
 
 // API exposed to renderer
@@ -693,6 +695,10 @@ const api = {
     ipcRenderer.invoke(IPC.TREND_TRANSITIONS, options),
   trendCorrelate: (options: { field: string; event: string; startLine?: number; endLine?: number; pattern?: string; patternFlags?: string }): Promise<{ success: boolean; [key: string]: any }> =>
     ipcRenderer.invoke(IPC.TREND_CORRELATE, options),
+
+  // Guided triage — run a symptom recipe and pin findings
+  triageRecipe: (options: { symptom: string; domain?: string; component?: string; sinceLine?: number; field?: string; baselineId?: string; maxFindings?: number; pin?: boolean }): Promise<{ success: boolean; [key: string]: any }> =>
+    ipcRenderer.invoke(IPC.TRIAGE_RECIPE, options),
 
   // Window controls
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),
