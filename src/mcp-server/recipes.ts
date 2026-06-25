@@ -19,6 +19,7 @@ export const RECIPE_SYMPTOMS = [
   'conn-drops',   // Connection drops
   'flaky',        // Intermittent / flaky
   'wrong-value',  // Wrong / odd value
+  'ui-state',     // UI in the wrong state (expected-vs-actual UI behaviour)
 ] as const;
 export type Symptom = (typeof RECIPE_SYMPTOMS)[number];
 
@@ -31,6 +32,7 @@ export interface RecipeOptions {
   component?: string;     // narrow every search to this component/module substring
   sinceLine?: number;     // 1-based viewer line — only look at/after this line
   field?: string;         // field name for slow / flaky / wrong-value recipes
+  expect?: string;        // free-text expected UI state for the ui-state recipe
   baselineId?: string;    // if set, recipes that support it diff against a known-good run
   maxFindings?: number;   // cap on findings returned & pinned (default 10)
   pin?: boolean;          // annotate findings + send one summary message (default true)
@@ -210,6 +212,29 @@ const ASK_COMPONENT: NextQuestion = { id: 'component', ask: 'Which component/mod
 const ASK_SINCE: NextQuestion = { id: 'sinceLine', ask: 'When did you first notice it? Give a timestamp or line.', hint: 'Pass sinceLine (1-based) to focus the recipe.' };
 const ASK_FIELD: NextQuestion = { id: 'field', ask: 'Which field/value looks wrong?', hint: 'Run logan_trend_fields to list candidate fields, then pass field.' };
 const ASK_BASELINE: NextQuestion = { id: 'baselineId', ask: 'Do you have a known-good run to compare against?', hint: 'Pass baselineId to diff via logan_baseline_compare.' };
+const ASK_EXPECT: NextQuestion = { id: 'expect', ask: 'What should have happened? Describe the expected UI state.', hint: 'e.g. "login 2.0 immersive, statusbar hidden" — I trace those UI events.' };
+
+// Words that carry no signal as a log search term in an expectation sentence.
+const UI_STOPWORDS = new Set([
+  'should', 'must', 'shall', 'will', 'would', 'could', 'the', 'this', 'that',
+  'with', 'from', 'when', 'then', 'than', 'have', 'been', 'being', 'appear',
+  'appears', 'shown', 'show', 'shows', 'showing', 'display', 'displayed',
+  'mode', 'screen', 'view', 'page', 'state', 'and', 'but', 'for', 'was',
+  'were', 'its', 'into', 'onto', 'need', 'needs', 'not', 'visible',
+]);
+
+// Pull candidate UI-state keywords out of a free-text expectation.
+function uiKeywords(expect: string): string[] {
+  const words = expect.toLowerCase().match(/[a-z][a-z0-9_.-]{2,}/g) || [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const w of words) {
+    if (w.length < 3 || UI_STOPWORDS.has(w) || seen.has(w)) continue;
+    seen.add(w);
+    out.push(w);
+  }
+  return out.slice(0, 6);
+}
 
 // --- recipes -------------------------------------------------------------------
 
@@ -337,6 +362,43 @@ async function recipeTransitions(api: ApiCall, o: RecipeOptions, steps: string[]
   }));
 }
 
+// Expectation-shaped triage: "the UI should be in state X, it wasn't." Takes the
+// user's plain-words expectation, extracts the UI-state keywords (immersive,
+// statusbar, login…) and, for each, surfaces (a) where that element/state is
+// logged and (b) any value flips — so the contradicting evidence lines up as a
+// timeline the user can click through. Drill-down then explains each transition.
+async function recipeUiState(api: ApiCall, o: RecipeOptions, steps: string[]): Promise<Finding[]> {
+  const expect = (o.expect || '').trim();
+  if (!expect) return [];
+  const keywords = uiKeywords(expect);
+  steps.push(`ui-state keywords: ${keywords.join(', ') || '(none)'}`);
+  if (keywords.length === 0) return [];
+  const findings: Finding[] = [];
+  const per = Math.max(2, Math.floor((o.maxFindings || 10) / keywords.length));
+  for (const kw of keywords) {
+    // (a) Where is this UI element/state logged?
+    const res = await api('POST', '/api/search', { pattern: kw, isRegex: false, matchCase: false }).catch(() => null);
+    let matches: any[] = res?.matches || [];
+    if (o.component) {
+      const c = o.component.toLowerCase();
+      matches = matches.filter((m) => (m.lineText || '').toLowerCase().includes(c));
+    }
+    if (o.sinceLine) matches = matches.filter((m) => (m.viewerLine || 0) >= o.sinceLine!);
+    for (const m of matches.slice(0, per)) {
+      findings.push({ lineNumber: m.viewerLine, title: `UI state: "${kw}"`, severity: 'info', sample: truncate(m.lineText || '') });
+    }
+    // (b) Did this state ever flip? (e.g. immersive=true→false, statusbar visible→hidden)
+    const tr = await api('POST', '/api/trend-transitions', { field: kw }).catch(() => null);
+    const trans: any[] = tr?.transitions || [];
+    for (const t of trans.slice(0, 2)) {
+      findings.push({ lineNumber: t.viewerLine, title: `UI flip: ${kw} ${truncate(String(t.fromValue), 16)} → ${truncate(String(t.toValue), 16)}`, severity: 'warning' });
+    }
+  }
+  // Sort by line so the evidence reads top-to-bottom as a timeline.
+  findings.sort((a, b) => a.lineNumber - b.lineNumber);
+  return findings.slice(0, o.maxFindings || 10);
+}
+
 // --- public entry --------------------------------------------------------------
 
 export async function runRecipe(api: ApiCall, opts: RecipeOptions): Promise<RecipeResult> {
@@ -378,6 +440,10 @@ export async function runRecipe(api: ApiCall, opts: RecipeOptions): Promise<Reci
     case 'wrong-value':
       findings = await recipeTransitions(api, o, steps, 'Changed');
       if (!o.field) nextQuestions.push(ASK_FIELD);
+      break;
+    case 'ui-state':
+      findings = await recipeUiState(api, o, steps);
+      if (!o.expect) nextQuestions.push(ASK_EXPECT);
       break;
   }
 

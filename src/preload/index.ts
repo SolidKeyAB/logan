@@ -697,7 +697,7 @@ const api = {
     ipcRenderer.invoke(IPC.TREND_CORRELATE, options),
 
   // Guided triage — run a symptom recipe and pin findings
-  triageRecipe: (options: { symptom: string; domain?: string; component?: string; sinceLine?: number; field?: string; baselineId?: string; maxFindings?: number; pin?: boolean }): Promise<{ success: boolean; [key: string]: any }> =>
+  triageRecipe: (options: { symptom: string; domain?: string; component?: string; sinceLine?: number; field?: string; expect?: string; baselineId?: string; maxFindings?: number; pin?: boolean }): Promise<{ success: boolean; [key: string]: any }> =>
     ipcRenderer.invoke(IPC.TRIAGE_RECIPE, options),
 
   // Window controls

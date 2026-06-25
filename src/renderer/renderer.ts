@@ -5623,6 +5623,7 @@ const INVESTIGATE_SYMPTOMS: SymptomDef[] = [
   { id: 'conn-drops', label: 'Connection drops', icon: '🔌', hint: 'disconnect / retry / timeout' },
   { id: 'flaky', label: 'Intermittent', icon: '🎲', hint: 'a value that flips (needs a field)' },
   { id: 'wrong-value', label: 'Wrong value', icon: '❓', hint: 'where a value changed (needs a field)' },
+  { id: 'ui-state', label: 'UI looks wrong', icon: '🖼️', hint: 'expected UI state vs. actual (describe what should have happened)' },
 ];
 
 let investigatePanelInited = false;
@@ -5643,7 +5644,7 @@ function initInvestigatePanel(): void {
   }
 }
 
-async function runInvestigateRecipe(symptom: string, opts: { field?: string; component?: string } = {}): Promise<void> {
+async function runInvestigateRecipe(symptom: string, opts: { field?: string; component?: string; expect?: string } = {}): Promise<void> {
   if (!state.filePath) { showToast('Open a log file first'); return; }
   const results = document.getElementById('investigate-results');
   if (results) results.innerHTML = '<p class="placeholder">Running recipe…</p>';
@@ -5673,6 +5674,13 @@ function renderInvestigateResult(res: any): void {
 
   if (findings.length === 0) {
     html += '<p class="placeholder">No findings for this symptom.</p>';
+    // Don't dead-end: offer the other symptoms as one-click next tries.
+    const others = INVESTIGATE_SYMPTOMS.filter(s => s.id !== res.symptom);
+    if (others.length) {
+      html += '<div class="investigate-suggest"><span class="suggest-label">Try instead:</span>'
+        + others.map(s => `<button class="investigate-suggest-btn secondary-btn small" data-symptom="${escapeHtml(s.id)}" title="${escapeHtml(s.hint)}"><span class="sym-icon">${s.icon}</span> ${escapeHtml(s.label)}</button>`).join('')
+        + '</div>';
+    }
   } else {
     html += '<ul class="investigate-findings">';
     for (const f of findings) {
@@ -5695,11 +5703,12 @@ function renderInvestigateResult(res: any): void {
     html += '</ul>';
   }
 
-  // Surface the ONE narrowing question; field/component get an inline re-run input.
+  // Surface the ONE narrowing question; field/component/expect get an inline re-run input.
   for (const q of nextQuestions) {
-    if (q.id === 'field' || q.id === 'component') {
+    if (q.id === 'field' || q.id === 'component' || q.id === 'expect') {
+      const placeholder = q.id === 'expect' ? 'describe expected UI state, Enter to run' : 'type a value, Enter to re-run';
       html += `<div class="investigate-question"><label>${escapeHtml(q.ask)}</label>`
-        + `<input class="investigate-q-input trends-input" data-qid="${escapeHtml(q.id)}" data-symptom="${escapeHtml(res.symptom)}" type="text" placeholder="type a value, Enter to re-run">`
+        + `<input class="investigate-q-input trends-input" data-qid="${escapeHtml(q.id)}" data-symptom="${escapeHtml(res.symptom)}" type="text" placeholder="${placeholder}">`
         + '</div>';
     } else {
       html += `<div class="investigate-question"><span class="q-text">${escapeHtml(q.ask)}</span>${q.hint ? ` <span class="q-hint">${escapeHtml(q.hint)}</span>` : ''}</div>`;
@@ -5740,7 +5749,7 @@ function renderInvestigateResult(res: any): void {
     });
   });
 
-  // Field/component input → re-run the recipe narrowed.
+  // Field/component/expect input → re-run the recipe narrowed.
   container.querySelectorAll('.investigate-q-input').forEach(inp => {
     inp.addEventListener('keydown', (ev) => {
       if ((ev as KeyboardEvent).key !== 'Enter') return;
@@ -5748,8 +5757,17 @@ function renderInvestigateResult(res: any): void {
       const val = el.value.trim();
       if (!val) return;
       const symptom = el.dataset.symptom || res.symptom;
-      const narrow = el.dataset.qid === 'field' ? { field: val } : { component: val };
+      const qid = el.dataset.qid;
+      const narrow = qid === 'field' ? { field: val } : qid === 'expect' ? { expect: val } : { component: val };
       void runInvestigateRecipe(symptom, narrow);
+    });
+  });
+
+  // "Try instead" suggestions → run a different symptom.
+  container.querySelectorAll('.investigate-suggest-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const sym = (btn as HTMLElement).dataset.symptom;
+      if (sym) void runInvestigateRecipe(sym);
     });
   });
 }
@@ -5760,10 +5778,11 @@ function renderInvestigateResult(res: any): void {
 // null so the recurrence button is omitted rather than searching garbage.
 function deriveRecurTerm(f: any): string | null {
   const title: string = f.title || '';
+  const strip = (s: string) => s.trim().replace(/^["'“”]+|["'“”]+$/g, '').trim();
   const paren = title.match(/\(([^)]{2,40})\)/);
-  if (paren) return paren[1].trim();
+  if (paren) return strip(paren[1]) || null;
   const colon = title.match(/:\s*(.{2,40})$/);
-  if (colon) return colon[1].trim();
+  if (colon) return strip(colon[1]) || null;
   return null;
 }
 
