@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, nativeTheme } from 'electro
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import * as http from 'http';
 import { spawn, execSync, spawnSync } from 'child_process';
 // Lazy-loaded: node-pty causes SIGSEGV on Linux when bindings mismatch
 let pty: typeof import('node-pty') | null = null;
@@ -20,7 +21,8 @@ import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, 
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
-import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession } from './api-server';
+import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession, API_PORT } from './api-server';
+import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
 import { BaselineStore, buildFingerprint } from './baselineStore';
 import { discoverFields, extractSeries, detectTransitions, correlate } from './trendEngine';
 // Native-dependent modules — lazy-loaded to prevent SIGSEGV if bindings aren't built
@@ -4344,6 +4346,54 @@ ipcMain.handle(IPC.TREND_CORRELATE, async (_, options) => {
       pattern: options.pattern,
       patternFlags: options.patternFlags,
     });
+    return { success: true, ...result };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// === Guided triage recipe ===
+// Runs the shared recipe engine (src/mcp-server/recipes.ts) so the UI panel and the
+// MCP agent use the EXACT same code path. The engine speaks the /api/* HTTP contract,
+// so we let it call our own already-running api-server (localhost) — no logic is
+// duplicated and responses carry the same viewerLine augmentation the agent sees.
+function selfApiCall(method: string, urlPath: string, body?: any): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const payload = body ? JSON.stringify(body) : undefined;
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: API_PORT,
+        path: urlPath,
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),
+        },
+        timeout: 60000,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))); }
+          catch { resolve({ success: false }); }
+        });
+      },
+    );
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(); reject(new Error('triage recipe timed out')); });
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+ipcMain.handle(IPC.TRIAGE_RECIPE, async (_, options: RecipeOptions) => {
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+  if (!options?.symptom) return { success: false, error: 'symptom required' };
+  try {
+    const result = await runRecipe(selfApiCall, options);
     return { success: true, ...result };
   } catch (error) {
     return { success: false, error: String(error) };

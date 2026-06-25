@@ -8,7 +8,7 @@ import { FileHandler } from './fileHandler';
 import { type BaselineStore, buildFingerprint } from './baselineStore';
 import { AnalysisResult } from './analyzers/types';
 
-const API_PORT = 19532;
+export const API_PORT = 19532;
 const PORT_FILE = path.join(os.homedir(), '.logan', 'mcp-port');
 const SESSION_FILE = path.join(os.homedir(), '.logan', 'agent-session.json');
 const SESSION_MAX_MESSAGES = 100; // keep last 100 messages on disk
