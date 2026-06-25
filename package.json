@@ -30,7 +30,7 @@
   "scripts": {
     "postinstall": "electron-rebuild -f || echo 'Warning: native module rebuild failed — terminal/serial/SSH may not work'",
     "rebuild-native": "electron-rebuild -f",
-    "build": "tsc --noEmit && tsc && npm run copy-assets",
+    "build": "tsc --noEmit && tsc && node scripts/build-renderer.js && npm run copy-assets",
     "copy-assets": "node scripts/copy-assets.js",
     "start": "npm run build && electron . --no-sandbox",
     "dev": "npm run build && electron . --no-sandbox",
@@ -62,6 +62,7 @@
     "@types/ssh2": "^1.15.5",
     "electron": "^28.0.0",
     "electron-builder": "^24.9.1",
+    "esbuild": "^0.27.2",
     "typescript": "^5.3.0",
     "vitest": "^4.0.18"
   },
