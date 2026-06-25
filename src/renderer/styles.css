@@ -7833,6 +7833,18 @@ kbd {
   width: 100%;
   max-width: 280px;
 }
+.investigate-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+}
+.investigate-suggest .suggest-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-right: 2px;
+}
 
 .trend-cell {
   background: var(--bg-secondary);
