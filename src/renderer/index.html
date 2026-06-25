@@ -385,6 +385,7 @@
       <div class="bottom-panel-header">
         <div class="bottom-panel-tabs">
           <button class="bottom-tab-btn" data-bottom-tab="analysis" data-help="Log level distribution, crash detection, component breakdown, and timestamp analysis.&#10;Click Run Analysis to scan the entire file.">Analysis</button>
+          <button class="bottom-tab-btn" data-bottom-tab="investigate" data-help="Guided root-cause finding. Pick a symptom (it crashed, it froze, it's slow…) and LOGAN runs a recipe that searches, checks time gaps, and trends fields — then pins clickable findings.&#10;No expertise needed.">Investigate</button>
           <button class="bottom-tab-btn" data-bottom-tab="trends" data-help="Trend any field over time. Click Discover to auto-find log variables (key=value, JSON), then chart a field as value-over-time, value flips, or correlation.&#10;Click a chart point to jump to that line.">Trends</button>
           <button class="bottom-tab-btn" data-bottom-tab="time-gaps" data-help="Find gaps in log timestamps where no events were recorded.&#10;Useful for detecting hangs, freezes, or missing data periods.">Time Gaps</button>
           <button class="bottom-tab-btn" data-bottom-tab="search-results" data-help="Results from Ctrl+F search. Click a result to jump to that line.&#10;Supports regex, wildcard, case-sensitive, and whole-word modes.">Search Results</button>
@@ -422,6 +423,16 @@
             <div class="section-divider">Baselines</div>
             <div id="baseline-controls"></div>
             <div id="baseline-comparison-results"></div>
+          </div>
+        </div>
+        <!-- Investigate tab (guided triage) -->
+        <div class="bottom-tab-view" data-bottom-tab="investigate">
+          <div class="bottom-tab-sub-header investigate-toolbar">
+            <span class="investigate-label">What's the symptom?</span>
+            <div id="investigate-symptoms" class="investigate-symptoms"></div>
+          </div>
+          <div id="investigate-results" class="investigate-content">
+            <p class="placeholder">Pick a <strong>symptom</strong> above — LOGAN runs the matching recipe and pins findings you can click to jump to.</p>
           </div>
         </div>
         <!-- Trends tab (notebook) -->
