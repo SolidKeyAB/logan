@@ -12,6 +12,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as http from 'http';
 import { Obfuscator } from './obfuscate';
+import { runRecipe, RECIPE_SYMPTOMS, DOMAIN_IDS } from './recipes';
 
 const PORT_FILE = path.join(os.homedir(), '.logan', 'mcp-port');
 
@@ -1291,6 +1292,40 @@ server.tool(
       results.message = await apiCall('POST', '/api/agent-message', { message: chatText });
 
       return { content: [{ type: 'text', text: JSON.stringify(results, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_triage_recipe ===
+// The guided-triage recipe engine (docs/TRIAGE_GUIDE.md). One symptom in → an ordered
+// set of LOGAN primitives run for you, findings pinned in the viewer, and a COMPACT
+// result back: capped findings + the next question to ask the user + drill-down moves.
+// Designed so the agent can guide the user with clear inputs/outputs and minimal tokens.
+server.tool(
+  'logan_triage_recipe',
+  'Guided root-cause triage. Pick a SYMPTOM and LOGAN runs the matching recipe (a fixed chain of search/time-gaps/analyze/trends), pins findings in the viewer, and returns a compact result: findings (capped), the next question to ask the user, and 5-Whys drill-down moves. Use this to lead a non-expert from symptom → root cause without many manual tool calls. Symptoms: crash (it died), hang (it froze), slow, error-storm, wont-start, conn-drops, flaky, wrong-value.',
+  {
+    symptom: z.enum(RECIPE_SYMPTOMS).describe('The user-reported symptom to investigate'),
+    domain: z.enum(['auto', ...DOMAIN_IDS]).default('auto').describe('Log domain (auto-detects from content if "auto"). Changes only the keyword/field vocabulary, not the recipe.'),
+    component: z.string().optional().describe('Narrow every search to lines containing this component/module substring'),
+    sinceLine: z.number().int().min(1).optional().describe('1-based viewer line — only consider this line onward ("when did you first notice it")'),
+    field: z.string().optional().describe('Field name for slow / flaky / wrong-value recipes (from logan_trend_fields)'),
+    baselineId: z.string().optional().describe('Known-good baseline id for recipes that support a before/after diff'),
+    maxFindings: z.number().int().min(1).max(50).default(10).describe('Cap on findings returned and pinned'),
+    pin: z.boolean().default(true).describe('Annotate findings in the viewer and send one summary chat message'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data in the returned findings'),
+  },
+  async ({ symptom, domain, component, sinceLine, field, baselineId, maxFindings, pin, redact }) => {
+    try {
+      const status = await apiCall('GET', '/api/status');
+      if (!status.success || !status.status.filePath) {
+        return { content: [{ type: 'text', text: 'Error: No file open in LOGAN. Use logan_open_file first.' }], isError: true };
+      }
+      const result = await runRecipe(apiCall, { symptom, domain, component, sinceLine, field, baselineId, maxFindings, pin });
+      const output = redact ? maybeRedact(result, true) : result;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
     } catch (err: any) {
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
     }
