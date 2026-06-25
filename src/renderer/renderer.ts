@@ -5704,16 +5704,21 @@ function renderInvestigateResult(res: any): void {
   }
 
   // Surface the ONE narrowing question; field/component/expect get an inline re-run input.
+  let hasFieldInput = false;
   for (const q of nextQuestions) {
     if (q.id === 'field' || q.id === 'component' || q.id === 'expect') {
       const placeholder = q.id === 'expect' ? 'describe expected UI state, Enter to run' : 'type a value, Enter to re-run';
+      // Field inputs get a datalist of discovered fields so it's pick, not guess.
+      const listAttr = q.id === 'field' ? ' list="investigate-field-list"' : '';
+      if (q.id === 'field') hasFieldInput = true;
       html += `<div class="investigate-question"><label>${escapeHtml(q.ask)}</label>`
-        + `<input class="investigate-q-input trends-input" data-qid="${escapeHtml(q.id)}" data-symptom="${escapeHtml(res.symptom)}" type="text" placeholder="${placeholder}">`
+        + `<input class="investigate-q-input trends-input" data-qid="${escapeHtml(q.id)}" data-symptom="${escapeHtml(res.symptom)}" type="text"${listAttr} placeholder="${placeholder}">`
         + '</div>';
     } else {
       html += `<div class="investigate-question"><span class="q-text">${escapeHtml(q.ask)}</span>${q.hint ? ` <span class="q-hint">${escapeHtml(q.hint)}</span>` : ''}</div>`;
     }
   }
+  if (hasFieldInput) html += '<datalist id="investigate-field-list"></datalist>';
 
   container.innerHTML = html;
 
@@ -5770,6 +5775,30 @@ function renderInvestigateResult(res: any): void {
       if (sym) void runInvestigateRecipe(sym);
     });
   });
+
+  // Populate the field autocomplete lazily on first focus (cached after).
+  container.querySelectorAll('.investigate-q-input[data-qid="field"]').forEach(inp => {
+    inp.addEventListener('focus', () => { void populateInvestigateFieldList(); }, { once: true });
+  });
+}
+
+// Discovered field names for the Investigate field autocomplete, fetched once.
+let investigateFieldNames: string[] | null = null;
+async function populateInvestigateFieldList(): Promise<void> {
+  const list = document.getElementById('investigate-field-list');
+  if (!list) return;
+  if (!investigateFieldNames) {
+    try {
+      const res = await window.api.trendDiscoverFields();
+      investigateFieldNames = (res.success && res.fields ? res.fields : [])
+        .slice()
+        .sort((a, b) => (b.occurrences || 0) - (a.occurrences || 0))
+        .map(f => f.name);
+    } catch {
+      investigateFieldNames = [];
+    }
+  }
+  list.innerHTML = investigateFieldNames.map(n => `<option value="${escapeHtml(n)}"></option>`).join('');
 }
 
 // Derive a searchable keyword from a finding's title so "Other occurrences"
