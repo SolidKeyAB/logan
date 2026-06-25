@@ -5677,10 +5677,19 @@ function renderInvestigateResult(res: any): void {
     html += '<ul class="investigate-findings">';
     for (const f of findings) {
       const range = f.endLine && f.endLine > f.lineNumber ? `${f.lineNumber}–${f.endLine}` : `${f.lineNumber}`;
+      const term = deriveRecurTerm(f);
       html += `<li class="investigate-finding ${sevClass(f.severity)}" data-line="${f.lineNumber}">`
+        + '<div class="finding-row">'
         + `<span class="finding-line">L${escapeHtml(range)}</span>`
         + `<span class="finding-title">${escapeHtml(f.title || '')}</span>`
         + (f.sample ? `<span class="finding-sample">${escapeHtml(f.sample)}</span>` : '')
+        + '<button class="finding-why" title="Drill down — the five whys">🔍 why?</button>'
+        + '</div>'
+        + '<div class="finding-drill" hidden>'
+        + `<button class="drill-act" data-act="before" data-line="${f.lineNumber}">⬆ What happened right before</button>`
+        + `<button class="drill-act" data-act="at" data-line="${f.lineNumber}">⊙ Context at this point</button>`
+        + (term ? `<button class="drill-act" data-act="recur" data-term="${escapeHtml(term)}">🔁 Other occurrences of “${escapeHtml(term)}”</button>` : '')
+        + '</div>'
         + '</li>';
     }
     html += '</ul>';
@@ -5699,11 +5708,35 @@ function renderInvestigateResult(res: any): void {
 
   container.innerHTML = html;
 
-  // Click a finding → jump to that line (findings are 1-based viewer lines).
-  container.querySelectorAll('.investigate-finding').forEach(el => {
-    el.addEventListener('click', () => {
-      const line1 = parseInt((el as HTMLElement).dataset.line || '0', 10);
+  // Click a finding row → jump to that line (findings are 1-based viewer lines).
+  container.querySelectorAll('.finding-row').forEach(row => {
+    row.addEventListener('click', (ev) => {
+      if ((ev.target as HTMLElement).closest('.finding-why')) return; // handled below
+      const li = (row as HTMLElement).closest('.investigate-finding') as HTMLElement | null;
+      const line1 = parseInt(li?.dataset.line || '0', 10);
       if (line1 > 0) jumpToTrendLine(line1 - 1);
+    });
+  });
+
+  // 🔍 why? → toggle the per-finding drill-down (the five whys).
+  container.querySelectorAll('.finding-why').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const drill = (btn as HTMLElement).closest('.investigate-finding')?.querySelector('.finding-drill') as HTMLElement | null;
+      if (drill) drill.hidden = !drill.hidden;
+    });
+  });
+
+  // Drill-down moves: jump before / jump to / search recurrences.
+  container.querySelectorAll('.drill-act').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const el = btn as HTMLElement;
+      const act = el.dataset.act;
+      const line1 = parseInt(el.dataset.line || '0', 10);
+      if (act === 'before' && line1 > 0) jumpToTrendLine(Math.max(0, line1 - 1 - 20));
+      else if (act === 'at' && line1 > 0) jumpToTrendLine(line1 - 1);
+      else if (act === 'recur' && el.dataset.term) void searchRecurrences(el.dataset.term);
     });
   });
 
@@ -5719,6 +5752,32 @@ function renderInvestigateResult(res: any): void {
       void runInvestigateRecipe(symptom, narrow);
     });
   });
+}
+
+// Derive a searchable keyword from a finding's title so "Other occurrences"
+// can re-run a real search. Only returns a term when the recipe captured a
+// concrete keyword (e.g. "Crash: FATAL" / "Flip (battery_state)"); otherwise
+// null so the recurrence button is omitted rather than searching garbage.
+function deriveRecurTerm(f: any): string | null {
+  const title: string = f.title || '';
+  const paren = title.match(/\(([^)]{2,40})\)/);
+  if (paren) return paren[1].trim();
+  const colon = title.match(/:\s*(.{2,40})$/);
+  if (colon) return colon[1].trim();
+  return null;
+}
+
+// Drill-down "Other occurrences" → reveal the search panel and run the normal
+// search for the captured keyword (literal, case-insensitive).
+async function searchRecurrences(term: string): Promise<void> {
+  if (!elements.searchInput) return;
+  if (elements.searchPanel) elements.searchPanel.classList.remove('hidden');
+  elements.searchInput.value = term;
+  if (elements.searchRegex) elements.searchRegex.checked = false;
+  if (elements.searchWildcard) elements.searchWildcard.checked = false;
+  if (elements.searchCase) elements.searchCase.checked = false;
+  if (elements.searchWholeWord) elements.searchWholeWord.checked = false;
+  await performSearch();
 }
 
 // ─── Trends Notebook ─────────────────────────────────────────────────────────
