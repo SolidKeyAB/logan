@@ -1448,6 +1448,20 @@ body.platform-darwin .titlebar {
   font-weight: 500;
 }
 
+/* Tree tops (root folder names) — distinct "section header" format so they
+   stand out from the files/subfolders below them (VSCode-explorer style). */
+.folder-header .folder-name {
+  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+}
+
+.folder-header:hover .folder-name {
+  color: var(--accent-color);
+}
+
 .folder-refresh {
   background: none;
   border: none;
@@ -7723,16 +7737,55 @@ kbd {
   padding: 0;
 }
 .investigate-finding {
+  border-left: 3px solid var(--border-color);
+  border-radius: 3px;
+  margin-bottom: 3px;
+}
+.investigate-finding .finding-row {
   display: flex;
   align-items: baseline;
   gap: 8px;
   padding: 4px 6px;
-  border-left: 3px solid var(--border-color);
-  border-radius: 3px;
   cursor: pointer;
-  margin-bottom: 3px;
 }
-.investigate-finding:hover {
+.investigate-finding .finding-row:hover {
+  background: var(--bg-hover);
+}
+.investigate-finding .finding-why {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 1px 6px;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0;
+}
+.investigate-finding .finding-row:hover .finding-why { opacity: 1; }
+.investigate-finding .finding-why:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.investigate-finding .finding-drill {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 4px 6px 6px 10px;
+}
+.investigate-finding .drill-act {
+  font-size: 11px;
+  padding: 2px 6px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+.investigate-finding .drill-act:hover {
   background: var(--bg-hover);
 }
 .investigate-finding.sev-error { border-left-color: #f48771; }
@@ -7779,6 +7832,18 @@ kbd {
 .investigate-q-input {
   width: 100%;
   max-width: 280px;
+}
+.investigate-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+}
+.investigate-suggest .suggest-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-right: 2px;
 }
 
 .trend-cell {

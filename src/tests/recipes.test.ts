@@ -17,10 +17,11 @@ function makeApi(responses: Record<string, any>): { api: ApiCall; calls: Array<{
 }
 
 describe('triage recipe engine', () => {
-  it('exposes the eight symptoms', () => {
-    expect(RECIPE_SYMPTOMS).toHaveLength(8);
+  it('exposes the nine symptoms', () => {
+    expect(RECIPE_SYMPTOMS).toHaveLength(9);
     expect(RECIPE_SYMPTOMS).toContain('crash');
     expect(RECIPE_SYMPTOMS).toContain('wrong-value');
+    expect(RECIPE_SYMPTOMS).toContain('ui-state');
   });
 
   it('crash recipe maps analyzer crashes to 1-based findings and flags the last one', async () => {
@@ -93,6 +94,34 @@ describe('triage recipe engine', () => {
     const withField = await runRecipe(api, { symptom: 'flaky', field: 'state', pin: false, domain: 'generic' });
     expect(withField.findings[0]).toMatchObject({ lineNumber: 55, severity: 'warning' });
     expect(withField.findings[0].title).toMatch(/A → B/);
+  });
+
+  it('ui-state recipe asks for the expectation when none given', async () => {
+    const res = await runRecipe(makeApi({ '/api/get-lines': { lines: [] } }).api, { symptom: 'ui-state', pin: false, domain: 'generic' });
+    expect(res.findings).toHaveLength(0);
+    expect(res.nextQuestions.some((q) => q.id === 'expect')).toBe(true);
+  });
+
+  it('ui-state recipe traces keywords from the expectation: searches + flags flips, timeline-ordered', async () => {
+    const { api, calls } = makeApi({
+      '/api/get-lines': { lines: [] },
+      '/api/search': (body: any) => body.pattern === 'statusbar'
+        ? { success: true, matches: [{ viewerLine: 40, lineText: 'statusbar shown' }] }
+        : { success: true, matches: [{ viewerLine: 10, lineText: 'login 2.0' }] },
+      '/api/trend-transitions': (body: any) => body.field === 'immersive'
+        ? { success: true, transitions: [{ fromValue: 'true', toValue: 'false', viewerLine: 25 }] }
+        : { success: true, transitions: [] },
+    });
+    const res = await runRecipe(api, { symptom: 'ui-state', expect: 'login 2.0 immersive, statusbar hidden', pin: false, domain: 'generic' });
+    // Stopwords (e.g. "should") are dropped; real UI tokens drive searches.
+    expect(calls.some((c) => c.path === '/api/search' && c.body.pattern === 'immersive')).toBe(true);
+    expect(calls.some((c) => c.path === '/api/search' && c.body.pattern === 'statusbar')).toBe(true);
+    // Findings include the immersive flip and are sorted into a top-to-bottom timeline.
+    expect(res.findings.some((f) => /UI flip: immersive/.test(f.title))).toBe(true);
+    const lines = res.findings.map((f) => f.lineNumber);
+    expect(lines).toEqual([...lines].sort((a, b) => a - b));
+    // No expectation question once expect is supplied.
+    expect(res.nextQuestions.some((q) => q.id === 'expect')).toBe(false);
   });
 
   it('auto-detects domain from content', async () => {
