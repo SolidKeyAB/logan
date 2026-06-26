@@ -1305,7 +1305,7 @@ server.tool(
 // Designed so the agent can guide the user with clear inputs/outputs and minimal tokens.
 server.tool(
   'logan_triage_recipe',
-  'Guided root-cause triage. Pick a SYMPTOM and LOGAN runs the matching recipe (a fixed chain of search/time-gaps/analyze/trends), pins findings in the viewer, and returns a compact result: findings (capped), the next question to ask the user, and 5-Whys drill-down moves. Symptoms: crash (it died), hang (it froze), slow, error-storm, wont-start, conn-drops, flaky, wrong-value. ' +
+  'Guided root-cause triage. Pick a SYMPTOM and LOGAN runs the matching recipe (a fixed chain of search/time-gaps/analyze/trends), pins findings in the viewer, and returns a compact result: findings (capped), the next question to ask the user, and 5-Whys drill-down moves. Symptoms: crash (it died), hang (it froze), slow, error-storm, wont-start, conn-drops, flaky, wrong-value, ui-state (UI in the wrong state — pass the expected behaviour via "expect"). ' +
     'HOW TO DRIVE IT: do not interrogate the user up front. Infer the symptom from what they already gave you — a chat sentence ("app froze after the update" → hang) or pasted ticket/bug text — and call this with that symptom. If you have nothing to go on, run logan_triage first and pick the symptom from the result, or ask ONE short question. Then read the returned "nextQuestions": ask the user only that one narrowing question (e.g. which component, or which field for flaky/wrong-value) and call again with the answer. Use "drillDown" to go deeper after a hit. This keeps it a short guided loop, not a questionnaire.',
   {
     symptom: z.enum(RECIPE_SYMPTOMS).describe('The user-reported symptom to investigate'),
@@ -1313,18 +1313,19 @@ server.tool(
     component: z.string().optional().describe('Narrow every search to lines containing this component/module substring'),
     sinceLine: z.number().int().min(1).optional().describe('1-based viewer line — only consider this line onward ("when did you first notice it")'),
     field: z.string().optional().describe('Field name for slow / flaky / wrong-value recipes (from logan_trend_fields)'),
+    expect: z.string().optional().describe('For the ui-state symptom: the expected UI behaviour in plain words (e.g. "login 2.0 immersive, statusbar hidden")'),
     baselineId: z.string().optional().describe('Known-good baseline id for recipes that support a before/after diff'),
     maxFindings: z.number().int().min(1).max(50).default(10).describe('Cap on findings returned and pinned'),
     pin: z.boolean().default(true).describe('Annotate findings in the viewer and send one summary chat message'),
     redact: z.boolean().default(true).describe('Whether to redact sensitive data in the returned findings'),
   },
-  async ({ symptom, domain, component, sinceLine, field, baselineId, maxFindings, pin, redact }) => {
+  async ({ symptom, domain, component, sinceLine, field, expect, baselineId, maxFindings, pin, redact }) => {
     try {
       const status = await apiCall('GET', '/api/status');
       if (!status.success || !status.status.filePath) {
         return { content: [{ type: 'text', text: 'Error: No file open in LOGAN. Use logan_open_file first.' }], isError: true };
       }
-      const result = await runRecipe(apiCall, { symptom, domain, component, sinceLine, field, baselineId, maxFindings, pin });
+      const result = await runRecipe(apiCall, { symptom, domain, component, sinceLine, field, expect, baselineId, maxFindings, pin });
       const output = redact ? maybeRedact(result, true) : result;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
     } catch (err: any) {
