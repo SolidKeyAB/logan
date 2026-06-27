@@ -5012,7 +5012,7 @@ const TERMINAL_THEME = {
   brightWhite: '#ffffff',
 };
 
-async function initTerminal(): Promise<void> {
+async function initTerminal(skipFirstTab = false): Promise<void> {
   if (state.terminalInitialized) return;
 
   // Register global data/exit routing (once)
@@ -5051,8 +5051,9 @@ async function initTerminal(): Promise<void> {
 
   state.terminalInitialized = true;
 
-  // Create first local tab
-  await createTerminalTab('local');
+  // Create first local tab (skipped when the caller will open its own, e.g. a
+  // folder right-click → "Open Terminal Here").
+  if (!skipFirstTab) await createTerminalTab('local');
 }
 
 function generateSessionId(): string {
@@ -5061,7 +5062,8 @@ function generateSessionId(): string {
 
 async function createTerminalTab(
   type: 'local' | 'ssh',
-  sshOptions?: { liveConnectionId?: string; savedConnectionId?: string; sshConfig?: any }
+  sshOptions?: { liveConnectionId?: string; savedConnectionId?: string; sshConfig?: any },
+  localOptions?: { cwd?: string }
 ): Promise<void> {
   // @ts-ignore
   const Terminal = window.Terminal;
@@ -5138,8 +5140,9 @@ async function createTerminalTab(
   const rows = dims?.rows || 24;
 
   if (type === 'local') {
-    let cwd: string | undefined;
-    if (state.filePath) {
+    // Explicit cwd (folder right-click) wins; otherwise default to the open file's folder.
+    let cwd: string | undefined = localOptions?.cwd;
+    if (!cwd && state.filePath) {
       const lastSlash = state.filePath.lastIndexOf('/');
       if (lastSlash > 0) cwd = state.filePath.substring(0, lastSlash);
     }
@@ -5149,9 +5152,15 @@ async function createTerminalTab(
       tab.alive = false;
       return;
     }
-    if (result.label) {
-      tab.label = result.label;
-      updateTerminalTabButton(sessionId, result.label);
+    // When opened on a specific folder, label the tab with that folder's name so
+    // multiple folder-terminals are tellable apart; else use the backend label.
+    const folderLabel = localOptions?.cwd
+      ? (localOptions.cwd.split('/').filter(Boolean).pop() || '')
+      : '';
+    const finalLabel = folderLabel || result.label;
+    if (finalLabel) {
+      tab.label = finalLabel;
+      updateTerminalTabButton(sessionId, finalLabel);
     }
   } else {
     const result = await window.api.terminalCreateSsh(sessionId, { ...sshOptions, cols, rows });
@@ -5427,6 +5436,20 @@ async function toggleTerminal(): Promise<void> {
   } else {
     hideTerminalOverlay();
   }
+}
+
+// Folder right-click → "Open Terminal Here": reveal the terminal overlay and
+// open a new local tab rooted at the given folder.
+async function openTerminalAtFolder(folderPath: string): Promise<void> {
+  if (!state.terminalVisible) {
+    state.terminalVisible = true;
+    showTerminalOverlay();
+  }
+  if (!state.terminalInitialized) {
+    // Skip the default tab — we open our own rooted at the folder instead.
+    await initTerminal(true);
+  }
+  await createTerminalTab('local', undefined, { cwd: folderPath });
 }
 
 function closeTerminal(): void {
@@ -17087,9 +17110,15 @@ function showFolderContextMenu(e: MouseEvent, folderPath: string): void {
   document.querySelector('.tab-context-menu')?.remove();
   const menu = document.createElement('div');
   menu.className = 'tab-context-menu';
-  menu.innerHTML = `<div class="tab-context-item" data-action="copy-path">Copy Path</div>`;
+  menu.innerHTML = `<div class="tab-context-item" data-action="open-terminal">Open Terminal Here</div>`
+    + `<div class="tab-context-separator"></div>`
+    + `<div class="tab-context-item" data-action="copy-path">Copy Path</div>`;
   menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;`;
   document.body.appendChild(menu);
+  menu.querySelector('[data-action="open-terminal"]')?.addEventListener('click', () => {
+    menu.remove();
+    void openTerminalAtFolder(folderPath);
+  });
   menu.querySelector('[data-action="copy-path"]')?.addEventListener('click', () => {
     navigator.clipboard.writeText(folderPath);
     menu.remove();
