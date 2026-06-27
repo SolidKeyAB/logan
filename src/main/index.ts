@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as http from 'http';
 import { spawn, execSync, spawnSync } from 'child_process';
+import { randomUUID } from 'crypto';
 // Lazy-loaded: node-pty causes SIGSEGV on Linux when bindings mismatch
 let pty: typeof import('node-pty') | null = null;
 if (process.platform !== 'linux') {
@@ -65,6 +66,9 @@ let currentFilePath: string | null = null;
 // Built-in agent child process
 import type { ChildProcess } from 'child_process';
 let agentProcess: ChildProcess | null = null;
+// Claude Code session id pinned on a fresh launch so a restart-after-idle can
+// --resume the SAME conversation (full history) instead of starting blank.
+let agentSessionId: string | null = null;
 
 // Live connection registry (replaces per-source singletons)
 interface LiveConnection {
@@ -5804,13 +5808,14 @@ After completing each significant task, call logan_memory_write with a brief not
 what you found and what the user asked — this lets you resume naturally if you reconnect.`;
 }
 
-async function launchAgentProcess(isReconnect = false): Promise<{ success: boolean; agentName?: string; error?: string }> {
+async function launchAgentProcess(isReconnect = false): Promise<{ success: boolean; agentName?: string; error?: string; resumed?: boolean }> {
   if (agentProcess) {
     return { success: false, error: 'Agent is already running' };
   }
 
   const config = getAgentConfig();
   const prompt = buildAgentPrompt();
+  let resumed = false;
 
   if (!isReconnect) {
     // Fresh session: archive any existing memory so old notes don't bleed in
@@ -5836,7 +5841,25 @@ async function launchAgentProcess(isReconnect = false): Promise<{ success: boole
       fs.writeFileSync(tmpMcpPath, JSON.stringify(mcpConfig));
       const args = ['--print', '--mcp-config', tmpMcpPath, '--permission-mode', 'bypassPermissions', '--strict-mcp-config'];
       if (config.model) args.push('--model', config.model);
-      args.push(prompt);
+
+      // Session continuity: on a fresh launch pin a session id; on a restart after
+      // an idle disconnect, --resume that same id so Claude rehydrates the full
+      // prior conversation instead of starting from a blank context.
+      if (isReconnect && agentSessionId) {
+        args.push('--resume', agentSessionId);
+        resumed = true;
+      } else {
+        agentSessionId = randomUUID();
+        args.push('--session-id', agentSessionId);
+      }
+
+      // On resume the conversation is restored, so we only nudge the agent to
+      // re-read memory and re-enter the chat loop; on a fresh start, the full
+      // bootstrap prompt sets everything up.
+      const launchPrompt = resumed
+        ? 'You have just reconnected to LOGAN after an idle disconnect — your previous conversation has been restored. Call logan_memory_read to refresh context if needed, briefly tell the user you are back and what you were working on, then resume the chat loop with logan_wait_for_message.'
+        : prompt;
+      args.push(launchPrompt);
       agentProcess = spawn(claudePath, args, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env } });
     } else if (config.type === 'local-llm') {
       const llmScriptPath = path.join(app.getAppPath(), 'examples', 'agent-local-llm.mjs');
@@ -5873,7 +5896,7 @@ async function launchAgentProcess(isReconnect = false): Promise<{ success: boole
       : config.type === 'local-llm' ? `${baseName} (${config.llmModel || 'local'})`
       : baseName;
 
-    return { success: true, agentName };
+    return { success: true, agentName, resumed };
   } catch (err: any) {
     agentProcess = null;
     return { success: false, error: err.message || String(err) };
@@ -5895,9 +5918,11 @@ ipcMain.handle('agent-reconnect', async () => {
     return { success: true, agentName: name, resumed: true };
   }
 
-  // Process died — relaunch fresh, then nudge the agent to check its memory
+  // Process died — relaunch. For Claude Code this --resume's the prior session
+  // (full history restored) and the launch prompt already nudges it, so we skip
+  // the chat nudge. For agents that can't resume, fall back to a memory nudge.
   const result = await launchAgentProcess(true);
-  if (result.success) {
+  if (result.success && !result.resumed) {
     const mem = getAgentMemory(currentFilePath);
     const nudge = mem?.content
       ? 'You have just reconnected to LOGAN after an interruption. You have saved memory for this session — call logan_memory_read to recall context and then briefly let the user know you are back and what you were working on.'
@@ -5909,6 +5934,9 @@ ipcMain.handle('agent-reconnect', async () => {
 });
 
 ipcMain.handle('agent-stop', async () => {
+  // Explicit stop ends the session — drop the id so the next launch is fresh,
+  // not a --resume of the conversation the user just stopped.
+  agentSessionId = null;
   if (!agentProcess) {
     return { success: true };
   }
