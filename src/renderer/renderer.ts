@@ -9649,18 +9649,39 @@ async function renderSearchConfigsResults(): Promise<void> {
     return;
   }
 
-  // Merge all results sorted by line number
-  const allResults: Array<{ lineNumber: number; column: number; length: number; lineText: string; displayIndex?: number; configId: string; color: string }> = [];
+  // Group matches BY LINE so a line hit by several configs shows as a single row
+  // (with one coloured dot per matching config) instead of one row per config.
+  // This surfaces co-occurrence — the configs are searched together, not shown
+  // sequentially config-by-config.
+  interface ScLineMatch { column: number; length: number; color: string; }
+  interface ScLineEntry {
+    lineNumber: number;
+    lineText: string;
+    matches: ScLineMatch[];
+    configIds: Set<string>;
+    dots: Array<{ color: string; pattern: string }>;
+  }
+  const byLine = new Map<number, ScLineEntry>();
+  // Iterate configs in their defined order so dots render in a stable order.
   for (const config of enabledConfigs) {
     const matches = state.searchConfigResults.get(config.id) || [];
     for (const m of matches) {
-      allResults.push({ ...m, configId: config.id, color: config.color });
+      let entry = byLine.get(m.lineNumber);
+      if (!entry) {
+        entry = { lineNumber: m.lineNumber, lineText: m.lineText, matches: [], configIds: new Set(), dots: [] };
+        byLine.set(m.lineNumber, entry);
+      }
+      entry.matches.push({ column: m.column, length: m.length, color: config.color });
+      if (!entry.configIds.has(config.id)) {
+        entry.configIds.add(config.id);
+        entry.dots.push({ color: config.color, pattern: config.pattern });
+      }
     }
   }
 
-  allResults.sort((a, b) => a.lineNumber - b.lineNumber);
+  const lineEntries = Array.from(byLine.values()).sort((a, b) => a.lineNumber - b.lineNumber);
 
-  if (allResults.length === 0) {
+  if (lineEntries.length === 0) {
     list.innerHTML = '<div class="sc-results-cap-notice">No matches found</div>';
     return;
   }
@@ -9668,15 +9689,40 @@ async function renderSearchConfigsResults(): Promise<void> {
   list.innerHTML = '';
 
   const MAX_DISPLAY = 2000;
-  const totalCount = allResults.length;
-  const displayResults = allResults.slice(0, MAX_DISPLAY);
+  const totalCount = lineEntries.length;
+  const multiCount = lineEntries.filter(e => e.configIds.size > 1).length;
+  const displayResults = lineEntries.slice(0, MAX_DISPLAY);
 
-  if (totalCount > MAX_DISPLAY) {
+  if (multiCount > 0 || totalCount > MAX_DISPLAY) {
     const cap = document.createElement('div');
     cap.className = 'sc-results-cap-notice';
-    cap.textContent = `Showing first ${MAX_DISPLAY.toLocaleString()} of ${totalCount.toLocaleString()} matches`;
+    const shown = totalCount > MAX_DISPLAY
+      ? `Showing first ${MAX_DISPLAY.toLocaleString()} of ${totalCount.toLocaleString()} lines`
+      : `${totalCount.toLocaleString()} line${totalCount !== 1 ? 's' : ''}`;
+    cap.textContent = multiCount > 0
+      ? `${shown} · ${multiCount.toLocaleString()} matched by 2+ configs`
+      : shown;
     list.appendChild(cap);
   }
+
+  // Build the snippet HTML for a line, highlighting every config's match in its
+  // own colour. Ranges are sorted by column; overlaps are skipped.
+  const buildSnippet = (lineText: string, matches: ScLineMatch[]): string => {
+    const ranges = matches
+      .filter(m => m.column >= 0 && m.length > 0 && m.column < lineText.length)
+      .sort((a, b) => a.column - b.column);
+    let html = '';
+    let pos = 0;
+    for (const m of ranges) {
+      if (m.column < pos) continue; // overlapping a prior highlight — skip
+      const end = Math.min(m.column + m.length, lineText.length);
+      html += escapeHtml(lineText.substring(pos, m.column));
+      html += `<mark style="background:${m.color};color:#000">${escapeHtml(lineText.substring(m.column, end))}</mark>`;
+      pos = end;
+    }
+    html += escapeHtml(lineText.substring(pos));
+    return html;
+  };
 
   const CHUNK_SIZE = 200;
 
@@ -9685,38 +9731,37 @@ async function renderSearchConfigsResults(): Promise<void> {
     const fragment = document.createDocumentFragment();
 
     for (let i = chunkStart; i < chunkEnd; i++) {
-      const r = displayResults[i];
+      const entry = displayResults[i];
       const item = document.createElement('div');
       item.className = 'sc-result-item';
+      if (entry.configIds.size > 1) item.classList.add('sc-result-multi');
 
-      const dot = document.createElement('span');
-      dot.className = 'sc-result-dot';
-      dot.style.backgroundColor = r.color;
+      // One dot per distinct config that matched this line.
+      const dots = document.createElement('span');
+      dots.className = 'sc-result-dots';
+      for (const d of entry.dots) {
+        const dot = document.createElement('span');
+        dot.className = 'sc-result-dot';
+        dot.style.backgroundColor = d.color;
+        dot.title = d.pattern;
+        dots.appendChild(dot);
+      }
 
       const lineNum = document.createElement('span');
       lineNum.className = 'sc-result-line-num';
-      lineNum.textContent = `${r.lineNumber + 1}`;
+      lineNum.textContent = `${entry.lineNumber + 1}`;
 
       const text = document.createElement('span');
       text.className = 'sc-result-text';
-      const lineText = r.lineText || '';
-      const truncated = lineText.length > 300 ? lineText.substring(0, 300) + '...' : lineText;
-      if (r.column >= 0 && r.length > 0) {
-        const before = escapeHtml(truncated.substring(0, r.column));
-        const match = escapeHtml(truncated.substring(r.column, r.column + r.length));
-        const after = escapeHtml(truncated.substring(r.column + r.length));
-        text.innerHTML = `${before}<mark style="background:${r.color};color:#000">${match}</mark>${after}`;
-      } else {
-        text.textContent = truncated;
-      }
+      text.innerHTML = buildSnippet(entry.lineText || '', entry.matches);
 
-      item.appendChild(dot);
+      item.appendChild(dots);
       item.appendChild(lineNum);
       item.appendChild(text);
       item.addEventListener('click', () => {
-        const di = getFilteredDisplayIndex(r.lineNumber);
-        const scrollTarget = di >= 0 ? di : r.lineNumber;
-        goToLine(scrollTarget, r.lineNumber);
+        const di = getFilteredDisplayIndex(entry.lineNumber);
+        const scrollTarget = di >= 0 ? di : entry.lineNumber;
+        goToLine(scrollTarget, entry.lineNumber);
         renderVisibleLines();
       });
       fragment.appendChild(item);
