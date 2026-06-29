@@ -2078,6 +2078,9 @@ function createLogViewer(): void {
   logViewerElement.addEventListener('contextmenu', handleContextMenu);
 
   // Mouse wheel zoom (Ctrl + scroll) and scroll speed normalization
+  // Horizontal scroll boost: log lines are wide, so sideways nav needs to cover
+  // far more ground per gesture than vertical. Applied to both trackpad and wheel.
+  const HORIZONTAL_SCROLL_BOOST = 4;
   logViewerElement.addEventListener('wheel', (e: WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
@@ -2100,11 +2103,12 @@ function createLogViewer(): void {
       // Pixel-based scrolling (trackpad) - apply user's scroll speed setting for vertical only
       const speedFactor = userSettings.scrollSpeed / 100;
       deltaY = deltaY * speedFactor;
-      // Horizontal scroll uses raw pixel values for natural trackpad feel
+      // Horizontal: boost raw trackpad deltas so sideways nav isn't sluggish
+      deltaX = deltaX * HORIZONTAL_SCROLL_BOOST;
     } else if (e.deltaMode === 1) {
       // Line-based scrolling (mouse wheel) - convert to pixels
       deltaY = deltaY * getLineHeight();
-      deltaX = deltaX * getLineHeight() * 3; // 3x multiplier for faster horizontal nav
+      deltaX = deltaX * getLineHeight() * HORIZONTAL_SCROLL_BOOST; // faster horizontal nav
     } else if (e.deltaMode === 2) {
       // Page-based scrolling - convert to pixels
       deltaY = deltaY * logViewerElement!.clientHeight;
@@ -2113,7 +2117,7 @@ function createLogViewer(): void {
 
     // Shift+Scroll: convert vertical scroll to horizontal for easy line navigation
     if (e.shiftKey && deltaY !== 0 && deltaX === 0) {
-      deltaX = deltaY;
+      deltaX = deltaY * HORIZONTAL_SCROLL_BOOST;
       deltaY = 0;
     }
 
@@ -6292,6 +6296,9 @@ const PANEL_COLOR_KEY = 'logan-panel-bg-color';
 
 // WCAG relative luminance — decides whether a panel bg is "light" enough that the
 // panel's (default light-on-dark) text needs to flip to dark for readability.
+// Threshold is the WCAG black-vs-white contrast crossover (L ≈ 0.179), NOT 0.5:
+// saturated/medium colours (orange ≈0.48, red ≈0.21, teal, etc.) sit below 0.5 but
+// still read far better with dark text — a 0.5 cutoff left their text unreadably light.
 function isLightPanelColor(color: string): boolean {
   const m = color.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
   if (!m) return false;
@@ -6300,7 +6307,7 @@ function isLightPanelColor(color: string): boolean {
     return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
   };
   const L = 0.2126 * lin(+m[1]) + 0.7152 * lin(+m[2]) + 0.0722 * lin(+m[3]);
-  return L > 0.5;
+  return L > 0.179;
 }
 
 function applyPanelBgColor(color: string): void {
