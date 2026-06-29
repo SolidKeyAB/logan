@@ -7448,14 +7448,14 @@ kbd {
 .ctx-group-header:hover { background: rgba(220,190,140,0.06); }
 .ctx-group-toggle { font-size: 10px; color: #7a6e58; flex-shrink: 0; width: 14px; text-align: center; user-select: none; }
 .ctx-group-line-num { color: #c8a87a; font-size: 10px; min-width: 50px; flex-shrink: 0; font-family: var(--font-mono); }
-.ctx-group-text { color: #ddd0b8; font-family: var(--font-mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.ctx-group-text { color: #ddd0b8; font-family: var(--font-mono); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; flex: 1; min-width: 0; }
 .ctx-score-badge { font-size: 9px; padding: 1px 6px; border-radius: 8px; background: rgba(200,168,122,0.12); color: #c8a87a; flex-shrink: 0; font-weight: 500; }
 .ctx-group-clues { margin-left: 18px; }
 .ctx-clue-item { display: flex; align-items: flex-start; gap: 5px; padding: 2px 6px; font-size: 11px; cursor: pointer; border-radius: 3px; transition: background 0.15s; }
 .ctx-clue-item:hover { background: rgba(140,190,170,0.06); }
 .ctx-connector { font-family: var(--font-mono); font-size: 11px; flex-shrink: 0; opacity: 0.45; }
 .ctx-clue-line-num { color: #7ab8a0; font-size: 10px; min-width: 50px; flex-shrink: 0; font-family: var(--font-mono); }
-.ctx-clue-text { color: #9ac0b0; font-family: var(--font-mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.ctx-clue-text { color: #9ac0b0; font-family: var(--font-mono); font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; flex: 1; min-width: 0; }
 .ctx-clue-dist { font-size: 9px; color: #5a7a6a; flex-shrink: 0; padding: 0 3px; }
 
 /* Multi-lane view */
