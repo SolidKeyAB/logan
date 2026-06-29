@@ -835,6 +835,11 @@ app.whenReady().then(() => {
       // Reuse the same logic as the IPC.OPEN_FILE handler
       let fileHandler = fileHandlerCache.get(filePath);
       let info;
+      // Re-index if the file changed on disk since it was cached (avoids stale content).
+      if (fileHandler && fileHandler.isStale()) {
+        evictFromCache(filePath);
+        fileHandler = undefined;
+      }
       if (fileHandler) {
         currentFilePath = filePath;
         info = fileHandler.getFileInfo();
@@ -2506,6 +2511,14 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
     // Check if file is already cached
     let fileHandler = fileHandlerCache.get(filePath);
     let info;
+
+    // Drop the cached handler if the file changed on disk since it was indexed,
+    // so re-opening an edited file (e.g. a markdown doc) shows fresh content
+    // instead of stale cached lines.
+    if (fileHandler && fileHandler.isStale()) {
+      evictFromCache(filePath);
+      fileHandler = undefined;
+    }
 
     if (fileHandler) {
       // File already indexed - just switch to it

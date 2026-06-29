@@ -72,6 +72,7 @@ export class FileHandler {
   private _maxLineLength: number = 0;
   private headerLineCount: number = 0; // Lines to skip (hidden header)
   private indexedSize: number = 0; // Bytes indexed so far (for incremental indexing)
+  private indexedMtimeMs: number = 0; // mtime of the file when last indexed (for staleness checks)
   private _hasStandaloneCR: boolean = false; // Standalone \r found (not CRLF) — ripgrep can't handle these
 
   async open(
@@ -85,6 +86,7 @@ export class FileHandler {
 
     const stat = fs.statSync(filePath);
     const fileSize = stat.size;
+    this.indexedMtimeMs = stat.mtimeMs;
 
     // Index all line offsets - handle any line ending format (LF, CRLF, CR, mixed)
     this.lineOffsets = [];
@@ -768,6 +770,22 @@ export class FileHandler {
     return this.fileInfo;
   }
 
+  /**
+   * Has the file on disk changed since it was indexed? Compares current size and
+   * mtime against what was captured at index time. Used to invalidate the cached
+   * handler when a file (e.g. a markdown doc) is edited and re-opened, so we don't
+   * serve stale content. Returns true if the file is gone or unreadable too.
+   */
+  isStale(): boolean {
+    if (!this.filePath) return false;
+    try {
+      const stat = fs.statSync(this.filePath);
+      return stat.size !== this.indexedSize || stat.mtimeMs !== this.indexedMtimeMs;
+    } catch {
+      return true;
+    }
+  }
+
   getTotalLines(): number {
     return this.lineOffsets.length - this.headerLineCount;
   }
@@ -783,6 +801,7 @@ export class FileHandler {
     this.splitMetadata = null;
     this.headerLineCount = 0;
     this.indexedSize = 0;
+    this.indexedMtimeMs = 0;
     this._hasStandaloneCR = false;
   }
 }
