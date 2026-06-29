@@ -5413,7 +5413,7 @@ kbd {
 
 .sc-result-item {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   gap: 8px;
   padding: 3px 12px;
   cursor: pointer;
@@ -5422,6 +5422,20 @@ kbd {
 
 .sc-result-item:hover {
   background-color: var(--bg-hover);
+}
+
+/* Lines matched by 2+ configs get a subtle left accent so they stand out. */
+.sc-result-item.sc-result-multi {
+  border-left: 2px solid var(--accent-color);
+  padding-left: 10px;
+}
+
+/* Dots container: one coloured dot per config that matched the line. */
+.sc-result-dots {
+  display: inline-flex;
+  gap: 3px;
+  flex-shrink: 0;
+  align-self: center;
 }
 
 .sc-result-dot {
@@ -5442,9 +5456,11 @@ kbd {
 
 .sc-result-text {
   color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  flex: 1;
+  min-width: 0;
 }
 
 .sc-result-text mark {
