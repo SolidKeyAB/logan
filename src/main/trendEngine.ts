@@ -357,9 +357,10 @@ export interface SignalSeries {
 export interface SignalSeriesResult {
   x: { field: string; values: number[]; isIndex: boolean }; // shared axis (t, or record index fallback)
   series: SignalSeries[];
-  totalRecords: number;        // lines that carried an x value
+  totalRecords: number;        // lines that carried an x value (read/sampled)
   buckets: number;             // emitted bucket count (≤ maxPoints)
   truncated: boolean;
+  sampled: boolean;            // true if the file was sampled (not fully scanned)
 }
 
 /**
@@ -372,7 +373,7 @@ export interface SignalSeriesResult {
 export function extractSignalSeries(
   handler: FileHandler,
   fields: string[],
-  opts: ScanRange & { xField?: string; maxPoints?: number } = {},
+  opts: ScanRange & { xField?: string; maxPoints?: number; sampleBudget?: number } = {},
 ): SignalSeriesResult {
   const xField = opts.xField ?? 't';
   const maxPoints = Math.min(Math.max(opts.maxPoints ?? 4000, 100), 20000);
@@ -400,40 +401,57 @@ export function extractSignalSeries(
   }));
 
   let totalRecords = 0;
-  const { truncated } = scanLines(
-    handler,
-    { startLine: start, endLine: end, maxScan: opts.maxScan ?? 50_000_000 },
-    (lineNumber, text) => {
-      const map = extractFields(text);
-      if (map.size === 0) return;
-      const relIdx = lineNumber - start;
-      let bucket = Math.floor(relIdx / bucketSize);
-      if (bucket < 0) bucket = 0; else if (bucket >= nBuckets) bucket = nBuckets - 1;
+  const consume = (lineNumber: number, text: string): void => {
+    const map = extractFields(text);
+    if (map.size === 0) return;
+    const relIdx = lineNumber - start;
+    let bucket = Math.floor(relIdx / bucketSize);
+    if (bucket < 0) bucket = 0; else if (bucket >= nBuckets) bucket = nBuckets - 1;
 
-      // x value: the master field if numeric, else the record index.
-      const xRaw = map.get(xField);
-      const xNum = xRaw !== undefined ? toNum(xRaw) : null;
-      const x = xNum !== null ? (sawRealX = true, xNum) : relIdx;
-      xSum[bucket] += x;
-      xCnt[bucket]++;
-      if (repLine[bucket] === 0) repLine[bucket] = lineNumber + 1;
-      totalRecords++;
+    // x value: the master field if numeric, else the record index.
+    const xRaw = map.get(xField);
+    const xNum = xRaw !== undefined ? toNum(xRaw) : null;
+    const x = xNum !== null ? (sawRealX = true, xNum) : relIdx;
+    xSum[bucket] += x;
+    xCnt[bucket]++;
+    if (repLine[bucket] === 0) repLine[bucket] = lineNumber + 1;
+    totalRecords++;
 
-      for (let f = 0; f < fields.length; f++) {
-        const raw = map.get(fields[f]);
-        if (raw === undefined) continue;
-        const n = toNum(raw);
-        if (n === null) continue;
-        const a = accs[f];
-        if (a.type === null) a.type = classifyValue(raw);
-        a.sum[bucket] += n;
-        a.cnt[bucket]++;
-        if (n < a.min[bucket]) a.min[bucket] = n;
-        if (n > a.max[bucket]) a.max[bucket] = n;
-        a.present++;
-      }
-    },
-  );
+    for (let f = 0; f < fields.length; f++) {
+      const raw = map.get(fields[f]);
+      if (raw === undefined) continue;
+      const n = toNum(raw);
+      if (n === null) continue;
+      const a = accs[f];
+      if (a.type === null) a.type = classifyValue(raw);
+      a.sum[bucket] += n;
+      a.cnt[bucket]++;
+      if (n < a.min[bucket]) a.min[bucket] = n;
+      if (n > a.max[bucket]) a.max[bucket] = n;
+      a.present++;
+    }
+  };
+
+  // Reading EVERY record of a multi-million-row file blocks the main process
+  // (millions of regex parses) → the UI goes "not responding". Since we only emit
+  // ~maxPoints buckets, sample a bounded number of lines in short contiguous runs
+  // spread across the range instead. Small files are still read in full (exact).
+  const sampleBudget = Math.max(opts.sampleBudget ?? 60_000, nBuckets * 4);
+  let truncated = false;
+  let sampled = false;
+  if (span <= sampleBudget) {
+    ({ truncated } = scanLines(handler, { startLine: start, endLine: end }, consume));
+  } else {
+    sampled = true;
+    const RUN = 8;                                   // contiguous lines per anchor
+    const anchors = Math.max(1, Math.ceil(sampleBudget / RUN));
+    const stride = span / anchors;
+    for (let a = 0; a < anchors; a++) {
+      const idx = start + Math.min(span - 1, Math.floor(a * stride));
+      const run = handler.getLines(idx, Math.min(RUN, end - idx + 1));
+      for (const ln of run) consume(ln.lineNumber, ln.text);
+    }
+  }
 
   // Compact to buckets that actually have an x sample, preserving order.
   const xValues: number[] = [];
@@ -478,6 +496,7 @@ export function extractSignalSeries(
     totalRecords,
     buckets: xValues.length,
     truncated,
+    sampled,
   };
 }
 

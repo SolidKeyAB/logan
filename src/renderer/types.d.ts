@@ -341,6 +341,7 @@ interface SignalSeriesResult {
   totalRecords: number;
   buckets: number;
   truncated: boolean;
+  sampled: boolean;
 }
 
 interface TrendTransition {
