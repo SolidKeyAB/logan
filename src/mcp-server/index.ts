@@ -544,6 +544,106 @@ server.tool(
   }
 );
 
+// === Tool: logan_trend_show ===
+server.tool(
+  'logan_trend_show',
+  'Compute a trend AND DISPLAY it as a chart cell in LOGAN\'s Trends panel for the user to see (and click into). Use this — not the bare logan_trend_* tools — when you want the user to SEE the trend. Call it repeatedly to build a vertical sequence of charts (e.g. show several related fields in order). Returns the same data as logan_trend_series/transitions/correlate so you can reason over it too.',
+  {
+    type: z.enum(['series', 'transitions', 'correlate']).default('series').describe('series = value over time (numeric/boolean as a line/step chart); transitions = every value flip; correlate = field grouped by event presence'),
+    field: z.string().describe('Field name to chart (from logan_trend_fields), or a label when using pattern'),
+    pattern: z.string().optional().describe('ADVANCED: regex to extract an unlabeled value; first capture group is the value. Overrides keyed lookup.'),
+    event: z.string().optional().describe('Required for type=correlate: substring identifying the event line'),
+    label: z.string().optional().describe('Optional title shown on the cell (defaults to the field name)'),
+    startLine: z.number().int().min(1).optional().describe('1-based viewer line to start at (omit for whole file)'),
+    endLine: z.number().int().min(1).optional().describe('1-based viewer line to end at (omit for whole file)'),
+    bucketCount: z.number().int().min(10).max(2000).optional().describe('series only: number of time buckets (default 200)'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data in the returned text (the on-screen chart always shows real values)'),
+  },
+  async ({ type, field, pattern, event, label, startLine, endLine, bucketCount, redact }) => {
+    try {
+      if (type === 'correlate' && !event) {
+        return { content: [{ type: 'text', text: 'Error: event is required when type="correlate"' }], isError: true };
+      }
+      const result = await apiCall('POST', '/api/trend-show', {
+        type, field, pattern, event, label,
+        startLine: startLine !== undefined ? startLine - 1 : undefined,
+        endLine: endLine !== undefined ? endLine - 1 : undefined,
+        bucketCount,
+      });
+      const output = redact ? maybeRedact(result, true) : result;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_get_investigation_log ===
+server.tool(
+  'logan_get_investigation_log',
+  'Return the ordered list of investigative tool calls (search/filter/analyze/trend/investigate/…) recorded so far this session — i.e. the LOGIC you followed to investigate. Use it to show the user the steps you took for a ticket before saving them as a reusable template.',
+  {},
+  async () => {
+    try {
+      const result = await apiCall('POST', '/api/investigation-log', {});
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_save_investigation ===
+server.tool(
+  'logan_save_investigation',
+  'Save the investigative steps recorded so far as a NAMED, re-runnable template (an "investigate pattern"). Values like component/field/pattern/event become fill-in parameters so the template can be replayed on a different log. Call this after you have investigated a ticket and the user wants to reuse the approach.',
+  {
+    name: z.string().describe('Template name, e.g. "Auth token-expiry investigation"'),
+    description: z.string().optional().describe('Optional note on what this pattern is for / when to use it'),
+  },
+  async ({ name, description }) => {
+    try {
+      const result = await apiCall('POST', '/api/investigation-save', { name, description });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_list_investigations ===
+server.tool(
+  'logan_list_investigations',
+  'List saved investigation templates (re-runnable patterns), each with its steps and fill-in parameters.',
+  {},
+  async () => {
+    try {
+      const result = await apiCall('POST', '/api/investigations', {});
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_run_investigation ===
+server.tool(
+  'logan_run_investigation',
+  'Replay a saved investigation template by name on the CURRENT log, re-running its recorded steps in order. Pass `params` to override the captured fill-ins (e.g. a different component/field). Returns a per-step result summary.',
+  {
+    name: z.string().describe('Saved template name (or slug) from logan_list_investigations'),
+    params: z.record(z.string(), z.any()).optional().describe('Override fill-in params, e.g. { "component": "auth", "field": "isTokenExpired" }'),
+  },
+  async ({ name, params }) => {
+    try {
+      const result = await apiCall('POST', '/api/investigation-run', { name, params: params || {} });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_navigate ===
 server.tool(
   'logan_navigate',

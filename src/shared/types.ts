@@ -327,6 +327,11 @@ export const IPC = {
   VIDEO_TRANSCODE: 'video-transcode',
   VIDEO_TRANSCODE_PROGRESS: 'video-transcode-progress',
   VIDEO_TRANSCODE_CANCEL: 'video-transcode-cancel',
+  // Investigation templates (capture agent's logic → save → replay)
+  INVESTIGATION_LIST: 'investigation-list',
+  INVESTIGATION_SAVE: 'investigation-save',
+  INVESTIGATION_RUN: 'investigation-run',
+  INVESTIGATION_DELETE: 'investigation-delete',
   // Device discovery (kept per-source)
   SERIAL_LIST_PORTS: 'serial-list-ports',
   LOGCAT_LIST_DEVICES: 'logcat-list-devices',

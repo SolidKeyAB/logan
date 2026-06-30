@@ -6124,6 +6124,30 @@ ipcMain.handle('agent-interrupt', async () => {
   return { success: delivered, error: delivered ? undefined : 'Agent is not listening' };
 });
 
+// --- Investigation templates ---
+// Route through the local api-server so the journal + replay engine (which live
+// there) are the single source of truth for both the agent and the panel UI.
+function callApiServer(apiPath: string, body: any): Promise<any> {
+  return new Promise((resolve) => {
+    const payload = JSON.stringify(body || {});
+    const req = http.request({
+      hostname: '127.0.0.1', port: API_PORT, path: apiPath, method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))); } catch { resolve({ success: false, error: 'bad response' }); } });
+    });
+    req.on('error', (e) => resolve({ success: false, error: e.message }));
+    req.write(payload); req.end();
+  });
+}
+
+ipcMain.handle(IPC.INVESTIGATION_LIST, async () => callApiServer('/api/investigations', {}));
+ipcMain.handle(IPC.INVESTIGATION_SAVE, async (_e, name: string, description?: string) => callApiServer('/api/investigation-save', { name, description }));
+ipcMain.handle(IPC.INVESTIGATION_RUN, async (_e, name: string, params?: Record<string, any>) => callApiServer('/api/investigation-run', { name, params: params || {} }));
+ipcMain.handle(IPC.INVESTIGATION_DELETE, async (_e, name: string) => callApiServer('/api/investigation-delete', { name }));
+
 // --- Agent Setup Wizard ---
 
 ipcMain.handle('agent-detect-environment', async () => {

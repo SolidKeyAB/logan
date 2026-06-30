@@ -5674,6 +5674,69 @@ function initInvestigatePanel(): void {
     btn.addEventListener('click', () => { void runInvestigateRecipe(s.id); });
     bar.appendChild(btn);
   }
+
+  // Saved investigation patterns (templates of the agent's recorded steps).
+  document.getElementById('btn-save-investigation')?.addEventListener('click', () => { void saveCurrentInvestigation(); });
+  window.api.onInvestigationTemplatesChanged(() => { void loadInvestigationTemplates(); });
+  void loadInvestigationTemplates();
+}
+
+async function loadInvestigationTemplates(): Promise<void> {
+  const list = document.getElementById('investigate-patterns-list');
+  if (!list) return;
+  const res = await window.api.listInvestigations();
+  const templates = (res.success && res.templates) ? res.templates : [];
+  list.innerHTML = '';
+  if (templates.length === 0) {
+    list.innerHTML = '<span class="investigate-patterns-empty">none yet — ask the agent to investigate, then “Save current”</span>';
+    return;
+  }
+  for (const t of templates) {
+    const chip = document.createElement('span');
+    chip.className = 'investigate-pattern-chip';
+    const stepCount = (t.steps || []).length;
+    const stepsPreview = (t.steps || []).map((s: any) => s.label).join(' → ');
+    chip.title = `${stepCount} steps: ${stepsPreview}`;
+    const run = document.createElement('button');
+    run.className = 'investigate-pattern-run';
+    run.innerHTML = `▶ ${escapeHtml(t.name)} <span class="investigate-pattern-count">${stepCount}</span>`;
+    run.addEventListener('click', () => { void runInvestigationTemplate(t.name); });
+    const del = document.createElement('button');
+    del.className = 'investigate-pattern-del';
+    del.textContent = '×';
+    del.title = 'Delete this pattern';
+    del.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await window.api.deleteInvestigation(t.name);
+      void loadInvestigationTemplates();
+    });
+    chip.appendChild(run);
+    chip.appendChild(del);
+    list.appendChild(chip);
+  }
+}
+
+async function saveCurrentInvestigation(): Promise<void> {
+  const name = (prompt('Name this investigation pattern (the steps taken so far):') || '').trim();
+  if (!name) return;
+  const res = await window.api.saveInvestigation(name);
+  if (!res.success) { showToast(res.error || 'Nothing to save yet — run an investigation first'); return; }
+  showToast(`Saved pattern “${name}” (${res.template?.steps?.length || 0} steps)`);
+  void loadInvestigationTemplates();
+}
+
+async function runInvestigationTemplate(name: string): Promise<void> {
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  const container = document.getElementById('investigate-results');
+  if (container) container.innerHTML = `<p class="placeholder">Replaying “${escapeHtml(name)}”…</p>`;
+  const res = await window.api.runInvestigation(name);
+  if (!res.success) { if (container) container.innerHTML = `<p class="placeholder">${escapeHtml(res.error || 'Replay failed')}</p>`; return; }
+  if (container) {
+    const rows = (res.steps || []).map((s: any) =>
+      `<div class="investigate-replay-row"><span class="investigate-replay-ok">${s.ok ? '✓' : '✗'}</span><span class="investigate-replay-step">${escapeHtml(s.step)}</span><span class="investigate-replay-sum">${escapeHtml(s.summary || '')}</span></div>`
+    ).join('');
+    container.innerHTML = `<div class="investigate-replay"><div class="investigate-replay-title">Replayed “${escapeHtml(name)}” — ${(res.steps || []).length} steps</div>${rows}</div>`;
+  }
 }
 
 async function runInvestigateRecipe(symptom: string, opts: { field?: string; component?: string; expect?: string } = {}): Promise<void> {
@@ -5879,7 +5942,7 @@ function initTrendsPanel(): void {
   const btnAdd = trendEl<HTMLButtonElement>('btn-add-trend-cell');
   const cellType = trendEl<HTMLSelectElement>('trends-cell-type');
   const eventInput = trendEl<HTMLInputElement>('trends-event-input');
-  const fieldSelect = trendEl<HTMLSelectElement>('trends-field-select');
+  const fieldSelect = trendEl<HTMLInputElement>('trends-field-select');
   const patternInput = trendEl<HTMLInputElement>('trends-pattern-input');
 
   const refreshAddEnabled = () => {
@@ -5894,7 +5957,13 @@ function initTrendsPanel(): void {
   cellType?.addEventListener('change', () => {
     eventInput?.classList.toggle('hidden', cellType.value !== 'correlate');
   });
+  // Field picker is a searchable combobox (input + datalist): react to typing and
+  // datalist selection, and add the cell on Enter.
+  fieldSelect?.addEventListener('input', refreshAddEnabled);
   fieldSelect?.addEventListener('change', refreshAddEnabled);
+  fieldSelect?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && fieldSelect.value.trim()) { e.preventDefault(); void addTrendCell(); }
+  });
   patternInput?.addEventListener('input', refreshAddEnabled);
 }
 
@@ -5918,20 +5987,23 @@ async function discoverTrendFields(): Promise<void> {
 }
 
 function populateTrendFieldPicker(fields: TrendFieldSpec[]): void {
-  const sel = trendEl<HTMLSelectElement>('trends-field-select');
-  if (!sel) return;
-  sel.innerHTML = '';
-  const def = document.createElement('option');
-  def.value = '';
-  def.textContent = fields.length ? 'Pick a field…' : 'No fields — use a regex pattern';
-  sel.appendChild(def);
+  const input = trendEl<HTMLInputElement>('trends-field-select');
+  const dl = document.getElementById('trends-field-options') as HTMLDataListElement | null;
+  if (!input || !dl) return;
+  // Fill the datalist so the input becomes a type-to-search combobox. The option
+  // value is the field name (what gets inserted + filtered on); the label shows
+  // type + frequency as a hint in the suggestion dropdown.
+  dl.innerHTML = '';
   for (const f of fields) {
     const o = document.createElement('option');
     o.value = f.name;
-    o.textContent = `${f.name} · ${f.type} · ${f.occurrences}×`;
-    sel.appendChild(o);
+    o.label = `${f.type} · ${f.occurrences}×`;
+    dl.appendChild(o);
   }
-  sel.disabled = fields.length === 0;
+  input.disabled = fields.length === 0;
+  input.placeholder = fields.length
+    ? 'Search a field… (type to filter)'
+    : 'No fields — use a regex pattern';
 }
 
 function renderTrendFieldsBar(fields: TrendFieldSpec[]): void {
@@ -5946,7 +6018,7 @@ function renderTrendFieldsBar(fields: TrendFieldSpec[]): void {
     chip.title = `${f.type} · seen ${f.occurrences}× · ${f.distinct} distinct${f.examples.length ? `\ne.g. ${f.examples.join(', ')}` : ''}\nClick to chart over time`;
     chip.innerHTML = `<span class="trend-chip-name">${escapeHtml(f.name)}</span><span class="trend-chip-type">${f.type}</span>`;
     chip.addEventListener('click', () => {
-      const sel = trendEl<HTMLSelectElement>('trends-field-select');
+      const sel = trendEl<HTMLInputElement>('trends-field-select');
       const cellType = trendEl<HTMLSelectElement>('trends-cell-type');
       const eventInput = trendEl<HTMLInputElement>('trends-event-input');
       if (sel) sel.value = f.name;
@@ -5962,7 +6034,7 @@ interface TrendCellShell {
   error: (msg: string) => void;
 }
 
-function createTrendCellShell(type: string, label: string): TrendCellShell {
+function createTrendCellShell(type: string, label: string, byAgent = false): TrendCellShell {
   const results = trendEl<HTMLDivElement>('trends-results');
   if (results) {
     const ph = results.querySelector('.placeholder');
@@ -5975,7 +6047,8 @@ function createTrendCellShell(type: string, label: string): TrendCellShell {
 
   const header = document.createElement('div');
   header.className = 'trend-cell-header';
-  header.innerHTML = `<span class="trend-cell-label">${escapeHtml(label)}</span><span class="trend-cell-kind">${typeLabels[type] || type}</span>`;
+  const agentBadge = byAgent ? '<span class="trend-cell-agent" title="Added by the AI agent">🤖 agent</span>' : '';
+  header.innerHTML = `<span class="trend-cell-label">${escapeHtml(label)}</span><span class="trend-cell-kind">${typeLabels[type] || type}</span>${agentBadge}`;
   const remove = document.createElement('button');
   remove.className = 'trend-cell-remove';
   remove.title = 'Remove cell';
@@ -5999,7 +6072,7 @@ function createTrendCellShell(type: string, label: string): TrendCellShell {
 
 async function addTrendCell(): Promise<void> {
   if (!state.filePath) { showToast('Open a log file first'); return; }
-  const fieldSelect = trendEl<HTMLSelectElement>('trends-field-select');
+  const fieldSelect = trendEl<HTMLInputElement>('trends-field-select');
   const cellTypeSel = trendEl<HTMLSelectElement>('trends-cell-type');
   const eventInput = trendEl<HTMLInputElement>('trends-event-input');
   const patternInput = trendEl<HTMLInputElement>('trends-pattern-input');
@@ -6032,6 +6105,26 @@ async function addTrendCell(): Promise<void> {
       if (!res.success) { cell.error(res.error || 'Failed'); return; }
       renderCorrelateCell(cell.body, res as TrendCorrelateResult);
     }
+  } catch (e) {
+    cell.error(String(e));
+  }
+}
+
+// Agent-driven trend cell: the AI pushes a pre-computed trend (via logan_trend_show)
+// and it appears as a cell in the SAME vertical Trends notebook the user builds —
+// so a sequence can be prepared by either the user or the agent.
+function addAgentTrendCell(spec: { type: string; label: string; result: any }): void {
+  openBottomTab('trends');
+  const cell = createTrendCellShell(spec.type, spec.label || '(agent)', true);
+  try {
+    if (!spec.result || spec.result.success === false) {
+      cell.error(spec.result?.error || 'Agent trend failed');
+      return;
+    }
+    if (spec.type === 'series') renderSeriesCell(cell.body, spec.result as TrendSeriesResult);
+    else if (spec.type === 'transitions') renderTransitionsCell(cell.body, spec.result as TrendTransitionsResult);
+    else if (spec.type === 'correlate') renderCorrelateCell(cell.body, spec.result as TrendCorrelateResult);
+    else cell.error(`Unknown trend type: ${spec.type}`);
   } catch (e) {
     cell.error(String(e));
   }
@@ -6143,22 +6236,44 @@ function drawTrendChart(canvas: HTMLCanvasElement, series: TrendSeriesResult): v
     ctx.fillRect(padL + i * bw, padT + h - bh, Math.max(1, bw - 1), bh);
   });
 
-  // Numeric fields: overlay an average line.
-  if (series.type === 'numeric') {
+  // Numeric & boolean fields: overlay a value line. Boolean is charted as a
+  // step line on a fixed 0..1 (false..true) scale so state changes are obvious.
+  if (series.type === 'numeric' || series.type === 'boolean') {
+    const isBool = series.type === 'boolean';
     const avgs = buckets.map(b => (b.avg !== undefined ? b.avg : null));
     const valid = avgs.filter((v): v is number => v != null);
     if (valid.length > 0) {
-      const mn = Math.min(...valid), mx = Math.max(...valid);
+      const mn = isBool ? 0 : Math.min(...valid);
+      const mx = isBool ? 1 : Math.max(...valid);
       const range = mx - mn || 1;
+      const yFor = (v: number): number => padT + h - ((v - mn) / range) * h;
+
+      // Boolean: faint false/true gridlines + labels.
+      if (isBool) {
+        ctx.strokeStyle = hexToRgba(muted, 0.25);
+        ctx.lineWidth = 1;
+        for (const v of [0, 1]) {
+          const y = yFor(v);
+          ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + w, y); ctx.stroke();
+        }
+        ctx.fillStyle = muted;
+        ctx.font = '9px sans-serif';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('true', padL + 2, yFor(1));
+        ctx.fillText('false', padL + 2, yFor(0));
+      }
+
       ctx.strokeStyle = accent;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      let started = false;
+      let started = false, prevY = 0;
       buckets.forEach((b, i) => {
         if (b.avg === undefined) return;
         const x = padL + i * bw + bw / 2;
-        const y = padT + h - ((b.avg - mn) / range) * h;
-        if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+        const y = yFor(b.avg);
+        if (!started) { ctx.moveTo(x, y); started = true; }
+        else { if (isBool) ctx.lineTo(x, prevY); ctx.lineTo(x, y); } // step for boolean
+        prevY = y;
       });
       ctx.stroke();
     }
@@ -16469,6 +16584,11 @@ function init(): void {
   // Agent memory push listener
   window.api.onAgentMemoryChanged((memory: any) => {
     updateAgentMemoryBar(memory);
+  });
+
+  // Agent-pushed trend cells (logan_trend_show) → render into the Trends notebook
+  window.api.onAgentTrendCell((spec: any) => {
+    addAgentTrendCell(spec);
   });
 
   // Clear agent memory button

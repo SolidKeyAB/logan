@@ -101,6 +101,22 @@ describe('extractSeries', () => {
     expect(last.max).toBe(100);
   });
 
+  it('charts a boolean field as 0/1 so the series has numeric aggregates', () => {
+    const h = fakeHandler([
+      '2024-01-01 00:00:00 isTokenExpired=false',
+      '2024-01-01 00:00:30 isTokenExpired=false',
+      '2024-01-01 01:00:00 isTokenExpired=true',
+    ]);
+    const s = extractSeries(h, parseTs, 'isTokenExpired', { bucketCount: 10 });
+    expect(s.type).toBe('boolean');
+    // false→0, true→1 so buckets carry avg/min/max (the chart's value line)
+    expect(s.points.map((p) => p.num)).toEqual([0, 0, 1]);
+    const first = s.buckets.filter((b) => b.count > 0)[0];
+    expect(first.avg).toBe(0); // both early "false" → fraction-true 0
+    const last = s.buckets[s.buckets.length - 1];
+    expect(last.max).toBe(1); // the late "true"
+  });
+
   it('handles a categorical field with per-bucket value counts', () => {
     // identical timestamps → all land in the first bucket
     const h = fakeHandler([

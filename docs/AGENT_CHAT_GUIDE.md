@@ -71,6 +71,20 @@ Add to your project's `.mcp.json`:
 | `logan_wait_for_message` | Block until the user replies (up to 300s timeout) |
 | `logan_get_messages` | Get full chat history (optional `since` timestamp filter) |
 
+> **Being interrupted:** the user can press **⏹ Stop** in the Chat panel. This does
+> not kill the session — your next tool call returns a `⛔ INTERRUPTED` instruction.
+> When you see it, stop the current task, send one short acknowledgement via
+> `logan_send_message`, then call `logan_wait_for_message`.
+
+### Visualization & investigation tools
+
+| Tool | Description |
+|------|-------------|
+| `logan_trend_show` | Compute a trend AND render it as a chart cell in the user's Trends panel (call repeatedly to build a vertical sequence; booleans render as a 0/1 step line). Prefer this over the bare `logan_trend_*` tools when you want the user to SEE the trend |
+| `logan_get_investigation_log` | The ordered investigative steps you've taken this session (the logic you followed) |
+| `logan_save_investigation` | Save those steps as a named, re-runnable template (see `INVESTIGATION_TEMPLATES.md`) |
+| `logan_list_investigations` / `logan_run_investigation` | List saved patterns / replay one by name on the current log |
+
 ### Chat Loop Example (agent pseudocode)
 
 ```
