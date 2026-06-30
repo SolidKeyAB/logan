@@ -4661,6 +4661,73 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// Inline (Lucide-style) SVG icons for file types. Stroke uses currentColor so each
+// type is tinted purely via its .folder-file-icon--<cls> CSS class — themeable, crisp
+// at any DPI, and consistent in weight (unlike the per-OS emoji they replaced).
+function svgFileIcon(inner: string): string {
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
+}
+const FILE_ICON_PATHS: Record<string, string> = {
+  // activity / waveform — fits MF4 numeric signals
+  mf4: '<path d="M22 12h-2.5a2 2 0 0 0-1.9 1.4l-2.4 8.4a.25.25 0 0 1-.5 0L9.2 2.2a.25.25 0 0 0-.5 0l-2.3 8.4A2 2 0 0 1 4.5 12H2"/>',
+  // record-per-line list — JSON Lines / NDJSON
+  jsonl: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
+  // braces { } — JSON
+  json: '<path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1"/><path d="M16 21h1a2 2 0 0 0 2-2v-5a2 2 0 0 1 2-2 2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"/>',
+  // binary 0/1 — protobuf
+  protobuf: '<rect x="14" y="14" width="4" height="6" rx="2"/><rect x="6" y="4" width="4" height="6" rx="2"/><path d="M6 20h4"/><path d="M14 10h4"/><path d="M6 14h2v6"/><path d="M14 4h2v6"/>',
+  // file-text — markdown
+  markdown: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/>',
+  // grid table — CSV / TSV
+  csv: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M12 3v18"/>',
+  // sliders — structured config (xml/yaml/ini/…)
+  config: '<line x1="21" y1="4" x2="14" y2="4"/><line x1="10" y1="4" x2="3" y2="4"/><line x1="21" y1="12" x2="12" y2="12"/><line x1="8" y1="12" x2="3" y2="12"/><line x1="21" y1="20" x2="16" y2="20"/><line x1="12" y1="20" x2="3" y2="20"/><line x1="14" y1="2" x2="14" y2="6"/><line x1="8" y1="10" x2="8" y2="14"/><line x1="16" y1="18" x2="16" y2="22"/>',
+  // align-left lines — plain logs / text
+  text: '<line x1="21" y1="6" x2="3" y2="6"/><line x1="17" y1="10" x2="3" y2="10"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="17" y1="18" x2="3" y2="18"/>',
+  // image
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  // film strip — video
+  video: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 3v18"/><path d="M3 7.5h4"/><path d="M3 12h18"/><path d="M3 16.5h4"/><path d="M17 3v18"/><path d="M17 7.5h4"/><path d="M17 16.5h4"/>',
+};
+// Pick an icon for a file based on its supported type. Mirrors the main-process
+// adapter registry (sourceAdapter.ts) detection by extension, since the renderer
+// only receives the coarse text/image/video fileType.
+function fileTypeIcon(entry: LocalFolderFile): { glyph: string; cls: string } {
+  const icon = (cls: string) => ({ glyph: svgFileIcon(FILE_ICON_PATHS[cls]), cls });
+  if (entry.fileType === 'image') return icon('image');
+  if (entry.fileType === 'video') return icon('video');
+  const ext = (entry.name.split('.').pop() || '').toLowerCase();
+  switch (ext) {
+    case 'mf4':
+    case 'mdf':       return icon('mf4');       // ASAM MDF / Signals
+    case 'jsonl':
+    case 'ndjson':    return icon('jsonl');     // JSON Lines / NDJSON
+    case 'json':      return icon('json');
+    case 'pb':
+    case 'binpb':
+    case 'protobuf':  return icon('protobuf');  // binary, needs sidecar schema
+    case 'md':
+    case 'markdown':  return icon('markdown');
+    case 'csv':
+    case 'tsv':       return icon('csv');
+    case 'xml':
+    case 'yaml':
+    case 'yml':
+    case 'toml':
+    case 'ini':
+    case 'conf':
+    case 'cfg':
+    case 'config':
+    case 'properties': return icon('config');
+    case 'log':
+    case 'out':
+    case 'err':
+    case 'txt':
+    case 'text':      return icon('text');
+    default:          return { glyph: '', cls: '' };
+  }
+}
+
 function renderFolderEntries(entries: LocalFolderFile[], depth: number, isRemote: boolean): string {
   return entries.map(entry => {
     if (entry.isDirectory) {
@@ -4688,14 +4755,14 @@ function renderFolderEntries(entries: LocalFolderFile[], depth: number, isRemote
           <div class="folder-subdir-files">${innerHtml}</div>
         </div>`;
     }
-    const icon = entry.fileType === 'image' ? '\uD83D\uDDBC' : entry.fileType === 'video' ? '\u25B6' : '';
+    const { glyph: icon, cls: iconCls } = fileTypeIcon(entry);
     return `
       <div class="folder-file ${entry.path === state.filePath ? 'active' : ''}"
            data-path="${escapeHtml(entry.path)}"
            data-filetype="${entry.fileType || 'text'}"
            ${isRemote ? 'data-remote="true"' : ''}
            style="padding-left: ${8 + depth * 14}px">
-        ${icon ? `<span class="folder-file-icon">${icon}</span>` : ''}
+        ${icon ? `<span class="folder-file-icon folder-file-icon--${iconCls}">${icon}</span>` : '<span class="folder-file-icon"></span>'}
         <span class="folder-file-name" title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</span>
         ${entry.size ? `<span class="folder-file-size">${formatFileSize(entry.size)}</span>` : ''}
       </div>`;
@@ -6289,12 +6356,25 @@ interface SignalsPanelState {
   result: SignalSeriesResult | null;
   initialized: boolean;
   wired: boolean;               // canvas handlers attached
+  viewMode: 'overlay' | 'stacked'; // overlay = shared plot; stacked = per-signal bands
+  hoverIdx: number;             // sample index under the cursor (-1 = none), drives the synced crosshair
 }
 const signalsState: SignalsPanelState = {
   fields: [], selected: [], colors: new Map(), result: null, initialized: false, wired: false,
+  viewMode: 'overlay', hoverIdx: -1,
 };
 const SIGNAL_COLORS = ['#4fc3f7', '#ff8a65', '#81c784', '#ba68c8', '#ffd54f', '#4dd0e1', '#f06292', '#aed581', '#9575cd', '#90a4ae', '#7986cb', '#a1887f'];
-let signalsGeom: { padL: number; padT: number; w: number; h: number; xMin: number; xRange: number } | null = null;
+// Per-band geometry recorded by drawSignalsChart so the crosshair/hit-testing can map a value back to a pixel.
+interface SignalBandGeom { field: string; top: number; bottom: number; min: number; range: number; color: string }
+let signalsGeom:
+  | { padL: number; padT: number; w: number; h: number; xMin: number; xRange: number; mode: 'overlay' | 'stacked'; bands: SignalBandGeom[] }
+  | null = null;
+let signalsRedrawRaf = 0;
+// Coalesce hover-driven redraws to one per frame.
+function scheduleSignalsRedraw(): void {
+  if (signalsRedrawRaf) return;
+  signalsRedrawRaf = requestAnimationFrame(() => { signalsRedrawRaf = 0; drawSignalsChart(); });
+}
 
 function signalColor(field: string): string {
   let c = signalsState.colors.get(field);
@@ -6317,11 +6397,24 @@ function initSignalsPanel(): void {
     const search = document.getElementById('signals-search') as HTMLInputElement | null;
     search?.addEventListener('input', () => renderSignalsList());
     document.getElementById('signals-normalize')?.addEventListener('change', () => drawSignalsChart());
+    document.getElementById('signals-mode-overlay')?.addEventListener('click', () => setSignalsViewMode('overlay'));
+    document.getElementById('signals-mode-stacked')?.addEventListener('click', () => setSignalsViewMode('stacked'));
     wireSignalsCanvas();
     window.addEventListener('resize', () => { if (state.activeBottomTab === 'signals') drawSignalsChart(); });
   }
   // Auto-discover the first time the tab is opened with a file loaded.
   if (signalsState.fields.length === 0 && state.filePath) discoverSignals();
+}
+
+// Switch between the shared overlay plot and per-signal stacked bands.
+function setSignalsViewMode(mode: 'overlay' | 'stacked'): void {
+  if (signalsState.viewMode === mode) return;
+  signalsState.viewMode = mode;
+  document.getElementById('signals-mode-overlay')?.classList.toggle('active', mode === 'overlay');
+  document.getElementById('signals-mode-stacked')?.classList.toggle('active', mode === 'stacked');
+  // Normalize is meaningless in stacked mode — every band already auto-scales to its own range.
+  document.querySelector('.signals-toggle')?.classList.toggle('is-disabled', mode === 'stacked');
+  drawSignalsChart();
 }
 
 async function discoverSignals(): Promise<void> {
@@ -6446,14 +6539,19 @@ function wireSignalsCanvas(): void {
   signalsState.wired = true;
   canvas.addEventListener('mousemove', (e) => {
     const r = signalsState.result;
-    if (!r || !readout) return;
+    if (!r) return;
     const idx = nearestSignalIndex(e.clientX);
+    if (idx !== signalsState.hoverIdx) { signalsState.hoverIdx = idx; scheduleSignalsRedraw(); }
+    if (!readout) return;
     if (idx < 0) { readout.textContent = ''; return; }
     const xLabel = r.x.isIndex ? `#${Math.round(r.x.values[idx])}` : `${r.x.field}=${formatSignalVal(r.x.values[idx])}`;
     const parts = r.series.map(s => `${s.field}=${s.values[idx] == null ? '–' : formatSignalVal(s.values[idx] as number)}`);
     readout.textContent = `${xLabel}  ·  ${parts.join('  ')}`;
   });
-  canvas.addEventListener('mouseleave', () => { if (readout) readout.textContent = ''; });
+  canvas.addEventListener('mouseleave', () => {
+    if (readout) readout.textContent = '';
+    if (signalsState.hoverIdx !== -1) { signalsState.hoverIdx = -1; scheduleSignalsRedraw(); }
+  });
   canvas.addEventListener('click', (e) => {
     const r = signalsState.result;
     if (!r || r.series.length === 0) return;
@@ -6480,7 +6578,6 @@ function drawSignalsChart(): void {
   const padL = 46, padR = 10, padT = 12, padB = 22;
   const w = cssW - padL - padR, h = cssH - padT - padB;
   const muted = trendCssVar('--text-muted', '#888888');
-  const grid = trendCssVar('--border-color', '#333333');
   const r = signalsState.result;
 
   if (!r || r.series.length === 0 || r.x.values.length === 0) {
@@ -6488,7 +6585,7 @@ function drawSignalsChart(): void {
     ctx.font = '12px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('Check signals on the left to overlay them here.', cssW / 2, cssH / 2);
+    ctx.fillText('Check signals on the left to plot them here.', cssW / 2, cssH / 2);
     signalsGeom = null;
     return;
   }
@@ -6496,31 +6593,11 @@ function drawSignalsChart(): void {
   const xs = r.x.values;
   const xMin = xs[0], xMax = xs[xs.length - 1];
   const xRange = (xMax - xMin) || 1;
-  const normalize = (document.getElementById('signals-normalize') as HTMLInputElement | null)?.checked ?? true;
+  const xToPx = (x: number) => padL + ((x - xMin) / xRange) * w;
 
-  let yMin = Infinity, yMax = -Infinity;
-  for (const s of r.series) { if (s.globalMin < yMin) yMin = s.globalMin; if (s.globalMax > yMax) yMax = s.globalMax; }
-  if (yMin === Infinity) { yMin = 0; yMax = 1; }
-  const yRange = (yMax - yMin) || 1;
-
-  // Horizontal grid + Y labels (real units when shared, else 0–100%).
-  ctx.strokeStyle = hexToRgba(grid, 0.6);
-  ctx.lineWidth = 1;
+  // Shared bottom time axis — identical in both modes, which is what makes the views directly comparable.
   ctx.fillStyle = muted;
   ctx.font = '10px sans-serif';
-  ctx.textAlign = 'right';
-  ctx.textBaseline = 'middle';
-  for (let g = 0; g <= 4; g++) {
-    const yy = padT + (h * g / 4);
-    ctx.beginPath();
-    ctx.moveTo(padL, yy);
-    ctx.lineTo(padL + w, yy);
-    ctx.stroke();
-    const label = normalize ? `${100 - g * 25}%` : formatSignalVal(yMax - yRange * g / 4);
-    ctx.fillText(label, padL - 5, yy);
-  }
-
-  // X labels.
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   const xLabel = (v: number) => r.x.isIndex ? `#${Math.round(v)}` : formatSignalVal(v);
@@ -6528,9 +6605,48 @@ function drawSignalsChart(): void {
   ctx.fillText(xLabel(xMin + xRange / 2), padL + w / 2, padT + h + 5);
   ctx.fillText(xLabel(xMax), padL + w, padT + h + 5);
 
-  const xToPx = (x: number) => padL + ((x - xMin) / xRange) * w;
+  const bands: SignalBandGeom[] = [];
+  if (signalsState.viewMode === 'stacked') {
+    drawSignalsStacked(ctx, r, { padL, padT, w, h, xToPx }, bands);
+  } else {
+    drawSignalsOverlay(ctx, r, { padL, padT, w, h, xToPx });
+  }
 
-  // Each signal as a polyline.
+  signalsGeom = { padL, padT, w, h, xMin, xRange, mode: signalsState.viewMode, bands };
+
+  if (signalsState.hoverIdx >= 0) drawSignalsCrosshair(ctx, r);
+}
+
+interface SignalsDrawCtx { padL: number; padT: number; w: number; h: number; xToPx: (x: number) => number }
+
+// Overlay: all signals on one plot, sharing a single y-axis (0–100% when normalized, real units otherwise).
+function drawSignalsOverlay(ctx: CanvasRenderingContext2D, r: SignalSeriesResult, g: SignalsDrawCtx): void {
+  const { padL, padT, w, h, xToPx } = g;
+  const muted = trendCssVar('--text-muted', '#888888');
+  const grid = trendCssVar('--border-color', '#333333');
+  const normalize = (document.getElementById('signals-normalize') as HTMLInputElement | null)?.checked ?? true;
+
+  let yMin = Infinity, yMax = -Infinity;
+  for (const s of r.series) { if (s.globalMin < yMin) yMin = s.globalMin; if (s.globalMax > yMax) yMax = s.globalMax; }
+  if (yMin === Infinity) { yMin = 0; yMax = 1; }
+  const yRange = (yMax - yMin) || 1;
+
+  ctx.strokeStyle = hexToRgba(grid, 0.6);
+  ctx.lineWidth = 1;
+  ctx.fillStyle = muted;
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (let gi = 0; gi <= 4; gi++) {
+    const yy = padT + (h * gi / 4);
+    ctx.beginPath();
+    ctx.moveTo(padL, yy);
+    ctx.lineTo(padL + w, yy);
+    ctx.stroke();
+    const label = normalize ? `${100 - gi * 25}%` : formatSignalVal(yMax - yRange * gi / 4);
+    ctx.fillText(label, padL - 5, yy);
+  }
+
   for (const s of r.series) {
     const sRange = (s.globalMax - s.globalMin) || 1;
     ctx.strokeStyle = signalColor(s.field);
@@ -6541,14 +6657,129 @@ function drawSignalsChart(): void {
       const v = s.values[i];
       if (v == null) { started = false; continue; }
       const norm = normalize ? (v - s.globalMin) / sRange : (v - yMin) / yRange;
-      const x = xToPx(xs[i]);
+      const x = xToPx(r.x.values[i]);
       const y = padT + h - norm * h;
       if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
     }
     ctx.stroke();
   }
+}
 
-  signalsGeom = { padL, padT, w, h, xMin, xRange };
+// Stacked: each signal in its own horizontal band with an independent y-scale, name + min/max labels,
+// and dots at its global extrema. All bands share the x (time) axis, so they line up vertically.
+function drawSignalsStacked(ctx: CanvasRenderingContext2D, r: SignalSeriesResult, g: SignalsDrawCtx, bandsOut: SignalBandGeom[]): void {
+  const { padL, padT, w, h, xToPx } = g;
+  const muted = trendCssVar('--text-muted', '#888888');
+  const grid = trendCssVar('--border-color', '#333333');
+  const n = r.series.length;
+  const gap = n > 1 ? 8 : 0;
+  const bandH = (h - gap * (n - 1)) / n;
+
+  for (let si = 0; si < n; si++) {
+    const s = r.series[si];
+    const top = padT + si * (bandH + gap);
+    const bottom = top + bandH;
+    const sMin = s.globalMin, sMax = s.globalMax;
+    const sRange = (sMax - sMin) || 1;
+    const color = signalColor(s.field);
+    bandsOut.push({ field: s.field, top, bottom, min: sMin, range: sRange, color });
+    const yFor = (v: number) => bottom - ((v - sMin) / sRange) * bandH;
+
+    // Band frame: solid top (max) & bottom (min), faint mid guide.
+    ctx.strokeStyle = hexToRgba(grid, 0.6);
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, top); ctx.lineTo(padL + w, top); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(padL, bottom); ctx.lineTo(padL + w, bottom); ctx.stroke();
+    ctx.strokeStyle = hexToRgba(grid, 0.25);
+    ctx.beginPath(); ctx.moveTo(padL, (top + bottom) / 2); ctx.lineTo(padL + w, (top + bottom) / 2); ctx.stroke();
+
+    // Per-band y labels: max at top, min at bottom.
+    ctx.fillStyle = muted;
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'top';
+    ctx.fillText(formatSignalVal(sMax), padL - 4, top - 1);
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(formatSignalVal(sMin), padL - 4, bottom + 1);
+
+    // Signal name inside the band, top-left, in its own color.
+    ctx.fillStyle = color;
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(s.field, padL + 5, top + 2);
+
+    // Polyline + track the extrema for marker dots.
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    let started = false;
+    let maxI = -1, minI = -1, maxV = -Infinity, minV = Infinity;
+    for (let i = 0; i < s.values.length; i++) {
+      const v = s.values[i];
+      if (v == null) { started = false; continue; }
+      const x = xToPx(r.x.values[i]);
+      const y = yFor(v);
+      if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+      if (v > maxV) { maxV = v; maxI = i; }
+      if (v < minV) { minV = v; minI = i; }
+    }
+    ctx.stroke();
+
+    // Extrema markers.
+    ctx.fillStyle = color;
+    if (maxI >= 0) { ctx.beginPath(); ctx.arc(xToPx(r.x.values[maxI]), yFor(maxV), 2.5, 0, Math.PI * 2); ctx.fill(); }
+    if (minI >= 0) { ctx.beginPath(); ctx.arc(xToPx(r.x.values[minI]), yFor(minV), 2.5, 0, Math.PI * 2); ctx.fill(); }
+  }
+}
+
+// Synced crosshair: one vertical time line spanning the whole plot, plus a value dot per signal/band
+// at the hovered sample. In stacked mode the dots land in each band; in overlay mode on the shared plot.
+function drawSignalsCrosshair(ctx: CanvasRenderingContext2D, r: SignalSeriesResult): void {
+  const geom = signalsGeom;
+  if (!geom) return;
+  const idx = signalsState.hoverIdx;
+  const xVal = r.x.values[idx];
+  if (xVal == null) return;
+  const { padL, padT, w, h, xMin, xRange, mode, bands } = geom;
+  const x = padL + ((xVal - xMin) / xRange) * w;
+  if (x < padL - 0.5 || x > padL + w + 0.5) return;
+  const muted = trendCssVar('--text-muted', '#888888');
+
+  ctx.strokeStyle = hexToRgba(muted, 0.85);
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(x, padT);
+  ctx.lineTo(x, padT + h);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  if (mode === 'stacked') {
+    for (const b of bands) {
+      const s = r.series.find(ss => ss.field === b.field);
+      const v = s?.values[idx];
+      if (v == null) continue;
+      const y = b.bottom - ((v - b.min) / b.range) * (b.bottom - b.top);
+      ctx.fillStyle = b.color;
+      ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+    }
+  } else {
+    const normalize = (document.getElementById('signals-normalize') as HTMLInputElement | null)?.checked ?? true;
+    let yMin = Infinity, yMax = -Infinity;
+    for (const s of r.series) { if (s.globalMin < yMin) yMin = s.globalMin; if (s.globalMax > yMax) yMax = s.globalMax; }
+    if (yMin === Infinity) { yMin = 0; yMax = 1; }
+    const yRange = (yMax - yMin) || 1;
+    for (const s of r.series) {
+      const v = s.values[idx];
+      if (v == null) continue;
+      const sRange = (s.globalMax - s.globalMin) || 1;
+      const norm = normalize ? (v - s.globalMin) / sRange : (v - yMin) / yRange;
+      const y = padT + h - norm * h;
+      ctx.fillStyle = signalColor(s.field);
+      ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+    }
+  }
 }
 
 function renderTransitionsCell(body: HTMLDivElement, res: TrendTransitionsResult): void {
