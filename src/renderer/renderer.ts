@@ -5530,6 +5530,9 @@ function openBottomTab(tabId: string): void {
   if (tabId === 'trends') {
     initTrendsPanel();
   }
+  if (tabId === 'signals') {
+    initSignalsPanel();
+  }
   if (tabId === 'investigate') {
     initInvestigatePanel();
   }
@@ -6158,6 +6161,276 @@ function drawTrendChart(canvas: HTMLCanvasElement, series: TrendSeriesResult): v
       ctx.stroke();
     }
   }
+}
+
+// ── Signals overlay panel (multi-signal MF4 viz) ─────────────────────────────
+
+interface SignalsPanelState {
+  fields: TrendFieldSpec[];     // discovered numeric signals (excludes the 't' axis)
+  selected: string[];           // checked signal names, in pick order
+  colors: Map<string, string>;  // stable per-signal color
+  result: SignalSeriesResult | null;
+  initialized: boolean;
+  wired: boolean;               // canvas handlers attached
+}
+const signalsState: SignalsPanelState = {
+  fields: [], selected: [], colors: new Map(), result: null, initialized: false, wired: false,
+};
+const SIGNAL_COLORS = ['#4fc3f7', '#ff8a65', '#81c784', '#ba68c8', '#ffd54f', '#4dd0e1', '#f06292', '#aed581', '#9575cd', '#90a4ae', '#7986cb', '#a1887f'];
+let signalsGeom: { padL: number; padT: number; w: number; h: number; xMin: number; xRange: number } | null = null;
+
+function signalColor(field: string): string {
+  let c = signalsState.colors.get(field);
+  if (!c) { c = SIGNAL_COLORS[signalsState.colors.size % SIGNAL_COLORS.length]; signalsState.colors.set(field, c); }
+  return c;
+}
+
+function formatSignalVal(v: number): string {
+  if (!Number.isFinite(v)) return '–';
+  const a = Math.abs(v);
+  if (a !== 0 && (a < 1e-3 || a >= 1e6)) return v.toExponential(2);
+  if (Number.isInteger(v)) return String(v);
+  return v.toFixed(a < 1 ? 3 : a < 100 ? 2 : 1);
+}
+
+function initSignalsPanel(): void {
+  if (!signalsState.initialized) {
+    signalsState.initialized = true;
+    document.getElementById('btn-signals-discover')?.addEventListener('click', () => discoverSignals());
+    const search = document.getElementById('signals-search') as HTMLInputElement | null;
+    search?.addEventListener('input', () => renderSignalsList());
+    document.getElementById('signals-normalize')?.addEventListener('change', () => drawSignalsChart());
+    wireSignalsCanvas();
+    window.addEventListener('resize', () => { if (state.activeBottomTab === 'signals') drawSignalsChart(); });
+  }
+  // Auto-discover the first time the tab is opened with a file loaded.
+  if (signalsState.fields.length === 0 && state.filePath) discoverSignals();
+}
+
+async function discoverSignals(): Promise<void> {
+  if (!state.filePath) return;
+  const listEl = document.getElementById('signals-list');
+  if (listEl) listEl.innerHTML = '<p class="placeholder">Scanning for signals…</p>';
+  const res = await window.api.trendDiscoverFields({});
+  if (!res.success || !res.fields) {
+    if (listEl) listEl.innerHTML = `<p class="placeholder">${escapeHtml(res.error || 'Discovery failed')}</p>`;
+    return;
+  }
+  // Numeric fields only; the 't' master is the shared axis, not a plottable signal.
+  signalsState.fields = (res.fields as TrendFieldSpec[]).filter(f => f.type === 'numeric' && f.name !== 't');
+  const search = document.getElementById('signals-search') as HTMLInputElement | null;
+  if (search) search.disabled = signalsState.fields.length === 0;
+  renderSignalsList();
+}
+
+function renderSignalsList(): void {
+  const listEl = document.getElementById('signals-list');
+  if (!listEl) return;
+  if (signalsState.fields.length === 0) {
+    listEl.innerHTML = '<p class="placeholder">No numeric signals found in this file.</p>';
+    return;
+  }
+  const filter = ((document.getElementById('signals-search') as HTMLInputElement | null)?.value || '').toLowerCase();
+  const fields = signalsState.fields.filter(f => !filter || f.name.toLowerCase().includes(filter));
+  listEl.innerHTML = '';
+  if (fields.length === 0) { listEl.innerHTML = '<p class="placeholder">No signals match the filter.</p>'; return; }
+  for (const f of fields) {
+    const row = document.createElement('label');
+    row.className = 'signal-row';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'signal-check';
+    cb.checked = signalsState.selected.includes(f.name);
+    cb.addEventListener('change', () => toggleSignal(f.name, cb.checked));
+    const sw = document.createElement('span');
+    sw.className = 'signal-swatch';
+    sw.style.background = signalColor(f.name);
+    const name = document.createElement('span');
+    name.className = 'signal-name';
+    name.textContent = f.name;
+    name.title = f.name;
+    const cnt = document.createElement('span');
+    cnt.className = 'signal-count';
+    cnt.textContent = f.occurrences.toLocaleString();
+    row.append(cb, sw, name, cnt);
+    listEl.appendChild(row);
+  }
+}
+
+function toggleSignal(field: string, on: boolean): void {
+  if (on) { if (!signalsState.selected.includes(field)) signalsState.selected.push(field); }
+  else { signalsState.selected = signalsState.selected.filter(s => s !== field); }
+  loadSignalSeries();
+}
+
+async function loadSignalSeries(): Promise<void> {
+  const summary = document.getElementById('signals-summary');
+  if (signalsState.selected.length === 0) {
+    signalsState.result = null;
+    if (summary) summary.textContent = '';
+    drawSignalsChart();
+    renderSignalsLegend();
+    return;
+  }
+  if (summary) summary.textContent = 'Loading…';
+  const res = await window.api.signalSeries({ fields: [...signalsState.selected], maxPoints: 4000 });
+  if (!res.success) { if (summary) summary.textContent = escapeHtml(res.error || 'Failed to load signals'); return; }
+  signalsState.result = res as SignalSeriesResult;
+  const r = signalsState.result;
+  if (summary) {
+    summary.textContent = `${signalsState.selected.length} signal${signalsState.selected.length !== 1 ? 's' : ''} · ${r.totalRecords.toLocaleString()} records · x=${r.x.field}${r.truncated ? ' · scan truncated' : ''}`;
+  }
+  drawSignalsChart();
+  renderSignalsLegend();
+}
+
+function renderSignalsLegend(): void {
+  const legend = document.getElementById('signals-legend');
+  if (!legend) return;
+  const r = signalsState.result;
+  legend.innerHTML = '';
+  if (!r) return;
+  for (const s of r.series) {
+    const item = document.createElement('span');
+    item.className = 'signal-legend-item';
+    item.innerHTML = `<span class="signal-swatch" style="background:${signalColor(s.field)}"></span>` +
+      `<span class="signal-legend-name">${escapeHtml(s.field)}</span>` +
+      `<span class="signal-legend-range">${formatSignalVal(s.globalMin)}…${formatSignalVal(s.globalMax)}</span>`;
+    legend.appendChild(item);
+  }
+}
+
+function nearestSignalIndex(clientX: number): number {
+  const r = signalsState.result;
+  if (!r || !signalsGeom || r.x.values.length === 0) return -1;
+  const canvas = document.getElementById('signals-canvas') as HTMLCanvasElement | null;
+  if (!canvas) return -1;
+  const rect = canvas.getBoundingClientRect();
+  const px = clientX - rect.left;
+  const frac = Math.max(0, Math.min(1, (px - signalsGeom.padL) / signalsGeom.w));
+  const xTarget = signalsGeom.xMin + frac * signalsGeom.xRange;
+  // xs ascending → binary search for closest
+  const xs = r.x.values;
+  let lo = 0, hi = xs.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (xs[mid] < xTarget) lo = mid + 1; else hi = mid;
+  }
+  if (lo > 0 && Math.abs(xs[lo - 1] - xTarget) < Math.abs(xs[lo] - xTarget)) lo--;
+  return lo;
+}
+
+function wireSignalsCanvas(): void {
+  if (signalsState.wired) return;
+  const canvas = document.getElementById('signals-canvas') as HTMLCanvasElement | null;
+  const readout = document.getElementById('signals-readout');
+  if (!canvas) return;
+  signalsState.wired = true;
+  canvas.addEventListener('mousemove', (e) => {
+    const r = signalsState.result;
+    if (!r || !readout) return;
+    const idx = nearestSignalIndex(e.clientX);
+    if (idx < 0) { readout.textContent = ''; return; }
+    const xLabel = r.x.isIndex ? `#${Math.round(r.x.values[idx])}` : `${r.x.field}=${formatSignalVal(r.x.values[idx])}`;
+    const parts = r.series.map(s => `${s.field}=${s.values[idx] == null ? '–' : formatSignalVal(s.values[idx] as number)}`);
+    readout.textContent = `${xLabel}  ·  ${parts.join('  ')}`;
+  });
+  canvas.addEventListener('mouseleave', () => { if (readout) readout.textContent = ''; });
+  canvas.addEventListener('click', (e) => {
+    const r = signalsState.result;
+    if (!r || r.series.length === 0) return;
+    const idx = nearestSignalIndex(e.clientX);
+    if (idx < 0) return;
+    const viewerLine = r.series[0].viewerLines[idx];
+    if (viewerLine) jumpToTrendLine(viewerLine - 1); // viewerLine is 1-based
+  });
+}
+
+function drawSignalsChart(): void {
+  const canvas = document.getElementById('signals-canvas') as HTMLCanvasElement | null;
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || 600;
+  const cssH = canvas.clientHeight || 220;
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const padL = 46, padR = 10, padT = 12, padB = 22;
+  const w = cssW - padL - padR, h = cssH - padT - padB;
+  const muted = trendCssVar('--text-muted', '#888888');
+  const grid = trendCssVar('--border-color', '#333333');
+  const r = signalsState.result;
+
+  if (!r || r.series.length === 0 || r.x.values.length === 0) {
+    ctx.fillStyle = muted;
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Check signals on the left to overlay them here.', cssW / 2, cssH / 2);
+    signalsGeom = null;
+    return;
+  }
+
+  const xs = r.x.values;
+  const xMin = xs[0], xMax = xs[xs.length - 1];
+  const xRange = (xMax - xMin) || 1;
+  const normalize = (document.getElementById('signals-normalize') as HTMLInputElement | null)?.checked ?? true;
+
+  let yMin = Infinity, yMax = -Infinity;
+  for (const s of r.series) { if (s.globalMin < yMin) yMin = s.globalMin; if (s.globalMax > yMax) yMax = s.globalMax; }
+  if (yMin === Infinity) { yMin = 0; yMax = 1; }
+  const yRange = (yMax - yMin) || 1;
+
+  // Horizontal grid + Y labels (real units when shared, else 0–100%).
+  ctx.strokeStyle = hexToRgba(grid, 0.6);
+  ctx.lineWidth = 1;
+  ctx.fillStyle = muted;
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'middle';
+  for (let g = 0; g <= 4; g++) {
+    const yy = padT + (h * g / 4);
+    ctx.beginPath();
+    ctx.moveTo(padL, yy);
+    ctx.lineTo(padL + w, yy);
+    ctx.stroke();
+    const label = normalize ? `${100 - g * 25}%` : formatSignalVal(yMax - yRange * g / 4);
+    ctx.fillText(label, padL - 5, yy);
+  }
+
+  // X labels.
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  const xLabel = (v: number) => r.x.isIndex ? `#${Math.round(v)}` : formatSignalVal(v);
+  ctx.fillText(xLabel(xMin), padL, padT + h + 5);
+  ctx.fillText(xLabel(xMin + xRange / 2), padL + w / 2, padT + h + 5);
+  ctx.fillText(xLabel(xMax), padL + w, padT + h + 5);
+
+  const xToPx = (x: number) => padL + ((x - xMin) / xRange) * w;
+
+  // Each signal as a polyline.
+  for (const s of r.series) {
+    const sRange = (s.globalMax - s.globalMin) || 1;
+    ctx.strokeStyle = signalColor(s.field);
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < s.values.length; i++) {
+      const v = s.values[i];
+      if (v == null) { started = false; continue; }
+      const norm = normalize ? (v - s.globalMin) / sRange : (v - yMin) / yRange;
+      const x = xToPx(xs[i]);
+      const y = padT + h - norm * h;
+      if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+    }
+    ctx.stroke();
+  }
+
+  signalsGeom = { padL, padT, w, h, xMin, xRange };
 }
 
 function renderTransitionsCell(body: HTMLDivElement, res: TrendTransitionsResult): void {

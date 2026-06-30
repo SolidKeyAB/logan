@@ -375,6 +375,7 @@ export const IPC = {
   // Trends notebook
   TREND_DISCOVER_FIELDS: 'trend-discover-fields',
   TREND_SERIES: 'trend-series',
+  TREND_SIGNAL_SERIES: 'trend-signal-series',
   TREND_TRANSITIONS: 'trend-transitions',
   TREND_CORRELATE: 'trend-correlate',
   // Guided triage

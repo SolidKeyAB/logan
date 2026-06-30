@@ -340,6 +340,147 @@ function topN(rec: Record<string, number>, n: number): Record<string, number> {
   return Object.fromEntries(sorted);
 }
 
+// ── 2b. Multi-signal aligned series (Signals overlay viz) ────────────────────
+
+export interface SignalSeries {
+  field: string;
+  type: FieldType;
+  values: (number | null)[];   // avg per emitted bucket (null = no sample in bucket)
+  min: (number | null)[];      // per-bucket min (spike-preserving band)
+  max: (number | null)[];      // per-bucket max
+  viewerLines: number[];       // representative 1-based line per bucket (click→line)
+  globalMin: number;           // for normalize / autoscale
+  globalMax: number;
+  present: number;             // total records that had this field
+}
+
+export interface SignalSeriesResult {
+  x: { field: string; values: number[]; isIndex: boolean }; // shared axis (t, or record index fallback)
+  series: SignalSeries[];
+  totalRecords: number;        // lines that carried an x value
+  buckets: number;             // emitted bucket count (≤ maxPoints)
+  truncated: boolean;
+}
+
+/**
+ * Read the file ONCE and return several fields ALIGNED on a shared x axis
+ * (default the `t` master), downsampled to ~maxPoints buckets so a multi-million
+ * record MF4 stays smooth. Records are file-ordered and `t` is monotonic, so we
+ * bucket by record index (cheap, no second pass) and keep min/max/avg per bucket
+ * to preserve spikes. If a line has no `t`, the record index is used as x.
+ */
+export function extractSignalSeries(
+  handler: FileHandler,
+  fields: string[],
+  opts: ScanRange & { xField?: string; maxPoints?: number } = {},
+): SignalSeriesResult {
+  const xField = opts.xField ?? 't';
+  const maxPoints = Math.min(Math.max(opts.maxPoints ?? 4000, 100), 20000);
+  const total = handler.getTotalLines();
+  const start = Math.max(0, opts.startLine ?? 0);
+  const end = Math.min(total - 1, opts.endLine ?? total - 1);
+  const span = Math.max(1, end - start + 1);
+  const bucketSize = Math.max(1, Math.ceil(span / maxPoints));
+  const nBuckets = Math.ceil(span / bucketSize);
+
+  // Per-bucket accumulators for the x axis.
+  const xSum = new Float64Array(nBuckets);
+  const xCnt = new Int32Array(nBuckets);
+  const repLine = new Int32Array(nBuckets); // representative 1-based line per bucket
+  let sawRealX = false;
+
+  // Per-signal accumulators.
+  const accs = fields.map(() => ({
+    sum: new Float64Array(nBuckets),
+    cnt: new Int32Array(nBuckets),
+    min: new Float64Array(nBuckets).fill(Infinity),
+    max: new Float64Array(nBuckets).fill(-Infinity),
+    type: null as FieldType | null,
+    present: 0,
+  }));
+
+  let totalRecords = 0;
+  const { truncated } = scanLines(
+    handler,
+    { startLine: start, endLine: end, maxScan: opts.maxScan ?? 50_000_000 },
+    (lineNumber, text) => {
+      const map = extractFields(text);
+      if (map.size === 0) return;
+      const relIdx = lineNumber - start;
+      let bucket = Math.floor(relIdx / bucketSize);
+      if (bucket < 0) bucket = 0; else if (bucket >= nBuckets) bucket = nBuckets - 1;
+
+      // x value: the master field if numeric, else the record index.
+      const xRaw = map.get(xField);
+      const xNum = xRaw !== undefined ? toNum(xRaw) : null;
+      const x = xNum !== null ? (sawRealX = true, xNum) : relIdx;
+      xSum[bucket] += x;
+      xCnt[bucket]++;
+      if (repLine[bucket] === 0) repLine[bucket] = lineNumber + 1;
+      totalRecords++;
+
+      for (let f = 0; f < fields.length; f++) {
+        const raw = map.get(fields[f]);
+        if (raw === undefined) continue;
+        const n = toNum(raw);
+        if (n === null) continue;
+        const a = accs[f];
+        if (a.type === null) a.type = classifyValue(raw);
+        a.sum[bucket] += n;
+        a.cnt[bucket]++;
+        if (n < a.min[bucket]) a.min[bucket] = n;
+        if (n > a.max[bucket]) a.max[bucket] = n;
+        a.present++;
+      }
+    },
+  );
+
+  // Compact to buckets that actually have an x sample, preserving order.
+  const xValues: number[] = [];
+  const keep: number[] = [];
+  for (let b = 0; b < nBuckets; b++) {
+    if (xCnt[b] > 0) { keep.push(b); xValues.push(xSum[b] / xCnt[b]); }
+  }
+
+  const series: SignalSeries[] = fields.map((field, f) => {
+    const a = accs[f];
+    const values: (number | null)[] = [];
+    const minA: (number | null)[] = [];
+    const maxA: (number | null)[] = [];
+    const viewerLines: number[] = [];
+    let gMin = Infinity, gMax = -Infinity;
+    for (const b of keep) {
+      viewerLines.push(repLine[b] || 1);
+      if (a.cnt[b] > 0) {
+        const avg = a.sum[b] / a.cnt[b];
+        values.push(avg);
+        minA.push(a.min[b]);
+        maxA.push(a.max[b]);
+        if (a.min[b] < gMin) gMin = a.min[b];
+        if (a.max[b] > gMax) gMax = a.max[b];
+      } else {
+        values.push(null); minA.push(null); maxA.push(null);
+      }
+    }
+    return {
+      field,
+      type: a.type ?? 'numeric',
+      values, min: minA, max: maxA, viewerLines,
+      globalMin: gMin === Infinity ? 0 : gMin,
+      globalMax: gMax === -Infinity ? 0 : gMax,
+      present: a.present,
+    };
+  });
+
+  return {
+    x: { field: sawRealX ? xField : 'index', values: xValues, isIndex: !sawRealX },
+    series,
+    totalRecords,
+    buckets: xValues.length,
+    truncated,
+  };
+}
+
 // ── 3. Transition ("flip") detection ─────────────────────────────────────────
 
 export interface TransitionResult {

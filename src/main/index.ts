@@ -25,7 +25,7 @@ import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogL
 import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession, API_PORT } from './api-server';
 import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
 import { BaselineStore, buildFingerprint } from './baselineStore';
-import { discoverFields, extractSeries, detectTransitions, correlate } from './trendEngine';
+import { discoverFields, extractSeries, extractSignalSeries, detectTransitions, correlate } from './trendEngine';
 // Native-dependent modules — lazy-loaded to prevent SIGSEGV if bindings aren't built
 let SerialHandler: any = null;
 let LogcatHandler: any = null;
@@ -4327,6 +4327,23 @@ ipcMain.handle(IPC.TREND_SERIES, async (_, options) => {
       maxPoints: options.maxPoints,
       pattern: options.pattern,
       patternFlags: options.patternFlags,
+    });
+    return { success: true, ...result };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.TREND_SIGNAL_SERIES, async (_, options) => {
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+  if (!options?.fields?.length) return { success: false, error: 'fields required' };
+  try {
+    const result = extractSignalSeries(handler, options.fields, {
+      startLine: options.startLine,
+      endLine: options.endLine,
+      xField: options.xField,
+      maxPoints: options.maxPoints,
     });
     return { success: true, ...result };
   } catch (error) {
