@@ -84,6 +84,7 @@ const IPC = {
   // Trends notebook
   TREND_DISCOVER_FIELDS: 'trend-discover-fields',
   TREND_SERIES: 'trend-series',
+  TREND_SIGNAL_SERIES: 'trend-signal-series',
   TREND_TRANSITIONS: 'trend-transitions',
   TREND_CORRELATE: 'trend-correlate',
   // Guided triage
@@ -691,6 +692,8 @@ const api = {
     ipcRenderer.invoke(IPC.TREND_DISCOVER_FIELDS, options),
   trendSeries: (options: { field: string; startLine?: number; endLine?: number; bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string }): Promise<{ success: boolean; [key: string]: any }> =>
     ipcRenderer.invoke(IPC.TREND_SERIES, options),
+  signalSeries: (options: { fields: string[]; xField?: string; startLine?: number; endLine?: number; maxPoints?: number }): Promise<{ success: boolean; [key: string]: any }> =>
+    ipcRenderer.invoke(IPC.TREND_SIGNAL_SERIES, options),
   trendTransitions: (options: { field: string; startLine?: number; endLine?: number; maxTransitions?: number; pattern?: string; patternFlags?: string }): Promise<{ success: boolean; [key: string]: any }> =>
     ipcRenderer.invoke(IPC.TREND_TRANSITIONS, options),
   trendCorrelate: (options: { field: string; event: string; startLine?: number; endLine?: number; pattern?: string; patternFlags?: string }): Promise<{ success: boolean; [key: string]: any }> =>

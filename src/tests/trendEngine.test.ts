@@ -4,6 +4,7 @@ import {
   classifyValue,
   discoverFields,
   extractSeries,
+  extractSignalSeries,
   detectTransitions,
   correlate,
 } from '../main/trendEngine';
@@ -167,5 +168,56 @@ describe('correlate', () => {
     expect(r.unmatchedLines).toBe(2);
     expect(r.numericStats?.matched?.max).toBeCloseTo(2.1);
     expect(r.numericStats?.unmatched?.min).toBeCloseTo(3.5);
+  });
+});
+
+describe('extractSignalSeries', () => {
+  // MF4-style normalized lines: a t= master plus per-record signals.
+  const lines = [
+    't=0 rpm=1000 throttle=0.1',
+    't=0.1 rpm=2000 throttle=0.2',
+    't=0.2 rpm=3000 throttle=0.3',
+    't=0.3 rpm=4000 throttle=0.4',
+    '[mf4] note line with no signals',
+  ];
+
+  it('aligns multiple signals on the shared t axis', () => {
+    const h = fakeHandler(lines);
+    const r = extractSignalSeries(h, ['rpm', 'throttle'], { maxPoints: 10 });
+    expect(r.x.field).toBe('t');
+    expect(r.x.isIndex).toBe(false);
+    expect(r.totalRecords).toBe(4);                 // note line carries no t → excluded
+    expect(r.x.values).toEqual([0, 0.1, 0.2, 0.3]);
+    const rpm = r.series.find(s => s.field === 'rpm')!;
+    expect(rpm.values).toEqual([1000, 2000, 3000, 4000]);
+    expect(rpm.globalMin).toBe(1000);
+    expect(rpm.globalMax).toBe(4000);
+    const thr = r.series.find(s => s.field === 'throttle')!;
+    expect(thr.globalMax).toBeCloseTo(0.4);
+  });
+
+  it('downsamples to maxPoints buckets, preserving min/max', () => {
+    // 1000 records, t = i, rpm = i. maxPoints 100 → 10 rows per bucket.
+    // (maxPoints has a floor of 100, so we need >100 rows to see bucketing.)
+    const many = Array.from({ length: 1000 }, (_, i) => `t=${i} rpm=${i}`);
+    const r = extractSignalSeries(fakeHandler(many), ['rpm'], { maxPoints: 100 });
+    expect(r.buckets).toBe(100);                     // 1000 rows / 10 → 100 buckets
+    const rpm = r.series[0];
+    expect(rpm.values.length).toBe(100);
+    expect(rpm.globalMin).toBe(0);
+    expect(rpm.globalMax).toBe(999);
+    // first bucket spans rows 0..9 → min 0, max 9
+    expect(rpm.min[0]).toBe(0);
+    expect(rpm.max[0]).toBe(9);
+    // representative line of bucket 0 is the first row (1-based)
+    expect(rpm.viewerLines[0]).toBe(1);
+  });
+
+  it('falls back to record index when there is no t master', () => {
+    const noT = ['rpm=10', 'rpm=20', 'rpm=30'];
+    const r = extractSignalSeries(fakeHandler(noT), ['rpm'], { maxPoints: 10 });
+    expect(r.x.isIndex).toBe(true);
+    expect(r.x.field).toBe('index');
+    expect(r.x.values).toEqual([0, 1, 2]);
   });
 });

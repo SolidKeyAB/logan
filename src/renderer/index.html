@@ -387,6 +387,7 @@
           <button class="bottom-tab-btn" data-bottom-tab="analysis" data-help="Log level distribution, crash detection, component breakdown, and timestamp analysis.&#10;Click Run Analysis to scan the entire file.">Analysis</button>
           <button class="bottom-tab-btn" data-bottom-tab="investigate" data-help="Guided root-cause finding. Pick a symptom (it crashed, it froze, it's slow…) and LOGAN runs a recipe that searches, checks time gaps, and trends fields — then pins clickable findings.&#10;No expertise needed.">Investigate</button>
           <button class="bottom-tab-btn" data-bottom-tab="trends" data-help="Trend any field over time. Click Discover to auto-find log variables (key=value, JSON), then chart a field as value-over-time, value flips, or correlation.&#10;Click a chart point to jump to that line.">Trends</button>
+          <button class="bottom-tab-btn" data-bottom-tab="signals" data-help="Overlay multiple numeric signals (e.g. MF4 channels) on one shared time axis.&#10;Check signals on the left to plot them; click a point to jump to that record.">Signals</button>
           <button class="bottom-tab-btn" data-bottom-tab="time-gaps" data-help="Find gaps in log timestamps where no events were recorded.&#10;Useful for detecting hangs, freezes, or missing data periods.">Time Gaps</button>
           <button class="bottom-tab-btn" data-bottom-tab="search-results" data-help="Results from Ctrl+F search. Click a result to jump to that line.&#10;Supports regex, wildcard, case-sensitive, and whole-word modes.">Search Results</button>
           <button class="bottom-tab-btn" data-bottom-tab="search-configs" data-help="Save and reuse complex search patterns across files.&#10;Each config stores pattern, regex/case/word flags, and a label.">Search Configs</button>
@@ -454,6 +455,25 @@
           <div id="trends-fields-bar" class="trends-fields-bar hidden"></div>
           <div id="trends-results" class="trends-content">
             <p class="placeholder">Click <strong>Discover Fields</strong> to scan the log for variables, then add a cell to chart one over time.</p>
+          </div>
+        </div>
+        <!-- Signals tab (multi-signal overlay viz) -->
+        <div class="bottom-tab-view" data-bottom-tab="signals">
+          <div class="bottom-tab-sub-header signals-toolbar">
+            <button id="btn-signals-discover" class="secondary-btn small">Discover Signals</button>
+            <input id="signals-search" class="trends-input signals-search" type="text" placeholder="filter signals…" disabled>
+            <label class="signals-toggle" title="Scale every signal to 0–1 so different ranges compare by shape"><input type="checkbox" id="signals-normalize" checked> Normalize</label>
+            <span id="signals-summary" class="signals-summary"></span>
+          </div>
+          <div class="signals-body">
+            <div id="signals-list" class="signals-list">
+              <p class="placeholder">Click <strong>Discover Signals</strong> to list numeric channels, then check signals to overlay them.</p>
+            </div>
+            <div class="signals-plot-wrap">
+              <canvas id="signals-canvas" class="signals-canvas"></canvas>
+              <div id="signals-readout" class="signals-readout"></div>
+              <div id="signals-legend" class="signals-legend"></div>
+            </div>
           </div>
         </div>
         <!-- Time Gaps tab -->

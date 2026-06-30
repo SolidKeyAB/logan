@@ -323,6 +323,26 @@ interface TrendSeriesResult {
   points: TrendPoint[];
 }
 
+interface SignalSeriesItem {
+  field: string;
+  type: TrendFieldType;
+  values: (number | null)[];
+  min: (number | null)[];
+  max: (number | null)[];
+  viewerLines: number[];
+  globalMin: number;
+  globalMax: number;
+  present: number;
+}
+
+interface SignalSeriesResult {
+  x: { field: string; values: number[]; isIndex: boolean };
+  series: SignalSeriesItem[];
+  totalRecords: number;
+  buckets: number;
+  truncated: boolean;
+}
+
 interface TrendTransition {
   lineNumber: number;
   viewerLine: number;
@@ -620,6 +640,7 @@ interface Api {
   // Trends notebook
   trendDiscoverFields: (options?: { startLine?: number; endLine?: number; sampleSize?: number }) => Promise<{ success: boolean; fields?: TrendFieldSpec[]; error?: string }>;
   trendSeries: (options: { field: string; startLine?: number; endLine?: number; bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string }) => Promise<{ success: boolean; error?: string } & Partial<TrendSeriesResult>>;
+  signalSeries: (options: { fields: string[]; xField?: string; startLine?: number; endLine?: number; maxPoints?: number }) => Promise<{ success: boolean; error?: string } & Partial<SignalSeriesResult>>;
   trendTransitions: (options: { field: string; startLine?: number; endLine?: number; maxTransitions?: number; pattern?: string; patternFlags?: string }) => Promise<{ success: boolean; error?: string } & Partial<TrendTransitionsResult>>;
   trendCorrelate: (options: { field: string; event: string; startLine?: number; endLine?: number; pattern?: string; patternFlags?: string }) => Promise<{ success: boolean; error?: string } & Partial<TrendCorrelateResult>>;
 
