@@ -6250,7 +6250,8 @@ function renderSeriesCell(body: HTMLDivElement, series: TrendSeriesResult): void
         const d = Math.abs(pt.epochMs - t);
         if (d < bestD) { bestD = d; best = pt; }
       }
-      if (best) jumpToTrendLine(best.lineNumber);
+      // Defer the viewer navigation a frame so the click returns instantly.
+      if (best) requestAnimationFrame(() => jumpToTrendLine(best.lineNumber));
     });
   } else {
     const p = document.createElement('p');
@@ -6426,8 +6427,14 @@ function initSignalsPanel(): void {
     wireSignalsCanvas();
     window.addEventListener('resize', () => { if (state.activeBottomTab === 'signals') drawSignalsChart(); });
   }
-  // Auto-discover the first time the tab is opened with a file loaded.
-  if (signalsState.fields.length === 0 && state.filePath) discoverSignals();
+  // Auto-discover the first time the tab is opened with a file loaded. Deferred to the
+  // next frame so the panel paints and is interactive immediately — the scan (already
+  // off the main thread in a worker) then fills the list a moment later.
+  if (signalsState.fields.length === 0 && state.filePath) {
+    const listEl = document.getElementById('signals-list');
+    if (listEl) listEl.innerHTML = '<p class="placeholder">Scanning for signals…</p>';
+    requestAnimationFrame(() => { if (state.activeBottomTab === 'signals') discoverSignals(); });
+  }
 }
 
 // Switch between the shared overlay plot and per-signal stacked bands.
@@ -6570,7 +6577,10 @@ function wireSignalsCanvas(): void {
     if (idx !== signalsState.hoverIdx) { signalsState.hoverIdx = idx; scheduleSignalsRedraw(); }
     if (!readout) return;
     if (idx < 0) { readout.textContent = ''; return; }
-    const xLabel = r.x.isIndex ? `#${Math.round(r.x.values[idx])}` : `${r.x.field}=${formatAxisNum(r.x.values[idx])}`;
+    const tMs = r.x.timeMs?.[idx];
+    const xLabel = tMs != null
+      ? formatFullTime(tMs)
+      : (r.x.isIndex ? `#${Math.round(r.x.values[idx])}` : `${r.x.field}=${formatAxisNum(r.x.values[idx])}`);
     const parts = r.series.map(s => `${s.field}=${s.values[idx] == null ? '–' : formatSignalVal(s.values[idx] as number)}`);
     readout.textContent = `${xLabel}  ·  ${parts.join('  ')}`;
   });
@@ -6583,11 +6593,14 @@ function wireSignalsCanvas(): void {
     if (!r || r.series.length === 0) return;
     const idx = nearestSignalIndex(e.clientX);
     if (idx < 0) return;
-    // Pin the sample so its value box stays after the mouse leaves, then jump to the log line.
+    // Pin the sample and paint the crosshair/value-box SYNCHRONOUSLY so the click gives
+    // instant feedback, then defer the heavier viewer navigation to the next frame so the
+    // click never feels like it hangs.
     signalsState.pinnedIdx = idx;
-    scheduleSignalsRedraw();
+    signalsState.hoverIdx = idx;
+    drawSignalsChart();
     const viewerLine = nearestViewerLine(idx);
-    if (viewerLine > 0) jumpToTrendLine(viewerLine - 1); // viewerLine is 1-based
+    if (viewerLine > 0) requestAnimationFrame(() => jumpToTrendLine(viewerLine - 1)); // viewerLine is 1-based
   });
 }
 
@@ -6669,7 +6682,19 @@ function drawSignalsXAxis(
   const muted = trendCssVar('--text-muted', '#888888');
   const grid = trendCssVar('--border-color', '#333333');
   const TICKS = 4; // → 5 labels including both ends
-  const label = (v: number) => r.x.isIndex ? `#${Math.round(v)}` : formatAxisNum(v);
+
+  // If the log carried parseable timestamps, label the axis with real wall-clock
+  // date/time. Otherwise fall back to the raw x value (record # or SI-formatted t).
+  const times = r.x.timeMs;
+  const timeSpanMs = signalsTimeSpan(times);
+  const label = (frac: number): string => {
+    if (times && timeSpanMs != null) {
+      const t = signalsTimeAtFraction(r, frac);
+      if (t != null) return formatAxisTime(t, timeSpanMs);
+    }
+    const v = xMin + frac * xRange;
+    return r.x.isIndex ? `#${Math.round(v)}` : formatAxisNum(v);
+  };
 
   ctx.lineWidth = 1;
   ctx.font = '10px sans-serif';
@@ -6686,8 +6711,51 @@ function drawSignalsXAxis(
     // Label, edge-aligned at the ends so it doesn't clip.
     ctx.fillStyle = muted;
     ctx.textAlign = i === 0 ? 'left' : i === TICKS ? 'right' : 'center';
-    ctx.fillText(label(xMin + frac * xRange), x, padT + h + 5);
+    ctx.fillText(label(frac), x, padT + h + 5);
   }
+}
+
+// Total wall-clock span across the (sparse) per-bucket timestamps, or null if none.
+function signalsTimeSpan(times: (number | null)[] | undefined): number | null {
+  if (!times) return null;
+  let lo = Infinity, hi = -Infinity;
+  for (const t of times) { if (t == null) continue; if (t < lo) lo = t; if (t > hi) hi = t; }
+  return hi >= lo ? hi - lo : null;
+}
+
+// Wall-clock time at a fraction across the plot. timeMs is aligned to x.values; pick the
+// nearest sample to the tick's x value, scanning outward if that bucket had no timestamp.
+function signalsTimeAtFraction(r: SignalSeriesResult, frac: number): number | null {
+  const times = r.x.timeMs;
+  const n = r.x.values.length;
+  if (!times || n === 0) return null;
+  let idx = Math.round(frac * (n - 1));
+  if (idx < 0) idx = 0; else if (idx >= n) idx = n - 1;
+  if (times[idx] != null) return times[idx];
+  for (let d = 1; d < n; d++) {
+    const a = idx + d < n ? times[idx + d] : null;
+    if (a != null) return a;
+    const b = idx - d >= 0 ? times[idx - d] : null;
+    if (b != null) return b;
+  }
+  return null;
+}
+
+// Compact wall-clock label whose granularity matches the visible span:
+// multi-day → "MM/DD HH:MM", within a day → "HH:MM:SS".
+function formatAxisTime(ms: number, spanMs: number): string {
+  const d = new Date(ms);
+  const p2 = (x: number) => String(x).padStart(2, '0');
+  const hh = p2(d.getHours()), mm = p2(d.getMinutes()), ss = p2(d.getSeconds());
+  if (spanMs >= 24 * 3600 * 1000) return `${p2(d.getMonth() + 1)}/${p2(d.getDate())} ${hh}:${mm}`;
+  return `${hh}:${mm}:${ss}`;
+}
+
+// Full date+time for the hover/click readout (always includes the date).
+function formatFullTime(ms: number): string {
+  const d = new Date(ms);
+  const p2 = (x: number) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
 }
 
 interface SignalsDrawCtx { padL: number; padT: number; w: number; h: number; xToPx: (x: number) => number }
@@ -6834,6 +6902,11 @@ function drawSignalsCrosshair(ctx: CanvasRenderingContext2D, r: SignalSeriesResu
 
   // Value dots, and collect rows for the value box.
   const rows: { label: string; color: string }[] = [];
+  const tMs = r.x.timeMs?.[idx];
+  if (tMs != null) {
+    // Wall-clock time leads the box when the log is timestamped.
+    rows.push({ label: `🕒 ${formatFullTime(tMs)}`, color: muted });
+  }
   rows.push({
     label: `${r.x.isIndex ? 'idx' : (r.x.field || 'x')} = ${r.x.isIndex ? '#' + Math.round(xVal) : formatAxisNum(xVal)}`,
     color: muted,

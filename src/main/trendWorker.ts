@@ -70,7 +70,7 @@ try {
       result = extractSeries(handler, parseTimestampFast, args.field, args);
       break;
     case 'signal':
-      result = extractSignalSeries(handler, args.fields, args);
+      result = extractSignalSeries(handler, args.fields, args, parseTimestampFast);
       break;
     case 'transitions':
       result = detectTransitions(handler, parseTimestampFast, args.field, args);

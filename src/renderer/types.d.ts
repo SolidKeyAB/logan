@@ -336,7 +336,7 @@ interface SignalSeriesItem {
 }
 
 interface SignalSeriesResult {
-  x: { field: string; values: number[]; isIndex: boolean };
+  x: { field: string; values: number[]; isIndex: boolean; timeMs?: (number | null)[] };
   series: SignalSeriesItem[];
   totalRecords: number;
   buckets: number;
