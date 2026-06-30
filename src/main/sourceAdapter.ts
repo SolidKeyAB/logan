@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as readline from 'readline';
+import * as zlib from 'zlib';
 import * as protobuf from 'protobufjs';
 import { FileInfo } from '../shared/types';
 
@@ -445,6 +446,77 @@ function decodeMdf4Value(rec: Buffer, base: number, cn: Mdf4Channel): number | n
   return null;
 }
 
+/**
+ * Decompress a ##DZ block (MDF4 compressed data). zip_type 0 = raw deflate,
+ * 1 = transposition + deflate (used for record data so columns compress better).
+ */
+function inflateMdf4Dz(buf: Buffer, block: Mdf4Block): Buffer {
+  const d = block.dataStart;
+  const zipType = buf.readUInt8(d + 2);
+  const zipParam = buf.readUInt32LE(d + 4);
+  const orgLen = Number(buf.readBigUInt64LE(d + 8));
+  const dataLen = Number(buf.readBigUInt64LE(d + 16));
+  const comp = buf.subarray(d + 24, d + 24 + dataLen);
+  let out: Buffer = zlib.inflateSync(comp);
+  if (zipType === 1 && zipParam > 0) out = untransposeMdf4(out, zipParam, orgLen);
+  return out;
+}
+
+/**
+ * Reverse MDF4 column-transposition. The original byte matrix (orgLen bytes,
+ * `cols` columns, N full rows) was stored column-major; any trailing remainder
+ * bytes are appended untransposed.
+ */
+function untransposeMdf4(data: Buffer, cols: number, orgLen: number): Buffer {
+  const N = Math.floor(orgLen / cols);
+  const out = Buffer.alloc(orgLen);
+  for (let j = 0; j < cols; j++) {
+    for (let i = 0; i < N; i++) {
+      out[i * cols + j] = data[j * N + i];
+    }
+  }
+  for (let k = N * cols; k < orgLen && k < data.length; k++) out[k] = data[k];
+  return out;
+}
+
+/**
+ * Resolve a data section pointer into one contiguous buffer of raw record bytes,
+ * following the layouts real MF4 files use: ##DT (raw), ##DZ (compressed),
+ * ##DL (data list of DT/DZ chunks) and ##HL (header list wrapping a DL).
+ * Returns an empty buffer for anything unsupported. `depth` guards cyclic links.
+ */
+function resolveMdf4Data(buf: Buffer, off: number, depth = 0): Buffer {
+  if (!off || depth > 64) return Buffer.alloc(0);
+  let block: Mdf4Block;
+  try { block = readMdf4Block(buf, off); } catch { return Buffer.alloc(0); }
+
+  if (block.id === '##DT' || block.id === '##RD') {
+    return buf.subarray(block.dataStart, block.dataEnd);
+  }
+  if (block.id === '##DZ') {
+    try { return inflateMdf4Dz(buf, block); } catch { return Buffer.alloc(0); }
+  }
+  if (block.id === '##HL') {
+    return resolveMdf4Data(buf, block.links[0], depth + 1); // hl_dl_first
+  }
+  if (block.id === '##DL') {
+    const parts: Buffer[] = [];
+    let dlOff = off;
+    let guard = 0;
+    while (dlOff && guard++ < 100000) {
+      const dl = readMdf4Block(buf, dlOff);
+      const count = buf.readUInt32LE(dl.dataStart + 4); // dl_flags(1)+reserved(3), then dl_count
+      for (let i = 0; i < count; i++) {
+        const link = dl.links[1 + i]; // links[0] is dl_dl_next; data links follow
+        if (link) parts.push(resolveMdf4Data(buf, link, depth + 1));
+      }
+      dlOff = dl.links[0]; // dl_dl_next
+    }
+    return Buffer.concat(parts);
+  }
+  return Buffer.alloc(0);
+}
+
 export class Mf4Adapter implements SourceAdapter {
   readonly id = 'mf4';
   readonly label = 'ASAM MDF4 (MF4)';
@@ -523,15 +595,19 @@ export class Mf4Adapter implements SourceAdapter {
                 cnOff = cn.links[0]; // cn_cn_next
               }
 
-              const dataBlock = dgData ? readMdf4Block(buf, dgData) : null;
-              if (!dataBlock || dataBlock.id !== '##DT') {
-                writeLine(`[mf4] data block ${dataBlock ? dataBlock.id : 'missing'} not supported (only uncompressed ##DT) — skipped`);
+              // Resolve the record bytes — handles raw ##DT, compressed ##DZ,
+              // and ##DL/##HL data lists (what real MF4 files actually use).
+              const rec = dgData ? resolveMdf4Data(buf, dgData) : Buffer.alloc(0);
+              const recSize = recIdSize + dataBytes + invalBytes;
+              if (rec.length === 0 || recSize === 0) {
+                const blk = dgData ? readMdf4Block(buf, dgData) : null;
+                writeLine(`[mf4] data block ${blk ? blk.id : 'missing'} produced no readable records — skipped`);
               } else {
-                const recSize = recIdSize + dataBytes + invalBytes;
-                for (let i = 0; i < cycleCount; i++) {
-                  const base = dataBlock.dataStart + i * recSize + recIdSize;
-                  if (base + dataBytes > dataBlock.dataEnd) break;
-                  const rec = buf;
+                const available = Math.floor(rec.length / recSize);
+                const limit = Math.min(cycleCount, available);
+                for (let i = 0; i < limit; i++) {
+                  const base = i * recSize + recIdSize;
+                  if (base + dataBytes > rec.length) break;
                   const parts: string[] = [];
                   if (master) {
                     const mv = decodeMdf4Value(rec, base, master);

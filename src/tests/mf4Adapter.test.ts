@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as zlib from 'zlib';
 import { Mf4Adapter, pickAdapter, adapterRegistry } from '../main/sourceAdapter';
 
 // ── Minimal MDF 4.x fixture builder ──────────────────────────────────────────
@@ -18,7 +19,41 @@ function mdf4Block(id: string, links: number[], data: Buffer): Buffer {
   return b;
 }
 
-function buildFixture(): Buffer {
+type DataKind = 'dt' | 'dz' | 'dzt' | 'dl';
+
+/** Wrap raw record bytes in a ##DZ block (deflate, zip_type 0, org_block_type "DT"). */
+function makeDz(raw: Buffer): Buffer {
+  const comp = zlib.deflateSync(raw);
+  const d = Buffer.alloc(24 + comp.length);
+  d.write('DT', 0, 'latin1');                  // dz_org_block_type
+  d.writeUInt8(0, 2);                          // dz_zip_type = deflate
+  d.writeUInt32LE(0, 4);                       // dz_zip_parameter
+  d.writeBigUInt64LE(BigInt(raw.length), 8);   // dz_org_data_length
+  d.writeBigUInt64LE(BigInt(comp.length), 16); // dz_data_length
+  comp.copy(d, 24);
+  return mdf4Block('##DZ', [], d);
+}
+
+/** Wrap raw record bytes in a transposed ##DZ block (zip_type 1), cols = record size. */
+function makeDzTransposed(raw: Buffer, cols: number): Buffer {
+  const N = Math.floor(raw.length / cols);
+  const transposed = Buffer.alloc(raw.length);
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < cols; j++) transposed[j * N + i] = raw[i * cols + j];
+  }
+  for (let k = N * cols; k < raw.length; k++) transposed[k] = raw[k];
+  const comp = zlib.deflateSync(transposed);
+  const d = Buffer.alloc(24 + comp.length);
+  d.write('DT', 0, 'latin1');
+  d.writeUInt8(1, 2);                          // dz_zip_type = transposition + deflate
+  d.writeUInt32LE(cols, 4);                    // dz_zip_parameter = columns
+  d.writeBigUInt64LE(BigInt(raw.length), 8);
+  d.writeBigUInt64LE(BigInt(comp.length), 16);
+  comp.copy(d, 24);
+  return mdf4Block('##DZ', [], d);
+}
+
+function buildFixture(dataKind: DataKind = 'dt'): Buffer {
   // IDBLOCK — 64 bytes, "MDF     " + version.
   const id = Buffer.alloc(64);
   id.write('MDF     ', 0, 'latin1');
@@ -72,20 +107,37 @@ function buildFixture(): Buffer {
 
   const tx = mdf4Block('##TX', [], Buffer.from('speed\0'));
 
-  // DTBLOCK — 3 records × (float64 time + int16 speed).
-  const dtData = Buffer.alloc(30);
+  // Record payload — 3 records × (float64 time + int16 speed).
+  const recData = Buffer.alloc(30);
   for (let i = 0; i < 3; i++) {
-    dtData.writeDoubleLE(i * 0.1, i * 10);
-    dtData.writeInt16LE(100 * (i + 1), i * 10 + 8);
+    recData.writeDoubleLE(i * 0.1, i * 10);
+    recData.writeInt16LE(100 * (i + 1), i * 10 + 8);
   }
-  const dt = mdf4Block('##DT', [], dtData);
 
-  return Buffer.concat([id, hd, dg, cg, cn1, cn2, tx, dt]);
+  // The data section sits at offset DT regardless of kind (dg_data points there).
+  let dataSection: Buffer;
+  if (dataKind === 'dt') {
+    dataSection = mdf4Block('##DT', [], recData);
+  } else if (dataKind === 'dz') {
+    dataSection = makeDz(recData);
+  } else if (dataKind === 'dzt') {
+    dataSection = makeDzTransposed(recData, 10); // record size = 10 bytes
+  } else {
+    // ##DL listing a single ##DZ chunk placed right after the DL block.
+    const DLlen = 24 + 2 * 8 + 16; // header + (dl_dl_next + 1 data link) + data
+    const dlData = Buffer.alloc(16);
+    dlData.writeUInt8(0, 0);    // dl_flags (no equal-length → dl_offset[] follows)
+    dlData.writeUInt32LE(1, 4); // dl_count = 1
+    const dl = mdf4Block('##DL', [0, DT + DLlen], dlData); // links: dl_dl_next, dl_data[0]
+    dataSection = Buffer.concat([dl, makeDz(recData)]);
+  }
+
+  return Buffer.concat([id, hd, dg, cg, cn1, cn2, tx, dataSection]);
 }
 
-function tmpMf4(): string {
+function tmpMf4(kind: DataKind = 'dt'): string {
   const p = path.join(os.tmpdir(), `logan-mf4-fix-${process.pid}-${Math.random().toString(36).slice(2)}.mf4`);
-  fs.writeFileSync(p, buildFixture());
+  fs.writeFileSync(p, buildFixture(kind));
   return p;
 }
 
@@ -127,6 +179,63 @@ describe('Mf4Adapter', () => {
       ]);
       expect(source.capabilities.isBinary).toBe(true);
       expect(source.capabilities.supportsAppend).toBe(false);
+      source.cleanup?.();
+    } finally {
+      fs.unlinkSync(p);
+      if (outPath && fs.existsSync(outPath)) fs.unlinkSync(outPath);
+    }
+  });
+
+  it('normalize() decodes compressed ##DZ data blocks', async () => {
+    const p = tmpMf4('dz');
+    let outPath = '';
+    try {
+      const source = await new Mf4Adapter().normalize(p);
+      outPath = source.path;
+      const lines = fs.readFileSync(source.path, 'utf-8').split('\n');
+      expect(lines).toEqual([
+        't=0 speed=100',
+        't=0.1 speed=200',
+        't=0.2 speed=300',
+      ]);
+      source.cleanup?.();
+    } finally {
+      fs.unlinkSync(p);
+      if (outPath && fs.existsSync(outPath)) fs.unlinkSync(outPath);
+    }
+  });
+
+  it('normalize() decodes transposed ##DZ blocks (zip_type 1)', async () => {
+    const p = tmpMf4('dzt');
+    let outPath = '';
+    try {
+      const source = await new Mf4Adapter().normalize(p);
+      outPath = source.path;
+      const lines = fs.readFileSync(source.path, 'utf-8').split('\n');
+      expect(lines).toEqual([
+        't=0 speed=100',
+        't=0.1 speed=200',
+        't=0.2 speed=300',
+      ]);
+      source.cleanup?.();
+    } finally {
+      fs.unlinkSync(p);
+      if (outPath && fs.existsSync(outPath)) fs.unlinkSync(outPath);
+    }
+  });
+
+  it('normalize() decodes ##DL data lists pointing to ##DZ chunks', async () => {
+    const p = tmpMf4('dl');
+    let outPath = '';
+    try {
+      const source = await new Mf4Adapter().normalize(p);
+      outPath = source.path;
+      const lines = fs.readFileSync(source.path, 'utf-8').split('\n');
+      expect(lines).toEqual([
+        't=0 speed=100',
+        't=0.1 speed=200',
+        't=0.2 speed=300',
+      ]);
       source.cleanup?.();
     } finally {
       fs.unlinkSync(p);
