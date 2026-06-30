@@ -36,6 +36,9 @@ const IPC = {
   SEARCH_CONFIG_SESSION_SAVE: 'search-config-session-save',
   SEARCH_CONFIG_SESSION_DELETE: 'search-config-session-delete',
   GET_LINE_TIMESTAMP: 'get-line-timestamp',
+  VIDEO_TRANSCODE: 'video-transcode',
+  VIDEO_TRANSCODE_PROGRESS: 'video-transcode-progress',
+  VIDEO_TRANSCODE_CANCEL: 'video-transcode-cancel',
   SERIAL_LIST_PORTS: 'serial-list-ports',
   LOGCAT_LIST_DEVICES: 'logcat-list-devices',
   SSH_PARSE_CONFIG: 'ssh-parse-config',
@@ -461,6 +464,18 @@ const api = {
   getLineTimestamps: (lineNumbers: number[]): Promise<Array<{ lineNumber: number; epochMs: number }>> =>
     ipcRenderer.invoke(IPC.GET_LINE_TIMESTAMPS, lineNumbers),
 
+  transcodeVideo: (srcPath: string): Promise<{ success: boolean; outputPath?: string; cached?: boolean; error?: string; cancelled?: boolean }> =>
+    ipcRenderer.invoke(IPC.VIDEO_TRANSCODE, srcPath),
+
+  cancelVideoTranscode: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.VIDEO_TRANSCODE_CANCEL),
+
+  onVideoTranscodeProgress: (callback: (data: { percent: number }) => void): (() => void) => {
+    const handler = (_: any, data: { percent: number }) => callback(data);
+    ipcRenderer.on(IPC.VIDEO_TRANSCODE_PROGRESS, handler);
+    return () => ipcRenderer.removeListener(IPC.VIDEO_TRANSCODE_PROGRESS, handler);
+  },
+
   // MCP navigation
   onNavigateToLine: (callback: (lineNumber: number) => void): (() => void) => {
     const handler = (_: any, lineNumber: number) => callback(lineNumber);
@@ -521,6 +536,9 @@ const api = {
 
   stopAgent: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('agent-stop'),
+
+  interruptAgent: (): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('agent-interrupt'),
 
   getAgentRunning: (): Promise<{ running: boolean }> =>
     ipcRenderer.invoke('agent-get-running'),

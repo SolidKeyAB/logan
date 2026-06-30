@@ -56,7 +56,6 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
 
       const stat = fs.statSync(filePath);
       const fileSize = stat.size;
-      let bytesRead = 0;
       let lineNumber = 0;
       let lastProgressUpdate = Date.now();
 
@@ -97,9 +96,13 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
       let lineBuffer = '';
       let lineBufferFull = false;
 
-      const processLine = (line: string): void => {
+      // atByte = true byte offset of this line in the file (interpolated from
+      // actual chunk bytes by the read loop). Used for the density heatmap and
+      // progress. NOT derived from line.length, which is a UTF-16 char count and
+      // undercounts for long lines (capped at MAX_LINE_LENGTH), CRLF and
+      // multi-byte UTF-8 — that drift left the minimap's tail black on big files.
+      const processLine = (line: string, atByte: number): void => {
         lineNumber++;
-        bytesRead += line.length + 1;
 
         if (lineNumber === 1 && this.looksLikeHeader(line)) return;
         if (!line.trim() || line.startsWith('#')) return;
@@ -131,8 +134,8 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
         }
         if (level) {
           levelCounts[level]++;
-          // Update density bucket based on byte position
-          const bucket = Math.min(DENSITY_BUCKETS - 1, Math.floor((bytesRead / fileSize) * DENSITY_BUCKETS));
+          // Update density bucket based on true byte position
+          const bucket = Math.min(DENSITY_BUCKETS - 1, Math.floor((atByte / fileSize) * DENSITY_BUCKETS));
           if (level === 'fatal') densityFatal[bucket]++;
           else if (level === 'error') densityError[bucket]++;
           else if (level === 'warning') densityWarning[bucket]++;
@@ -194,7 +197,7 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
         const now = Date.now();
         if (now - lastProgressUpdate > 200) {
           lastProgressUpdate = now;
-          const percent = Math.round(5 + (bytesRead / fileSize) * 75);
+          const percent = Math.round(5 + (atByte / fileSize) * 75);
           onProgress?.({ phase: 'parsing', percent, message: `Line ${lineNumber.toLocaleString()}...` });
         }
       };
@@ -204,16 +207,21 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
         while (filePos < fileSize) {
           if (signal?.cancelled) break;
 
+          const chunkStartByte = filePos;
           const bytesReadChunk = fs.readSync(fd, readBuffer, 0, CHUNK_SIZE, filePos);
           if (bytesReadChunk === 0) break;
           filePos += bytesReadChunk;
 
           const chunk = readBuffer.toString('utf-8', 0, bytesReadChunk);
+          const chunkChars = chunk.length || 1;
 
           for (let i = 0; i < chunk.length; i++) {
             const ch = chunk[i];
             if (ch === '\n' || ch === '\r') {
-              processLine(lineBuffer);
+              // Interpolate the line's true byte offset from chars-consumed × the
+              // chunk's real byte count (char≠byte for multi-byte/CRLF/long lines).
+              const atByte = chunkStartByte + Math.round(((i + 1) / chunkChars) * bytesReadChunk);
+              processLine(lineBuffer, atByte);
               lineBuffer = '';
               lineBufferFull = false;
               if (ch === '\r' && i + 1 < chunk.length && chunk[i + 1] === '\n') {
@@ -234,7 +242,7 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
         }
 
         if (lineBuffer.length > 0) {
-          processLine(lineBuffer);
+          processLine(lineBuffer, fileSize);
         }
       } finally {
         fs.closeSync(fd);
