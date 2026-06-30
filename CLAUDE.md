@@ -71,6 +71,14 @@ Use `logan_report_finding` for each distinct finding, then send a summary via `l
 | `logan_trend_series` | Trend one field over time (adaptive time buckets + sampled points). Accepts a `pattern` regex for unlabeled values |
 | `logan_trend_transitions` | Detect every value change ("flip") of a field — any type; great for "what changed before the bug" |
 | `logan_trend_correlate` | Cross-tab a field by event presence ("when X fires, what is v vs when it doesn't") |
+| `logan_trend_show` | Like the trend tools, but ALSO renders the chart as a cell in the user's Trends panel — call it (not the bare trend tools) when you want the user to SEE the trend; call repeatedly to build a vertical sequence. Booleans render as a 0/1 step line |
+| `logan_get_investigation_log` | Return the ordered list of investigative tool calls recorded this session — i.e. the logic you followed; use to show the user your steps for a ticket |
+| `logan_save_investigation` | Save the recorded steps as a NAMED, re-runnable template ("investigate pattern"); component/field/pattern/event become fill-in params |
+| `logan_list_investigations` / `logan_run_investigation` | List saved patterns, or replay one by name on the current log (with optional `params` overrides) |
+
+**Discoverable fields are typed** (numeric/boolean/string/array). Booleans (e.g. `isTokenExpired=false`) chart in the Trends panel as a 0/1 step line. Numeric MF4/log signals overlay in the **Signals** panel (shares the trend engine).
+
+**Interrupting the agent:** the user can press **⏹ Stop** in the Chat panel. It does not kill the session — your next tool call returns a STOP instruction; acknowledge briefly and call `logan_wait_for_message`.
 
 ### Agent Setup Wizard
 

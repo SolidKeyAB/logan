@@ -392,7 +392,7 @@
           <button class="bottom-tab-btn" data-bottom-tab="search-results" data-help="Results from Ctrl+F search. Click a result to jump to that line.&#10;Supports regex, wildcard, case-sensitive, and whole-word modes.">Search Results</button>
           <button class="bottom-tab-btn" data-bottom-tab="search-configs" data-help="Save and reuse complex search patterns across files.&#10;Each config stores pattern, regex/case/word flags, and a label.">Search Configs</button>
           <button class="bottom-tab-btn" data-bottom-tab="contexts" data-help="Define must+clue patterns to find correlated log events.&#10;Example: must:&quot;ERROR&quot; + clue:&quot;timeout&quot; within 10 lines.&#10;Lanes view shows each context as a colored row for comparison.">Contexts</button>
-          <button class="bottom-tab-btn" data-bottom-tab="video" data-help="Sync a video recording with log timestamps.&#10;Set a sync point to correlate video playback with log lines.">Video</button>
+          <button class="bottom-tab-btn" data-bottom-tab="video" data-help="Sync a video recording with log timestamps.&#10;Set a sync point to correlate video playback with log lines.&#10;Plays MP4/WebM/Ogg directly; AVI/MKV/WMV are auto-converted to MP4 (needs ffmpeg).">Video</button>
           <button class="bottom-tab-btn" data-bottom-tab="image" data-help="View images referenced in log files.&#10;Drag and drop or open image files for side-by-side analysis.">Image</button>
           <button class="bottom-tab-btn" data-bottom-tab="live" data-help="Connect to live log sources: Serial ports, ADB logcat, or SSH.&#10;Up to 4 parallel connections with real-time streaming.">Live</button>
           <button class="bottom-tab-btn" data-bottom-tab="time-align" data-help="Visually align search config results by timestamp.&#10;Each enabled config becomes a draggable timeline lane.&#10;Drag lanes left/right to apply time offsets and correlate events.">Time Align</button>
@@ -432,6 +432,11 @@
             <span class="investigate-label">What's the symptom?</span>
             <div id="investigate-symptoms" class="investigate-symptoms"></div>
           </div>
+          <div class="bottom-tab-sub-header investigate-patterns-bar" data-help="Saved investigation patterns. The agent records the steps it takes for a ticket (search → filter → trend → investigate); save that as a named template and replay it on any log — one click. Values like component/field become fill-ins.">
+            <span class="investigate-label">Saved patterns</span>
+            <button id="btn-save-investigation" class="secondary-btn small" title="Save the steps taken so far as a reusable template">💾 Save current</button>
+            <div id="investigate-patterns-list" class="investigate-patterns-list"></div>
+          </div>
           <div id="investigate-results" class="investigate-content">
             <p class="placeholder">Pick a <strong>symptom</strong> above — LOGAN runs the matching recipe and pins findings you can click to jump to.</p>
           </div>
@@ -440,9 +445,8 @@
         <div class="bottom-tab-view" data-bottom-tab="trends">
           <div class="bottom-tab-sub-header trends-toolbar">
             <button id="btn-discover-fields" class="secondary-btn small">Discover Fields</button>
-            <select id="trends-field-select" class="trends-input" title="Field to trend" disabled>
-              <option value="">Discover or pick a field…</option>
-            </select>
+            <input id="trends-field-select" class="trends-input" list="trends-field-options" type="text" autocomplete="off" placeholder="Discover or search a field…" title="Field to trend — type to search the discovered fields" disabled>
+            <datalist id="trends-field-options"></datalist>
             <select id="trends-cell-type" class="trends-input" title="Cell type">
               <option value="series">Value over time</option>
               <option value="transitions">Value flips</option>
@@ -1048,6 +1052,17 @@
               <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>9</kbd><span>Toggle video player</span></div>
               <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>\</kbd><span>Toggle sidebar visibility</span></div>
               <div class="shortcut-item"><kbd>Esc</kbd><span>Close panel (when focused)</span></div>
+            </div>
+          </div>
+          <div class="help-section">
+            <h4>Analysis, Trends &amp; AI</h4>
+            <div class="shortcut-list">
+              <div class="shortcut-item"><span><strong>Trends</strong> tab → Discover Fields, then type in <strong>Pick a field</strong> to search; chart value-over-time, flips, or correlation. Booleans (e.g. <code>isTokenExpired=false</code>) chart as a 0/1 step line.</span></div>
+              <div class="shortcut-item"><span><strong>Signals</strong> tab → overlays numeric signals (incl. MF4 channels) on one shared time axis; Discover Signals auto-finds them.</span></div>
+              <div class="shortcut-item"><span><strong>Investigate</strong> tab → pick a symptom for a guided recipe. The AI agent's steps are recorded; <strong>💾 Save current</strong> turns them into a re-runnable <em>pattern</em> you replay (▶) on any log.</span></div>
+              <div class="shortcut-item"><span><strong>Chat</strong> → <kbd>⏹ Stop</kbd> interrupts the agent's current task without ending the session. The agent can also push trend charts straight into the Trends panel.</span></div>
+              <div class="shortcut-item"><span><strong>Video</strong> tab → plays MP4/WebM/Ogg directly; AVI/MKV/WMV are auto-converted to MP4 via ffmpeg.</span></div>
+              <div class="shortcut-item"><span>Bottom panel <strong>color dot</strong> → recolor the panel; text/labels/buttons auto-adjust for contrast.</span></div>
             </div>
           </div>
           <div class="help-section">

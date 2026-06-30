@@ -7815,6 +7815,77 @@ kbd {
 .investigate-symptom-btn .sym-icon {
   font-size: 12px;
 }
+/* Saved investigation patterns */
+.investigate-patterns-bar {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  border-top: 1px solid var(--border-color);
+}
+.investigate-patterns-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+.investigate-patterns-empty {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.investigate-pattern-chip {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.investigate-pattern-run {
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 3px 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.investigate-pattern-run:hover { background: var(--bg-hover); }
+.investigate-pattern-count {
+  font-size: 9px;
+  background: var(--accent-color);
+  color: #fff;
+  border-radius: 7px;
+  padding: 0 5px;
+}
+.investigate-pattern-del {
+  background: none;
+  border: none;
+  border-left: 1px solid var(--border-color);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 6px;
+  font-size: 13px;
+}
+.investigate-pattern-del:hover { color: #e05a5a; background: var(--bg-hover); }
+/* Replay result list */
+.investigate-replay-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+.investigate-replay-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+  padding: 2px 0;
+}
+.investigate-replay-ok { color: var(--accent-hover); width: 12px; }
+.investigate-replay-step { color: var(--text-primary); font-family: var(--font-mono); }
+.investigate-replay-sum { color: var(--text-muted); margin-left: auto; }
 .investigate-content {
   flex: 1;
   min-height: 0;
@@ -7974,6 +8045,14 @@ kbd {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-secondary);
+}
+.trend-cell-agent {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--accent-color);
+  color: #fff;
+  white-space: nowrap;
 }
 .trend-cell-remove {
   margin-left: auto;
