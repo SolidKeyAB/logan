@@ -902,6 +902,7 @@ const elements = {
   chatMessages: document.getElementById('chat-messages') as HTMLDivElement,
   chatInput: document.getElementById('chat-input') as HTMLInputElement,
   chatSendBtn: document.getElementById('chat-send-btn') as HTMLButtonElement,
+  chatInterruptBtn: document.getElementById('chat-interrupt-btn') as HTMLButtonElement,
   chatAgentDot: document.getElementById('chat-agent-dot') as HTMLSpanElement,
   chatAgentStatusText: document.getElementById('chat-agent-status-text') as HTMLSpanElement,
   chatLaunchAgent: document.getElementById('chat-launch-agent') as HTMLButtonElement,
@@ -1019,6 +1020,7 @@ const elements = {
   videoContainer: document.getElementById('video-container') as HTMLDivElement,
   videoDropZone: document.getElementById('video-drop-zone') as HTMLDivElement,
   videoFileName: document.getElementById('video-file-name') as HTMLSpanElement,
+  videoError: document.getElementById('video-error') as HTMLDivElement,
   videoSyncInput: document.getElementById('video-sync-input') as HTMLInputElement,
   videoSyncStatus: document.getElementById('video-sync-status') as HTMLSpanElement,
   btnVideoPlayer: document.getElementById('btn-video-player') as HTMLButtonElement,
@@ -4836,7 +4838,7 @@ function renderFolderTree(): void {
         }
       } else if (fileType === 'video') {
         loadVideoFromPath(filePath);
-        toggleBottomTab('video');
+        openBottomTab('video');
       } else if (fileType === 'image') {
         openImageInPanel(filePath);
       } else {
@@ -6584,10 +6586,52 @@ function isLightPanelColor(color: string): boolean {
   return L > 0.179;
 }
 
+// Smart, CONTINUOUS contrast: from the chosen panel bg, compute a full set of
+// foreground tokens (text shades, borders, control surfaces) that are guaranteed
+// readable — for ANY colour, including medium/saturated ones a binary light/dark
+// flip handles badly. These are set as CSS custom properties on the panel so every
+// label, button and surface that references them adapts automatically.
+function computePanelTokens(color: string): Record<string, string> {
+  const m = color.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+  const r = m ? +m[1] : 30, g = m ? +m[2] : 30, b = m ? +m[3] : 30;
+  const lin = (v: number): number => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  // Pick black or white text by whichever yields the higher WCAG contrast ratio.
+  const contrastWhite = 1.05 / (L + 0.05);
+  const contrastBlack = (L + 0.05) / 0.05;
+  const fg = contrastBlack >= contrastWhite ? [17, 17, 17] : [242, 242, 242];
+  // Solid shade = fg blended over the panel bg at `a` (no alpha surprises on text).
+  const mix = (a: number): string => {
+    const rr = Math.round(fg[0] * a + r * (1 - a));
+    const gg = Math.round(fg[1] * a + g * (1 - a));
+    const bb = Math.round(fg[2] * a + b * (1 - a));
+    return `rgb(${rr}, ${gg}, ${bb})`;
+  };
+  const fgA = (a: number): string => `rgba(${fg[0]}, ${fg[1]}, ${fg[2]}, ${a})`;
+  return {
+    '--text-primary': mix(1),
+    '--text-secondary': mix(0.72),
+    '--text-muted': mix(0.52),
+    '--text-muted-bright': mix(0.82),
+    '--panel-fg-strong': mix(1),
+    '--panel-border': fgA(0.22),
+    '--panel-surface': fgA(0.10),
+    '--panel-surface-strong': fgA(0.20),
+  };
+}
+
 function applyPanelBgColor(color: string): void {
-  elements.bottomPanel.style.background = color;
-  // Flip panel text to a contrasting set when the chosen bg is light (handled in CSS).
-  elements.bottomPanel.classList.toggle('panel-light-bg', isLightPanelColor(color));
+  const bp = elements.bottomPanel;
+  bp.style.background = color;
+  // Drive all panel text/surfaces off computed, contrast-safe tokens (continuous).
+  const tokens = computePanelTokens(color);
+  for (const [k, v] of Object.entries(tokens)) bp.style.setProperty(k, v);
+  bp.style.color = tokens['--text-primary'];
+  // Keep the legacy binary class too — harmless and agrees with tokens for light bg.
+  bp.classList.toggle('panel-light-bg', isLightPanelColor(color));
   // Keep the dot in sync
   const dot = document.querySelector('.panel-color-dot') as HTMLElement | null;
   if (dot) dot.style.background = color;
@@ -7373,6 +7417,25 @@ function updateAgentConnectionStatus(connected: boolean, _count: number, name?: 
   } else {
     dot.className = 'chat-agent-status-dot disconnected';
     text.textContent = 'No agent connected';
+  }
+  // Stop is only meaningful while an agent is connected.
+  if (elements.chatInterruptBtn) elements.chatInterruptBtn.disabled = !connected;
+}
+
+async function interruptAgent(): Promise<void> {
+  if (!agentConnected) return;
+  const btn = elements.chatInterruptBtn;
+  btn.disabled = true;
+  const prev = btn.textContent;
+  btn.textContent = 'Stopping…';
+  try {
+    const res = await window.api.interruptAgent();
+    if (!res.success) showToast(res.error || 'Could not interrupt the agent');
+  } catch (e) {
+    showToast('Interrupt failed: ' + String(e));
+  } finally {
+    btn.textContent = prev;
+    btn.disabled = !agentConnected;
   }
 }
 
@@ -9537,10 +9600,22 @@ function setupLiveEventListeners(): void {
   });
 }
 
+// Chromium's <video> only decodes MP4/H.264, WebM and Ogg. Everything else is
+// transcoded to MP4 on demand via ffmpeg (main process), cached per source file.
+//   NATIVE         — play directly.
+//   NEEDS_TRANSCODE — never plays natively (AVI/WMV/…), transcode straight away.
+//   MAYBE_NATIVE    — sometimes plays (MKV/MOV wrapping H.264); try native, fall
+//                     back to transcode if the <video> errors.
+const NATIVE_VIDEO_EXTS = new Set(['mp4', 'm4v', 'webm', 'ogv', 'ogg']);
+const MAYBE_NATIVE_VIDEO_EXTS = new Set(['mkv', 'mov']);
+
+let videoTranscodeProgressUnsub: (() => void) | null = null;
+
 function openVideoFile(): void {
   const input = document.createElement('input');
   input.type = 'file';
-  input.accept = 'video/mp4,video/webm,video/ogg,.mp4,.webm,.ogv,.ogg';
+  // Accept the natively-playable formats plus the ones we transcode.
+  input.accept = 'video/*,.mp4,.webm,.ogv,.ogg,.mov,.mkv,.avi,.wmv,.flv,.mpg,.mpeg';
   input.onchange = () => {
     const file = input.files?.[0];
     if (file) {
@@ -9550,13 +9625,106 @@ function openVideoFile(): void {
   input.click();
 }
 
+function clearVideoError(): void {
+  elements.videoError.style.display = 'none';
+  elements.videoError.innerHTML = '';
+}
+
+// Play a file path directly in the <video> element (path is original or transcoded).
+function playVideoSrc(srcPath: string, onError: () => void): void {
+  elements.videoElement.onerror = onError;
+  elements.videoElement.src = 'file://' + srcPath;
+  elements.videoElement.load();
+  clearVideoError();
+}
+
+function showVideoError(ext: string, explicit?: string): void {
+  const fmt = ext ? ext.toUpperCase() : 'This';
+  const title = explicit ? `Couldn’t play ${fmt} video` : `Couldn’t play this video`;
+  let detail: string;
+  let cmd = '';
+  if (explicit && /ffmpeg not found/i.test(explicit)) {
+    detail = 'Automatic conversion needs ffmpeg, which wasn’t found. Install it and reopen the video — or convert it yourself:';
+    const srcName = state.videoFilePath ? (state.videoFilePath.split(/[\\/]/).pop() || 'input') : 'input';
+    cmd = `ffmpeg -i "${srcName}" -c:v libx264 -c:a aac "${srcName.replace(/\.[^.]+$/, '')}.mp4"`;
+  } else if (explicit) {
+    detail = 'Conversion failed: ' + explicit;
+  } else {
+    detail = `The file may be corrupt, or uses a codec that couldn’t be decoded or converted (the player supports MP4/H.264, WebM and Ogg natively).`;
+  }
+  elements.videoError.innerHTML =
+    `<div class="video-error-title">${escapeHtml(title)}</div>` +
+    `<div class="video-error-detail">${escapeHtml(detail)}</div>` +
+    (cmd ? `<code>${escapeHtml(cmd)}</code>` : '');
+  elements.videoError.style.display = 'flex';
+}
+
+function showTranscodeProgress(ext: string): void {
+  const fmt = ext ? ext.toUpperCase() : 'video';
+  elements.videoError.innerHTML =
+    `<div class="video-error-title">Converting ${escapeHtml(fmt)} → MP4…</div>` +
+    `<div class="video-error-detail">Chromium can’t play ${escapeHtml(fmt)} directly. Converting once (cached afterwards) — large files may take a minute.</div>` +
+    `<div class="video-transcode-track"><div id="video-transcode-fill" class="video-transcode-fill"></div></div>` +
+    `<div id="video-transcode-pct" class="video-error-detail">0%</div>` +
+    `<button id="video-transcode-cancel" class="video-open-btn">Cancel</button>`;
+  elements.videoError.style.display = 'flex';
+  document.getElementById('video-transcode-cancel')?.addEventListener('click', () => {
+    window.api.cancelVideoTranscode();
+    elements.videoContainer.classList.remove('has-video');
+    clearVideoError();
+  });
+}
+
+function updateTranscodeProgress(percent: number): void {
+  const fill = document.getElementById('video-transcode-fill');
+  const pct = document.getElementById('video-transcode-pct');
+  if (fill) fill.style.width = percent + '%';
+  if (pct) pct.textContent = percent + '%';
+}
+
+// Transcode `srcPath` → MP4 via ffmpeg, then play it. `videoFilePath` stays the
+// original path (for display + sync); only the playback src is the temp MP4.
+function transcodeAndPlay(srcPath: string, ext: string): void {
+  showTranscodeProgress(ext);
+  videoTranscodeProgressUnsub?.();
+  videoTranscodeProgressUnsub = window.api.onVideoTranscodeProgress((d) => updateTranscodeProgress(d.percent));
+  window.api.transcodeVideo(srcPath).then((res) => {
+    videoTranscodeProgressUnsub?.();
+    videoTranscodeProgressUnsub = null;
+    // Ignore stale results if the user has since loaded another file.
+    if (state.videoFilePath !== srcPath) return;
+    if (res.cancelled) return;
+    if (!res.success || !res.outputPath) {
+      showVideoError(ext, res.error || 'unknown error');
+      return;
+    }
+    playVideoSrc(res.outputPath, () => showVideoError(ext));
+  }).catch((e) => {
+    videoTranscodeProgressUnsub?.();
+    videoTranscodeProgressUnsub = null;
+    showVideoError(ext, String(e));
+  });
+}
+
 function loadVideoFromPath(videoPath: string): void {
   state.videoFilePath = videoPath;
-  elements.videoElement.src = 'file://' + videoPath;
+  clearVideoError();
   elements.videoContainer.classList.add('has-video');
+  const ext = (videoPath.split('.').pop() || '').toLowerCase();
   const fileName = videoPath.split(/[\\/]/).pop() || videoPath;
   elements.videoFileName.textContent = fileName;
   saveVideoState();
+
+  if (NATIVE_VIDEO_EXTS.has(ext)) {
+    // Plays directly; if it somehow fails, offer transcode as a fallback.
+    playVideoSrc(videoPath, () => transcodeAndPlay(videoPath, ext));
+  } else if (MAYBE_NATIVE_VIDEO_EXTS.has(ext)) {
+    // Try native first (fast when it's H.264); transcode on decode error.
+    playVideoSrc(videoPath, () => transcodeAndPlay(videoPath, ext));
+  } else {
+    // AVI/WMV/FLV/MPG/… — never decodable by Chromium, transcode immediately.
+    transcodeAndPlay(videoPath, ext);
+  }
 }
 
 function syncVideoToLine(lineNumber: number): void {
@@ -9693,7 +9861,11 @@ function setupVideoDragDrop(): void {
     prevent(e);
     dropZone.classList.remove('drag-over');
     const file = e.dataTransfer?.files?.[0];
-    if (file && file.type.startsWith('video/')) {
+    if (!file) return;
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const videoExts = new Set(['mp4', 'webm', 'ogv', 'ogg', 'mov', 'mkv', 'avi', 'wmv', 'flv', 'mpg', 'mpeg', 'm4v', 'm2ts', 'ts', '3gp']);
+    // Accept by MIME OR extension — some containers (e.g. .mkv) report an empty type.
+    if (file.type.startsWith('video/') || videoExts.has(ext)) {
       loadVideoFromPath(file.path);
     }
   });
@@ -14811,8 +14983,9 @@ function openImageInPanel(filePath: string): void {
   };
   imageViewerImg.src = `file://${filePath}`;
 
-  // Switch to image tab in bottom panel
-  toggleBottomTab('image');
+  // Always open (never toggle-closed) — opening a file should show the panel,
+  // even if the image tab is already the active one.
+  openBottomTab('image');
 }
 
 function setImageZoom(zoom: number): void {
@@ -16218,6 +16391,7 @@ function init(): void {
 
   // Agent Chat event listeners
   elements.chatSendBtn.addEventListener('click', sendChatMessage);
+  elements.chatInterruptBtn?.addEventListener('click', interruptAgent);
   elements.chatInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();

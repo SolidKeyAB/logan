@@ -323,6 +323,10 @@ export const IPC = {
   SEARCH_CONFIG_SESSION_SAVE: 'search-config-session-save',
   SEARCH_CONFIG_SESSION_DELETE: 'search-config-session-delete',
   GET_LINE_TIMESTAMP: 'get-line-timestamp',
+  // Video transcode (AVI/etc → MP4 for the built-in player)
+  VIDEO_TRANSCODE: 'video-transcode',
+  VIDEO_TRANSCODE_PROGRESS: 'video-transcode-progress',
+  VIDEO_TRANSCODE_CANCEL: 'video-transcode-cancel',
   // Device discovery (kept per-source)
   SERIAL_LIST_PORTS: 'serial-list-ports',
   LOGCAT_LIST_DEVICES: 'logcat-list-devices',
