@@ -790,19 +790,29 @@ export class FileHandler {
     return this.lineOffsets.length - this.headerLineCount;
   }
 
-  // Snapshot of the byte-offset index so a worker thread can read the same file
-  // independently (its own fd) without sharing this handler. offsets/lengths are
-  // typed arrays so they structured-clone cheaply across the worker boundary.
+  // Byte-offset index for a worker thread to read the same file independently (its
+  // own fd) without sharing this handler. The index is built ONCE into SharedArrayBuffers
+  // and cached, so repeated trend/signal scans (discover, then each signal toggle) don't
+  // re-copy a multi-million-entry array on the main process every call. Because the buffers
+  // are SHARED (not transferred/cloned), passing them to the worker is O(1) — the per-call
+  // main-thread cost that made the panel slow to open and clicks feel laggy is gone.
+  private scanIndexCache: { len: number; offsets: Float64Array; lengths: Float64Array } | null = null;
+
   getScanContext(): { filePath: string; headerLineCount: number; maxLineRead: number; offsets: Float64Array; lengths: Float64Array } | null {
     if (!this.filePath) return null;
     const n = this.lineOffsets.length;
-    const offsets = new Float64Array(n);
-    const lengths = new Float64Array(n);
-    for (let i = 0; i < n; i++) {
-      offsets[i] = this.lineOffsets[i].offset;
-      lengths[i] = this.lineOffsets[i].length;
+    // Rebuild only when the line count changes (e.g. live-tail append); otherwise reuse.
+    if (!this.scanIndexCache || this.scanIndexCache.len !== n) {
+      const offsets = new Float64Array(new SharedArrayBuffer(n * Float64Array.BYTES_PER_ELEMENT));
+      const lengths = new Float64Array(new SharedArrayBuffer(n * Float64Array.BYTES_PER_ELEMENT));
+      for (let i = 0; i < n; i++) {
+        offsets[i] = this.lineOffsets[i].offset;
+        lengths[i] = this.lineOffsets[i].length;
+      }
+      this.scanIndexCache = { len: n, offsets, lengths };
     }
-    return { filePath: this.filePath, headerLineCount: this.headerLineCount, maxLineRead: FileHandler.MAX_LINE_READ, offsets, lengths };
+    const c = this.scanIndexCache;
+    return { filePath: this.filePath, headerLineCount: this.headerLineCount, maxLineRead: FileHandler.MAX_LINE_READ, offsets: c.offsets, lengths: c.lengths };
   }
 
   close(): void {
@@ -812,6 +822,7 @@ export class FileHandler {
     }
     this.filePath = null;
     this.lineOffsets = [];
+    this.scanIndexCache = null;
     this.fileInfo = null;
     this.splitMetadata = null;
     this.headerLineCount = 0;

@@ -369,7 +369,7 @@ export interface SignalSeries {
 }
 
 export interface SignalSeriesResult {
-  x: { field: string; values: number[]; isIndex: boolean }; // shared axis (t, or record index fallback)
+  x: { field: string; values: number[]; isIndex: boolean; timeMs?: (number | null)[] }; // shared axis (t/index) + optional wall-clock per point
   series: SignalSeries[];
   totalRecords: number;        // lines that carried an x value (read/sampled)
   buckets: number;             // emitted bucket count (≤ maxPoints)
@@ -388,6 +388,7 @@ export function extractSignalSeries(
   handler: FileHandler,
   fields: string[],
   opts: ScanRange & { xField?: string; maxPoints?: number; sampleBudget?: number } = {},
+  parseTs?: (text: string) => { date: Date; str: string } | null,
 ): SignalSeriesResult {
   const xField = opts.xField ?? 't';
   const maxPoints = Math.min(Math.max(opts.maxPoints ?? 4000, 100), 20000);
@@ -402,7 +403,9 @@ export function extractSignalSeries(
   const xSum = new Float64Array(nBuckets);
   const xCnt = new Int32Array(nBuckets);
   const repLine = new Int32Array(nBuckets); // representative 1-based line per bucket
+  const repTimeMs = new Float64Array(nBuckets).fill(NaN); // wall-clock of each bucket's first line, if parseable
   let sawRealX = false;
+  let sawTime = false;
 
   // Per-signal accumulators.
   const accs = fields.map(() => ({
@@ -428,7 +431,15 @@ export function extractSignalSeries(
     const x = xNum !== null ? (sawRealX = true, xNum) : relIdx;
     xSum[bucket] += x;
     xCnt[bucket]++;
-    if (repLine[bucket] === 0) repLine[bucket] = lineNumber + 1;
+    if (repLine[bucket] === 0) {
+      repLine[bucket] = lineNumber + 1;
+      // Capture the bucket's wall-clock time from its first line so the chart can
+      // label the x axis with real date/time (the raw `t`/index is not a clock).
+      if (parseTs) {
+        const ts = parseTs(text);
+        if (ts) { repTimeMs[bucket] = ts.date.getTime(); sawTime = true; }
+      }
+    }
     totalRecords++;
 
     for (let f = 0; f < fields.length; f++) {
@@ -469,9 +480,14 @@ export function extractSignalSeries(
 
   // Compact to buckets that actually have an x sample, preserving order.
   const xValues: number[] = [];
+  const timeMs: (number | null)[] = [];
   const keep: number[] = [];
   for (let b = 0; b < nBuckets; b++) {
-    if (xCnt[b] > 0) { keep.push(b); xValues.push(xSum[b] / xCnt[b]); }
+    if (xCnt[b] > 0) {
+      keep.push(b);
+      xValues.push(xSum[b] / xCnt[b]);
+      timeMs.push(Number.isNaN(repTimeMs[b]) ? null : repTimeMs[b]);
+    }
   }
 
   const series: SignalSeries[] = fields.map((field, f) => {
@@ -505,7 +521,12 @@ export function extractSignalSeries(
   });
 
   return {
-    x: { field: sawRealX ? xField : 'index', values: xValues, isIndex: !sawRealX },
+    x: {
+      field: sawRealX ? xField : 'index',
+      values: xValues,
+      isIndex: !sawRealX,
+      timeMs: sawTime ? timeMs : undefined,
+    },
     series,
     totalRecords,
     buckets: xValues.length,
