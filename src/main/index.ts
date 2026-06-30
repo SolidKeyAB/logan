@@ -25,7 +25,8 @@ import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogL
 import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession, broadcastInterrupt, API_PORT } from './api-server';
 import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
 import { BaselineStore, buildFingerprint } from './baselineStore';
-import { discoverFields, extractSeries, extractSignalSeries, detectTransitions, correlate } from './trendEngine';
+import { parseTimestampFast } from './timestampParse';
+import { runTrendJob } from './trendWorkerClient';
 // Native-dependent modules — lazy-loaded to prevent SIGSEGV if bindings aren't built
 let SerialHandler: any = null;
 let LogcatHandler: any = null;
@@ -1529,51 +1530,71 @@ app.whenReady().then(() => {
     trendDiscoverFields: async (options) => {
       const handler = getFileHandler();
       if (!handler) return { success: false, error: 'No file open' };
-      const fields = discoverFields(handler, {
-        startLine: options?.startLine,
-        endLine: options?.endLine,
-        sampleSize: options?.sampleSize,
-      });
-      return { success: true, fields };
+      try {
+        const fields = await runTrendJob('discover', handler, {
+          startLine: options?.startLine,
+          endLine: options?.endLine,
+          sampleSize: options?.sampleSize,
+        });
+        return { success: true, fields };
+      } catch (error) {
+        return { success: false, error: String(error) };
+      }
     },
     trendSeries: async (options) => {
       const handler = getFileHandler();
       if (!handler) return { success: false, error: 'No file open' };
       if (!options?.field) return { success: false, error: 'field required' };
-      const result = extractSeries(handler, parseTimestampFast, options.field, {
-        startLine: options.startLine,
-        endLine: options.endLine,
-        bucketCount: options.bucketCount,
-        maxPoints: options.maxPoints,
-        pattern: options.pattern,
-        patternFlags: options.patternFlags,
-      });
-      return { success: true, ...result };
+      try {
+        const result = await runTrendJob('series', handler, {
+          field: options.field,
+          startLine: options.startLine,
+          endLine: options.endLine,
+          bucketCount: options.bucketCount,
+          maxPoints: options.maxPoints,
+          pattern: options.pattern,
+          patternFlags: options.patternFlags,
+        });
+        return { success: true, ...result };
+      } catch (error) {
+        return { success: false, error: String(error) };
+      }
     },
     trendTransitions: async (options) => {
       const handler = getFileHandler();
       if (!handler) return { success: false, error: 'No file open' };
       if (!options?.field) return { success: false, error: 'field required' };
-      const result = detectTransitions(handler, parseTimestampFast, options.field, {
-        startLine: options.startLine,
-        endLine: options.endLine,
-        maxTransitions: options.maxTransitions,
-        pattern: options.pattern,
-        patternFlags: options.patternFlags,
-      });
-      return { success: true, ...result };
+      try {
+        const result = await runTrendJob('transitions', handler, {
+          field: options.field,
+          startLine: options.startLine,
+          endLine: options.endLine,
+          maxTransitions: options.maxTransitions,
+          pattern: options.pattern,
+          patternFlags: options.patternFlags,
+        });
+        return { success: true, ...result };
+      } catch (error) {
+        return { success: false, error: String(error) };
+      }
     },
     trendCorrelate: async (options) => {
       const handler = getFileHandler();
       if (!handler) return { success: false, error: 'No file open' };
       if (!options?.field || !options?.event) return { success: false, error: 'field and event required' };
-      const result = correlate(handler, options.field, options.event, {
-        startLine: options.startLine,
-        endLine: options.endLine,
-        pattern: options.pattern,
-        patternFlags: options.patternFlags,
-      });
-      return { success: true, ...result };
+      try {
+        const result = await runTrendJob('correlate', handler, {
+          field: options.field,
+          event: options.event,
+          startLine: options.startLine,
+          endLine: options.endLine,
+          pattern: options.pattern,
+          patternFlags: options.patternFlags,
+        });
+        return { success: true, ...result };
+      } catch (error) {
+        return { success: false, error: String(error) };
+      }
     },
   };
   loadPersistedSession(); // restore last 24h of chat history
@@ -4300,11 +4321,14 @@ ipcMain.handle('analyze-file-path', async (_, filePath: string) => {
 });
 
 // ── Trends notebook (renderer path; mirrors the ApiContext trend* methods) ──
+// All five trend scans run in a worker thread (src/main/trendWorker.ts) so a big
+// file never blocks the main/UI event loop — the panel stays responsive instead of
+// appearing stuck. The worker returns the exact same engine result shape.
 ipcMain.handle(IPC.TREND_DISCOVER_FIELDS, async (_, options) => {
   const handler = getFileHandler();
   if (!handler) return { success: false, error: 'No file open' };
   try {
-    const fields = discoverFields(handler, {
+    const fields = await runTrendJob('discover', handler, {
       startLine: options?.startLine,
       endLine: options?.endLine,
       sampleSize: options?.sampleSize,
@@ -4320,7 +4344,8 @@ ipcMain.handle(IPC.TREND_SERIES, async (_, options) => {
   if (!handler) return { success: false, error: 'No file open' };
   if (!options?.field) return { success: false, error: 'field required' };
   try {
-    const result = extractSeries(handler, parseTimestampFast, options.field, {
+    const result = await runTrendJob('series', handler, {
+      field: options.field,
       startLine: options.startLine,
       endLine: options.endLine,
       bucketCount: options.bucketCount,
@@ -4339,7 +4364,8 @@ ipcMain.handle(IPC.TREND_SIGNAL_SERIES, async (_, options) => {
   if (!handler) return { success: false, error: 'No file open' };
   if (!options?.fields?.length) return { success: false, error: 'fields required' };
   try {
-    const result = extractSignalSeries(handler, options.fields, {
+    const result = await runTrendJob('signal', handler, {
+      fields: options.fields,
       startLine: options.startLine,
       endLine: options.endLine,
       xField: options.xField,
@@ -4356,7 +4382,8 @@ ipcMain.handle(IPC.TREND_TRANSITIONS, async (_, options) => {
   if (!handler) return { success: false, error: 'No file open' };
   if (!options?.field) return { success: false, error: 'field required' };
   try {
-    const result = detectTransitions(handler, parseTimestampFast, options.field, {
+    const result = await runTrendJob('transitions', handler, {
+      field: options.field,
       startLine: options.startLine,
       endLine: options.endLine,
       maxTransitions: options.maxTransitions,
@@ -4374,7 +4401,9 @@ ipcMain.handle(IPC.TREND_CORRELATE, async (_, options) => {
   if (!handler) return { success: false, error: 'No file open' };
   if (!options?.field || !options?.event) return { success: false, error: 'field and event required' };
   try {
-    const result = correlate(handler, options.field, options.event, {
+    const result = await runTrendJob('correlate', handler, {
+      field: options.field,
+      event: options.event,
       startLine: options.startLine,
       endLine: options.endLine,
       pattern: options.pattern,
@@ -4799,11 +4828,6 @@ interface TimeGap {
   linePreview: string;
 }
 
-const MONTH_MAP: Record<string, number> = {
-  'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5,
-  'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11
-};
-
 interface TimeGapOptions {
   thresholdSeconds: number;
   startLine?: number;
@@ -4818,50 +4842,7 @@ let timeGapSignal = { cancelled: false };
 // Helper to yield to event loop - use setTimeout for better yielding
 const yieldToEventLoop = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 
-// Optimized timestamp parser - pre-compiled regex
-const ISO_TIMESTAMP_REGEX = /(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/;
-const EURO_TIMESTAMP_REGEX = /(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/;
-const SYSLOG_TIMESTAMP_REGEX = /([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})/;
-
-function parseTimestampFast(text: string): { date: Date; str: string } | null {
-  // Check first 60 chars for performance (enough for most timestamp formats)
-  const sample = text.length > 60 ? text.substring(0, 60) : text;
-
-  // Try ISO format first (most common)
-  const isoMatch = sample.match(ISO_TIMESTAMP_REGEX);
-  if (isoMatch) {
-    const [match, year, month, day, hour, min, sec] = isoMatch;
-    return {
-      date: new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hour), parseInt(min), parseInt(sec)),
-      str: match,
-    };
-  }
-
-  // Try European format: DD.MM.YYYY HH:mm:ss
-  const euroMatch = sample.match(EURO_TIMESTAMP_REGEX);
-  if (euroMatch) {
-    const [match, day, month, year, hour, min, sec] = euroMatch;
-    return {
-      date: new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hour), parseInt(min), parseInt(sec)),
-      str: match,
-    };
-  }
-
-  // Try syslog format
-  const syslogMatch = sample.match(SYSLOG_TIMESTAMP_REGEX);
-  if (syslogMatch) {
-    const [match, monthStr, day, hour, min, sec] = syslogMatch;
-    const month = MONTH_MAP[monthStr];
-    if (month !== undefined) {
-      return {
-        date: new Date(new Date().getFullYear(), month, parseInt(day), parseInt(hour), parseInt(min), parseInt(sec)),
-        str: match,
-      };
-    }
-  }
-
-  return null;
-}
+// parseTimestampFast now lives in ./timestampParse (shared with the trend worker).
 
 // Get timestamp from a specific line
 ipcMain.handle(IPC.GET_LINE_TIMESTAMP, async (_, lineNumber: number) => {
