@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as zlib from 'zlib';
 import { Mf4Adapter, pickAdapter, adapterRegistry } from '../main/sourceAdapter';
+import { parseMdf4ToFile } from '../main/mf4Parse';
 
 // ── Minimal MDF 4.x fixture builder ──────────────────────────────────────────
 // Builds a tiny but spec-shaped MF4 buffer: ID + HD + DG + CG + 2×CN (a float64
@@ -141,6 +142,22 @@ function tmpMf4(kind: DataKind = 'dt'): string {
   return p;
 }
 
+/**
+ * Parse a fixture of the given kind via the worker-thread parse core (called
+ * directly here, no worker) and return the normalized output lines.
+ */
+async function parseToLines(kind: DataKind): Promise<string[]> {
+  const p = tmpMf4(kind);
+  const outPath = path.join(os.tmpdir(), `logan-mf4-out-${process.pid}-${Math.random().toString(36).slice(2)}.norm`);
+  try {
+    await parseMdf4ToFile(p, outPath);
+    return fs.readFileSync(outPath, 'utf-8').split('\n');
+  } finally {
+    if (fs.existsSync(p)) fs.unlinkSync(p);
+    if (fs.existsSync(outPath)) fs.unlinkSync(outPath);
+  }
+}
+
 describe('Mf4Adapter', () => {
   it('is registered ahead of the text fallback', () => {
     const ids = adapterRegistry.map(a => a.id);
@@ -165,81 +182,27 @@ describe('Mf4Adapter', () => {
     }
   });
 
-  it('normalize() decodes records into synthetic t=…/signal=… lines', async () => {
-    const p = tmpMf4();
-    let outPath = '';
-    try {
-      const source = await new Mf4Adapter().normalize(p);
-      outPath = source.path;
-      const lines = fs.readFileSync(source.path, 'utf-8').split('\n');
-      expect(lines).toEqual([
-        't=0 speed=100',
-        't=0.1 speed=200',
-        't=0.2 speed=300',
-      ]);
-      expect(source.capabilities.isBinary).toBe(true);
-      expect(source.capabilities.supportsAppend).toBe(false);
-      source.cleanup?.();
-    } finally {
-      fs.unlinkSync(p);
-      if (outPath && fs.existsSync(outPath)) fs.unlinkSync(outPath);
-    }
+  const expectedLines = ['t=0 speed=100', 't=0.1 speed=200', 't=0.2 speed=300'];
+
+  it('parse decodes raw ##DT records into synthetic t=…/signal=… lines', async () => {
+    expect(await parseToLines('dt')).toEqual(expectedLines);
   });
 
-  it('normalize() decodes compressed ##DZ data blocks', async () => {
-    const p = tmpMf4('dz');
-    let outPath = '';
-    try {
-      const source = await new Mf4Adapter().normalize(p);
-      outPath = source.path;
-      const lines = fs.readFileSync(source.path, 'utf-8').split('\n');
-      expect(lines).toEqual([
-        't=0 speed=100',
-        't=0.1 speed=200',
-        't=0.2 speed=300',
-      ]);
-      source.cleanup?.();
-    } finally {
-      fs.unlinkSync(p);
-      if (outPath && fs.existsSync(outPath)) fs.unlinkSync(outPath);
-    }
+  it('parse decodes compressed ##DZ data blocks', async () => {
+    expect(await parseToLines('dz')).toEqual(expectedLines);
   });
 
-  it('normalize() decodes transposed ##DZ blocks (zip_type 1)', async () => {
-    const p = tmpMf4('dzt');
-    let outPath = '';
-    try {
-      const source = await new Mf4Adapter().normalize(p);
-      outPath = source.path;
-      const lines = fs.readFileSync(source.path, 'utf-8').split('\n');
-      expect(lines).toEqual([
-        't=0 speed=100',
-        't=0.1 speed=200',
-        't=0.2 speed=300',
-      ]);
-      source.cleanup?.();
-    } finally {
-      fs.unlinkSync(p);
-      if (outPath && fs.existsSync(outPath)) fs.unlinkSync(outPath);
-    }
+  it('parse decodes transposed ##DZ blocks (zip_type 1)', async () => {
+    expect(await parseToLines('dzt')).toEqual(expectedLines);
   });
 
-  it('normalize() decodes ##DL data lists pointing to ##DZ chunks', async () => {
-    const p = tmpMf4('dl');
-    let outPath = '';
-    try {
-      const source = await new Mf4Adapter().normalize(p);
-      outPath = source.path;
-      const lines = fs.readFileSync(source.path, 'utf-8').split('\n');
-      expect(lines).toEqual([
-        't=0 speed=100',
-        't=0.1 speed=200',
-        't=0.2 speed=300',
-      ]);
-      source.cleanup?.();
-    } finally {
-      fs.unlinkSync(p);
-      if (outPath && fs.existsSync(outPath)) fs.unlinkSync(outPath);
-    }
+  it('parse decodes ##DL data lists pointing to ##DZ chunks', async () => {
+    expect(await parseToLines('dl')).toEqual(expectedLines);
+  });
+
+  it('exposes binary, no-append capabilities', () => {
+    const caps = new Mf4Adapter().capabilities;
+    expect(caps.isBinary).toBe(true);
+    expect(caps.supportsAppend).toBe(false);
   });
 });
