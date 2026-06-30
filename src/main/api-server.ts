@@ -148,6 +148,21 @@ function broadcastSSE(msg: ChatMessage, ctx?: ApiContext): void {
   }
 }
 
+// Push an "interrupt" signal to the connected agent (via the MCP server's SSE
+// listener). The agent's next MCP tool call returns a STOP instruction so it
+// aborts the current task and goes back to waiting — without killing the session.
+export function broadcastInterrupt(): boolean {
+  const data = `event: interrupt\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`;
+  let delivered = false;
+  if (activeAgent) {
+    try { activeAgent.res.write(data); delivered = true; } catch { activeAgent = null; }
+  }
+  for (const res of chatListeners) {
+    try { res.write(data); delivered = true; } catch { chatListeners.delete(res); }
+  }
+  return delivered;
+}
+
 // Heartbeat timer — SSE connections drop silently when idle without a periodic ping
 let sseHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
