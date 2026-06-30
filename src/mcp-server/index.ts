@@ -93,6 +93,17 @@ interface ChatMessage {
 let sseBuffer: ChatMessage[] = [];
 let sseWaiters: Array<(msg: ChatMessage) => void> = [];
 
+// Cooperative interrupt: the user pressing "Stop" in LOGAN pushes an SSE
+// `interrupt` event. We set this flag; the next non-exempt MCP tool call returns
+// a STOP instruction instead of running, so the agent aborts its current task
+// and returns to the chat loop — the session stays alive.
+let interruptPending = false;
+const INTERRUPT_INSTRUCTION =
+  '⛔ INTERRUPTED BY USER — the user pressed Stop in LOGAN. Abort the current task immediately: do NOT run any further analysis/search/finding/navigation tools for it. Send ONE short logan_send_message acknowledging you have stopped and asking what they would like instead, then call logan_wait_for_message to await their next instruction.';
+// Tools allowed to run even while an interrupt is pending (so the agent can
+// acknowledge and get back to waiting).
+const INTERRUPT_EXEMPT = new Set(['logan_send_message', 'logan_wait_for_message', 'logan_get_messages', 'logan_status']);
+
 let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
 function startKeepAlive(_port: number): void {
@@ -130,7 +141,17 @@ function connectSSE(): void {
           if (line.startsWith('event: ')) eventType = line.slice(7);
           else if (line.startsWith('data: ')) data = line.slice(6);
         }
-        if (eventType === 'message' && data) {
+        if (eventType === 'interrupt') {
+          // If the agent is parked in logan_wait_for_message, waking it with the
+          // STOP text delivers the instruction directly — no need to also arm the
+          // flag. Otherwise it's mid-task: arm the flag so its next tool call stops.
+          if (sseWaiters.length > 0) {
+            const waiter = sseWaiters.shift()!;
+            waiter({ id: 'interrupt', from: 'user', text: INTERRUPT_INSTRUCTION, timestamp: Date.now() });
+          } else {
+            interruptPending = true;
+          }
+        } else if (eventType === 'message' && data) {
           try {
             const msg: ChatMessage = JSON.parse(data);
             // Only deliver user messages (agent doesn't need to see its own messages)
@@ -163,6 +184,25 @@ const server = new McpServer({
   name: 'logan',
   version: '1.0.0',
 });
+
+// Wrap every tool registration so a pending user interrupt short-circuits the
+// next (non-exempt) tool call with a STOP instruction. One chokepoint covers all
+// current and future tools without touching each handler.
+const _origTool = (server.tool as any).bind(server);
+(server as any).tool = (name: string, ...rest: any[]) => {
+  const last = rest[rest.length - 1];
+  if (typeof last === 'function' && !INTERRUPT_EXEMPT.has(name)) {
+    const origHandler = last;
+    rest[rest.length - 1] = async (...handlerArgs: any[]) => {
+      if (interruptPending) {
+        interruptPending = false;
+        return { content: [{ type: 'text', text: INTERRUPT_INSTRUCTION }] };
+      }
+      return origHandler(...handlerArgs);
+    };
+  }
+  return _origTool(name, ...rest);
+};
 
 // === Tool: logan_status ===
 server.tool(

@@ -571,9 +571,11 @@
                 <div class="video-drop-zone-content">
                   <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><polygon points="10 8 16 12 10 16 10 8"></polygon></svg>
                   <p>Drag & drop a video file here</p>
+                  <p class="video-drop-zone-hint">MP4 / WebM / Ogg play directly · AVI, MKV, MOV, WMV &amp; more are auto-converted (needs ffmpeg)</p>
                   <button id="btn-video-open" class="video-open-btn">Open Video</button>
                 </div>
               </div>
+              <div id="video-error" class="video-error" style="display:none"></div>
             </div>
             <div class="video-sync-bar">
               <span class="video-sync-help" title="How to sync video and logs:&#10;1. Pause the video at a moment you can identify in the logs&#10;2. Click that line in the log viewer&#10;3. Click the 'Sync to video time' button below&#10;4. Now clicking any log line jumps the video to that moment">&#9432;</span>
@@ -730,6 +732,7 @@
             <div id="chat-messages" class="chat-messages"></div>
             <div class="chat-input-bar">
               <input id="chat-input" type="text" placeholder="Message the AI agent..." />
+              <button id="chat-interrupt-btn" class="chat-interrupt-btn" title="Stop the agent's current task (keeps the session — it returns to waiting for you)" disabled>⏹ Stop</button>
               <button id="chat-send-btn" class="chat-send-btn">Send</button>
             </div>
           </div>

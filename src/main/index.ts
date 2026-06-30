@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as http from 'http';
 import { spawn, execSync, spawnSync } from 'child_process';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 // Lazy-loaded: node-pty causes SIGSEGV on Linux when bindings mismatch
 let pty: typeof import('node-pty') | null = null;
 if (process.platform !== 'linux') {
@@ -22,7 +22,7 @@ import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, 
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
-import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession, API_PORT } from './api-server';
+import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession, broadcastInterrupt, API_PORT } from './api-server';
 import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
 import { BaselineStore, buildFingerprint } from './baselineStore';
 import { discoverFields, extractSeries, extractSignalSeries, detectTransitions, correlate } from './trendEngine';
@@ -4884,6 +4884,120 @@ ipcMain.handle(IPC.GET_LINE_TIMESTAMP, async (_, lineNumber: number) => {
   }
 });
 
+// ─── Video transcode (AVI/MKV/etc → MP4 for Chromium's <video>) ──────────────
+// Chromium can only decode MP4/H.264, WebM and Ogg. To support other containers
+// we transcode them to H.264/AAC MP4 on demand (cached by source size+mtime).
+let ffmpegPathCache: string | null | undefined; // undefined=unresolved, null=not found
+function resolveFfmpeg(): string | null {
+  if (ffmpegPathCache !== undefined) return ffmpegPathCache;
+  // 1) bundled ffmpeg-static, if the dependency is installed
+  try {
+    const ffStatic = require('ffmpeg-static');
+    const p = typeof ffStatic === 'string' ? ffStatic : (ffStatic && ffStatic.path);
+    if (p && fs.existsSync(p)) { ffmpegPathCache = p; return p; }
+  } catch { /* not installed — fall through to system */ }
+  // 2) common system locations (GUI apps on macOS often miss /opt/homebrew/bin in PATH)
+  const candidates = ['/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg', '/bin/ffmpeg'];
+  for (const c of candidates) { if (fs.existsSync(c)) { ffmpegPathCache = c; return c; } }
+  // 3) bare name — relies on PATH (works in dev launched from a shell)
+  try {
+    const probe = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['ffmpeg'], { encoding: 'utf8' });
+    if (probe.status === 0 && probe.stdout.trim()) { ffmpegPathCache = 'ffmpeg'; return 'ffmpeg'; }
+  } catch { /* ignore */ }
+  ffmpegPathCache = null;
+  return null;
+}
+
+let activeTranscode: ChildProcess | null = null;
+
+ipcMain.handle(IPC.VIDEO_TRANSCODE_CANCEL, async () => {
+  if (activeTranscode) { try { activeTranscode.kill('SIGKILL'); } catch { /* ignore */ } activeTranscode = null; }
+  return { success: true };
+});
+
+ipcMain.handle(IPC.VIDEO_TRANSCODE, async (_, srcPath: string) => {
+  const ffmpeg = resolveFfmpeg();
+  if (!ffmpeg) {
+    return { success: false, error: 'ffmpeg not found. Install it (macOS: `brew install ffmpeg`) or we can bundle it into LOGAN.' };
+  }
+  let stat: fs.Stats;
+  try { stat = fs.statSync(srcPath); } catch { return { success: false, error: 'Source video not found: ' + srcPath }; }
+
+  const cacheDir = path.join(os.tmpdir(), 'logan-video-cache');
+  try { fs.mkdirSync(cacheDir, { recursive: true }); } catch { /* ignore */ }
+  const key = createHash('sha1').update(srcPath + ':' + stat.size + ':' + Math.round(stat.mtimeMs)).digest('hex').slice(0, 16);
+  const outPath = path.join(cacheDir, key + '.mp4');
+
+  // Cache hit — reuse the previously transcoded file.
+  if (fs.existsSync(outPath) && fs.statSync(outPath).size > 0) {
+    return { success: true, outputPath: outPath, cached: true };
+  }
+
+  // Cancel any in-flight transcode before starting a new one.
+  if (activeTranscode) { try { activeTranscode.kill('SIGKILL'); } catch { /* ignore */ } activeTranscode = null; }
+
+  const partPath = outPath + '.part';
+  const args = [
+    '-y', '-i', srcPath,
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac', '-b:a', '160k',
+    '-movflags', '+faststart',
+    '-f', 'mp4', partPath,
+  ];
+
+  return await new Promise((resolve) => {
+    let durationMs = 0;
+    let stderrTail = '';
+    let settled = false;
+    const proc = spawn(ffmpeg, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    activeTranscode = proc;
+
+    proc.stderr?.on('data', (buf: Buffer) => {
+      const text = buf.toString();
+      stderrTail = (stderrTail + text).slice(-2000);
+      if (durationMs === 0) {
+        const dm = text.match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
+        if (dm) durationMs = (+dm[1] * 3600 + +dm[2] * 60 + parseFloat(dm[3])) * 1000;
+      }
+      const tm = text.match(/time=\s*(\d+):(\d+):(\d+\.?\d*)/);
+      if (tm && durationMs > 0) {
+        const curMs = (+tm[1] * 3600 + +tm[2] * 60 + parseFloat(tm[3])) * 1000;
+        const percent = Math.max(0, Math.min(99, Math.round((curMs / durationMs) * 100)));
+        mainWindow?.webContents.send(IPC.VIDEO_TRANSCODE_PROGRESS, { percent });
+      }
+    });
+
+    proc.on('error', (err) => {
+      if (settled) return; settled = true; activeTranscode = null;
+      resolve({ success: false, error: 'Failed to launch ffmpeg: ' + err.message });
+    });
+
+    proc.on('close', (code, signal) => {
+      if (settled) return; settled = true;
+      const wasActive = activeTranscode === proc;
+      activeTranscode = null;
+      if (signal === 'SIGKILL') {
+        try { fs.unlinkSync(partPath); } catch { /* ignore */ }
+        resolve({ success: false, error: 'cancelled', cancelled: true });
+        return;
+      }
+      if (code === 0) {
+        try {
+          fs.renameSync(partPath, outPath);
+          mainWindow?.webContents.send(IPC.VIDEO_TRANSCODE_PROGRESS, { percent: 100 });
+          resolve({ success: true, outputPath: outPath });
+        } catch (e: any) {
+          resolve({ success: false, error: 'Transcode finished but output could not be saved: ' + e.message });
+        }
+      } else {
+        try { fs.unlinkSync(partPath); } catch { /* ignore */ }
+        const reason = stderrTail.split('\n').filter(Boolean).slice(-2).join(' ').slice(0, 300) || ('ffmpeg exited with code ' + code);
+        resolve({ success: false, error: wasActive ? reason : 'cancelled', cancelled: !wasActive });
+      }
+    });
+  });
+});
+
 // Batch timestamp fetch for Time Align
 ipcMain.handle(IPC.GET_LINE_TIMESTAMPS, async (_, lineNumbers: number[]) => {
   const handler = getFileHandler();
@@ -5997,6 +6111,17 @@ ipcMain.handle('agent-stop', async () => {
 
 ipcMain.handle('agent-get-running', async () => {
   return { running: agentProcess !== null };
+});
+
+// Interrupt: cooperatively stop the agent's CURRENT task without ending the
+// session. Pushes an interrupt signal over SSE; the MCP server surfaces a STOP
+// instruction on the agent's next tool call so it aborts and returns to waiting.
+ipcMain.handle('agent-interrupt', async () => {
+  if (!agentProcess && !getAgentName()) {
+    return { success: false, error: 'No agent connected' };
+  }
+  const delivered = broadcastInterrupt();
+  return { success: delivered, error: delivered ? undefined : 'Agent is not listening' };
 });
 
 // --- Agent Setup Wizard ---

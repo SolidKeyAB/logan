@@ -525,6 +525,9 @@ interface Api {
 
   // Video player
   getLineTimestamp: (lineNumber: number) => Promise<{ epochMs: number | null; timestampStr: string | null }>;
+  transcodeVideo: (srcPath: string) => Promise<{ success: boolean; outputPath?: string; cached?: boolean; error?: string; cancelled?: boolean }>;
+  cancelVideoTranscode: () => Promise<{ success: boolean }>;
+  onVideoTranscodeProgress: (callback: (data: { percent: number }) => void) => () => void;
 
   // Time Align (batch)
   getLineTimestamps: (lineNumbers: number[]) => Promise<Array<{ lineNumber: number; epochMs: number }>>;
@@ -547,6 +550,7 @@ interface Api {
   launchAgent: () => Promise<{ success: boolean; agentName?: string; error?: string }>;
   reconnectAgent: () => Promise<{ success: boolean; agentName?: string; resumed?: boolean; error?: string }>;
   stopAgent: () => Promise<{ success: boolean }>;
+  interruptAgent: () => Promise<{ success: boolean; error?: string }>;
   getAgentRunning: () => Promise<{ running: boolean }>;
   detectAgentEnvironment: () => Promise<{
     hasClaudeCli: boolean;
