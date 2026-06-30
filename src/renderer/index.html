@@ -466,7 +466,11 @@
           <div class="bottom-tab-sub-header signals-toolbar">
             <button id="btn-signals-discover" class="secondary-btn small">Discover Signals</button>
             <input id="signals-search" class="trends-input signals-search" type="text" placeholder="filter signals…" disabled>
-            <label class="signals-toggle" title="Scale every signal to 0–1 so different ranges compare by shape"><input type="checkbox" id="signals-normalize" checked> Normalize</label>
+            <div class="signals-mode-toggle" role="group" aria-label="Chart layout">
+              <button id="signals-mode-overlay" class="signals-mode-btn active" data-mode="overlay" title="All signals on one shared plot">Overlay</button>
+              <button id="signals-mode-stacked" class="signals-mode-btn" data-mode="stacked" title="Each signal in its own time-synced band">Stacked</button>
+            </div>
+            <label class="signals-toggle" title="Scale every signal to 0–1 so different ranges compare by shape (overlay only — stacked bands auto-scale)"><input type="checkbox" id="signals-normalize" checked> Normalize</label>
             <span id="signals-summary" class="signals-summary"></span>
           </div>
           <div class="signals-body">
