@@ -39,6 +39,10 @@ const IPC = {
   VIDEO_TRANSCODE: 'video-transcode',
   VIDEO_TRANSCODE_PROGRESS: 'video-transcode-progress',
   VIDEO_TRANSCODE_CANCEL: 'video-transcode-cancel',
+  INVESTIGATION_LIST: 'investigation-list',
+  INVESTIGATION_SAVE: 'investigation-save',
+  INVESTIGATION_RUN: 'investigation-run',
+  INVESTIGATION_DELETE: 'investigation-delete',
   SERIAL_LIST_PORTS: 'serial-list-ports',
   LOGCAT_LIST_DEVICES: 'logcat-list-devices',
   SSH_PARSE_CONFIG: 'ssh-parse-config',
@@ -540,6 +544,21 @@ const api = {
   interruptAgent: (): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('agent-interrupt'),
 
+  // Investigation templates
+  listInvestigations: (): Promise<{ success: boolean; templates?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.INVESTIGATION_LIST),
+  saveInvestigation: (name: string, description?: string): Promise<{ success: boolean; template?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.INVESTIGATION_SAVE, name, description),
+  runInvestigation: (name: string, params?: Record<string, any>): Promise<{ success: boolean; ran?: string; steps?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.INVESTIGATION_RUN, name, params),
+  deleteInvestigation: (name: string): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.INVESTIGATION_DELETE, name),
+  onInvestigationTemplatesChanged: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('investigation-templates-changed', handler);
+    return () => ipcRenderer.removeListener('investigation-templates-changed', handler);
+  },
+
   getAgentRunning: (): Promise<{ running: boolean }> =>
     ipcRenderer.invoke('agent-get-running'),
 
@@ -598,6 +617,12 @@ const api = {
     const handler = (_: any, mem: any) => callback(mem);
     ipcRenderer.on('agent-memory-changed', handler);
     return () => ipcRenderer.removeListener('agent-memory-changed', handler);
+  },
+
+  onAgentTrendCell: (callback: (spec: any) => void): (() => void) => {
+    const handler = (_: any, spec: any) => callback(spec);
+    ipcRenderer.on('agent-trend-cell', handler);
+    return () => ipcRenderer.removeListener('agent-trend-cell', handler);
   },
 
   // Device discovery

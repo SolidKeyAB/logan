@@ -141,6 +141,19 @@ function toNum(raw: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// Map a boolean literal to 0/1 so boolean fields can be charted as a step line.
+function boolNum(raw: string): number | null {
+  if (/^true$/i.test(raw)) return 1;
+  if (/^false$/i.test(raw)) return 0;
+  return null;
+}
+
+// Numeric value for series/bucket math — numeric as-is, boolean as 0/1.
+function seriesNum(raw: string): number | null {
+  const n = toNum(raw);
+  return n !== null ? n : boolNum(raw);
+}
+
 // ── Line scanning helper ─────────────────────────────────────────────────────
 
 const BATCH = 4000;            // lines read per getLines() call
@@ -277,7 +290,7 @@ export function extractSeries(
       if (epochMs < minMs) minMs = epochMs;
       if (epochMs > maxMs) maxMs = epochMs;
     }
-    collected.push({ lineNumber, viewerLine: lineNumber + 1, epochMs, raw, num: toNum(raw) });
+    collected.push({ lineNumber, viewerLine: lineNumber + 1, epochMs, raw, num: seriesNum(raw) });
   });
 
   const effType: FieldType = typeRef.v ?? 'string';
@@ -299,7 +312,8 @@ export function extractSeries(
       if (idx < 0) idx = 0; if (idx >= bucketCount) idx = bucketCount - 1;
       const b = buckets[idx];
       b.count++;
-      if (effType === 'numeric' && p.num !== null) {
+      if ((effType === 'numeric' || effType === 'boolean') && p.num !== null) {
+        // boolean → 0/1, so the bucket avg is the fraction "true" in that window.
         b.sum = (b.sum ?? 0) + p.num;
         b.min = b.min === undefined ? p.num : Math.min(b.min, p.num);
         b.max = b.max === undefined ? p.num : Math.max(b.max, p.num);
