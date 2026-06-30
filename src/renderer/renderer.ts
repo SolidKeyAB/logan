@@ -6358,11 +6358,16 @@ interface SignalsPanelState {
   wired: boolean;               // canvas handlers attached
   viewMode: 'overlay' | 'stacked'; // overlay = shared plot; stacked = per-signal bands
   hoverIdx: number;             // sample index under the cursor (-1 = none), drives the synced crosshair
+  pinnedIdx: number;            // sample pinned by a click (-1 = none); keeps the value box visible after the mouse leaves
 }
 const signalsState: SignalsPanelState = {
   fields: [], selected: [], colors: new Map(), result: null, initialized: false, wired: false,
-  viewMode: 'overlay', hoverIdx: -1,
+  viewMode: 'overlay', hoverIdx: -1, pinnedIdx: -1,
 };
+// The sample the crosshair/value-box should reflect: live hover wins, else the last clicked (pinned) sample.
+function activeSignalIdx(): number {
+  return signalsState.hoverIdx >= 0 ? signalsState.hoverIdx : signalsState.pinnedIdx;
+}
 const SIGNAL_COLORS = ['#4fc3f7', '#ff8a65', '#81c784', '#ba68c8', '#ffd54f', '#4dd0e1', '#f06292', '#aed581', '#9575cd', '#90a4ae', '#7986cb', '#a1887f'];
 // Per-band geometry recorded by drawSignalsChart so the crosshair/hit-testing can map a value back to a pixel.
 interface SignalBandGeom { field: string; top: number; bottom: number; min: number; range: number; color: string }
@@ -6386,6 +6391,25 @@ function formatSignalVal(v: number): string {
   if (!Number.isFinite(v)) return '–';
   const a = Math.abs(v);
   if (a !== 0 && (a < 1e-3 || a >= 1e6)) return v.toExponential(2);
+  if (Number.isInteger(v)) return String(v);
+  return v.toFixed(a < 1 ? 3 : a < 100 ? 2 : 1);
+}
+
+// Compact axis/tick formatter: SI suffixes (k/M/G/T, m/µ/n) instead of e+NN so large
+// timestamps like 5.73e+10 read as "57.3G" and min/max labels stay legible.
+const SI_BIG = [{ d: 1e12, s: 'T' }, { d: 1e9, s: 'G' }, { d: 1e6, s: 'M' }, { d: 1e3, s: 'k' }];
+const SI_SMALL = [{ d: 1e-3, s: 'm' }, { d: 1e-6, s: 'µ' }, { d: 1e-9, s: 'n' }];
+function formatAxisNum(v: number): string {
+  if (!Number.isFinite(v)) return '–';
+  if (v === 0) return '0';
+  const sign = v < 0 ? '-' : '';
+  const a = Math.abs(v);
+  const fmt = (n: number) => n >= 100 ? n.toFixed(0) : n >= 10 ? n.toFixed(1) : n.toFixed(2);
+  for (const u of SI_BIG) if (a >= u.d) return sign + fmt(a / u.d) + u.s;
+  if (a < 1e-2) {
+    for (const u of SI_SMALL) if (a >= u.d) return sign + fmt(a / u.d) + u.s;
+    return v.toExponential(1);
+  }
   if (Number.isInteger(v)) return String(v);
   return v.toFixed(a < 1 ? 3 : a < 100 ? 2 : 1);
 }
@@ -6486,6 +6510,8 @@ async function loadSignalSeries(): Promise<void> {
   const res = await window.api.signalSeries({ fields: [...signalsState.selected], maxPoints: 4000 });
   if (!res.success) { if (summary) summary.textContent = escapeHtml(res.error || 'Failed to load signals'); return; }
   signalsState.result = res as SignalSeriesResult;
+  signalsState.hoverIdx = -1;
+  signalsState.pinnedIdx = -1; // sample indices are stale once the data changes
   const r = signalsState.result;
   if (summary) {
     const recLabel = r.sampled ? `${r.totalRecords.toLocaleString()} sampled` : `${r.totalRecords.toLocaleString()} records`;
@@ -6544,7 +6570,7 @@ function wireSignalsCanvas(): void {
     if (idx !== signalsState.hoverIdx) { signalsState.hoverIdx = idx; scheduleSignalsRedraw(); }
     if (!readout) return;
     if (idx < 0) { readout.textContent = ''; return; }
-    const xLabel = r.x.isIndex ? `#${Math.round(r.x.values[idx])}` : `${r.x.field}=${formatSignalVal(r.x.values[idx])}`;
+    const xLabel = r.x.isIndex ? `#${Math.round(r.x.values[idx])}` : `${r.x.field}=${formatAxisNum(r.x.values[idx])}`;
     const parts = r.series.map(s => `${s.field}=${s.values[idx] == null ? '–' : formatSignalVal(s.values[idx] as number)}`);
     readout.textContent = `${xLabel}  ·  ${parts.join('  ')}`;
   });
@@ -6557,9 +6583,30 @@ function wireSignalsCanvas(): void {
     if (!r || r.series.length === 0) return;
     const idx = nearestSignalIndex(e.clientX);
     if (idx < 0) return;
-    const viewerLine = r.series[0].viewerLines[idx];
-    if (viewerLine) jumpToTrendLine(viewerLine - 1); // viewerLine is 1-based
+    // Pin the sample so its value box stays after the mouse leaves, then jump to the log line.
+    signalsState.pinnedIdx = idx;
+    scheduleSignalsRedraw();
+    const viewerLine = nearestViewerLine(idx);
+    if (viewerLine > 0) jumpToTrendLine(viewerLine - 1); // viewerLine is 1-based
   });
+}
+
+// A sampled bucket may have no representative line; search outward across all signals for the
+// nearest sample that does, so a click reliably navigates instead of silently doing nothing.
+function nearestViewerLine(idx: number): number {
+  const r = signalsState.result;
+  if (!r) return 0;
+  const at = (i: number): number => {
+    if (i < 0 || i >= r.x.values.length) return 0;
+    for (const s of r.series) { const vl = s.viewerLines[i]; if (vl > 0) return vl; }
+    return 0;
+  };
+  const n = r.x.values.length;
+  for (let d = 0; d < n; d++) {
+    const right = at(idx + d); if (right > 0) return right;
+    const left = at(idx - d); if (left > 0) return left;
+  }
+  return 0;
 }
 
 function drawSignalsChart(): void {
@@ -6595,16 +6642,6 @@ function drawSignalsChart(): void {
   const xRange = (xMax - xMin) || 1;
   const xToPx = (x: number) => padL + ((x - xMin) / xRange) * w;
 
-  // Shared bottom time axis — identical in both modes, which is what makes the views directly comparable.
-  ctx.fillStyle = muted;
-  ctx.font = '10px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  const xLabel = (v: number) => r.x.isIndex ? `#${Math.round(v)}` : formatSignalVal(v);
-  ctx.fillText(xLabel(xMin), padL, padT + h + 5);
-  ctx.fillText(xLabel(xMin + xRange / 2), padL + w / 2, padT + h + 5);
-  ctx.fillText(xLabel(xMax), padL + w, padT + h + 5);
-
   const bands: SignalBandGeom[] = [];
   if (signalsState.viewMode === 'stacked') {
     drawSignalsStacked(ctx, r, { padL, padT, w, h, xToPx }, bands);
@@ -6612,9 +6649,45 @@ function drawSignalsChart(): void {
     drawSignalsOverlay(ctx, r, { padL, padT, w, h, xToPx });
   }
 
+  // Shared bottom time axis — drawn last so its ticks/gridlines sit over the bands.
+  // Identical in both modes, which is what makes the views directly comparable.
+  drawSignalsXAxis(ctx, r, { padL, padT, w, h, xMin, xRange });
+
   signalsGeom = { padL, padT, w, h, xMin, xRange, mode: signalsState.viewMode, bands };
 
-  if (signalsState.hoverIdx >= 0) drawSignalsCrosshair(ctx, r);
+  const active = activeSignalIdx();
+  if (active >= 0) drawSignalsCrosshair(ctx, r);
+}
+
+// Shared x (time) axis: a baseline, 5 evenly-spaced ticks with faint full-height gridlines,
+// and SI-formatted labels (so big timestamps read as 57.3G, not 5.73e+10).
+function drawSignalsXAxis(
+  ctx: CanvasRenderingContext2D, r: SignalSeriesResult,
+  g: { padL: number; padT: number; w: number; h: number; xMin: number; xRange: number },
+): void {
+  const { padL, padT, w, h, xMin, xRange } = g;
+  const muted = trendCssVar('--text-muted', '#888888');
+  const grid = trendCssVar('--border-color', '#333333');
+  const TICKS = 4; // → 5 labels including both ends
+  const label = (v: number) => r.x.isIndex ? `#${Math.round(v)}` : formatAxisNum(v);
+
+  ctx.lineWidth = 1;
+  ctx.font = '10px sans-serif';
+  ctx.textBaseline = 'top';
+  for (let i = 0; i <= TICKS; i++) {
+    const frac = i / TICKS;
+    const x = padL + frac * w;
+    // Faint vertical gridline across the plot.
+    ctx.strokeStyle = hexToRgba(grid, 0.22);
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + h); ctx.stroke();
+    // Tick mark on the baseline.
+    ctx.strokeStyle = hexToRgba(grid, 0.7);
+    ctx.beginPath(); ctx.moveTo(x, padT + h); ctx.lineTo(x, padT + h + 3); ctx.stroke();
+    // Label, edge-aligned at the ends so it doesn't clip.
+    ctx.fillStyle = muted;
+    ctx.textAlign = i === 0 ? 'left' : i === TICKS ? 'right' : 'center';
+    ctx.fillText(label(xMin + frac * xRange), x, padT + h + 5);
+  }
 }
 
 interface SignalsDrawCtx { padL: number; padT: number; w: number; h: number; xToPx: (x: number) => number }
@@ -6643,7 +6716,7 @@ function drawSignalsOverlay(ctx: CanvasRenderingContext2D, r: SignalSeriesResult
     ctx.moveTo(padL, yy);
     ctx.lineTo(padL + w, yy);
     ctx.stroke();
-    const label = normalize ? `${100 - gi * 25}%` : formatSignalVal(yMax - yRange * gi / 4);
+    const label = normalize ? `${100 - gi * 25}%` : formatAxisNum(yMax - yRange * gi / 4);
     ctx.fillText(label, padL - 5, yy);
   }
 
@@ -6698,9 +6771,9 @@ function drawSignalsStacked(ctx: CanvasRenderingContext2D, r: SignalSeriesResult
     ctx.font = '10px sans-serif';
     ctx.textAlign = 'right';
     ctx.textBaseline = 'top';
-    ctx.fillText(formatSignalVal(sMax), padL - 4, top - 1);
+    ctx.fillText(formatAxisNum(sMax), padL - 4, top - 1);
     ctx.textBaseline = 'bottom';
-    ctx.fillText(formatSignalVal(sMin), padL - 4, bottom + 1);
+    ctx.fillText(formatAxisNum(sMin), padL - 4, bottom + 1);
 
     // Signal name inside the band, top-left, in its own color.
     ctx.fillStyle = color;
@@ -6733,32 +6806,43 @@ function drawSignalsStacked(ctx: CanvasRenderingContext2D, r: SignalSeriesResult
   }
 }
 
-// Synced crosshair: one vertical time line spanning the whole plot, plus a value dot per signal/band
-// at the hovered sample. In stacked mode the dots land in each band; in overlay mode on the shared plot.
+// Synced crosshair: one vertical time line spanning the whole plot, a value dot per signal/band
+// at the active sample, and a floating value box. The active sample is the live hover, or the last
+// clicked (pinned) sample once the mouse leaves — so you can click a point and read its exact values.
 function drawSignalsCrosshair(ctx: CanvasRenderingContext2D, r: SignalSeriesResult): void {
   const geom = signalsGeom;
   if (!geom) return;
-  const idx = signalsState.hoverIdx;
+  const idx = activeSignalIdx();
+  if (idx < 0) return;
   const xVal = r.x.values[idx];
   if (xVal == null) return;
   const { padL, padT, w, h, xMin, xRange, mode, bands } = geom;
   const x = padL + ((xVal - xMin) / xRange) * w;
   if (x < padL - 0.5 || x > padL + w + 0.5) return;
   const muted = trendCssVar('--text-muted', '#888888');
+  const pinnedOnly = signalsState.hoverIdx < 0 && signalsState.pinnedIdx >= 0;
 
-  ctx.strokeStyle = hexToRgba(muted, 0.85);
+  // Vertical time line — solid for a pinned (clicked) sample, dashed for a live hover.
+  ctx.strokeStyle = hexToRgba(muted, pinnedOnly ? 1 : 0.85);
   ctx.lineWidth = 1;
-  ctx.setLineDash([3, 3]);
+  ctx.setLineDash(pinnedOnly ? [] : [3, 3]);
   ctx.beginPath();
   ctx.moveTo(x, padT);
   ctx.lineTo(x, padT + h);
   ctx.stroke();
   ctx.setLineDash([]);
 
+  // Value dots, and collect rows for the value box.
+  const rows: { label: string; color: string }[] = [];
+  rows.push({
+    label: `${r.x.isIndex ? 'idx' : (r.x.field || 'x')} = ${r.x.isIndex ? '#' + Math.round(xVal) : formatAxisNum(xVal)}`,
+    color: muted,
+  });
   if (mode === 'stacked') {
     for (const b of bands) {
       const s = r.series.find(ss => ss.field === b.field);
       const v = s?.values[idx];
+      rows.push({ label: `${b.field} = ${v == null ? '–' : formatSignalVal(v)}`, color: b.color });
       if (v == null) continue;
       const y = b.bottom - ((v - b.min) / b.range) * (b.bottom - b.top);
       ctx.fillStyle = b.color;
@@ -6772,6 +6856,7 @@ function drawSignalsCrosshair(ctx: CanvasRenderingContext2D, r: SignalSeriesResu
     const yRange = (yMax - yMin) || 1;
     for (const s of r.series) {
       const v = s.values[idx];
+      rows.push({ label: `${s.field} = ${v == null ? '–' : formatSignalVal(v)}`, color: signalColor(s.field) });
       if (v == null) continue;
       const sRange = (s.globalMax - s.globalMin) || 1;
       const norm = normalize ? (v - s.globalMin) / sRange : (v - yMin) / yRange;
@@ -6780,6 +6865,63 @@ function drawSignalsCrosshair(ctx: CanvasRenderingContext2D, r: SignalSeriesResu
       ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
     }
   }
+
+  drawSignalsValueBox(ctx, rows, x, geom);
+}
+
+// Floating value box anchored to the crosshair — swatch + "field = value" per row, flipped to the
+// left of the line when it would overflow the right edge, and clamped vertically into the plot.
+function drawSignalsValueBox(
+  ctx: CanvasRenderingContext2D,
+  rows: { label: string; color: string }[],
+  xLine: number,
+  geom: { padL: number; padT: number; w: number; h: number },
+): void {
+  const { padL, padT, w, h } = geom;
+  const pad = 6, lineH = 14, sw = 8, gap = 5;
+  ctx.font = '11px sans-serif';
+  let textW = 0;
+  for (const row of rows) textW = Math.max(textW, ctx.measureText(row.label).width);
+  const boxW = pad + sw + gap + textW + pad;
+  const boxH = pad + rows.length * lineH + pad - 2;
+
+  let bx = xLine + 10;
+  if (bx + boxW > padL + w) bx = xLine - 10 - boxW;       // flip left near the right edge
+  bx = Math.max(padL + 2, Math.min(bx, padL + w - boxW - 2));
+  let by = padT + 4;
+  by = Math.max(padT + 2, Math.min(by, padT + h - boxH - 2));
+
+  const bg = trendCssVar('--bg-secondary', '#1e1e1e');
+  const border = trendCssVar('--border-color', '#333333');
+  const textCol = trendCssVar('--text-primary', '#dddddd');
+  ctx.fillStyle = hexToRgba(bg, 0.94);
+  ctx.strokeStyle = hexToRgba(border, 0.9);
+  ctx.lineWidth = 1;
+  roundRectPath(ctx, bx, by, boxW, boxH, 4);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i < rows.length; i++) {
+    const cy = by + pad + i * lineH + lineH / 2 - 1;
+    ctx.fillStyle = rows[i].color;
+    ctx.fillRect(bx + pad, cy - sw / 2, sw, sw);
+    ctx.fillStyle = textCol;
+    ctx.fillText(rows[i].label, bx + pad + sw + gap, cy);
+  }
+}
+
+// Small rounded-rect path helper for canvas (no native roundRect dependency).
+function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
 }
 
 function renderTransitionsCell(body: HTMLDivElement, res: TrendTransitionsResult): void {

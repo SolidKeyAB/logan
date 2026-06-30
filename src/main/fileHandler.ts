@@ -790,6 +790,21 @@ export class FileHandler {
     return this.lineOffsets.length - this.headerLineCount;
   }
 
+  // Snapshot of the byte-offset index so a worker thread can read the same file
+  // independently (its own fd) without sharing this handler. offsets/lengths are
+  // typed arrays so they structured-clone cheaply across the worker boundary.
+  getScanContext(): { filePath: string; headerLineCount: number; maxLineRead: number; offsets: Float64Array; lengths: Float64Array } | null {
+    if (!this.filePath) return null;
+    const n = this.lineOffsets.length;
+    const offsets = new Float64Array(n);
+    const lengths = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      offsets[i] = this.lineOffsets[i].offset;
+      lengths[i] = this.lineOffsets[i].length;
+    }
+    return { filePath: this.filePath, headerLineCount: this.headerLineCount, maxLineRead: FileHandler.MAX_LINE_READ, offsets, lengths };
+  }
+
   close(): void {
     if (this.fd !== null) {
       fs.closeSync(this.fd);
