@@ -3,12 +3,12 @@ import * as path from 'path';
 import type { FileHandler } from './fileHandler';
 
 /**
- * Main-process client for the trend worker. Builds a byte-offset snapshot of the
- * currently-open file, spawns src/main/trendWorker.js to run the scan off-thread,
- * and resolves with the engine's result — so the UI never blocks on a big file.
+ * Main-process client for the trend worker. Gets the (cached) byte-offset index of the
+ * currently-open file, spawns src/main/trendWorker.js to run the scan off-thread, and
+ * resolves with the engine's result — so the UI never blocks on a big file.
  *
- * The offsets/lengths ArrayBuffers are TRANSFERRED (zero-copy) to the worker; the
- * snapshot is built fresh per call, so detaching it on the main side is harmless.
+ * The offsets/lengths are backed by SharedArrayBuffers, so handing them to the worker is
+ * zero-copy and zero-transfer (shared by reference). Nothing big is serialized per call.
  */
 export type TrendJobKind = 'discover' | 'series' | 'signal' | 'transitions' | 'correlate';
 
@@ -18,7 +18,6 @@ export function runTrendJob(kind: TrendJobKind, handler: FileHandler, args: any)
   return new Promise((resolve, reject) => {
     const worker = new Worker(path.join(__dirname, 'trendWorker.js'), {
       workerData: { kind, args, scan },
-      transferList: [scan.offsets.buffer as ArrayBuffer, scan.lengths.buffer as ArrayBuffer],
     });
     let settled = false;
     const finish = (err?: Error, result?: any): void => {
