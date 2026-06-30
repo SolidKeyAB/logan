@@ -6278,7 +6278,8 @@ async function loadSignalSeries(): Promise<void> {
   signalsState.result = res as SignalSeriesResult;
   const r = signalsState.result;
   if (summary) {
-    summary.textContent = `${signalsState.selected.length} signal${signalsState.selected.length !== 1 ? 's' : ''} · ${r.totalRecords.toLocaleString()} records · x=${r.x.field}${r.truncated ? ' · scan truncated' : ''}`;
+    const recLabel = r.sampled ? `${r.totalRecords.toLocaleString()} sampled` : `${r.totalRecords.toLocaleString()} records`;
+    summary.textContent = `${signalsState.selected.length} signal${signalsState.selected.length !== 1 ? 's' : ''} · ${recLabel} · x=${r.x.field}${r.truncated ? ' · truncated' : ''}`;
   }
   drawSignalsChart();
   renderSignalsLegend();

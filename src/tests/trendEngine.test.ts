@@ -220,4 +220,19 @@ describe('extractSignalSeries', () => {
     expect(r.x.field).toBe('index');
     expect(r.x.values).toEqual([0, 1, 2]);
   });
+
+  it('samples (not full-scan) when the range exceeds the sample budget', () => {
+    // 1000 rows, but a tiny sample budget forces the sampling path so a huge
+    // file never blocks by reading every record.
+    const many = Array.from({ length: 1000 }, (_, i) => `t=${i} rpm=${i}`);
+    const r = extractSignalSeries(fakeHandler(many), ['rpm'], { maxPoints: 100, sampleBudget: 200 });
+    expect(r.sampled).toBe(true);
+    expect(r.totalRecords).toBeLessThan(1000);       // did NOT read every line
+    expect(r.totalRecords).toBeGreaterThan(0);
+    expect(r.series[0].globalMin).toBe(0);           // first run covers row 0
+    expect(r.buckets).toBeGreaterThan(0);
+    // x axis stays ascending
+    const xs = r.x.values;
+    for (let i = 1; i < xs.length; i++) expect(xs[i]).toBeGreaterThanOrEqual(xs[i - 1]);
+  });
 });
