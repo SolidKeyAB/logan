@@ -551,6 +551,11 @@ interface Api {
   reconnectAgent: () => Promise<{ success: boolean; agentName?: string; resumed?: boolean; error?: string }>;
   stopAgent: () => Promise<{ success: boolean }>;
   interruptAgent: () => Promise<{ success: boolean; error?: string }>;
+  listInvestigations: () => Promise<{ success: boolean; templates?: any[]; error?: string }>;
+  saveInvestigation: (name: string, description?: string) => Promise<{ success: boolean; template?: any; error?: string }>;
+  runInvestigation: (name: string, params?: Record<string, any>) => Promise<{ success: boolean; ran?: string; steps?: any[]; error?: string }>;
+  deleteInvestigation: (name: string) => Promise<{ success: boolean }>;
+  onInvestigationTemplatesChanged: (callback: () => void) => () => void;
   getAgentRunning: () => Promise<{ running: boolean }>;
   detectAgentEnvironment: () => Promise<{
     hasClaudeCli: boolean;
@@ -584,6 +589,7 @@ interface Api {
   saveAgentMemory: (content: string, agentName?: string) => Promise<{ success: boolean }>;
   clearAgentMemory: () => Promise<{ success: boolean }>;
   onAgentMemoryChanged: (callback: (memory: any) => void) => () => void;
+  onAgentTrendCell: (callback: (spec: { type: string; label: string; result: any }) => void) => () => void;
 
   // Device discovery
   serialListPorts: () => Promise<{ success: boolean; ports?: Array<{ path: string; manufacturer?: string; vendorId?: string; productId?: string }>; error?: string }>;

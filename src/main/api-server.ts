@@ -7,11 +7,70 @@ import { SearchOptions, Bookmark, Highlight, Annotation } from '../shared/types'
 import { FileHandler } from './fileHandler';
 import { type BaselineStore, buildFingerprint } from './baselineStore';
 import { AnalysisResult } from './analyzers/types';
+import { JournalEntry, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps } from './investigationStore';
 
 export const API_PORT = 19532;
 const PORT_FILE = path.join(os.homedir(), '.logan', 'mcp-port');
 const SESSION_FILE = path.join(os.homedir(), '.logan', 'agent-session.json');
 const SESSION_MAX_MESSAGES = 100; // keep last 100 messages on disk
+
+// --- Investigation journal (records the agent's investigative tool calls) ---
+// Paths whose calls represent "investigative logic" worth capturing/replaying.
+const INVESTIGATIVE_PATHS = new Set<string>([
+  '/api/search', '/api/filter', '/api/clear-filter', '/api/analyze', '/api/time-gaps',
+  '/api/trend-fields', '/api/trend-series', '/api/trend-transitions', '/api/trend-correlate',
+  '/api/trend-show', '/api/investigate-crashes', '/api/investigate-component',
+  '/api/investigate-timerange', '/api/triage', '/api/navigate',
+]);
+const JOURNAL_CAP = 200;
+let agentJournal: JournalEntry[] = [];
+
+function journalLabel(p: string, body: Record<string, any>): string {
+  const name = p.replace('/api/', '');
+  if (p === '/api/search') return `search ${JSON.stringify(body.pattern ?? '')}`;
+  if (p === '/api/filter') return `filter ${body.levels ? `levels=[${body.levels}]` : ''}${body.includePatterns ? ` include=${body.includePatterns}` : ''}`.trim();
+  if (p === '/api/analyze') return `analyze${body.analyzerName ? ` (${body.analyzerName})` : ''}`;
+  if (p === '/api/time-gaps') return `time-gaps ≥${body.thresholdSeconds ?? 30}s`;
+  if (p.startsWith('/api/trend-')) return `${name} ${body.field ?? body.pattern ?? ''}`.trim();
+  if (p === '/api/investigate-component') return `investigate component ${body.component ?? ''}`;
+  if (p === '/api/triage') return `triage ${body.symptom ?? ''}`.trim();
+  return name;
+}
+
+function recordJournal(p: string, body: Record<string, any>): void {
+  if (!INVESTIGATIVE_PATHS.has(p)) return;
+  agentJournal.push({ path: p, body: { ...body }, ts: Date.now(), label: journalLabel(p, body) });
+  if (agentJournal.length > JOURNAL_CAP) agentJournal = agentJournal.slice(-JOURNAL_CAP);
+}
+
+// Replay one step as an internal HTTP call to ourselves (reuses all endpoint
+// logic, incl. finding-pinning). Marked so it is not itself re-journaled.
+function replayStep(step: { path: string; body: Record<string, any> }): Promise<any> {
+  return new Promise((resolve) => {
+    const payload = JSON.stringify(step.body || {});
+    const req = http.request({
+      hostname: '127.0.0.1', port: API_PORT, path: step.path, method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload), 'x-logan-replay': '1' },
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))); } catch { resolve({ success: false }); } });
+    });
+    req.on('error', () => resolve({ success: false, error: 'replay request failed' }));
+    req.write(payload); req.end();
+  });
+}
+
+// Short per-step result summary for a replay run.
+function summarizeReplay(p: string, r: any): string {
+  if (!r || r.success === false) return r?.error || 'failed';
+  if (p === '/api/search') return `${r.matches?.length ?? r.totalMatches ?? 0} matches`;
+  if (p === '/api/filter') return `${r.filteredLines ?? r.lines?.length ?? 0} lines after filter`;
+  if (p === '/api/analyze') return r.analysis?.summary || 'analyzed';
+  if (p === '/api/time-gaps') return `${r.gaps?.length ?? 0} gaps`;
+  if (p.startsWith('/api/trend')) return `${r.totalPoints ?? r.fields?.length ?? r.transitions?.length ?? 0} points/items`;
+  return 'ok';
+}
 
 // --- Chat message queue & SSE ---
 export interface ChatMessage {
@@ -429,6 +488,55 @@ export function startApiServer(ctx: ApiContext): void {
       if (req.method === 'POST') {
         const body = await parseBody(req);
 
+        // Record investigative calls into the journal — unless this is a replay
+        // (internal call from runTemplate), which would pollute the recording.
+        if (req.headers['x-logan-replay'] !== '1') recordJournal(url, body);
+
+        // --- Investigation templates (capture → save → replay) ---
+        if (url === '/api/investigation-log') {
+          sendJson(res, { success: true, journal: agentJournal });
+          return;
+        }
+        if (url === '/api/investigation-clear') {
+          agentJournal = [];
+          sendJson(res, { success: true });
+          return;
+        }
+        if (url === '/api/investigation-save') {
+          if (!body.name) return sendError(res, 'name required');
+          if (agentJournal.length === 0) return sendError(res, 'Nothing to save — the agent has not run any investigative steps yet.');
+          const tpl = buildTemplate(body.name, agentJournal, ctx.getCurrentFilePath() || undefined, body.description);
+          saveTemplate(tpl);
+          // Notify the renderer so the Investigate panel can refresh its list.
+          const win = ctx.getMainWindow();
+          if (win && !win.isDestroyed()) win.webContents.send('investigation-templates-changed');
+          sendJson(res, { success: true, template: tpl });
+          return;
+        }
+        if (url === '/api/investigations') {
+          sendJson(res, { success: true, templates: listTemplates() });
+          return;
+        }
+        if (url === '/api/investigation-delete') {
+          const ok = deleteTemplate(body.name || body.slug || '');
+          const win = ctx.getMainWindow();
+          if (win && !win.isDestroyed()) win.webContents.send('investigation-templates-changed');
+          sendJson(res, { success: ok });
+          return;
+        }
+        if (url === '/api/investigation-run') {
+          const tpl = getTemplate(body.name || body.slug || '');
+          if (!tpl) return sendError(res, `No saved investigation named "${body.name || body.slug}"`);
+          const steps = resolveSteps(tpl, body.params || {});
+          const results: any[] = [];
+          for (const step of steps) {
+            const r = await replayStep(step);
+            results.push({ step: step.label, path: step.path, ok: r?.success !== false, summary: summarizeReplay(step.path, r) });
+          }
+          sendJson(res, { success: true, ran: tpl.name, steps: results });
+          return;
+        }
+
         if (url === '/api/open-file') {
           if (!body.filePath) return sendError(res, 'filePath required');
           if (!fs.existsSync(body.filePath)) return sendError(res, 'File not found');
@@ -800,6 +908,33 @@ export function startApiServer(ctx: ApiContext): void {
             pattern: body.pattern,
             patternFlags: body.patternFlags,
           });
+          sendJson(res, result);
+          return;
+        }
+
+        // Compute a trend AND render it as a cell in the Trends panel, so the agent
+        // can build a vertical sequence of charts alongside the user's own cells.
+        if (url === '/api/trend-show') {
+          const type = body.type || 'series';
+          if (!body.field && !body.pattern) return sendError(res, 'field or pattern required');
+          const field = body.field || body.pattern;
+          const common = { field, startLine: body.startLine, endLine: body.endLine, pattern: body.pattern, patternFlags: body.patternFlags };
+          let result: any;
+          if (type === 'transitions') {
+            result = await ctx.trendTransitions({ ...common, maxTransitions: body.maxTransitions });
+          } else if (type === 'correlate') {
+            if (!body.event) return sendError(res, 'event required for correlate');
+            result = await ctx.trendCorrelate({ ...common, event: body.event });
+          } else {
+            result = await ctx.trendSeries({ ...common, bucketCount: body.bucketCount, maxPoints: body.maxPoints });
+          }
+          const label = body.label || body.field || `/${body.pattern}/`;
+          // Push the (unredacted) result to the renderer for display; the agent's
+          // own text copy is redacted by the MCP layer separately.
+          const win = ctx.getMainWindow();
+          if (win && !win.isDestroyed()) {
+            win.webContents.send('agent-trend-cell', { type, label, result });
+          }
           sendJson(res, result);
           return;
         }

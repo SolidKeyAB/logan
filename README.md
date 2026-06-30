@@ -44,6 +44,9 @@ npm start
 - **HTTP API** — Full REST API for custom agents (bash, Node.js, Python) — see [LOGAN-AGENT.md](LOGAN-AGENT.md)
 - **Connection indicator** — Shows agent name and status, enforces single-agent connection
 - **Custom agent scripts** — Point to your own agent via `~/.logan/agent-config.json`
+- **Interrupt (⏹ Stop)** — Stop the agent's current task without killing the session; it acknowledges and goes back to waiting
+- **Agent-driven charts** — The agent can render trend charts straight into the Trends panel (`logan_trend_show`)
+- **Investigation patterns** — The agent's investigative steps are recorded and can be saved as named, re-runnable templates (see [docs/INVESTIGATION_TEMPLATES.md](docs/INVESTIGATION_TEMPLATES.md))
 
 ### Live Connections
 - **Serial monitor** — Connect to serial ports with auto-device discovery
@@ -65,6 +68,9 @@ npm start
 - **Time-range analysis** — Focus on a specific time window
 - **Baseline comparison** — Save log fingerprints and compare future logs against them to detect regressions
 - **Search configs** — Persistent multi-pattern search with color-coded highlighting (Ctrl+8)
+- **Trends** — Discover log variables (key=value/JSON), search them by name, and chart any field over time, as value-flips, or correlated with an event; booleans chart as a 0/1 step line
+- **Signals** — Overlay multiple numeric signals (including MF4 channels) on one shared time axis with normalize toggle and click-to-line
+- **Guided Investigate** — One-tap symptom recipes (crashed/froze/slow/…) that search, trend, and pin findings; save the agent's steps as re-runnable patterns
 
 ### Annotations
 - **Bookmarks** — Mark lines with comments and colors, save/load bookmark sets, export
@@ -78,7 +84,7 @@ npm start
 - **Diff view** — Compare files with aligned hunk display, additions/deletions/modifications
 
 ### Media
-- **Video sync** — Open a screen recording alongside logs, set a sync point, click lines to seek video (Ctrl+9)
+- **Video sync** — Open a screen recording alongside logs, set a sync point, click lines to seek video (Ctrl+9). Plays MP4/WebM/Ogg directly; AVI/MKV/WMV are auto-converted to MP4 via ffmpeg (cached per file)
 - **Image viewer** — View PNG, JPG, SVG images with zoom in the bottom panel
 
 ### Built-in Tools
