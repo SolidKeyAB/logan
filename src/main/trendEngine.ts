@@ -260,6 +260,11 @@ export interface SeriesResult {
   truncated: boolean;
   timeRange: { startMs: number; endMs: number } | null;
   buckets: TimeBucket[];
+  // What the bucket startMs/endMs coordinates mean, so the renderer labels the X
+  // axis correctly and never has to fall back to a table:
+  //   'time' → buckets are over epoch-ms (a real timestamp was found)
+  //   'line' → buckets are over 1-based viewer line numbers (fallback: no timestamp)
+  xKind: 'time' | 'line';
   // a capped, evenly-sampled set of raw points for click-to-line + scatter
   points: TrendPoint[];
 }
@@ -298,17 +303,36 @@ export function extractSeries(
     ? { startMs: minMs, endMs: maxMs }
     : (minMs !== Infinity ? { startMs: minMs, endMs: minMs + 1 } : null);
 
-  // Build adaptive time buckets over points that have a timestamp.
+  // Pick the X axis. Prefer real timestamps; otherwise fall back to viewer line
+  // number so a series ALWAYS charts (no silent table-only degradation). The
+  // fallback mirrors extractSignalSeries, which already uses record index.
+  const useLine = !timeRange;
+  const xKind: 'time' | 'line' = useLine ? 'line' : 'time';
+  // In line mode every point has a coordinate (its line), so all points bucket —
+  // not just the timestamped ones.
+  const xOf = (p: TrendPoint): number | null => (useLine ? p.viewerLine : p.epochMs);
+  let xStart: number, xEnd: number;
+  if (useLine) {
+    xStart = collected.length ? collected[0].viewerLine : 0;
+    xEnd = collected.length ? collected[collected.length - 1].viewerLine : 1;
+    if (xEnd <= xStart) xEnd = xStart + 1;
+  } else {
+    xStart = timeRange!.startMs;
+    xEnd = timeRange!.endMs;
+  }
+
+  // Build adaptive buckets over the chosen X axis (time-ms or line number).
   const buckets: TimeBucket[] = [];
-  if (timeRange) {
-    const span = Math.max(1, timeRange.endMs - timeRange.startMs);
+  if (collected.length > 0) {
+    const span = Math.max(1, xEnd - xStart);
     const width = span / bucketCount;
     for (let i = 0; i < bucketCount; i++) {
-      buckets.push({ startMs: timeRange.startMs + i * width, endMs: timeRange.startMs + (i + 1) * width, count: 0 });
+      buckets.push({ startMs: xStart + i * width, endMs: xStart + (i + 1) * width, count: 0 });
     }
     for (const p of collected) {
-      if (p.epochMs === null) continue;
-      let idx = Math.floor((p.epochMs - timeRange.startMs) / width);
+      const x = xOf(p);
+      if (x === null) continue;
+      let idx = Math.floor((x - xStart) / width);
       if (idx < 0) idx = 0; if (idx >= bucketCount) idx = bucketCount - 1;
       const b = buckets[idx];
       b.count++;
@@ -345,6 +369,7 @@ export function extractSeries(
     truncated,
     timeRange,
     buckets,
+    xKind,
     points,
   };
 }

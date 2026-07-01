@@ -128,6 +128,26 @@ describe('extractSeries', () => {
     expect(s.type).toBe('string');
     expect(s.buckets[0].values).toEqual({ idle: 2, active: 1 });
   });
+
+  it('falls back to a line-number X axis when no timestamps exist (always charts)', () => {
+    const h = fakeHandler(['v=10', 'v=20', 'v=30', 'v=40']); // no timestamps
+    const s = extractSeries(h, parseTs, 'v', { bucketCount: 4 });
+    expect(s.xKind).toBe('line');
+    expect(s.timeRange).toBeNull();
+    expect(s.withTimestamp).toBe(0);
+    // Every point is charted (buckets populated), NOT dumped to a table.
+    expect(s.buckets.reduce((n, b) => n + b.count, 0)).toBe(4);
+    expect(s.buckets.some((b) => b.count > 0)).toBe(true);
+    // Numeric aggregates present so the value line draws.
+    expect(s.buckets.some((b) => b.max !== undefined)).toBe(true);
+  });
+
+  it('uses xKind "time" with time buckets when timestamps are present', () => {
+    const h = fakeHandler(['2024-01-01 00:00:00 v=10', '2024-01-01 00:00:30 v=20']);
+    const s = extractSeries(h, parseTs, 'v', { bucketCount: 10 });
+    expect(s.xKind).toBe('time');
+    expect(s.timeRange).not.toBeNull();
+  });
 });
 
 describe('detectTransitions', () => {
