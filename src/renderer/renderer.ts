@@ -5997,8 +5997,61 @@ async function searchRecurrences(term: string): Promise<void> {
 let trendsPanelInited = false;
 let trendCellSeq = 0;
 
+// Detected X-axis candidates (from discoverAxes) and the currently-selected id.
+// The top candidate is the smart default ("auto") — e.g. relative-seconds for the
+// decoded .esotrace stream, wall-clock for ISO logs, else the line-number fallback.
+let trendXAxes: AxisCandidate[] = [];
+let trendXAxisId = '';
+
 function trendEl<T extends HTMLElement>(id: string): T | null {
   return document.getElementById(id) as T | null;
+}
+
+// The AxisSpec for the selected candidate, or undefined (→ engine auto: time-or-line).
+function resolveTrendAxis(): AxisSpec | undefined {
+  return trendXAxes.find(a => a.id === trendXAxisId)?.spec;
+}
+
+// Fill the X-axis <select> from detected candidates; the first (best-ranked) is the
+// default and tagged "(auto)".
+function populateTrendAxisSelect(axes: AxisCandidate[]): void {
+  const sel = trendEl<HTMLSelectElement>('trends-xaxis');
+  if (!sel) return;
+  trendXAxes = axes;
+  sel.innerHTML = '';
+  axes.forEach((a, i) => {
+    const o = document.createElement('option');
+    o.value = a.id;
+    const detail = a.id !== 'line' && a.detail ? ` · ${a.detail}` : '';
+    o.textContent = `X: ${a.label}${detail}${i === 0 ? ' (auto)' : ''}`;
+    sel.appendChild(o);
+  });
+  trendXAxisId = axes[0]?.id ?? '';
+  sel.value = trendXAxisId;
+  sel.disabled = axes.length === 0;
+}
+
+// Re-run every value-over-time cell against the newly-selected axis (each series
+// cell remembers its field/pattern in dataset), so changing the axis updates all
+// charts at once.
+async function reapplyTrendAxis(): Promise<void> {
+  const results = trendEl<HTMLDivElement>('trends-results');
+  if (!results) return;
+  const xAxis = resolveTrendAxis();
+  for (const root of Array.from(results.querySelectorAll<HTMLElement>('.trend-cell[data-trend-kind="series"]'))) {
+    const field = root.dataset.trendField || '';
+    const pattern = root.dataset.trendPattern || undefined;
+    const body = root.querySelector<HTMLDivElement>('.trend-cell-body');
+    if (!field || !body) continue;
+    body.innerHTML = '<p class="placeholder">Recomputing…</p>';
+    try {
+      const res = await window.api.trendSeries({ field, pattern, xAxis });
+      if (res.success) renderSeriesCell(body, res as TrendSeriesResult);
+      else body.innerHTML = `<p class="placeholder trend-error">${escapeHtml(res.error || 'Failed')}</p>`;
+    } catch (e) {
+      body.innerHTML = `<p class="placeholder trend-error">${escapeHtml(String(e))}</p>`;
+    }
+  }
 }
 
 function initTrendsPanel(): void {
@@ -6032,6 +6085,9 @@ function initTrendsPanel(): void {
     if (e.key === 'Enter' && fieldSelect.value.trim()) { e.preventDefault(); void addTrendCell(); }
   });
   patternInput?.addEventListener('input', refreshAddEnabled);
+
+  const xaxisSel = trendEl<HTMLSelectElement>('trends-xaxis');
+  xaxisSel?.addEventListener('change', () => { trendXAxisId = xaxisSel.value; void reapplyTrendAxis(); });
 }
 
 async function discoverTrendFields(): Promise<void> {
@@ -6045,6 +6101,12 @@ async function discoverTrendFields(): Promise<void> {
     const fields = res.fields || [];
     populateTrendFieldPicker(fields);
     renderTrendFieldsBar(fields);
+    // Detect X-axis candidates in parallel-ish so the axis selector is ready
+    // before the user adds a cell (best candidate becomes the default).
+    try {
+      const ax = await window.api.trendDiscoverAxes({});
+      if (ax.success && ax.axes) populateTrendAxisSelect(ax.axes);
+    } catch { /* axis selector stays at its default/disabled state */ }
     if (fields.length === 0 && results && results.querySelector('.placeholder')) {
       results.innerHTML = '<p class="placeholder">No <code>key=value</code> or JSON fields found in the sample. You can still trend an unlabeled value with a regex pattern (first capture group = value).</p>';
     }
@@ -6158,7 +6220,14 @@ async function addTrendCell(): Promise<void> {
   const cell = createTrendCellShell(type, label);
   try {
     if (type === 'series') {
-      const res = await window.api.trendSeries({ field: fieldArg, pattern: patternOpt });
+      // Remember what this cell charts so the X-axis selector can re-run it later.
+      const root = cell.body.parentElement;
+      if (root) {
+        root.dataset.trendKind = 'series';
+        root.dataset.trendField = fieldArg;
+        if (patternOpt) root.dataset.trendPattern = patternOpt;
+      }
+      const res = await window.api.trendSeries({ field: fieldArg, pattern: patternOpt, xAxis: resolveTrendAxis() });
       if (!res.success) { cell.error(res.error || 'Failed'); return; }
       renderSeriesCell(cell.body, res as TrendSeriesResult);
     } else if (type === 'transitions') {
@@ -6222,9 +6291,9 @@ function renderSeriesCell(body: HTMLDivElement, series: TrendSeriesResult): void
   body.innerHTML = '';
   const stats = document.createElement('div');
   stats.className = 'trend-cell-stats';
-  // Show what the X axis is: real time, or the line-number fallback when no
-  // timestamp was found — so it's clear why (and honest about) the axis.
-  const axisLabel = series.xKind === 'time' ? 'x: time' : 'x: line #';
+  // Show what the X axis is (time, relative seconds, another field, or the
+  // line-number fallback) — so it's clear why, and honest about, the axis.
+  const axisLabel = ({ time: 'x: time', relative: 'x: rel. s', line: 'x: line #', number: 'x: field' } as Record<string, string>)[series.xKind] || `x: ${series.xKind}`;
   stats.textContent = `${series.totalPoints} values · ${series.withTimestamp} timestamped · ${series.type} · ${axisLabel}${series.truncated ? ' · scan truncated' : ''}`;
   body.appendChild(stats);
 
