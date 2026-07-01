@@ -6222,7 +6222,10 @@ function renderSeriesCell(body: HTMLDivElement, series: TrendSeriesResult): void
   body.innerHTML = '';
   const stats = document.createElement('div');
   stats.className = 'trend-cell-stats';
-  stats.textContent = `${series.totalPoints} values · ${series.withTimestamp} timestamped · ${series.type}${series.truncated ? ' · scan truncated' : ''}`;
+  // Show what the X axis is: real time, or the line-number fallback when no
+  // timestamp was found — so it's clear why (and honest about) the axis.
+  const axisLabel = series.xKind === 'time' ? 'x: time' : 'x: line #';
+  stats.textContent = `${series.totalPoints} values · ${series.withTimestamp} timestamped · ${series.type} · ${axisLabel}${series.truncated ? ' · scan truncated' : ''}`;
   body.appendChild(stats);
 
   if (series.totalPoints === 0) {
@@ -6233,7 +6236,9 @@ function renderSeriesCell(body: HTMLDivElement, series: TrendSeriesResult): void
     return;
   }
 
-  if (series.timeRange && series.buckets.length > 0) {
+  // A series now ALWAYS has buckets (time axis, or the line-number fallback), so
+  // the cell always charts instead of degrading to a table.
+  if (series.buckets.length > 0) {
     const canvas = document.createElement('canvas');
     canvas.className = 'trend-cell-canvas';
     body.appendChild(canvas);
@@ -6242,36 +6247,51 @@ function renderSeriesCell(body: HTMLDivElement, series: TrendSeriesResult): void
     canvas.addEventListener('click', (e) => {
       const rect = canvas.getBoundingClientRect();
       const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-      const tr = series.timeRange!;
-      const t = tr.startMs + frac * (tr.endMs - tr.startMs);
+      // Map the click to the chosen X axis, then find the nearest sample point.
       let best: TrendPoint | null = null, bestD = Infinity;
-      for (const pt of series.points) {
-        if (pt.epochMs == null) continue;
-        const d = Math.abs(pt.epochMs - t);
-        if (d < bestD) { bestD = d; best = pt; }
+      if (series.xKind === 'time' && series.timeRange) {
+        const tr = series.timeRange;
+        const t = tr.startMs + frac * (tr.endMs - tr.startMs);
+        for (const pt of series.points) {
+          if (pt.epochMs == null) continue;
+          const d = Math.abs(pt.epochMs - t);
+          if (d < bestD) { bestD = d; best = pt; }
+        }
+      } else {
+        // Line-number axis: interpolate across the sampled points' line span.
+        const pts = series.points;
+        if (pts.length > 0) {
+          const first = pts[0].viewerLine, last = pts[pts.length - 1].viewerLine;
+          const target = first + frac * (last - first);
+          for (const pt of pts) {
+            const d = Math.abs(pt.viewerLine - target);
+            if (d < bestD) { bestD = d; best = pt; }
+          }
+        }
       }
       // Defer the viewer navigation a frame so the click returns instantly.
-      if (best) requestAnimationFrame(() => jumpToTrendLine(best.lineNumber));
+      if (best) requestAnimationFrame(() => jumpToTrendLine(best!.lineNumber));
     });
-  } else {
-    const p = document.createElement('p');
-    p.className = 'placeholder';
-    p.textContent = 'No parseable timestamps — showing sample points below.';
-    body.appendChild(p);
   }
 
-  // A few clickable sample points so the cell is useful even without timestamps.
+  // Sample points as a collapsed detail (still one click → jump to line), so the
+  // chart is the headline and the raw rows are available but never dominate.
+  const details = document.createElement('details');
+  details.className = 'trend-point-details';
+  const summary = document.createElement('summary');
+  summary.textContent = `sample points (${Math.min(series.points.length, 12)})`;
+  details.appendChild(summary);
   const sample = document.createElement('div');
   sample.className = 'trend-point-list';
-  const pts = series.points.slice(0, 12);
-  for (const pt of pts) {
+  for (const pt of series.points.slice(0, 12)) {
     const row = document.createElement('div');
     row.className = 'trend-point-row';
     row.innerHTML = `<span class="trend-point-line">L${pt.viewerLine}</span><span class="trend-point-val">${escapeHtml(pt.raw)}</span>`;
     row.addEventListener('click', () => jumpToTrendLine(pt.lineNumber));
     sample.appendChild(row);
   }
-  body.appendChild(sample);
+  details.appendChild(sample);
+  body.appendChild(details);
 }
 
 function drawTrendChart(canvas: HTMLCanvasElement, series: TrendSeriesResult): void {

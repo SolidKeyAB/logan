@@ -320,6 +320,9 @@ interface TrendSeriesResult {
   truncated: boolean;
   timeRange: { startMs: number; endMs: number } | null;
   buckets: TrendTimeBucket[];
+  // Meaning of bucket startMs/endMs: 'time' = epoch-ms, 'line' = viewer line number
+  // (the fallback so a series always charts even without timestamps).
+  xKind: 'time' | 'line';
   points: TrendPoint[];
 }
 
