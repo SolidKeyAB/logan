@@ -8159,6 +8159,19 @@ kbd {
 .signal-legend-name { font-family: var(--font-mono); }
 .signal-legend-range { color: var(--text-muted); }
 
+.trend-point-details {
+  margin-top: 6px;
+}
+.trend-point-details > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 11px;
+  user-select: none;
+  list-style-position: inside;
+}
+.trend-point-details > summary:hover {
+  color: var(--text);
+}
 .trend-point-list {
   margin-top: 6px;
   display: flex;
