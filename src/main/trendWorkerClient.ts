@@ -10,7 +10,7 @@ import type { FileHandler } from './fileHandler';
  * The offsets/lengths are backed by SharedArrayBuffers, so handing them to the worker is
  * zero-copy and zero-transfer (shared by reference). Nothing big is serialized per call.
  */
-export type TrendJobKind = 'discover' | 'series' | 'signal' | 'transitions' | 'correlate';
+export type TrendJobKind = 'discover' | 'axes' | 'series' | 'signal' | 'transitions' | 'correlate';
 
 export function runTrendJob(kind: TrendJobKind, handler: FileHandler, args: any): Promise<any> {
   const scan = handler.getScanContext();
