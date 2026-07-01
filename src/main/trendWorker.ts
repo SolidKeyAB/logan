@@ -1,6 +1,6 @@
 import { parentPort, workerData } from 'worker_threads';
 import * as fs from 'fs';
-import { discoverFields, extractSeries, extractSignalSeries, detectTransitions, correlate } from './trendEngine';
+import { discoverFields, discoverAxes, extractSeries, extractSignalSeries, detectTransitions, correlate } from './trendEngine';
 import { parseTimestampFast } from './timestampParse';
 import type { FileHandler } from './fileHandler';
 
@@ -65,6 +65,9 @@ try {
   switch (kind) {
     case 'discover':
       result = discoverFields(handler, args);
+      break;
+    case 'axes':
+      result = discoverAxes(handler, parseTimestampFast, args);
       break;
     case 'series':
       result = extractSeries(handler, parseTimestampFast, args.field, args);

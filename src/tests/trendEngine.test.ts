@@ -3,6 +3,7 @@ import {
   extractFields,
   classifyValue,
   discoverFields,
+  discoverAxes,
   extractSeries,
   extractSignalSeries,
   detectTransitions,
@@ -147,6 +148,72 @@ describe('extractSeries', () => {
     const s = extractSeries(h, parseTs, 'v', { bucketCount: 10 });
     expect(s.xKind).toBe('time');
     expect(s.timeRange).not.toBeNull();
+  });
+
+  it('charts against a leading relative-seconds prefix when asked (xAxis relative)', () => {
+    // decoded ".esotrace"-style lines: "<seconds> LEVEL msg field=value"
+    const h = fakeHandler([
+      '10.0 INFO speed=5',
+      '20.0 INFO speed=9',
+      '30.0 INFO speed=1',
+    ]);
+    const s = extractSeries(h, parseTs, 'speed', { bucketCount: 20, xAxis: { kind: 'relative' } });
+    expect(s.xKind).toBe('relative');
+    expect(s.buckets.reduce((n, b) => n + b.count, 0)).toBe(3);
+    // buckets span 10..30 → first and last buckets are populated, not all in one
+    const first = s.buckets.find(b => b.count > 0)!;
+    expect(first.startMs).toBeCloseTo(10, 5);
+  });
+
+  it('charts against another field as the X axis (xAxis field)', () => {
+    const h = fakeHandler(['rpm=1000 speed=10', 'rpm=2000 speed=25', 'rpm=3000 speed=40']);
+    const s = extractSeries(h, parseTs, 'speed', { bucketCount: 20, xAxis: { kind: 'field', field: 'rpm' } });
+    expect(s.xKind).toBe('number');
+    expect(s.buckets.reduce((n, b) => n + b.count, 0)).toBe(3);
+  });
+
+  it('falls back to line axis when an explicit axis yields no values', () => {
+    const h = fakeHandler(['speed=10', 'speed=20']); // no "rpm" field at all
+    const s = extractSeries(h, parseTs, 'speed', { xAxis: { kind: 'field', field: 'rpm' } });
+    expect(s.xKind).toBe('line');
+    expect(s.buckets.reduce((n, b) => n + b.count, 0)).toBe(2);
+  });
+});
+
+describe('discoverAxes', () => {
+  it('ranks the wall-clock time axis first and always offers line number', () => {
+    const h = fakeHandler([
+      '2024-01-01 00:00:00 v=1',
+      '2024-01-01 00:00:01 v=2',
+      '2024-01-01 00:00:02 v=3',
+    ]);
+    const axes = discoverAxes(h, parseTs);
+    expect(axes[0].id).toBe('time');
+    expect(axes.some(a => a.id === 'line')).toBe(true);
+  });
+
+  it('detects a leading relative-seconds axis (the .esotrace case)', () => {
+    const h = fakeHandler([
+      '10.0 INFO frame=1',
+      '20.0 INFO frame=2',
+      '30.0 INFO frame=3',
+    ]);
+    const axes = discoverAxes(h, parseTs);
+    expect(axes[0].id).toBe('relative'); // beats line, no wall-clock present
+  });
+
+  it('offers a monotonic temporal-named field but NOT a fluctuating duration field', () => {
+    const h = fakeHandler([
+      'monotonicTimestamp=1000 deadlineNanos=16 v=1',
+      'monotonicTimestamp=2000 deadlineNanos=16 v=2',
+      'monotonicTimestamp=3000 deadlineNanos=8  v=3',
+      'monotonicTimestamp=4000 deadlineNanos=20 v=4',
+    ]);
+    const axes = discoverAxes(h, parseTs);
+    const ids = axes.map(a => a.id);
+    expect(ids).toContain('field:monotonicTimestamp');   // monotonic clock → offered
+    // deadlineNanos is duration-named and not monotonic → guarded out
+    expect(ids).not.toContain('field:deadlineNanos');
   });
 });
 
