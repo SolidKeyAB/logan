@@ -20,7 +20,7 @@ const INVESTIGATIVE_PATHS = new Set<string>([
   '/api/search', '/api/filter', '/api/clear-filter', '/api/analyze', '/api/time-gaps',
   '/api/trend-fields', '/api/trend-series', '/api/trend-transitions', '/api/trend-correlate',
   '/api/trend-show', '/api/investigate-crashes', '/api/investigate-component',
-  '/api/investigate-timerange', '/api/triage', '/api/navigate',
+  '/api/investigate-timerange', '/api/triage', '/api/navigate', '/api/evidence-pack',
 ]);
 const JOURNAL_CAP = 200;
 let agentJournal: JournalEntry[] = [];
@@ -34,6 +34,7 @@ function journalLabel(p: string, body: Record<string, any>): string {
   if (p.startsWith('/api/trend-')) return `${name} ${body.field ?? body.pattern ?? ''}`.trim();
   if (p === '/api/investigate-component') return `investigate component ${body.component ?? ''}`;
   if (p === '/api/triage') return `triage ${body.symptom ?? ''}`.trim();
+  if (p === '/api/evidence-pack') return `evidence-pack${body.baselineId ? ' (vs baseline)' : ''}`;
   return name;
 }
 
@@ -936,6 +937,110 @@ export function startApiServer(ctx: ApiContext): void {
             win.webContents.send('agent-trend-cell', { type, label, result });
           }
           sendJson(res, result);
+          return;
+        }
+
+        // Compose a compact "evidence pack" — one briefing the agent fetches
+        // FIRST, instead of dozens of exploratory round-trips. Reuses existing
+        // primitives (analyze / time-gaps / trend-fields / baseline) in-process;
+        // returns counts + references (viewerLine), not raw log text.
+        if (url === '/api/evidence-pack') {
+          const filePath = ctx.getCurrentFilePath();
+          const handler = ctx.getFileHandler();
+          if (!filePath || !handler) return sendError(res, 'No file open');
+          const totalLines = handler.getTotalLines();
+
+          const thresholdSeconds = body.thresholdSeconds ?? 60;
+          const topFieldsN = body.topFields ?? 25;
+          const topGapsN = body.topGaps ?? 8;
+          const topComponentsN = body.topComponents ?? 10;
+
+          // 1. Analysis (also caches getAnalysisResult() for the baseline step)
+          const analysisResp = await ctx.analyze(body.analyzerName);
+          const aresult = analysisResp?.success ? analysisResp.result : (analysisResp?.result ?? null);
+          const levelCounts = aresult?.levelCounts || {};
+          const totalAnalyzed = aresult?.stats?.analyzedLines || totalLines;
+          const errorCount = levelCounts['error'] || 0;
+          const warningCount = levelCounts['warning'] || 0;
+          const errorPercent = totalAnalyzed > 0 ? (errorCount / totalAnalyzed) * 100 : 0;
+          const warningPercent = totalAnalyzed > 0 ? (warningCount / totalAnalyzed) * 100 : 0;
+          const crashes = aresult?.insights?.crashes || [];
+          const topFailingComponents = aresult?.insights?.topFailingComponents || [];
+          const filterSuggestions = aresult?.insights?.filterSuggestions || [];
+
+          // 2. Time gaps (top N, with 1-based viewerLine)
+          const gapsResp = await ctx.detectTimeGaps({ thresholdSeconds });
+          const allGaps = gapsResp?.success ? (gapsResp.gaps || []) : [];
+          const timeGaps = allGaps.slice(0, topGapsN).map((g: any) => ({
+            viewerLine: g.lineNumber + 1,
+            gapSeconds: Math.round(g.gapSeconds),
+            from: g.prevTimestamp,
+            to: g.currTimestamp,
+            preview: g.linePreview,
+          }));
+
+          // 3. Discovered fields (the agent's vocabulary) — top N by frequency
+          const fieldsResp = await ctx.trendDiscoverFields({ sampleSize: body.fieldSampleSize });
+          const allFields = fieldsResp?.success ? (fieldsResp.fields || []) : [];
+          const fields = allFields.slice(0, topFieldsN).map((f: any) => ({
+            name: f.name, type: f.type, occurrences: f.occurrences,
+            distinct: f.distinct, examples: f.examples,
+          }));
+
+          // Group crashes by keyword, keep first-occurrence viewerLine
+          const crashGroups: Record<string, { keyword: string; count: number; viewerLine: number; sample: string }> = {};
+          for (const c of crashes) {
+            if (!crashGroups[c.keyword]) {
+              crashGroups[c.keyword] = { keyword: c.keyword, count: 0, viewerLine: c.lineNumber + 1, sample: c.text };
+            }
+            crashGroups[c.keyword].count++;
+          }
+
+          // Severity + one-line summary (same rubric as logan_triage)
+          let severity: 'healthy' | 'warning' | 'critical' = 'healthy';
+          if (crashes.length > 0 || errorPercent > 20) {
+            severity = 'critical';
+          } else if (errorPercent > 5 || timeGaps.some((g: any) => g.gapSeconds > 300) || topFailingComponents.length > 3) {
+            severity = 'warning';
+          }
+          const parts = [`${totalLines.toLocaleString()} lines`];
+          if (errorCount > 0) parts.push(`${errorCount.toLocaleString()} errors (${errorPercent.toFixed(1)}%)`);
+          if (crashes.length > 0) parts.push(`${crashes.length} crashes`);
+          if (allGaps.length > 0) parts.push(`${allGaps.length} time gaps`);
+          if (allFields.length > 0) parts.push(`${allFields.length} fields`);
+
+          // 4. Optional baseline delta (analysis just ran, so getAnalysisResult() is set)
+          let baselineDelta: any = null;
+          if (body.baselineId) {
+            const ar = ctx.getAnalysisResult();
+            if (ar) {
+              const fp = buildFingerprint(filePath, ar, handler);
+              baselineDelta = ctx.getBaselineStore().compare(fp, body.baselineId) || null;
+            }
+          }
+
+          const pack = {
+            file: { path: filePath, totalLines, timeRange: aresult?.timeRange || null },
+            severity,
+            summary: parts.join(', '),
+            levels: {
+              ...levelCounts,
+              errorPercent: Math.round(errorPercent * 100) / 100,
+              warningPercent: Math.round(warningPercent * 100) / 100,
+            },
+            crashes: Object.values(crashGroups),
+            topComponents: topFailingComponents.slice(0, topComponentsN),
+            timeGaps,
+            fields,
+            filterSuggestions: filterSuggestions.slice(0, 5),
+            baselineDelta,
+            caps: {
+              fields: { shown: fields.length, total: allFields.length, truncated: allFields.length > fields.length },
+              timeGaps: { shown: timeGaps.length, total: allGaps.length, truncated: allGaps.length > timeGaps.length },
+              note: 'Compact briefing. Drill into any viewerLine with logan_get_lines; chart any field with logan_trend_show; pin issues with logan_report_finding.',
+            },
+          };
+          sendJson(res, { success: true, pack });
           return;
         }
 
