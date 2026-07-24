@@ -8089,6 +8089,17 @@ kbd {
 .ctx-group.faded { opacity: 0.2; transition: opacity 0.2s; }
 .ctx-group.focused { opacity: 1; background: rgba(200,168,122,0.06); border-radius: 4px; box-shadow: 0 0 0 1px rgba(200,168,122,0.25); }
 
+/* Incomplete context anchors — not all clue patterns matched near the anchor */
+.ctx-group.incomplete { border-left-color: rgba(224,149,58,0.5); }
+.ctx-group.incomplete .ctx-group-header { background: rgba(224,149,58,0.05); }
+.ctx-score-badge.incomplete { background: rgba(224,149,58,0.16); color: #e0953a; }
+.ctx-group-missing { margin-left: 18px; padding: 1px 6px 3px; font-size: 10px; color: #e0953a; opacity: 0.9; font-style: italic; }
+.ctx-lane-mark.incomplete { background: transparent !important; border: 1.5px solid; box-shadow: none; opacity: 0.8; }
+.ctx-lane-mark.incomplete:hover { opacity: 1; box-shadow: 0 0 6px currentColor; }
+:root.theme-paper .ctx-score-badge.incomplete { background: rgba(179,112,26,0.14); color: #b3701a; }
+:root.theme-paper .ctx-group-missing { color: #b3701a; }
+:root.theme-paper .ctx-group.incomplete { border-left-color: rgba(179,112,26,0.5); }
+
 /* Paper theme overrides */
 :root.theme-paper .contexts-panel-body { background: #c4cdc8; }
 :root.theme-paper .contexts-toolbar { background: #bbc5c0; border-color: #a0aca7; }
