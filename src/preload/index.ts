@@ -440,8 +440,8 @@ const api = {
   searchConfigBatch: (configs: any[]): Promise<{ success: boolean; results?: Record<string, any[]>; error?: string }> =>
     ipcRenderer.invoke(IPC.SEARCH_CONFIG_BATCH, configs),
 
-  onSearchConfigBatchProgress: (callback: (data: { percent: number; configId: string }) => void): (() => void) => {
-    const handler = (_: any, data: { percent: number; configId: string }) => callback(data);
+  onSearchConfigBatchProgress: (callback: (data: { percent: number; configId: string; matchCount?: number }) => void): (() => void) => {
+    const handler = (_: any, data: { percent: number; configId: string; matchCount?: number }) => callback(data);
     ipcRenderer.on(IPC.SEARCH_CONFIG_BATCH_PROGRESS, handler);
     return () => ipcRenderer.removeListener(IPC.SEARCH_CONFIG_BATCH_PROGRESS, handler);
   },
