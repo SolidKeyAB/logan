@@ -3361,6 +3361,27 @@ ipcMain.handle(IPC.SEARCH_CONFIG_BATCH, async (_, configs: Array<{ id: string; p
   // file once, and attributes each matching line back to the individual configs — a
   // roughly N× win on big files. It streams per-config running counts for the live chip
   // tickers, and falls back to the per-config path for CR-only files / no ripgrep.
+  // Progressive streaming: as ripgrep finds matches, push each config's matched line
+  // numbers to the renderer so it can paint the overview/counts live instead of waiting
+  // for the whole file. Only line numbers are streamed (the overview needs positions,
+  // not text) and capped per config — the authoritative full results (with text) still
+  // arrive in the return payload. Filter-hidden lines are dropped to match the final set.
+  const STREAM_CAP_PER_CONFIG = 50000;
+  const streamedCount: Record<string, number> = {};
+  const streamMatches = (deltaByConfig: Record<string, Array<{ lineNumber: number; column: number; length: number; lineText: string }>>) => {
+    for (const [configId, matches] of Object.entries(deltaByConfig)) {
+      let lines = filteredSet
+        ? matches.filter(m => filteredSet!.has(m.lineNumber)).map(m => m.lineNumber)
+        : matches.map(m => m.lineNumber);
+      const already = streamedCount[configId] || 0;
+      if (already >= STREAM_CAP_PER_CONFIG) continue;
+      if (already + lines.length > STREAM_CAP_PER_CONFIG) lines = lines.slice(0, STREAM_CAP_PER_CONFIG - already);
+      if (lines.length === 0) continue;
+      streamedCount[configId] = already + lines.length;
+      mainWindow?.webContents.send(IPC.SEARCH_CONFIG_BATCH_CHUNK, { configId, lines });
+    }
+  };
+
   let raw: Record<string, Array<{ lineNumber: number; column: number; length: number; lineText: string }>>;
   try {
     raw = await handler.searchMulti(configs, (counts, overallPercent) => {
@@ -3368,7 +3389,7 @@ ipcMain.handle(IPC.SEARCH_CONFIG_BATCH, async (_, configs: Array<{ id: string; p
       for (const [configId, matchCount] of Object.entries(counts)) {
         mainWindow?.webContents.send(IPC.SEARCH_CONFIG_BATCH_PROGRESS, { percent, configId, matchCount });
       }
-    }, { cancelled: false });
+    }, { cancelled: false }, streamMatches);
   } catch (error) {
     console.error('Search config batch error:', error);
     return { success: false, error: String(error) };
