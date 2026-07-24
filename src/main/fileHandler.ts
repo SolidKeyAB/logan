@@ -545,6 +545,176 @@ export class FileHandler {
     });
   }
 
+  // Search MANY configs in ONE ripgrep pass instead of N concurrent full-file scans.
+  //
+  // Running one rg process per config (via Promise.all) looks parallel but isn't free:
+  // a single rg already saturates disk + all cores, so N of them just contend and the
+  // file gets read N times. Here we union every config's pattern into a single rg
+  // invocation (multiple `-e` branches = OR), read the file ONCE, then attribute each
+  // matching line back to the individual configs in JS. On a huge file this is roughly
+  // an N× win over the per-config batch.
+  //
+  // Per-config options are folded into each branch so a single rg run stays correct:
+  //   - literal (isRegex=false) -> regex-escaped
+  //   - wholeWord               -> wrapped in \b(?:…)\b
+  //   - !matchCase              -> wrapped in (?i:…)  (rg itself runs case-sensitive)
+  // Invalid patterns are skipped (left with empty results) so one bad config can't make
+  // the whole union pattern fail. CR-only files / missing ripgrep fall back to the
+  // per-config stream path, which handles those correctly.
+  async searchMulti(
+    configs: Array<{ id: string; pattern: string; isRegex: boolean; matchCase: boolean; wholeWord: boolean }>,
+    onProgress?: (counts: Record<string, number>, overallPercent: number) => void,
+    signal?: { cancelled: boolean },
+    maxMatchesPerConfig: number = DEFAULT_MAX_MATCHES
+  ): Promise<Record<string, SearchMatch[]>> {
+    const results: Record<string, SearchMatch[]> = {};
+    for (const c of configs) results[c.id] = [];
+    if (!this.filePath || configs.length === 0) return results;
+
+    // Normalize each config into (a) a JS regex used to attribute + measure the match
+    // per line, and (b) an rg branch string. Keep them in lock-step so the union pass
+    // and the attribution agree exactly.
+    const active: Array<{ id: string; attrRe: RegExp; branch: string }> = [];
+    for (const cfg of configs) {
+      if (!cfg.pattern) continue;
+      let src = cfg.pattern;
+      if (!cfg.isRegex) {
+        src = src.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      }
+      if (cfg.wholeWord) {
+        src = `\\b(?:${src})\\b`;
+      }
+      let attrRe: RegExp;
+      try {
+        attrRe = new RegExp(src, cfg.matchCase ? '' : 'i');
+      } catch {
+        continue; // invalid regex -> leave this config's results empty
+      }
+      const branch = cfg.matchCase ? src : `(?i:${src})`;
+      active.push({ id: cfg.id, attrRe, branch });
+    }
+    if (active.length === 0) return results;
+
+    // CR-only files and machines without bundled ripgrep can't use the union pass —
+    // fall back to the original per-config search (parallel), which is still correct.
+    const hasRipgrep = await checkRipgrep();
+    if (this._hasStandaloneCR || !hasRipgrep) {
+      await Promise.all(configs.map(async (cfg) => {
+        results[cfg.id] = await this.search(
+          {
+            pattern: cfg.pattern,
+            isRegex: cfg.isRegex,
+            isWildcard: false,
+            matchCase: cfg.matchCase,
+            wholeWord: cfg.wholeWord,
+            maxMatches: maxMatchesPerConfig,
+          },
+          undefined,
+          signal
+        );
+        const counts: Record<string, number> = {};
+        for (const c of configs) counts[c.id] = results[c.id]?.length ?? 0;
+        onProgress?.(counts, 100);
+      }));
+      return results;
+    }
+
+    // Single rg pass over the union of every branch. One file read for all configs.
+    const unionCap = Math.min(maxMatchesPerConfig * active.length, 500000);
+    const args: string[] = [
+      '--line-number',
+      '--column',
+      '--no-heading',
+      '--no-filename',
+      '--max-count',
+      String(unionCap),
+    ];
+    for (const a of active) {
+      args.push('-e', a.branch);
+    }
+    args.push('--', this.filePath);
+
+    return new Promise((resolve) => {
+      const proc = spawn(getRipgrepPath(), args);
+      let buffer = '';
+      let unionCount = 0;
+      let lastProgressUpdate = Date.now();
+      const counts: Record<string, number> = {};
+      for (const a of active) counts[a.id] = 0;
+
+      proc.stdout.on('data', (data: Buffer) => {
+        if (signal?.cancelled) {
+          proc.kill();
+          return;
+        }
+
+        buffer += data.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line) continue;
+
+          // rg (--no-filename --column): linenum:column:text — we re-derive the column
+          // per config, so only linenum and the text are needed here.
+          const colonIndex1 = line.indexOf(':');
+          if (colonIndex1 === -1) continue;
+          const colonIndex2 = line.indexOf(':', colonIndex1 + 1);
+          if (colonIndex2 === -1) continue;
+
+          const lineNum = parseInt(line.substring(0, colonIndex1), 10);
+          const lineText = line.substring(colonIndex2 + 1);
+          const adjustedLineNum = lineNum - 1 - this.headerLineCount;
+          if (adjustedLineNum < 0) continue;
+
+          unionCount++;
+
+          // Attribute this line to every config whose own pattern matches it, and record
+          // that config's first-match column/length (not the union's leftmost match).
+          for (const a of active) {
+            if (results[a.id].length >= maxMatchesPerConfig) continue;
+            const m = a.attrRe.exec(lineText);
+            if (m) {
+              results[a.id].push({
+                lineNumber: adjustedLineNum,
+                column: m.index,
+                length: m[0].length,
+                lineText,
+              });
+              counts[a.id]++;
+            }
+          }
+        }
+
+        const now = Date.now();
+        if (onProgress && now - lastProgressUpdate > 100) {
+          lastProgressUpdate = now;
+          onProgress({ ...counts }, Math.min(90, unionCount / 100));
+        }
+      });
+
+      proc.on('error', () => {
+        onProgress?.({ ...counts }, 100);
+        resolve(results);
+      });
+
+      proc.on('close', () => {
+        onProgress?.({ ...counts }, 100);
+        resolve(results);
+      });
+
+      if (signal) {
+        const checkCancel = setInterval(() => {
+          if (signal.cancelled) {
+            proc.kill();
+            clearInterval(checkCancel);
+          }
+        }, 100);
+        proc.on('close', () => clearInterval(checkCancel));
+      }
+    });
+  }
+
   // Helper to filter line to visible columns (delegates to shared utility)
   private filterLineToVisibleColumns(
     line: string,
