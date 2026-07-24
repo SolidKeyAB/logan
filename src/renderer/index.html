@@ -536,6 +536,17 @@
           <div id="search-configs-chips" class="search-configs-chips">
             <button id="btn-add-search-config" class="search-config-add-btn" title="Add search config">+ Add</button>
             <button id="btn-sc-export-all" class="search-config-add-btn" title="Export all results" style="display:none">Export All</button>
+            <button id="btn-sc-distance" class="search-config-add-btn" title="Measure line distance between two configs" style="display:none">&#128207; Distance</button>
+          </div>
+          <div id="sc-distance-panel" class="sc-distance-panel hidden">
+            <div class="sc-distance-controls">
+              <select id="sc-distance-a" class="sc-distance-select" title="Pattern A"></select>
+              <span class="sc-distance-arrow" title="For each hit of A, the nearest hit of B">&rarr; nearest &rarr;</span>
+              <select id="sc-distance-b" class="sc-distance-select" title="Pattern B"></select>
+              <button id="btn-sc-distance-compute" class="sc-form-btn primary">Measure</button>
+              <button id="btn-sc-distance-close" class="sc-form-btn">Close</button>
+            </div>
+            <div id="sc-distance-results" class="sc-distance-results"></div>
           </div>
           <div id="search-configs-form" class="search-configs-form hidden">
             <input type="text" id="sc-pattern-input" class="sc-pattern-input" placeholder="Search pattern...">
