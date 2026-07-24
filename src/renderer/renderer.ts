@@ -997,6 +997,19 @@ const elements = {
   btnScDistanceCompute: document.getElementById('btn-sc-distance-compute') as HTMLButtonElement,
   btnScDistanceClose: document.getElementById('btn-sc-distance-close') as HTMLButtonElement,
   scDistanceResults: document.getElementById('sc-distance-results') as HTMLDivElement,
+  // Pattern Distance explorer (right-click → dialog)
+  distanceModal: document.getElementById('distance-modal') as HTMLDivElement,
+  distAnchor: document.getElementById('dist-anchor') as HTMLInputElement,
+  distAnchorRegex: document.getElementById('dist-anchor-regex') as HTMLInputElement,
+  distAnchorCase: document.getElementById('dist-anchor-case') as HTMLInputElement,
+  distCompare: document.getElementById('dist-compare') as HTMLInputElement,
+  distCompareRegex: document.getElementById('dist-compare-regex') as HTMLInputElement,
+  distCompareCase: document.getElementById('dist-compare-case') as HTMLInputElement,
+  btnDistMeasure: document.getElementById('btn-dist-measure') as HTMLButtonElement,
+  distSummary: document.getElementById('dist-summary') as HTMLDivElement,
+  distChart: document.getElementById('dist-chart') as HTMLCanvasElement,
+  distChartLegend: document.getElementById('dist-chart-legend') as HTMLDivElement,
+  distStats: document.getElementById('dist-stats') as HTMLDivElement,
   scSessionsChips: document.getElementById('sc-sessions-chips') as HTMLDivElement,
   btnSearchConfigs: document.getElementById('btn-search-configs') as HTMLButtonElement,
   scPatternInput: document.getElementById('sc-pattern-input') as HTMLInputElement,
@@ -4135,6 +4148,15 @@ function handleContextMenu(event: MouseEvent): void {
       menu.remove();
     });
     menu.appendChild(filterExclude);
+
+    menu.appendChild(menuSeparator());
+
+    const distanceItem = menuItem('\u{1F4CF}', `Distance from "${filterText}${selectedText.trim().length > 30 ? '...' : ''}"…`);
+    distanceItem.addEventListener('click', () => {
+      openDistanceExplorer(selectedText.trim());
+      menu.remove();
+    });
+    menu.appendChild(distanceItem);
   }
 
   menu.appendChild(menuSeparator());
@@ -11190,6 +11212,199 @@ function computeAndRenderDistance(): void {
   });
 }
 
+// === Pattern Distance Explorer (right-click → dialog) ===
+// Ad-hoc version of the distance tool: the selected text seeds an "anchor" pattern, the
+// user types any "compare" pattern, and we chart how far each anchor hit is from the
+// nearest / next / previous compare hit across the whole log. Runs real searches (the
+// patterns are arbitrary, not existing configs), then reuses the same gap maths.
+
+interface DistPair { a: number; b: number; gap: number; }
+const DIST_COLOR_A = '#ffcc55';
+const DIST_COLOR_B = '#4aa3ff';
+// Held so the canvas click handler (wired once) can map an x-pixel back to an anchor line.
+let distChartState: { pairsByA: DistPair[]; maxLine: number; padL: number; plotW: number } | null = null;
+
+function openDistanceExplorer(anchorText: string): void {
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  elements.distAnchor.value = anchorText;
+  elements.distAnchorRegex.checked = false;
+  elements.distAnchorCase.checked = false;
+  elements.distCompare.value = '';
+  elements.distCompareRegex.checked = false;
+  elements.distCompareCase.checked = false;
+  elements.distSummary.innerHTML = '';
+  elements.distStats.innerHTML = '';
+  elements.distChartLegend.innerHTML = '';
+  distChartState = null;
+  const ctx = elements.distChart.getContext('2d');
+  if (ctx) ctx.clearRect(0, 0, elements.distChart.width, elements.distChart.height);
+  elements.distanceModal.classList.remove('hidden');
+  setTimeout(() => elements.distCompare.focus(), 30);
+}
+
+async function searchPatternLines(pattern: string, isRegex: boolean, matchCase: boolean): Promise<number[]> {
+  const res = await window.api.search({ pattern, isRegex, isWildcard: false, matchCase, wholeWord: false });
+  if (!res.success || !res.matches) return [];
+  return (res.matches as SearchResult[]).map(m => m.lineNumber).sort((x, y) => x - y);
+}
+
+// For each value in `from`, the gap to the relevant `to` hit given the direction.
+// 'nearest' = either side; 'after' = smallest b >= a; 'before' = largest b <= a. Anchor
+// hits with no qualifying compare hit on that side are dropped (correct: "no next B").
+function directionalLineGaps(from: number[], to: number[], dir: 'nearest' | 'after' | 'before'): DistPair[] {
+  if (dir === 'nearest') return nearestLineGaps(from, to);
+  const pairs: DistPair[] = [];
+  if (to.length === 0) return pairs;
+  for (const a of from) {
+    let lo = 0, hi = to.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (to[mid] < a) lo = mid + 1; else hi = mid; }
+    // to[lo] is the first value >= a; to[lo-1] is the last value < a.
+    if (dir === 'after') {
+      if (lo < to.length) pairs.push({ a, b: to[lo], gap: to[lo] - a });
+    } else {
+      let idx = -1;
+      if (lo < to.length && to[lo] === a) idx = lo;
+      else if (lo - 1 >= 0) idx = lo - 1;
+      if (idx >= 0) pairs.push({ a, b: to[idx], gap: a - to[idx] });
+    }
+  }
+  return pairs;
+}
+
+async function runDistanceMeasure(): Promise<void> {
+  const anchor = elements.distAnchor.value.trim();
+  const compare = elements.distCompare.value.trim();
+  if (!anchor || !compare) { elements.distSummary.textContent = 'Enter both an anchor and a compare pattern.'; return; }
+  const dir = ((document.querySelector('input[name="dist-dir"]:checked') as HTMLInputElement)?.value as 'nearest' | 'after' | 'before') || 'nearest';
+
+  elements.distSummary.textContent = 'Searching…';
+  elements.distStats.innerHTML = '';
+  elements.distChartLegend.innerHTML = '';
+
+  const [aLines, bLines] = await Promise.all([
+    searchPatternLines(anchor, elements.distAnchorRegex.checked, elements.distAnchorCase.checked),
+    searchPatternLines(compare, elements.distCompareRegex.checked, elements.distCompareCase.checked),
+  ]);
+
+  const clearChart = () => {
+    distChartState = null;
+    const ctx = elements.distChart.getContext('2d');
+    if (ctx) ctx.clearRect(0, 0, elements.distChart.width, elements.distChart.height);
+  };
+
+  if (aLines.length === 0 || bLines.length === 0) {
+    elements.distSummary.textContent = `No matches — anchor "${anchor}": ${aLines.length}, compare "${compare}": ${bLines.length}.`;
+    clearChart();
+    return;
+  }
+
+  const pairs = directionalLineGaps(aLines, bLines, dir);
+  if (pairs.length === 0) {
+    elements.distSummary.textContent = `No ${dir === 'after' ? 'downstream' : 'upstream'} compare hit for any anchor hit.`;
+    clearChart();
+    return;
+  }
+
+  const gaps = pairs.map(p => p.gap).sort((x, y) => x - y);
+  const n = gaps.length;
+  const min = gaps[0], max = gaps[n - 1];
+  const mean = Math.round(gaps.reduce((s, g) => s + g, 0) / n);
+  const median = n % 2 ? gaps[(n - 1) / 2] : Math.round((gaps[n / 2 - 1] + gaps[n / 2]) / 2);
+  const within = (t: number) => Math.round(100 * gaps.filter(g => g <= t).length / n);
+  const dirLabel = dir === 'after' ? 'next after (A→B)' : dir === 'before' ? 'previous before (B←A)' : 'nearest (either side)';
+
+  elements.distSummary.innerHTML =
+    `<span class="dist-dot" style="background:${DIST_COLOR_A}"></span><b>${escapeHtml(anchor)}</b> (${aLines.length.toLocaleString()})`
+    + ` <span class="dist-arrow">· ${escapeHtml(dirLabel)} ·</span> `
+    + `<span class="dist-dot" style="background:${DIST_COLOR_B}"></span><b>${escapeHtml(compare)}</b> (${bLines.length.toLocaleString()})`
+    + (pairs.length < aLines.length ? ` <span class="dist-note">— matched ${pairs.length.toLocaleString()} of ${aLines.length.toLocaleString()}</span>` : '');
+
+  elements.distStats.innerHTML =
+    `<div>Gap in lines · min <b>${min.toLocaleString()}</b> · median <b>${median.toLocaleString()}</b> · mean <b>${mean.toLocaleString()}</b> · max <b>${max.toLocaleString()}</b></div>`
+    + `<div>within ≤5: <b>${within(5)}%</b> · ≤20: <b>${within(20)}%</b> · ≤100: <b>${within(100)}%</b></div>`;
+
+  drawDistanceChart(pairs, aLines, bLines);
+}
+
+function drawDistanceChart(pairs: DistPair[], aLines: number[], bLines: number[]): void {
+  const canvas = elements.distChart;
+  const cssW = canvas.clientWidth || 600;
+  const cssH = 180;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(cssW * dpr);
+  canvas.height = Math.round(cssH * dpr);
+  canvas.style.height = `${cssH}px`;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const lastA = aLines.length ? aLines[aLines.length - 1] : 1;
+  const lastB = bLines.length ? bLines[bLines.length - 1] : 1;
+  const maxLine = Math.max(state.totalLines || 1, lastA, lastB, 1);
+  const padL = 10, padR = 10;
+  const plotW = Math.max(1, cssW - padL - padR);
+  const xOf = (ln: number) => padL + (ln / maxLine) * plotW;
+
+  const topY = 16, botY = cssH - 16;
+  const bandTop = topY + 8, bandBot = botY - 8;
+  const maxGap = Math.max(1, ...pairs.map(p => p.gap));
+  const yOf = (gap: number) => bandBot - (Math.log1p(gap) / Math.log1p(maxGap)) * (bandBot - bandTop);
+  const stepFor = (len: number, cap: number) => (len <= cap ? 1 : Math.ceil(len / cap));
+
+  // Lane baselines
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(padL, topY); ctx.lineTo(cssW - padR, topY); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(padL, botY); ctx.lineTo(cssW - padR, botY); ctx.stroke();
+
+  // Anchor instance ticks (top lane)
+  ctx.strokeStyle = DIST_COLOR_A;
+  ctx.globalAlpha = 0.75;
+  for (let i = 0, s = stepFor(aLines.length, 2000); i < aLines.length; i += s) {
+    const x = xOf(aLines[i]);
+    ctx.beginPath(); ctx.moveTo(x, topY - 5); ctx.lineTo(x, topY + 5); ctx.stroke();
+  }
+  // Compare instance ticks (bottom lane)
+  ctx.strokeStyle = DIST_COLOR_B;
+  for (let i = 0, s = stepFor(bLines.length, 2000); i < bLines.length; i += s) {
+    const x = xOf(bLines[i]);
+    ctx.beginPath(); ctx.moveTo(x, botY - 5); ctx.lineTo(x, botY + 5); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // Distance curve + dots for each anchor hit
+  const byA = pairs.slice().sort((p, q) => p.a - q.a);
+  const s = stepFor(byA.length, 2000);
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  let started = false;
+  for (let i = 0; i < byA.length; i += s) {
+    const x = xOf(byA[i].a), y = yOf(byA[i].gap);
+    if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.fillStyle = DIST_COLOR_A;
+  for (let i = 0; i < byA.length; i += s) {
+    ctx.beginPath(); ctx.arc(xOf(byA[i].a), yOf(byA[i].gap), 1.6, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // y-axis hints (top = far, bottom = near)
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.font = '9px sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('far', 2, bandTop + 2);
+  ctx.fillText('near', 2, bandBot - 2);
+
+  distChartState = { pairsByA: byA, maxLine, padL, plotW };
+
+  elements.distChartLegend.innerHTML =
+    `<span><span class="dist-dot" style="background:${DIST_COLOR_A}"></span>anchor (top) + distance dots</span>`
+    + `<span><span class="dist-dot" style="background:${DIST_COLOR_B}"></span>compare (bottom)</span>`
+    + `<span class="dist-note">x = line across file · y = gap (log scale) · click a point to jump</span>`;
+}
+
 // === Search Config Sessions ===
 
 async function loadSearchConfigSessions(): Promise<void> {
@@ -17423,6 +17638,24 @@ function init(): void {
   elements.btnScDistanceCompute.addEventListener('click', computeAndRenderDistance);
   elements.scDistanceA.addEventListener('change', computeAndRenderDistance);
   elements.scDistanceB.addEventListener('change', computeAndRenderDistance);
+
+  // Pattern Distance explorer (right-click → dialog)
+  elements.btnDistMeasure.addEventListener('click', () => { void runDistanceMeasure(); });
+  [elements.distAnchor, elements.distCompare].forEach(inp => {
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); void runDistanceMeasure(); }
+    });
+  });
+  elements.distChart.addEventListener('click', (e) => {
+    if (!distChartState || distChartState.pairsByA.length === 0) return;
+    const rect = elements.distChart.getBoundingClientRect();
+    const ln = Math.round(((e.clientX - rect.left - distChartState.padL) / distChartState.plotW) * distChartState.maxLine);
+    let best = distChartState.pairsByA[0], bd = Infinity;
+    for (const p of distChartState.pairsByA) { const d = Math.abs(p.a - ln); if (d < bd) { bd = d; best = p; } }
+    const di = getFilteredDisplayIndex(best.a);
+    goToLine(di >= 0 ? di : best.a, best.a);
+    renderVisibleLines();
+  });
   elements.btnScSave.addEventListener('click', addSearchConfig);
   elements.btnScCancel.addEventListener('click', hideSearchConfigForm);
   elements.scPatternInput.addEventListener('keydown', (e) => {
