@@ -17,6 +17,7 @@ if (process.platform !== 'linux') {
   console.warn('node-pty not available on Linux — using child_process fallback for terminal');
 }
 import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
+import { getRipgrepPath } from './ripgrepPath';
 import { openWithAdapter, NormalizedSource } from './sourceAdapter';
 import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation } from '../shared/types';
 import * as Diff from 'diff';
@@ -2271,7 +2272,7 @@ ipcMain.handle(IPC.FOLDER_SEARCH, async (_, folderPaths: string[], pattern: stri
     args.push(...folderPaths);
 
     return new Promise((resolve) => {
-      const proc = spawn('rg', args);
+      const proc = spawn(getRipgrepPath(), args);
       let buffer = '';
       let lastProgressUpdate = 0;
 
@@ -3354,8 +3355,13 @@ ipcMain.handle(IPC.SEARCH_CONFIG_BATCH, async (_, configs: Array<{ id: string; p
     filteredIndices.forEach((lineNum, idx) => lineToFilteredIndex!.set(lineNum, idx));
   }
 
-  for (let i = 0; i < configs.length; i++) {
-    const cfg = configs[i];
+  // Run every config concurrently instead of one-after-another. Each handler.search()
+  // opens its own fd / spawns its own ripgrep process, so they don't share mutable
+  // state and are safe to run in parallel. On a 24M-line file this turns N sequential
+  // full-file scans into N overlapping ones — the difference between "config search is
+  // frozen" and near-instant with bundled ripgrep.
+  let completed = 0;
+  await Promise.all(configs.map(async (cfg) => {
     try {
       const searchOpts: SearchOptions = {
         pattern: cfg.pattern,
@@ -3366,7 +3372,8 @@ ipcMain.handle(IPC.SEARCH_CONFIG_BATCH, async (_, configs: Array<{ id: string; p
       };
 
       const matches = await handler.search(searchOpts, (percent) => {
-        const overallPercent = Math.round(((i + percent / 100) / totalConfigs) * 100);
+        // Overall bar = configs already finished + this one's fraction (approximate under parallelism).
+        const overallPercent = Math.round(((completed + percent / 100) / totalConfigs) * 100);
         mainWindow?.webContents.send(IPC.SEARCH_CONFIG_BATCH_PROGRESS, { percent: overallPercent, configId: cfg.id });
       }, { cancelled: false });
 
@@ -3393,8 +3400,11 @@ ipcMain.handle(IPC.SEARCH_CONFIG_BATCH, async (_, configs: Array<{ id: string; p
     } catch (error) {
       console.error(`Search config batch error for ${cfg.id}:`, error);
       results[cfg.id] = [];
+    } finally {
+      completed++;
+      mainWindow?.webContents.send(IPC.SEARCH_CONFIG_BATCH_PROGRESS, { percent: Math.round((completed / totalConfigs) * 100), configId: cfg.id });
     }
-  }
+  }));
 
   return { success: true, results };
 });
@@ -3882,7 +3892,7 @@ ipcMain.handle('get-file-info', async () => {
 // Check if ripgrep is available
 ipcMain.handle('check-search-engine', async () => {
   return new Promise((resolve) => {
-    const proc = spawn('rg', ['--version']);
+    const proc = spawn(getRipgrepPath(), ['--version']);
     let version = '';
 
     proc.stdout.on('data', (data: Buffer) => {

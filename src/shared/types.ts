@@ -33,6 +33,7 @@ export interface SearchOptions {
   wholeWord: boolean;
   columnConfig?: SearchColumnConfig;
   filteredLineIndices?: number[]; // When filter is active, only search these lines
+  maxMatches?: number; // Cap on matches to collect (default DEFAULT_MAX_MATCHES). Raise for batch/config searches on huge files.
 }
 
 export interface Bookmark {
