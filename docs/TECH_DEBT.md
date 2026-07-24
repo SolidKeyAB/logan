@@ -12,6 +12,22 @@ The renderer uses ~30+ mutable global variables (`state`, `terminal`, `fitAddon`
 
 **What to do**: Introduce a state management layer — at minimum a centralized state object with accessor functions that validate mutations. A full reactive/reducer pattern would be ideal but is a significant rewrite.
 
+### Inline Mirror of `src/shared/patternDistance.ts`
+
+**Severity**: Low | **Effort**: Small (blocked on the script→module conversion)
+
+The pattern-distance gap maths (`nearestLineGaps`, `directionalLineGaps`, and the inline
+gap stats) lives in `src/shared/patternDistance.ts` — the canonical, unit-tested copy
+(`src/tests/patternDistance.test.ts`) — **and** as a byte-identical inline copy in
+`renderer.ts`. The renderer is still a single global script (no ES module imports; see the
+Phase 0 `renderer.ts` script→module conversion, issue #15), so it can't `import` the shared
+module without turning itself into a module and surfacing ~37 latent type errors (inline
+`.d.ts` interfaces stop merging, unused-local errors appear).
+
+**What to do**: When the renderer becomes an ES module, delete the inline copies and import
+from `src/shared/patternDistance.ts`. Until then, keep the two copies in sync (both sites
+carry a comment pointing here).
+
 ### Duplicated Modal Pattern
 
 **Severity**: Low | **Effort**: Medium
