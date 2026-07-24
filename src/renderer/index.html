@@ -943,6 +943,43 @@
       </div>
     </div>
 
+    <!-- Pattern Distance Modal -->
+    <div id="distance-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-content distance-modal-content">
+        <div class="modal-header">
+          <h3>Pattern Distance</h3>
+          <button class="modal-close" data-modal="distance-modal" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="dist-row">
+            <label class="dist-label">Anchor (A)</label>
+            <input type="text" id="dist-anchor" class="modal-input" placeholder="text or pattern…">
+            <label class="dist-flag"><input type="checkbox" id="dist-anchor-regex"> regex</label>
+            <label class="dist-flag"><input type="checkbox" id="dist-anchor-case"> case</label>
+          </div>
+          <div class="dist-row">
+            <label class="dist-label">Compare (B)</label>
+            <input type="text" id="dist-compare" class="modal-input" placeholder="text or pattern to measure against…">
+            <label class="dist-flag"><input type="checkbox" id="dist-compare-regex"> regex</label>
+            <label class="dist-flag"><input type="checkbox" id="dist-compare-case"> case</label>
+          </div>
+          <div class="dist-row">
+            <label class="dist-label">Direction</label>
+            <div class="radio-group dist-direction">
+              <label class="radio-label"><input type="radio" name="dist-dir" value="nearest" checked> nearest (either side)</label>
+              <label class="radio-label"><input type="radio" name="dist-dir" value="after"> next after (A&rarr;B)</label>
+              <label class="radio-label"><input type="radio" name="dist-dir" value="before"> previous before (B&larr;A)</label>
+            </div>
+            <button id="btn-dist-measure" class="primary-btn">Measure</button>
+          </div>
+          <div id="dist-summary" class="dist-summary"></div>
+          <canvas id="dist-chart" class="dist-chart"></canvas>
+          <div id="dist-chart-legend" class="dist-chart-legend"></div>
+          <div id="dist-stats" class="dist-stats"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- Highlight Modal -->
     <div id="highlight-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-content">
