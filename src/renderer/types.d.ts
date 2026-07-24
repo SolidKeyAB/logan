@@ -280,6 +280,10 @@ interface ContextMatchGroupDef {
     distance: number;
   }>;
   score: number;
+  matchedPatternCount: number;
+  totalCluePatterns: number;
+  missingPatternIds: string[];
+  complete: boolean;
 }
 
 // ── Trends notebook ──────────────────────────────────────────────────────────

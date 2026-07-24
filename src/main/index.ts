@@ -3698,17 +3698,27 @@ ipcMain.handle(IPC.CONTEXT_SEARCH, async (_, contextIds: string[]) => {
           }
         }
 
-        // Keep group if it has clues, or if context has no clue patterns (must-only context)
-        if (clues.length > 0 || cluePatterns.length === 0) {
-          groups.push({
-            contextId: ctx.id,
-            mustLine: mustLineNum,
-            mustText: mm.lineText,
-            mustPatternId: mustPat.id,
-            clues,
-            score: cluePatterns.length === 0 ? 1 : clues.length,
-          });
-        }
+        // Fulfillment: distinct clue patterns satisfied vs. defined.
+        const matchedPatternIds = new Set(clues.map(c => c.patternId));
+        const missingPatternIds = cluePatterns
+          .map(p => p.id)
+          .filter(id => !matchedPatternIds.has(id));
+        const complete = missingPatternIds.length === 0; // true for must-only contexts
+
+        // Emit EVERY must-anchor — including partially/unfulfilled ones — so the
+        // renderer can highlight incomplete matches. It filters/styles by `complete`.
+        groups.push({
+          contextId: ctx.id,
+          mustLine: mustLineNum,
+          mustText: mm.lineText,
+          mustPatternId: mustPat.id,
+          clues,
+          score: cluePatterns.length === 0 ? 1 : clues.length,
+          matchedPatternCount: matchedPatternIds.size,
+          totalCluePatterns: cluePatterns.length,
+          missingPatternIds,
+          complete,
+        });
       }
     }
 
