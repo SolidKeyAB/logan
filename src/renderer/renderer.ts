@@ -318,6 +318,7 @@ interface AppState {
   contextResults: Map<string, ContextMatchGroupDef[]>;
   contextViewMode: 'tree' | 'lanes';
   contextGroupMode: 'separate' | 'combined';
+  contextShowIncomplete: boolean;
   editingContextId: string | null;
   // Level visibility quick-toggle (persisted globally)
   hiddenLevels: Set<string>;
@@ -388,6 +389,7 @@ const state: AppState = {
   contextResults: new Map(),
   contextViewMode: 'tree' as 'tree' | 'lanes',
   contextGroupMode: 'separate' as 'separate' | 'combined',
+  contextShowIncomplete: localStorage.getItem('logan-ctx-show-incomplete') !== 'false',
   editingContextId: null,
   hiddenLevels: new Set<string>(JSON.parse(localStorage.getItem('logan-hidden-levels') || '[]')),
   levelBarFilterActive: false,
@@ -1044,6 +1046,7 @@ const elements = {
   ctxViewLanes: document.getElementById('ctx-view-lanes') as HTMLButtonElement,
   ctxGroupSeparate: document.getElementById('ctx-group-separate') as HTMLButtonElement,
   ctxGroupCombined: document.getElementById('ctx-group-combined') as HTMLButtonElement,
+  ctxShowIncomplete: document.getElementById('ctx-show-incomplete') as HTMLButtonElement,
   ctxChips: document.getElementById('ctx-chips') as HTMLDivElement,
   ctxForm: document.getElementById('ctx-form') as HTMLDivElement,
   ctxResults: document.getElementById('ctx-results') as HTMLDivElement,
@@ -12505,11 +12508,15 @@ async function runContextSearch(): Promise<void> {
     if (result.success && result.results) {
       state.contextResults.clear();
       let totalGroups = 0;
+      let partialGroups = 0;
       for (const r of result.results) {
         state.contextResults.set(r.contextId, r.groups);
         totalGroups += r.groups.length;
+        partialGroups += r.groups.reduce((n, g) => n + (g.complete ? 0 : 1), 0);
       }
-      elements.ctxResultsSummary.textContent = `${totalGroups} match group${totalGroups !== 1 ? 's' : ''}`;
+      elements.ctxResultsSummary.textContent = partialGroups > 0
+        ? `${totalGroups} group${totalGroups !== 1 ? 's' : ''} · ${partialGroups} partial`
+        : `${totalGroups} match group${totalGroups !== 1 ? 's' : ''}`;
       renderContextChips();
       if (state.contextViewMode === 'tree') {
         renderContextResults();
@@ -12524,6 +12531,11 @@ async function runContextSearch(): Promise<void> {
     hideProgress();
     elements.ctxResultsSummary.textContent = 'Search error';
   }
+}
+
+// Groups visible under the current "Show incomplete" toggle.
+function visibleContextGroups(groups: ContextMatchGroupDef[]): ContextMatchGroupDef[] {
+  return state.contextShowIncomplete ? groups : groups.filter(g => g.complete);
 }
 
 function renderContextResults(): void {
@@ -12549,8 +12561,11 @@ function renderContextResults(): void {
 function renderContextResultsSeparate(container: HTMLDivElement): void {
   for (const def of state.contextDefinitions) {
     if (!def.enabled) continue;
-    const groups = state.contextResults.get(def.id);
-    if (!groups || groups.length === 0) continue;
+    const allGroups = state.contextResults.get(def.id);
+    if (!allGroups || allGroups.length === 0) continue;
+    const groups = visibleContextGroups(allGroups);
+    if (groups.length === 0) continue;
+    const incompleteCount = groups.reduce((n, g) => n + (g.complete ? 0 : 1), 0);
 
     const section = document.createElement('div');
     section.className = 'ctx-context-section';
@@ -12567,7 +12582,9 @@ function renderContextResultsSeparate(container: HTMLDivElement): void {
     headerName.textContent = def.name;
     const matchCount = document.createElement('span');
     matchCount.className = 'ctx-context-match-count';
-    matchCount.textContent = `${groups.length} groups`;
+    matchCount.textContent = incompleteCount > 0
+      ? `${groups.length} groups · ${incompleteCount} partial`
+      : `${groups.length} groups`;
     header.appendChild(colorBar);
     header.appendChild(headerName);
     header.appendChild(matchCount);
@@ -12590,7 +12607,7 @@ function renderContextResultsCombined(container: HTMLDivElement): void {
     if (!def.enabled) continue;
     const groups = state.contextResults.get(def.id);
     if (!groups || groups.length === 0) continue;
-    for (const group of groups) {
+    for (const group of visibleContextGroups(groups)) {
       allGroups.push({ def, group });
     }
   }
@@ -12606,6 +12623,7 @@ function buildGroupElement(def: ContextDefinitionDef, group: ContextMatchGroupDe
   const groupEl = document.createElement('div');
   groupEl.className = 'ctx-group';
   if (collapsed) groupEl.classList.add('collapsed');
+  if (!group.complete) groupEl.classList.add('incomplete');
 
   // Group header (must match line)
   const gHeader = document.createElement('div');
@@ -12635,7 +12653,16 @@ function buildGroupElement(def: ContextDefinitionDef, group: ContextMatchGroupDe
 
   const score = document.createElement('span');
   score.className = 'ctx-score-badge';
-  score.textContent = `${group.score} clue${group.score !== 1 ? 's' : ''}`;
+  if (group.totalCluePatterns === 0) {
+    // Must-only context — no clue patterns to fulfil.
+    score.textContent = 'anchor';
+  } else {
+    score.textContent = `${group.matchedPatternCount}/${group.totalCluePatterns} clues`;
+    if (!group.complete) {
+      score.classList.add('incomplete');
+      score.title = 'Not all clue patterns matched near this anchor';
+    }
+  }
 
   gHeader.appendChild(toggle);
   gHeader.appendChild(lineNum);
@@ -12656,6 +12683,20 @@ function buildGroupElement(def: ContextDefinitionDef, group: ContextMatchGroupDe
   // Clue lines
   const cluesEl = document.createElement('div');
   cluesEl.className = 'ctx-group-clues';
+
+  // For incomplete anchors, list which clue patterns are missing.
+  if (!group.complete && group.missingPatternIds.length > 0) {
+    const missNames = group.missingPatternIds.map(id => {
+      const p = def.patterns.find(pt => pt.id === id);
+      const label = p ? p.pattern : id;
+      return label.length > 40 ? label.slice(0, 40) + '…' : label;
+    });
+    const missEl = document.createElement('div');
+    missEl.className = 'ctx-group-missing';
+    missEl.textContent = `⚠ missing: ${missNames.join(', ')}`;
+    missEl.title = `Clue pattern${missNames.length !== 1 ? 's' : ''} not found within range`;
+    cluesEl.appendChild(missEl);
+  }
 
   group.clues.forEach((clue, ci) => {
     const clueItem = document.createElement('div');
@@ -12702,8 +12743,10 @@ function renderContextLanes(): void {
 
   for (const def of state.contextDefinitions) {
     if (!def.enabled) continue;
-    const groups = state.contextResults.get(def.id);
-    if (!groups || groups.length === 0) continue;
+    const allGroups = state.contextResults.get(def.id);
+    if (!allGroups || allGroups.length === 0) continue;
+    const groups = visibleContextGroups(allGroups);
+    if (groups.length === 0) continue;
 
     const lane = document.createElement('div');
     lane.className = 'ctx-lane';
@@ -12729,9 +12772,17 @@ function renderContextLanes(): void {
       const mark = document.createElement('div');
       mark.className = 'ctx-lane-mark';
       mark.style.left = `${(group.mustLine / totalLines) * 100}%`;
-      mark.style.background = def.color;
       mark.style.color = def.color;
-      mark.title = `${def.name} — L${group.mustLine + 1}`;
+      if (group.complete) {
+        mark.style.background = def.color;
+        mark.title = `${def.name} — L${group.mustLine + 1}`;
+      } else {
+        // Incomplete anchor: hollow/outlined mark instead of a solid fill.
+        mark.classList.add('incomplete');
+        mark.style.background = 'transparent';
+        mark.style.borderColor = def.color;
+        mark.title = `${def.name} — L${group.mustLine + 1} (incomplete: ${group.matchedPatternCount}/${group.totalCluePatterns} clues)`;
+      }
       mark.addEventListener('click', () => {
         goToLine(group.mustLine);
         // Focus matching group in tree below
@@ -12781,6 +12832,18 @@ function toggleContextGroupMode(mode: 'separate' | 'combined'): void {
   state.contextGroupMode = mode;
   elements.ctxGroupSeparate.classList.toggle('active', mode === 'separate');
   elements.ctxGroupCombined.classList.toggle('active', mode === 'combined');
+
+  if (state.contextViewMode === 'lanes') {
+    renderContextLanes();
+  } else {
+    renderContextResults();
+  }
+}
+
+function toggleContextShowIncomplete(): void {
+  state.contextShowIncomplete = !state.contextShowIncomplete;
+  localStorage.setItem('logan-ctx-show-incomplete', String(state.contextShowIncomplete));
+  elements.ctxShowIncomplete.classList.toggle('active', state.contextShowIncomplete);
 
   if (state.contextViewMode === 'lanes') {
     renderContextLanes();
@@ -18309,6 +18372,8 @@ function init(): void {
   elements.ctxViewLanes.addEventListener('click', () => toggleContextView('lanes'));
   elements.ctxGroupSeparate.addEventListener('click', () => toggleContextGroupMode('separate'));
   elements.ctxGroupCombined.addEventListener('click', () => toggleContextGroupMode('combined'));
+  elements.ctxShowIncomplete.addEventListener('click', () => toggleContextShowIncomplete());
+  elements.ctxShowIncomplete.classList.toggle('active', state.contextShowIncomplete);
 
   // Time Align events (inside bottom panel)
   elements.taRefreshBtn.addEventListener('click', () => buildTimeAlignData());
