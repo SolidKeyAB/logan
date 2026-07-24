@@ -1,6 +1,17 @@
 import * as fs from 'fs';
+import * as path from 'path';
 import { spawn } from 'child_process';
+import { Worker } from 'worker_threads';
 import { FileInfo, LineData, SearchMatch, SearchOptions } from '../shared/types';
+import { getRipgrepPath } from './ripgrepPath';
+import { scanFileIndex, SplitMetadata, IndexResult } from './indexScan';
+
+// Re-export so existing importers of SplitMetadata from this module keep working.
+export type { SplitMetadata } from './indexScan';
+
+// Default cap on matches collected by a single search. Callers (e.g. the
+// search-config batch on a 24M-line file) can raise it via SearchOptions.maxMatches.
+export const DEFAULT_MAX_MATCHES = 100000;
 
 // Yield control to the event loop so Electron's UI stays responsive
 const yieldToEventLoop = () => new Promise<void>(resolve => setImmediate(resolve));
@@ -39,7 +50,7 @@ async function checkRipgrep(): Promise<boolean> {
   if (ripgrepAvailable !== null) return ripgrepAvailable;
 
   return new Promise((resolve) => {
-    const proc = spawn('rg', ['--version']);
+    const proc = spawn(getRipgrepPath(), ['--version']);
     proc.on('error', () => {
       ripgrepAvailable = false;
       resolve(false);
@@ -51,21 +62,15 @@ async function checkRipgrep(): Promise<boolean> {
   });
 }
 
-interface LineOffset {
-  offset: number;
-  length: number;
-}
-
-export interface SplitMetadata {
-  part: number;
-  total: number;
-  prev: string;
-  next: string;
-}
-
 export class FileHandler {
   private filePath: string | null = null;
-  private lineOffsets: LineOffset[] = [];
+  // Line index stored as two parallel typed arrays (offset + length per physical line)
+  // instead of an array of objects — for a 24M-line file that removes ~24M object
+  // allocations. `lineCount` is the number of valid entries; the arrays may have spare
+  // capacity for incremental (live-tail) appends. Use lineOffsetAt()/lineLengthAt().
+  private offsets: Float64Array = new Float64Array(0);
+  private lengths: Float64Array = new Float64Array(0);
+  private lineCount: number = 0;
   private fileInfo: FileInfo | null = null;
   private fd: number | null = null;
   private splitMetadata: SplitMetadata | null = null;
@@ -74,6 +79,20 @@ export class FileHandler {
   private indexedSize: number = 0; // Bytes indexed so far (for incremental indexing)
   private indexedMtimeMs: number = 0; // mtime of the file when last indexed (for staleness checks)
   private _hasStandaloneCR: boolean = false; // Standalone \r found (not CRLF) — ripgrep can't handle these
+
+  // Append one line to the index, growing the typed arrays (capacity doubling) when full.
+  // Used by incremental live-tail indexing; the bulk initial index comes from scanFileIndex.
+  private appendLine(offset: number, length: number): void {
+    if (this.lineCount >= this.offsets.length) {
+      const cap = Math.max(this.offsets.length * 2, 1024);
+      const no = new Float64Array(cap); no.set(this.offsets.subarray(0, this.lineCount)); this.offsets = no;
+      const nl = new Float64Array(cap); nl.set(this.lengths.subarray(0, this.lineCount)); this.lengths = nl;
+    }
+    this.offsets[this.lineCount] = offset;
+    this.lengths[this.lineCount] = length;
+    this.lineCount++;
+    if (length > this._maxLineLength) this._maxLineLength = length;
+  }
 
   async open(
     filePath: string,
@@ -88,141 +107,21 @@ export class FileHandler {
     const fileSize = stat.size;
     this.indexedMtimeMs = stat.mtimeMs;
 
-    // Index all line offsets - handle any line ending format (LF, CRLF, CR, mixed)
-    this.lineOffsets = [];
-    let lineNumber = 0;
-    let firstLine = true;
+    // Build the line-offset index. Prefer a worker thread so the byte scan never
+    // blocks the Electron UI on a big file; fall back to an inline scan when the
+    // compiled worker isn't present (unit tests) or the worker fails.
+    const result = await this.buildIndex(filePath, onProgress);
 
-    // Read file in chunks to find line boundaries and compute exact offsets
-    const fd = fs.openSync(filePath, 'r');
-    const chunkSize = 1024 * 1024; // 1MB chunks
-    const buffer = Buffer.alloc(chunkSize);
-    let fileOffset = 0;
-    let lineStart = 0;
-    let leftover = Buffer.alloc(0);
-
-    try {
-      while (fileOffset < fileSize) {
-        const bytesRead = fs.readSync(fd, buffer, 0, chunkSize, fileOffset);
-        if (bytesRead === 0) break;
-
-        // Combine leftover from previous chunk with current chunk
-        const chunk = Buffer.concat([leftover, buffer.slice(0, bytesRead)]);
-        let chunkPos = 0;
-        const effectiveOffset = fileOffset - leftover.length;
-
-        while (chunkPos < chunk.length) {
-          const byte = chunk[chunkPos];
-
-          if (byte === 0x0A) { // LF
-            // End of line (LF or end of CRLF)
-            const lineEnd = effectiveOffset + chunkPos;
-            const lineLength = lineEnd - lineStart;
-
-            // Check for CRLF - exclude CR from line content
-            let actualLength = lineLength;
-            if (lineLength > 0 && chunkPos > 0 && chunk[chunkPos - 1] === 0x0D) {
-              actualLength = lineLength - 1;
-            } else if (lineLength > 0 && this.lineOffsets.length > 0) {
-              // CR might be at end of previous chunk - check the stored length
-              // This is handled by reading the actual bytes when needed
-            }
-
-            this.lineOffsets.push({ offset: lineStart, length: actualLength });
-            if (actualLength > this._maxLineLength) this._maxLineLength = actualLength;
-
-            // Check first line for split header
-            if (firstLine) {
-              firstLine = false;
-              const lineBuffer = Buffer.alloc(Math.min(actualLength, 500));
-              fs.readSync(fd, lineBuffer, 0, lineBuffer.length, lineStart);
-              const lineText = lineBuffer.toString('utf-8');
-              const splitInfo = this.parseSplitHeader(lineText);
-              if (splitInfo) {
-                this.splitMetadata = splitInfo;
-                this.headerLineCount = 1;
-              }
-            }
-
-            lineNumber++;
-            lineStart = lineEnd + 1; // Move past LF
-
-            if (lineNumber % 100000 === 0 && onProgress) {
-              onProgress(Math.min(99, Math.round((lineStart / fileSize) * 100)));
-            }
-          } else if (byte === 0x0D) { // CR
-            // Could be CR-only (old Mac) or start of CRLF
-            // Look ahead to see if next byte is LF
-            if (chunkPos + 1 < chunk.length) {
-              if (chunk[chunkPos + 1] !== 0x0A) {
-                // CR-only line ending — ripgrep won't count this as a line break
-                this._hasStandaloneCR = true;
-                const lineEnd = effectiveOffset + chunkPos;
-                const lineLength = lineEnd - lineStart;
-                this.lineOffsets.push({ offset: lineStart, length: lineLength });
-                if (lineLength > this._maxLineLength) this._maxLineLength = lineLength;
-
-                if (firstLine) {
-                  firstLine = false;
-                  const lineBuffer = Buffer.alloc(Math.min(lineLength, 500));
-                  fs.readSync(fd, lineBuffer, 0, lineBuffer.length, lineStart);
-                  const lineText = lineBuffer.toString('utf-8');
-                  const splitInfo = this.parseSplitHeader(lineText);
-                  if (splitInfo) {
-                    this.splitMetadata = splitInfo;
-                    this.headerLineCount = 1;
-                  }
-                }
-
-                lineNumber++;
-                lineStart = lineEnd + 1; // Move past CR
-              }
-              // If next is LF, we'll handle it in the LF case
-            }
-            // If CR is at end of chunk, we'll handle it in the next iteration
-          }
-          chunkPos++;
-        }
-
-        // Keep any partial line for next chunk
-        if (lineStart < effectiveOffset + chunk.length) {
-          leftover = chunk.slice(lineStart - effectiveOffset);
-        } else {
-          leftover = Buffer.alloc(0);
-        }
-
-        fileOffset += bytesRead;
-
-        // Yield to event loop every chunk so Electron UI stays responsive
-        if (fileOffset < fileSize) {
-          await yieldToEventLoop();
-        }
-      }
-
-      // Handle last line if file doesn't end with newline
-      if (lineStart < fileSize) {
-        const lastLineLength = fileSize - lineStart;
-        this.lineOffsets.push({ offset: lineStart, length: lastLineLength });
-        if (lastLineLength > this._maxLineLength) this._maxLineLength = lastLineLength;
-
-        if (firstLine) {
-          const lineBuffer = Buffer.alloc(Math.min(lastLineLength, 500));
-          fs.readSync(fd, lineBuffer, 0, lineBuffer.length, lineStart);
-          const lineText = lineBuffer.toString('utf-8');
-          const splitInfo = this.parseSplitHeader(lineText);
-          if (splitInfo) {
-            this.splitMetadata = splitInfo;
-            this.headerLineCount = 1;
-          }
-        }
-        lineNumber++;
-      }
-    } finally {
-      fs.closeSync(fd);
-    }
+    this.offsets = result.offsets;
+    this.lengths = result.lengths;
+    this.lineCount = result.totalLines;
+    this._maxLineLength = result.maxLineLength;
+    this.headerLineCount = result.headerLineCount;
+    this.splitMetadata = result.splitMetadata;
+    this._hasStandaloneCR = result.hasStandaloneCR;
 
     // Adjust total lines to exclude hidden header
-    const visibleLines = lineNumber - this.headerLineCount;
+    const visibleLines = this.lineCount - this.headerLineCount;
 
     this.fileInfo = {
       path: filePath,
@@ -236,6 +135,65 @@ export class FileHandler {
 
     onProgress?.(100);
     return this.fileInfo;
+  }
+
+  // Run the index scan in a worker thread so the byte scan stays off the Electron
+  // main thread. Falls back to an inline (synchronous) scan when the compiled worker
+  // isn't present (e.g. unit tests) or the worker fails to spawn / errors — so opening
+  // a file never depends on the worker being available.
+  private buildIndex(
+    filePath: string,
+    onProgress?: (percent: number) => void
+  ): Promise<IndexResult> {
+    const workerPath = path.join(__dirname, 'indexWorker.js');
+    if (!fs.existsSync(workerPath)) {
+      return Promise.resolve(scanFileIndex(filePath, onProgress));
+    }
+    return new Promise<IndexResult>((resolve) => {
+      let settled = false;
+      const emptyIndex: IndexResult = {
+        offsets: new Float64Array(0), lengths: new Float64Array(0), totalLines: 0,
+        maxLineLength: 0, headerLineCount: 0, splitMetadata: null, hasStandaloneCR: false,
+      };
+      const fallback = (): void => {
+        if (settled) return;
+        settled = true;
+        try { resolve(scanFileIndex(filePath, onProgress)); }
+        catch { resolve(emptyIndex); }
+      };
+
+      let worker: Worker;
+      try {
+        worker = new Worker(workerPath, { workerData: { filePath } });
+      } catch {
+        fallback();
+        return;
+      }
+
+      worker.on('message', (msg: any) => {
+        if (settled) return;
+        if (msg?.type === 'progress') {
+          onProgress?.(msg.percent);
+        } else if (msg?.type === 'done') {
+          settled = true;
+          worker.terminate();
+          resolve({
+            offsets: msg.offsets,
+            lengths: msg.lengths,
+            totalLines: msg.totalLines,
+            maxLineLength: msg.maxLineLength,
+            headerLineCount: msg.headerLineCount,
+            splitMetadata: msg.splitMetadata,
+            hasStandaloneCR: msg.hasStandaloneCR,
+          });
+        } else if (msg?.type === 'error') {
+          worker.terminate();
+          fallback();
+        }
+      });
+      worker.on('error', () => { worker.terminate(); fallback(); });
+      worker.on('exit', (code) => { if (code !== 0) fallback(); });
+    });
   }
 
   /**
@@ -256,15 +214,16 @@ export class FileHandler {
 
     // If we have existing lines, the last one might have been unterminated.
     // Check if the last indexed line extends to indexedSize (no trailing newline).
-    if (this.lineOffsets.length > 0) {
-      const lastLine = this.lineOffsets[this.lineOffsets.length - 1];
-      const lastLineEnd = lastLine.offset + lastLine.length;
+    if (this.lineCount > 0) {
+      const lastOffset = this.offsets[this.lineCount - 1];
+      const lastLength = this.lengths[this.lineCount - 1];
+      const lastLineEnd = lastOffset + lastLength;
       // If last line ended right at indexedSize, the file had no trailing newline.
       // New data continues that line until a newline is found.
       if (lastLineEnd >= this.indexedSize) {
-        lineStart = lastLine.offset;
+        lineStart = lastOffset;
         // Remove last line — it will be re-parsed with new data appended
-        this.lineOffsets.pop();
+        this.lineCount--;
       }
     }
 
@@ -288,8 +247,7 @@ export class FileHandler {
             // CR might be at end of previous chunk — check via lineOffsets
             // This edge case is minor; we accept the CR in the line
           }
-          this.lineOffsets.push({ offset: lineStart, length: lineLength });
-          if (lineLength > this._maxLineLength) this._maxLineLength = lineLength;
+          this.appendLine(lineStart, lineLength);
           newLineCount++;
           lineStart = absPos + 1;
         } else if (byte === 0x0D) { // CR
@@ -298,8 +256,7 @@ export class FileHandler {
             if (buffer[i + 1] !== 0x0A) {
               // CR-only line ending
               const lineLength = absPos - lineStart;
-              this.lineOffsets.push({ offset: lineStart, length: lineLength });
-              if (lineLength > this._maxLineLength) this._maxLineLength = lineLength;
+              this.appendLine(lineStart, lineLength);
               newLineCount++;
               lineStart = absPos + 1;
             }
@@ -315,8 +272,7 @@ export class FileHandler {
     // Handle last unterminated line
     if (lineStart < newSize) {
       const lineLength = newSize - lineStart;
-      this.lineOffsets.push({ offset: lineStart, length: lineLength });
-      if (lineLength > this._maxLineLength) this._maxLineLength = lineLength;
+      this.appendLine(lineStart, lineLength);
       newLineCount++;
     }
 
@@ -325,35 +281,10 @@ export class FileHandler {
     // Update fileInfo
     if (this.fileInfo) {
       this.fileInfo.size = newSize;
-      this.fileInfo.totalLines = this.lineOffsets.length - this.headerLineCount;
+      this.fileInfo.totalLines = this.lineCount - this.headerLineCount;
     }
 
     return newLineCount;
-  }
-
-  private parseSplitHeader(line: string): SplitMetadata | null {
-    if (!line.startsWith('#SPLIT:')) return null;
-
-    const data = line.substring(7); // Remove '#SPLIT:'
-    const params: Record<string, string> = {};
-
-    for (const pair of data.split(',')) {
-      const [key, value] = pair.split('=');
-      if (key && value !== undefined) {
-        params[key] = value;
-      }
-    }
-
-    if (params.part && params.total) {
-      return {
-        part: parseInt(params.part, 10),
-        total: parseInt(params.total, 10),
-        prev: params.prev || '',
-        next: params.next || '',
-      };
-    }
-
-    return null;
   }
 
   getSplitMetadata(): SplitMetadata | null {
@@ -373,10 +304,11 @@ export class FileHandler {
     const lines: LineData[] = [];
     // Offset by header lines to skip hidden metadata
     const actualStart = startLine + this.headerLineCount;
-    const actualEnd = Math.min(actualStart + count, this.lineOffsets.length);
+    const actualEnd = Math.min(actualStart + count, this.lineCount);
 
     for (let i = actualStart; i < actualEnd; i++) {
-      const { offset, length } = this.lineOffsets[i];
+      const offset = this.offsets[i];
+      const length = this.lengths[i];
       // Cap read size to prevent OOM on lines with millions of characters
       const readLength = Math.min(length, FileHandler.MAX_LINE_READ);
       const buffer = Buffer.alloc(readLength);
@@ -477,7 +409,7 @@ export class FileHandler {
     }
 
     const matches: SearchMatch[] = [];
-    const MAX_MATCHES = 50000;
+    const MAX_MATCHES = options.maxMatches ?? DEFAULT_MAX_MATCHES;
 
     // Determine the effective regex pattern and whether ripgrep should use regex mode
     const useRegexMode = options.isRegex || options.isWildcard;
@@ -525,7 +457,7 @@ export class FileHandler {
     args.push('--', rgPattern, this.filePath);
 
     return new Promise((resolve) => {
-      const proc = spawn('rg', args);
+      const proc = spawn(getRipgrepPath(), args);
       let buffer = '';
       let lastProgressUpdate = Date.now();
 
@@ -629,6 +561,7 @@ export class FileHandler {
     if (!this.filePath) return [];
 
     const matches: SearchMatch[] = [];
+    const maxMatches = options.maxMatches ?? DEFAULT_MAX_MATCHES;
     let regex: RegExp;
 
     try {
@@ -692,7 +625,7 @@ export class FileHandler {
           lineText: searchText,
         });
 
-        if (matches.length >= 50000) {
+        if (matches.length >= maxMatches) {
           done = true;
           return;
         }
@@ -787,7 +720,7 @@ export class FileHandler {
   }
 
   getTotalLines(): number {
-    return this.lineOffsets.length - this.headerLineCount;
+    return this.lineCount - this.headerLineCount;
   }
 
   // Byte-offset index for a worker thread to read the same file independently (its
@@ -800,15 +733,15 @@ export class FileHandler {
 
   getScanContext(): { filePath: string; headerLineCount: number; maxLineRead: number; offsets: Float64Array; lengths: Float64Array } | null {
     if (!this.filePath) return null;
-    const n = this.lineOffsets.length;
+    const n = this.lineCount;
     // Rebuild only when the line count changes (e.g. live-tail append); otherwise reuse.
+    // The worker needs SharedArrayBuffer-backed views (zero-copy hand-off), so copy the
+    // exact-length prefix of our (possibly over-allocated) index arrays into shared memory.
     if (!this.scanIndexCache || this.scanIndexCache.len !== n) {
       const offsets = new Float64Array(new SharedArrayBuffer(n * Float64Array.BYTES_PER_ELEMENT));
       const lengths = new Float64Array(new SharedArrayBuffer(n * Float64Array.BYTES_PER_ELEMENT));
-      for (let i = 0; i < n; i++) {
-        offsets[i] = this.lineOffsets[i].offset;
-        lengths[i] = this.lineOffsets[i].length;
-      }
+      offsets.set(this.offsets.subarray(0, n));
+      lengths.set(this.lengths.subarray(0, n));
       this.scanIndexCache = { len: n, offsets, lengths };
     }
     const c = this.scanIndexCache;
@@ -821,7 +754,9 @@ export class FileHandler {
       this.fd = null;
     }
     this.filePath = null;
-    this.lineOffsets = [];
+    this.offsets = new Float64Array(0);
+    this.lengths = new Float64Array(0);
+    this.lineCount = 0;
     this.scanIndexCache = null;
     this.fileInfo = null;
     this.splitMetadata = null;
