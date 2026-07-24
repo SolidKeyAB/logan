@@ -5301,9 +5301,29 @@ kbd {
 }
 
 .sc-chip-count {
-  font-size: 10px;
-  color: #888;
+  font-size: 11px;
+  font-weight: 600;
+  color: #f0f0f0;
+  background: rgba(0, 0, 0, 0.38);
+  border-radius: 8px;
+  padding: 1px 6px;
   flex-shrink: 0;
+  /* tabular-nums keeps the pill from jittering as the count ticks up live */
+  font-variant-numeric: tabular-nums;
+}
+
+/* A dark, self-contained pill guarantees the number is readable on ANY chip /
+   panel colour (light, medium, or saturated custom bottom-panel backgrounds),
+   so it doesn't depend on the panel's contrast-flip logic. */
+.bottom-panel.panel-light-bg .sc-chip-count {
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+/* Briefly pulse the count while matches stream in during a live search. */
+.sc-chip-count.sc-counting {
+  color: #fff;
+  background: rgba(90, 170, 255, 0.55);
 }
 
 .sc-chip-toggle {
