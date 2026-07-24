@@ -45,6 +45,10 @@ interface ContextMatchGroup {
     distance: number;
   }>;
   score: number;
+  matchedPatternCount: number;
+  totalCluePatterns: number;
+  missingPatternIds: string[];
+  complete: boolean;
 }
 
 // --- Standalone context search engine (mirrors main process logic) ---
@@ -105,16 +109,22 @@ function runContextSearch(
           }
         }
 
-        if (clues.length > 0) {
-          groups.push({
-            contextId: ctx.id,
-            mustLine: i,
-            mustText: lines[i],
-            mustPatternId: mustPat.id,
-            clues,
-            score: clues.length,
-          });
-        }
+        // Emit EVERY must-anchor — including partially/unfulfilled ones — so the
+        // UI can highlight incomplete matches (mirrors main process logic).
+        const matchedPatternIds = new Set(clues.map(c => c.patternId));
+        const missingPatternIds = cluePatterns.map(p => p.id).filter(id => !matchedPatternIds.has(id));
+        groups.push({
+          contextId: ctx.id,
+          mustLine: i,
+          mustText: lines[i],
+          mustPatternId: mustPat.id,
+          clues,
+          score: cluePatterns.length === 0 ? 1 : clues.length,
+          matchedPatternCount: matchedPatternIds.size,
+          totalCluePatterns: cluePatterns.length,
+          missingPatternIds,
+          complete: missingPatternIds.length === 0,
+        });
       }
     }
 
@@ -212,10 +222,16 @@ describe('Context Search — Core Algorithm', () => {
     });
 
     const results = runContextSearch(sampleLines, [ctx]);
-    // Line 2 → "Account locked" at line 3 (distance 1, within range)
-    // Line 7 → "Account locked" at line 9 (distance 2, OUT of range)
-    expect(results[0].groups.length).toBe(1);
-    expect(results[0].groups[0].mustLine).toBe(2);
+    // Both "Login failed" anchors are emitted now; distance controls fulfilment.
+    // Line 2 → "Account locked" at line 3 (distance 1, within range) → complete
+    // Line 7 → "Account locked" at line 9 (distance 2, OUT of range) → incomplete
+    expect(results[0].groups.length).toBe(2);
+    const g2 = results[0].groups.find(g => g.mustLine === 2)!;
+    const g7 = results[0].groups.find(g => g.mustLine === 7)!;
+    expect(g2.complete).toBe(true);
+    expect(g2.clues.length).toBe(1);
+    expect(g7.complete).toBe(false);
+    expect(g7.clues.length).toBe(0);
   });
 
   it('should respect per-clue distance override', () => {
@@ -228,9 +244,11 @@ describe('Context Search — Core Algorithm', () => {
     });
 
     const results = runContextSearch(sampleLines, [ctx]);
-    // Only line 2 has "Account locked" within distance 1
-    expect(results[0].groups.length).toBe(1);
-    expect(results[0].groups[0].mustLine).toBe(2);
+    // Only line 2 has "Account locked" within the clue's distance-1 override;
+    // line 7's anchor is still emitted but incomplete.
+    expect(results[0].groups.length).toBe(2);
+    expect(results[0].groups.find(g => g.mustLine === 2)!.complete).toBe(true);
+    expect(results[0].groups.find(g => g.mustLine === 7)!.complete).toBe(false);
   });
 
   it('should support regex patterns', () => {
@@ -299,7 +317,7 @@ describe('Context Search — Core Algorithm', () => {
     expect(results).toHaveLength(0);
   });
 
-  it('should return empty groups when must matches but no clues nearby', () => {
+  it('should emit an incomplete group when must matches but no clues nearby', () => {
     const ctx = makeContext({
       defaultDistance: 1,
       patterns: [
@@ -309,8 +327,16 @@ describe('Context Search — Core Algorithm', () => {
     });
 
     const results = runContextSearch(sampleLines, [ctx]);
-    // "Application started" is at line 0, "Login failed" at line 2 — distance 2 > 1
-    expect(results[0].groups.length).toBe(0);
+    // "Application started" at line 0, "Login failed" at line 2 — distance 2 > 1.
+    // The anchor is still surfaced, flagged incomplete with the clue missing.
+    expect(results[0].groups.length).toBe(1);
+    const g = results[0].groups[0];
+    expect(g.mustLine).toBe(0);
+    expect(g.clues.length).toBe(0);
+    expect(g.complete).toBe(false);
+    expect(g.matchedPatternCount).toBe(0);
+    expect(g.totalCluePatterns).toBe(1);
+    expect(g.missingPatternIds).toEqual(['clue-1']);
   });
 
   it('should not include must-match line as its own clue', () => {
@@ -324,8 +350,11 @@ describe('Context Search — Core Algorithm', () => {
     });
 
     const results = runContextSearch(lines, [ctx]);
-    // Must-match at line 0, but clue should NOT include line 0 itself
-    expect(results[0].groups.length).toBe(0);
+    // Must-match at line 0; the clue must NOT count line 0 itself, so the anchor
+    // is emitted but incomplete with zero clues.
+    expect(results[0].groups.length).toBe(1);
+    expect(results[0].groups[0].clues.length).toBe(0);
+    expect(results[0].groups[0].complete).toBe(false);
   });
 
   it('should handle multiple contexts independently', () => {
@@ -400,6 +429,71 @@ describe('Context Search — Core Algorithm', () => {
 
     const results = runContextSearch(lines, [ctx]);
     expect(results[0].groups[0].score).toBe(3); // 2 stack traces + 1 heap dump
+  });
+
+  it('should track partial fulfillment across multiple clue patterns', () => {
+    const lines = [
+      'ERROR crash detected',   // 0 - must
+      'stack trace line 1',     // 1 - clue-1 matches
+      'stack trace line 2',     // 2 - clue-1 matches again (same pattern)
+      'nothing relevant here',  // 3 - clue-2 (heap dump) NOT present
+    ];
+    const ctx = makeContext({
+      defaultDistance: 5,
+      patterns: [
+        { id: 'must-1', pattern: 'crash detected', isRegex: false, matchCase: false, role: 'must' },
+        { id: 'clue-1', pattern: 'stack trace', isRegex: false, matchCase: false, role: 'clue' },
+        { id: 'clue-2', pattern: 'heap dump', isRegex: false, matchCase: false, role: 'clue' },
+      ],
+    });
+
+    const results = runContextSearch(lines, [ctx]);
+    const g = results[0].groups[0];
+    // 2 raw clue matches but only 1 of 2 distinct clue PATTERNS satisfied → incomplete.
+    expect(g.score).toBe(2);
+    expect(g.matchedPatternCount).toBe(1);
+    expect(g.totalCluePatterns).toBe(2);
+    expect(g.complete).toBe(false);
+    expect(g.missingPatternIds).toEqual(['clue-2']);
+  });
+
+  it('should mark a group complete only when every clue pattern matches', () => {
+    const lines = [
+      'ERROR crash detected',   // 0 - must
+      'stack trace line 1',     // 1 - clue-1
+      'heap dump available',    // 2 - clue-2
+    ];
+    const ctx = makeContext({
+      defaultDistance: 5,
+      patterns: [
+        { id: 'must-1', pattern: 'crash detected', isRegex: false, matchCase: false, role: 'must' },
+        { id: 'clue-1', pattern: 'stack trace', isRegex: false, matchCase: false, role: 'clue' },
+        { id: 'clue-2', pattern: 'heap dump', isRegex: false, matchCase: false, role: 'clue' },
+      ],
+    });
+
+    const results = runContextSearch(lines, [ctx]);
+    const g = results[0].groups[0];
+    expect(g.matchedPatternCount).toBe(2);
+    expect(g.totalCluePatterns).toBe(2);
+    expect(g.complete).toBe(true);
+    expect(g.missingPatternIds).toEqual([]);
+  });
+
+  it('should treat a must-only context (no clue patterns) as complete', () => {
+    const ctx = makeContext({
+      patterns: [
+        { id: 'must-1', pattern: 'Login failed', isRegex: false, matchCase: false, role: 'must' },
+      ],
+    });
+
+    const results = runContextSearch(sampleLines, [ctx]);
+    expect(results[0].groups.length).toBe(2);
+    for (const g of results[0].groups) {
+      expect(g.totalCluePatterns).toBe(0);
+      expect(g.complete).toBe(true);
+      expect(g.score).toBe(1);
+    }
   });
 });
 
