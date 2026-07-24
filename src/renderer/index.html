@@ -957,11 +957,18 @@
             <label class="dist-flag"><input type="checkbox" id="dist-anchor-regex"> regex</label>
             <label class="dist-flag"><input type="checkbox" id="dist-anchor-case"> case</label>
           </div>
-          <div class="dist-row">
+          <div class="dist-row dist-compare-row">
             <label class="dist-label">Compare (B)</label>
+            <span class="dist-swatch" id="dist-compare-swatch"></span>
             <input type="text" id="dist-compare" class="modal-input" placeholder="text or pattern to measure against…">
             <label class="dist-flag"><input type="checkbox" id="dist-compare-regex"> regex</label>
             <label class="dist-flag"><input type="checkbox" id="dist-compare-case"> case</label>
+          </div>
+          <div id="dist-compare-extra"></div>
+          <div class="dist-row dist-add-row">
+            <span class="dist-label"></span>
+            <button id="btn-dist-add-compare" class="secondary-btn dist-add-btn" type="button">&#43; compare</button>
+            <button id="btn-dist-add-configs" class="secondary-btn dist-add-btn" type="button">&#43; from Search Configs</button>
           </div>
           <div class="dist-row">
             <label class="dist-label">Direction</label>
@@ -969,6 +976,13 @@
               <label class="radio-label"><input type="radio" name="dist-dir" value="nearest" checked> nearest (either side)</label>
               <label class="radio-label"><input type="radio" name="dist-dir" value="after"> next after (A&rarr;B)</label>
               <label class="radio-label"><input type="radio" name="dist-dir" value="before"> previous before (B&larr;A)</label>
+            </div>
+          </div>
+          <div class="dist-row">
+            <label class="dist-label">Gap unit</label>
+            <div class="radio-group dist-unit">
+              <label class="radio-label"><input type="radio" name="dist-unit" value="lines" checked> lines</label>
+              <label class="radio-label"><input type="radio" name="dist-unit" value="seconds"> seconds (timestamps)</label>
             </div>
             <button id="btn-dist-measure" class="primary-btn">Measure</button>
           </div>
