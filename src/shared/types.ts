@@ -384,6 +384,7 @@ export const IPC = {
   READ_FILE_TEXT: 'read-file-text',
   // Trends notebook
   TREND_DISCOVER_FIELDS: 'trend-discover-fields',
+  TREND_DISCOVER_AXES: 'trend-discover-axes',
   TREND_SERIES: 'trend-series',
   TREND_SIGNAL_SERIES: 'trend-signal-series',
   TREND_TRANSITIONS: 'trend-transitions',

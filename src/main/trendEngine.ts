@@ -154,6 +154,59 @@ function seriesNum(raw: string): number | null {
   return n !== null ? n : boolNum(raw);
 }
 
+// ── X-axis selection ─────────────────────────────────────────────────────────
+// What a series (and an overlay) plots against. 'time' is wall-clock (epoch ms);
+// 'relative' is the leading seconds prefix logs like the decoded .esotrace stream
+// carry; 'field' uses another field's value; 'line' is the always-available
+// record-order fallback.
+export type AxisSpec =
+  | { kind: 'line' }
+  | { kind: 'time' }
+  | { kind: 'relative' }
+  | { kind: 'field'; field: string; asTime?: boolean };
+
+// How to label the axis downstream — mirrors AxisSpec.kind but collapses 'field'
+// into whether it reads as a clock ('time') or a plain number.
+export type XKind = 'time' | 'line' | 'relative' | 'number';
+
+// Leading relative-seconds prefix, e.g. the decoded ".esotrace" line
+// "296.041591 WARNING …". Anchored at line start so it never grabs a mid-line number.
+const REL_SECONDS_RE = /^\s*(\d+(?:\.\d+)?)(?=\s)/;
+
+// Build a function that returns the numeric X coordinate for a line under `spec`
+// (or null when this line has no value on that axis).
+export function makeAxisExtractor(
+  spec: AxisSpec,
+  parseTs: TsParser,
+): (text: string, viewerLine: number) => number | null {
+  switch (spec.kind) {
+    case 'line':
+      return (_t, vl) => vl;
+    case 'time':
+      return (t) => { const p = parseTs(t); return p ? p.date.getTime() : null; };
+    case 'relative':
+      return (t) => { const m = REL_SECONDS_RE.exec(t); return m ? parseFloat(m[1]) : null; };
+    case 'field': {
+      const ex = makeExtractor({ field: spec.field });
+      return (t) => {
+        const raw = ex(t);
+        if (raw === undefined) return null;
+        if (spec.asTime) {
+          const p = parseTs(raw);
+          if (p) return p.date.getTime();
+        }
+        const n = Number(raw);
+        return Number.isFinite(n) ? n : null;
+      };
+    }
+  }
+}
+
+function xKindOf(spec: AxisSpec): XKind {
+  if (spec.kind === 'field') return spec.asTime ? 'time' : 'number';
+  return spec.kind;
+}
+
 // ── Line scanning helper ─────────────────────────────────────────────────────
 
 const BATCH = 4000;            // lines read per getLines() call
@@ -250,6 +303,109 @@ export function discoverFields(
   return specs;
 }
 
+// ── X-axis discovery ─────────────────────────────────────────────────────────
+// A single log line can carry several time-ish values that mean different things
+// (the line's own clock, an embedded epoch, a device monotonic clock, plus plain
+// durations that only *look* temporal). This enumerates every plausible X axis,
+// ranks them by how clock-like they behave across the file, and always offers the
+// line-number fallback — feeding the X-axis selector menu.
+
+export interface AxisCandidate {
+  id: string;            // stable id (also encodes the spec): 'line'|'time'|'relative'|'field:<name>'
+  label: string;         // menu label
+  spec: AxisSpec;        // reconstruct the axis for extractSeries({ xAxis })
+  detail: string;        // 'record order'|'wall-clock'|'relative seconds'|'monotonic'|'numeric'
+  coverage: number;      // fraction of sampled lines carrying a value (0..1)
+  score: number;         // clock-likeness ranking (0..1); highest is the default
+}
+
+// Names that suggest a real clock vs. a duration/rate/counter that merely looks temporal.
+const TEMPORAL_NAME_RE = /(^|[_.])(time|timestamp|ts|clock|epoch|date|uptime|monotonic|elapsedrealtime)($|[_.\d])/i;
+const DURATION_NAME_RE = /(rate|hz|freq|fps|offset|deadline|duration|interval|latency|delay|timeout|period|count|nanos?|millis?|micros?)/i;
+
+function axisStats(xs: (number | null)[]): { coverage: number; mono: number; spread: boolean } {
+  let present = 0, pairs = 0, incr = 0, mn = Infinity, mx = -Infinity;
+  let prev: number | null = null;
+  for (const x of xs) {
+    if (x === null) continue;
+    present++;
+    if (x < mn) mn = x; if (x > mx) mx = x;
+    if (prev !== null) { pairs++; if (x >= prev) incr++; }
+    prev = x;
+  }
+  return {
+    coverage: xs.length ? present / xs.length : 0,
+    mono: pairs ? incr / pairs : (present > 0 ? 1 : 0),   // fraction non-decreasing
+    spread: mx > mn,
+  };
+}
+
+export function discoverAxes(
+  handler: FileHandler,
+  parseTs: TsParser,
+  opts: ScanRange & { sampleSize?: number } = {},
+): AxisCandidate[] {
+  const lineAxis: AxisCandidate = {
+    id: 'line', label: 'Line number', spec: { kind: 'line' },
+    detail: 'record order', coverage: 1, score: 0.15,   // modest, so real clocks win by default
+  };
+  const total = handler.getTotalLines();
+  if (total === 0) return [lineAxis];
+
+  // Sample lines (in order) so monotonicity is measured over real record order.
+  const start = Math.max(0, opts.startLine ?? 0);
+  const end = Math.min(total - 1, opts.endLine ?? total - 1);
+  const span = end - start + 1;
+  const sampleSize = Math.min(opts.sampleSize ?? 600, span);
+  const step = Math.max(1, Math.floor(span / sampleSize));
+  const texts: string[] = [];
+  for (let s = 0; s < sampleSize; s++) {
+    const [ln] = handler.getLines(start + s * step, 1);
+    if (ln) texts.push(ln.text);
+  }
+
+  const out: AxisCandidate[] = [];
+
+  // Wall-clock and leading relative-seconds are "real time" axes.
+  const timeXs = texts.map(t => { const p = parseTs(t); return p ? p.date.getTime() : null; });
+  const timeSt = axisStats(timeXs);
+  if (timeSt.coverage >= 0.5 && timeSt.spread) {
+    out.push({ id: 'time', label: 'Time (wall-clock)', spec: { kind: 'time' }, detail: 'wall-clock',
+      coverage: timeSt.coverage, score: 0.9 + 0.1 * timeSt.mono });
+  }
+  const relXs = texts.map(t => { const m = REL_SECONDS_RE.exec(t); return m ? parseFloat(m[1]) : null; });
+  const relSt = axisStats(relXs);
+  if (relSt.coverage >= 0.5 && relSt.spread) {
+    out.push({ id: 'relative', label: 'Time (relative s)', spec: { kind: 'relative' }, detail: 'relative seconds',
+      coverage: relSt.coverage, score: 0.85 + 0.1 * relSt.mono });
+  }
+
+  // Field candidates: numeric/timestamp-typed or temporally-named fields.
+  for (const f of discoverFields(handler, { startLine: start, endLine: end, sampleSize: Math.min(1500, span) })) {
+    const temporalName = TEMPORAL_NAME_RE.test(f.name);
+    if (f.type !== 'numeric' && f.type !== 'timestamp' && !temporalName) continue;
+    const ex = makeExtractor({ field: f.name });
+    const xs = texts.map(t => { const raw = ex(t); if (raw === undefined) return null; const n = Number(raw); return Number.isFinite(n) ? n : null; });
+    const st = axisStats(xs);
+    if (st.coverage < 0.5 || !st.spread) continue;
+    // Duration/rate guard: a duration-named field that isn't strongly monotonic is
+    // NOT a clock (e.g. presentationDeadlineNanos) — drop it as an axis.
+    const durationish = DURATION_NAME_RE.test(f.name) && !temporalName;
+    if (durationish && st.mono < 0.9) continue;
+    let score = st.coverage * (st.mono ** 2);
+    // Only clearly-temporal fields may outrank the line fallback and become default;
+    // generic numeric fields stay selectable but below line (0.15).
+    if (!temporalName) score = Math.min(score, 0.12);
+    const detail = st.mono > 0.95 ? 'monotonic' : 'numeric';
+    out.push({ id: `field:${f.name}`, label: f.name, spec: { kind: 'field', field: f.name }, detail,
+      coverage: st.coverage, score });
+  }
+
+  out.push(lineAxis);
+  out.sort((a, b) => b.score - a.score);
+  return out;
+}
+
 // ── 2. Value-over-time series + adaptive time buckets ────────────────────────
 
 export interface SeriesResult {
@@ -260,6 +416,11 @@ export interface SeriesResult {
   truncated: boolean;
   timeRange: { startMs: number; endMs: number } | null;
   buckets: TimeBucket[];
+  // What the bucket startMs/endMs coordinates mean, so the renderer labels the X
+  // axis correctly and never has to fall back to a table:
+  //   'time'     → epoch-ms (wall-clock)      'relative' → leading seconds prefix
+  //   'line'     → 1-based viewer line number 'number'   → another field's value
+  xKind: XKind;
   // a capped, evenly-sampled set of raw points for click-to-line + scatter
   points: TrendPoint[];
 }
@@ -268,16 +429,19 @@ export function extractSeries(
   handler: FileHandler,
   parseTs: TsParser,
   fieldName: string,
-  opts: ScanRange & { bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string } = {},
+  opts: ScanRange & { bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string; xAxis?: AxisSpec } = {},
 ): SeriesResult {
   const bucketCount = Math.min(Math.max(opts.bucketCount ?? 200, 10), 2000);
   const maxPoints = opts.maxPoints ?? 5000;
   const extract = makeExtractor({ field: fieldName, pattern: opts.pattern, patternFlags: opts.patternFlags });
+  // Explicit axis (from the X-axis selector) or auto: prefer wall-clock, else line.
+  const explicit = opts.xAxis;
+  const axisEx = explicit ? makeAxisExtractor(explicit, parseTs) : null;
 
   const collected: TrendPoint[] = [];
+  const xs: (number | null)[] = [];   // per-point X coordinate under the chosen axis
   const typeRef: { v: FieldType | null } = { v: null };
   let withTimestamp = 0;
-  let minMs = Infinity, maxMs = -Infinity;
 
   const { truncated } = scanLines(handler, opts, (lineNumber, text) => {
     const raw = extract(text);
@@ -285,30 +449,59 @@ export function extractSeries(
     if (typeRef.v === null) typeRef.v = classifyValue(raw);
     const ts = parseTs(text);
     const epochMs = ts ? ts.date.getTime() : null;
-    if (epochMs !== null) {
-      withTimestamp++;
-      if (epochMs < minMs) minMs = epochMs;
-      if (epochMs > maxMs) maxMs = epochMs;
-    }
-    collected.push({ lineNumber, viewerLine: lineNumber + 1, epochMs, raw, num: seriesNum(raw) });
+    if (epochMs !== null) withTimestamp++;
+    const vl = lineNumber + 1;
+    collected.push({ lineNumber, viewerLine: vl, epochMs, raw, num: seriesNum(raw) });
+    xs.push(axisEx ? axisEx(text, vl) : epochMs); // auto captures wall-clock for now
   });
 
   const effType: FieldType = typeRef.v ?? 'string';
-  const timeRange = (minMs !== Infinity && maxMs !== minMs)
-    ? { startMs: minMs, endMs: maxMs }
-    : (minMs !== Infinity ? { startMs: minMs, endMs: minMs + 1 } : null);
 
-  // Build adaptive time buckets over points that have a timestamp.
+  // Resolve the axis + per-point X. Auto uses wall-clock when any line had one,
+  // else the viewer line number so a series ALWAYS charts (mirrors
+  // extractSignalSeries' record-index fallback). An explicit axis with no usable
+  // values also falls back to line, never to a table.
+  let xKind: XKind;
+  let xvals: (number | null)[];
+  if (explicit) {
+    xKind = xKindOf(explicit);
+    xvals = xs;
+  } else if (withTimestamp > 0) {
+    xKind = 'time';
+    xvals = xs; // = epochMs captured above
+  } else {
+    xKind = 'line';
+    xvals = collected.map(p => p.viewerLine);
+  }
+  let haveX = xvals.some(x => x !== null);
+  if (!haveX && collected.length > 0) {           // explicit axis produced nothing
+    xKind = 'line';
+    xvals = collected.map(p => p.viewerLine);
+    haveX = true;
+  }
+
+  let xStart = Infinity, xEnd = -Infinity;
+  for (const x of xvals) { if (x === null) continue; if (x < xStart) xStart = x; if (x > xEnd) xEnd = x; }
+  if (!haveX) { xStart = 0; xEnd = 1; }
+  if (xEnd <= xStart) xEnd = xStart + 1;
+
+  // timeRange stays meaningful only for wall-clock, so the renderer keeps drawing
+  // real date labels; other axes label from xKind.
+  const timeRange = (xKind === 'time' && haveX) ? { startMs: xStart, endMs: xEnd } : null;
+
+  // Build adaptive buckets over the chosen X axis.
   const buckets: TimeBucket[] = [];
-  if (timeRange) {
-    const span = Math.max(1, timeRange.endMs - timeRange.startMs);
+  if (collected.length > 0) {
+    const span = Math.max(1, xEnd - xStart);
     const width = span / bucketCount;
     for (let i = 0; i < bucketCount; i++) {
-      buckets.push({ startMs: timeRange.startMs + i * width, endMs: timeRange.startMs + (i + 1) * width, count: 0 });
+      buckets.push({ startMs: xStart + i * width, endMs: xStart + (i + 1) * width, count: 0 });
     }
-    for (const p of collected) {
-      if (p.epochMs === null) continue;
-      let idx = Math.floor((p.epochMs - timeRange.startMs) / width);
+    for (let pi = 0; pi < collected.length; pi++) {
+      const p = collected[pi];
+      const x = xvals[pi];
+      if (x === null) continue;
+      let idx = Math.floor((x - xStart) / width);
       if (idx < 0) idx = 0; if (idx >= bucketCount) idx = bucketCount - 1;
       const b = buckets[idx];
       b.count++;
@@ -345,6 +538,7 @@ export function extractSeries(
     truncated,
     timeRange,
     buckets,
+    xKind,
     points,
   };
 }
