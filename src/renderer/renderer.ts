@@ -2125,20 +2125,27 @@ function createLogViewer(): void {
     let deltaY = e.deltaY;
     let deltaX = e.deltaX;
 
+    // The "Scroll Speed" setting (10–300%) scales every wheel/trackpad mode. The neutral
+    // point differs per mode so the default (30%) preserves the previously-tuned feel:
+    //   • pixel mode (trackpad, and most mouse wheels in Chromium): 30% = 0.30×
+    //   • line/page mode (classic mouse wheel):                     30% = 1.00×
+    // Raising the slider now speeds up the mouse wheel too (it used to ignore this setting).
     if (e.deltaMode === 0) {
-      // Pixel-based scrolling (trackpad) - apply user's scroll speed setting for vertical only
+      // Pixel-based scrolling (trackpad / normalized wheel)
       const speedFactor = userSettings.scrollSpeed / 100;
       deltaY = deltaY * speedFactor;
       // Horizontal: boost raw trackpad deltas so sideways nav isn't sluggish
       deltaX = deltaX * HORIZONTAL_SCROLL_BOOST;
     } else if (e.deltaMode === 1) {
-      // Line-based scrolling (mouse wheel) - convert to pixels
-      deltaY = deltaY * getLineHeight();
-      deltaX = deltaX * getLineHeight() * HORIZONTAL_SCROLL_BOOST; // faster horizontal nav
+      // Line-based scrolling (mouse wheel) - convert to pixels, scaled by the setting
+      const wheelFactor = userSettings.scrollSpeed / 30;
+      deltaY = deltaY * getLineHeight() * wheelFactor;
+      deltaX = deltaX * getLineHeight() * HORIZONTAL_SCROLL_BOOST * wheelFactor; // faster horizontal nav
     } else if (e.deltaMode === 2) {
-      // Page-based scrolling - convert to pixels
-      deltaY = deltaY * logViewerElement!.clientHeight;
-      deltaX = deltaX * logViewerElement!.clientWidth;
+      // Page-based scrolling - convert to pixels, scaled by the setting
+      const wheelFactor = userSettings.scrollSpeed / 30;
+      deltaY = deltaY * logViewerElement!.clientHeight * wheelFactor;
+      deltaX = deltaX * logViewerElement!.clientWidth * wheelFactor;
     }
 
     // Shift+Scroll: convert vertical scroll to horizontal for easy line navigation
