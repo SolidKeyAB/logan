@@ -547,6 +547,12 @@ let wordWrapEnabled = false;
 // Search direction and start line
 let searchDirection: 'forward' | 'backward' = 'forward';
 
+// Signature of the last completed Find search (file + pattern + options + filter
+// generation). Lets a repeat search of the exact same thing reuse the cached
+// results instead of re-scanning the whole file — pressing Enter again just
+// advances to the next match. Reset when the file changes.
+let lastFindSignature: string | null = null;
+
 // JSON formatting setting
 let jsonFormattingEnabled = false;
 let jsonOriginalFile: string | null = null; // Track original file when viewing formatted JSON
@@ -12606,6 +12612,7 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       state.searchResults = [];
       state.currentSearchIndex = -1;
       state.hiddenSearchMatches = [];
+      lastFindSignature = null; // new/reloaded file → any cached Find is stale
       if (state.activeBottomTab === 'search-results') {
         renderSearchResultsList();
       }
@@ -13086,10 +13093,44 @@ let searchConfigHistory: InputHistory | null = null;
 let timeGapStartHistory: InputHistory | null = null;
 let timeGapEndHistory: InputHistory | null = null;
 
+// Serialize everything that affects the Find result SET (not navigation) so an
+// identical repeat search can be short-circuited. Column visibility and the active
+// filter both change what matches, so they're part of the key; start line and
+// direction only affect which match is selected, so they're deliberately excluded.
+function findSignature(pattern: string): string {
+  const colSig = (state.columnConfig && state.columnConfig.columns.some(c => !c.visible))
+    ? `${state.columnConfig.delimiter}:${state.columnConfig.columns.map(c => (c.visible ? '1' : '0')).join('')}`
+    : '';
+  return [
+    state.filePath || '',
+    searchConfigFilterGeneration,        // bumped on every applyFilter/clearFilter
+    pattern,
+    elements.searchRegex.checked ? 1 : 0,
+    elements.searchWildcard.checked ? 1 : 0,
+    elements.searchCase.checked ? 1 : 0,
+    elements.searchWholeWord.checked ? 1 : 0,
+    colSig,
+  ].join('');
+}
+
 async function performSearch(): Promise<void> {
   const pattern = elements.searchInput.value;
   if (!pattern || !state.filePath) return;
   addToSearchHistory(pattern);
+
+  // Same file + same pattern + same options + same filter as the last completed
+  // search → don't re-scan. Keep the results and just advance to the next match
+  // (like "find next"), so repeated Enter is instant instead of re-running rg.
+  const signature = findSignature(pattern);
+  if (signature === lastFindSignature) {
+    if (state.searchResults.length > 0) {
+      if (state.activeBottomTab !== 'search-results') openBottomTab('search-results');
+      navigateSearchNext();
+    } else {
+      updateSearchUI(); // keep the "No results" state without re-scanning
+    }
+    return;
+  }
 
   showProgress('Searching...');
 
@@ -13120,6 +13161,8 @@ async function performSearch(): Promise<void> {
 
     if (result.success && result.matches) {
       state.searchResults = result.matches;
+      // Remember what we just searched so an identical repeat reuses these results.
+      lastFindSignature = signature;
       // Merge hidden matches from filter and from hidden columns
       const filterHidden: HiddenMatch[] = (result as any).hiddenMatches || [];
       const columnHidden: HiddenMatch[] = (result as any).hiddenColumnMatches || [];
