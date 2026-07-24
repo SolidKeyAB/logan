@@ -526,6 +526,7 @@ interface Api {
   searchConfigDelete: (id: string) => Promise<{ success: boolean }>;
   searchConfigBatch: (configs: Array<{ id: string; pattern: string; isRegex: boolean; matchCase: boolean; wholeWord: boolean }>) => Promise<{ success: boolean; results?: Record<string, SearchResult[]>; error?: string }>;
   onSearchConfigBatchProgress: (callback: (data: { percent: number; configId: string; matchCount?: number }) => void) => () => void;
+  onSearchConfigBatchChunk: (callback: (data: { configId: string; lines: number[] }) => void) => () => void;
   searchConfigExport: (configId: string, lines: string[]) => Promise<{ success: boolean; filePath?: string; error?: string }>;
   searchConfigExportAll: (content: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
   searchConfigSessionList: () => Promise<{ success: boolean; sessions?: SearchConfigSessionDef[] }>;
