@@ -990,6 +990,13 @@ const elements = {
   searchConfigsResults: document.getElementById('search-configs-results') as HTMLDivElement,
   btnAddSearchConfig: document.getElementById('btn-add-search-config') as HTMLButtonElement,
   btnScExportAll: document.getElementById('btn-sc-export-all') as HTMLButtonElement,
+  btnScDistance: document.getElementById('btn-sc-distance') as HTMLButtonElement,
+  scDistancePanel: document.getElementById('sc-distance-panel') as HTMLDivElement,
+  scDistanceA: document.getElementById('sc-distance-a') as HTMLSelectElement,
+  scDistanceB: document.getElementById('sc-distance-b') as HTMLSelectElement,
+  btnScDistanceCompute: document.getElementById('btn-sc-distance-compute') as HTMLButtonElement,
+  btnScDistanceClose: document.getElementById('btn-sc-distance-close') as HTMLButtonElement,
+  scDistanceResults: document.getElementById('sc-distance-results') as HTMLDivElement,
   scSessionsChips: document.getElementById('sc-sessions-chips') as HTMLDivElement,
   btnSearchConfigs: document.getElementById('btn-search-configs') as HTMLButtonElement,
   scPatternInput: document.getElementById('sc-pattern-input') as HTMLInputElement,
@@ -10770,10 +10777,18 @@ function renderSearchConfigsChips(): void {
   container.appendChild(fragment);
   container.appendChild(addBtn);
   container.appendChild(elements.btnScExportAll);
+  container.appendChild(elements.btnScDistance);
 
   // Show/hide Export All button based on whether any results exist
   const hasResults = state.searchConfigs.some(c => c.enabled && (state.searchConfigResults.get(c.id)?.length || 0) > 0);
   elements.btnScExportAll.style.display = hasResults ? '' : 'none';
+
+  // Distance needs at least two enabled configs that actually have matches to compare.
+  const withResults = state.searchConfigs.filter(c => c.enabled && (state.searchConfigResults.get(c.id)?.length || 0) > 0);
+  elements.btnScDistance.style.display = withResults.length >= 2 ? '' : 'none';
+  if (withResults.length < 2 && !elements.scDistancePanel.classList.contains('hidden')) {
+    closeDistancePanel();
+  }
 
   // Update badge
   const badge = document.getElementById('badge-search-configs');
@@ -11032,6 +11047,147 @@ async function exportAllSearchConfigResults(): Promise<void> {
   if (result.success && result.filePath) {
     // Could show notification, but keeping it simple
   }
+}
+
+// === Pattern Distance ===
+// How far does each hit of pattern A sit from the NEAREST hit of pattern B (in lines)?
+// Answers "do these two events travel together?" so you can narrow a query to where they
+// cluster. Computed entirely from results already in memory — no new search / IPC.
+
+function distanceConfigsWithResults(): SearchConfigDef[] {
+  return state.searchConfigs.filter(c => c.enabled && (state.searchConfigResults.get(c.id)?.length || 0) > 0);
+}
+
+function openDistancePanel(): void {
+  const withResults = distanceConfigsWithResults();
+  if (withResults.length < 2) { showToast('Need two configs with matches to measure distance'); return; }
+
+  const optionsHtml = withResults.map(c => {
+    const n = state.searchConfigResults.get(c.id)?.length || 0;
+    return `<option value="${escapeHtml(c.id)}">${escapeHtml(c.pattern)}  (${n.toLocaleString()})</option>`;
+  }).join('');
+  elements.scDistanceA.innerHTML = optionsHtml;
+  elements.scDistanceB.innerHTML = optionsHtml;
+  elements.scDistanceA.selectedIndex = 0;
+  elements.scDistanceB.selectedIndex = 1; // default to the first two distinct configs
+
+  elements.scDistancePanel.classList.remove('hidden');
+  computeAndRenderDistance();
+}
+
+function closeDistancePanel(): void {
+  elements.scDistancePanel.classList.add('hidden');
+  elements.scDistanceResults.innerHTML = '';
+}
+
+// For each value in `from`, the smallest |from - to| against the sorted `to` array
+// (binary search for the insertion point, then check the two straddling neighbours).
+function nearestLineGaps(from: number[], to: number[]): Array<{ a: number; b: number; gap: number }> {
+  const pairs: Array<{ a: number; b: number; gap: number }> = [];
+  if (to.length === 0) return pairs;
+  for (const a of from) {
+    let lo = 0, hi = to.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (to[mid] < a) lo = mid + 1; else hi = mid; }
+    let best = to[Math.min(lo, to.length - 1)];
+    let bestGap = Math.abs(a - best);
+    if (lo - 1 >= 0) {
+      const g = Math.abs(a - to[lo - 1]);
+      if (g < bestGap) { bestGap = g; best = to[lo - 1]; }
+    }
+    pairs.push({ a, b: best, gap: bestGap });
+  }
+  return pairs;
+}
+
+function computeAndRenderDistance(): void {
+  const idA = elements.scDistanceA.value;
+  const idB = elements.scDistanceB.value;
+  const configA = state.searchConfigs.find(c => c.id === idA);
+  const configB = state.searchConfigs.find(c => c.id === idB);
+  if (!configA || !configB) return;
+  if (idA === idB) {
+    elements.scDistanceResults.innerHTML = '<div class="sc-distance-hint">Pick two different configs.</div>';
+    return;
+  }
+
+  const aLines = (state.searchConfigResults.get(idA) || []).map(m => m.lineNumber).sort((x, y) => x - y);
+  const bLines = (state.searchConfigResults.get(idB) || []).map(m => m.lineNumber).sort((x, y) => x - y);
+  if (aLines.length === 0 || bLines.length === 0) {
+    elements.scDistanceResults.innerHTML = '<div class="sc-distance-hint">One of the configs has no matches.</div>';
+    return;
+  }
+
+  const pairs = nearestLineGaps(aLines, bLines);
+  const gaps = pairs.map(p => p.gap).sort((x, y) => x - y);
+  const n = gaps.length;
+  const min = gaps[0];
+  const max = gaps[n - 1];
+  const mean = Math.round(gaps.reduce((s, g) => s + g, 0) / n);
+  const median = n % 2 ? gaps[(n - 1) / 2] : Math.round((gaps[n / 2 - 1] + gaps[n / 2]) / 2);
+  const within = (t: number) => Math.round(100 * gaps.filter(g => g <= t).length / n);
+
+  const buckets: Array<{ label: string; lo: number; hi: number; count: number }> = [
+    { label: 'same line', lo: 0, hi: 0, count: 0 },
+    { label: '1–2', lo: 1, hi: 2, count: 0 },
+    { label: '3–5', lo: 3, hi: 5, count: 0 },
+    { label: '6–10', lo: 6, hi: 10, count: 0 },
+    { label: '11–25', lo: 11, hi: 25, count: 0 },
+    { label: '26–50', lo: 26, hi: 50, count: 0 },
+    { label: '51–100', lo: 51, hi: 100, count: 0 },
+    { label: '101–500', lo: 101, hi: 500, count: 0 },
+    { label: '500+', lo: 501, hi: Infinity, count: 0 },
+  ];
+  for (const g of gaps) {
+    const bkt = buckets.find(b => g >= b.lo && g <= b.hi);
+    if (bkt) bkt.count++;
+  }
+  const maxBucket = Math.max(1, ...buckets.map(b => b.count));
+
+  const colorA = configA.color, colorB = configB.color;
+  const closest = pairs.slice().sort((p, q) => p.gap - q.gap).slice(0, 20);
+
+  const html: string[] = [];
+  html.push(`<div class="sc-distance-summary">`
+    + `<span class="sc-distance-dot" style="background:${colorA}"></span><b>${escapeHtml(configA.pattern)}</b> (${aLines.length.toLocaleString()})`
+    + `<span class="sc-distance-arrow-inline">&rarr; nearest &rarr;</span>`
+    + `<span class="sc-distance-dot" style="background:${colorB}"></span><b>${escapeHtml(configB.pattern)}</b> (${bLines.length.toLocaleString()})`
+    + `</div>`);
+  html.push(`<div class="sc-distance-stats">Gap in lines &nbsp;·&nbsp; min <b>${min.toLocaleString()}</b> &nbsp; median <b>${median.toLocaleString()}</b> &nbsp; mean <b>${mean.toLocaleString()}</b> &nbsp; max <b>${max.toLocaleString()}</b></div>`);
+  html.push(`<div class="sc-distance-within">within &le;5 lines: <b>${within(5)}%</b> &nbsp; &le;20: <b>${within(20)}%</b> &nbsp; &le;100: <b>${within(100)}%</b></div>`);
+
+  html.push('<div class="sc-distance-hist">');
+  for (const b of buckets) {
+    const barPct = Math.round(100 * b.count / maxBucket);
+    const share = Math.round(100 * b.count / n);
+    html.push(`<div class="sc-hist-row"><span class="sc-hist-label">${b.label}</span>`
+      + `<span class="sc-hist-bar-wrap"><span class="sc-hist-bar" style="width:${barPct}%"></span></span>`
+      + `<span class="sc-hist-count">${b.count.toLocaleString()} (${share}%)</span></div>`);
+  }
+  html.push('</div>');
+
+  html.push('<div class="sc-distance-closest-title">Closest co-occurrences (click to jump)</div>');
+  html.push('<div class="sc-distance-pairs">');
+  for (const p of closest) {
+    const gapLabel = p.gap === 0 ? 'same line' : `${p.gap.toLocaleString()} line${p.gap === 1 ? '' : 's'}`;
+    html.push(`<div class="sc-distance-pair">`
+      + `<span class="sc-distance-dot" style="background:${colorA}"></span><span class="sc-pair-line" data-line="${p.a}">Ln ${(p.a + 1).toLocaleString()}</span>`
+      + `<span class="sc-pair-gap">${gapLabel}</span>`
+      + `<span class="sc-distance-dot" style="background:${colorB}"></span><span class="sc-pair-line" data-line="${p.b}">Ln ${(p.b + 1).toLocaleString()}</span>`
+      + `</div>`);
+  }
+  html.push('</div>');
+
+  elements.scDistanceResults.innerHTML = html.join('');
+
+  elements.scDistanceResults.querySelectorAll('.sc-pair-line').forEach(el => {
+    el.addEventListener('click', () => {
+      const ln = parseInt((el as HTMLElement).dataset.line || '', 10);
+      if (Number.isNaN(ln)) return;
+      const di = getFilteredDisplayIndex(ln);
+      goToLine(di >= 0 ? di : ln, ln);
+      renderVisibleLines();
+    });
+  });
 }
 
 // === Search Config Sessions ===
@@ -17262,6 +17418,11 @@ function init(): void {
   // Search configs panel events (inside bottom panel)
   elements.btnAddSearchConfig.addEventListener('click', () => showSearchConfigForm());
   elements.btnScExportAll.addEventListener('click', exportAllSearchConfigResults);
+  elements.btnScDistance.addEventListener('click', openDistancePanel);
+  elements.btnScDistanceClose.addEventListener('click', closeDistancePanel);
+  elements.btnScDistanceCompute.addEventListener('click', computeAndRenderDistance);
+  elements.scDistanceA.addEventListener('change', computeAndRenderDistance);
+  elements.scDistanceB.addEventListener('change', computeAndRenderDistance);
   elements.btnScSave.addEventListener('click', addSearchConfig);
   elements.btnScCancel.addEventListener('click', hideSearchConfigForm);
   elements.scPatternInput.addEventListener('keydown', (e) => {
