@@ -5712,6 +5712,43 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
+/* Multi-series compare controls (Pattern Distance explorer) */
+.dist-swatch {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.dist-add-row { margin-top: -2px; }
+
+.dist-add-btn {
+  font-size: 11px;
+  padding: 3px 9px;
+}
+
+.dist-remove-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.dist-remove-btn:hover { color: #ff6b6b; }
+
+.dist-series-stat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 3px 0;
+}
+
 .search-configs-results {
   flex: 1;
   overflow-y: auto;
