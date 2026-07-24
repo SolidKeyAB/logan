@@ -254,6 +254,11 @@ export interface ContextMatchGroup {
     distance: number;
   }>;
   score: number;
+  // Fulfillment: how many DISTINCT clue patterns were satisfied vs. defined.
+  matchedPatternCount: number;
+  totalCluePatterns: number;
+  missingPatternIds: string[];
+  complete: boolean; // matchedPatternCount === totalCluePatterns (always true for must-only contexts)
 }
 
 // Search config session (saved group of search configs)
