@@ -75,6 +75,7 @@ Right-click any line in the log viewer for:
 
 - **Highlight "..."** — highlight the selected text across the file
 - **Include / Exclude "..."** — add selection to filter patterns
+- **Distance from "..."** — open the Pattern Distance explorer seeded with the selection as the anchor (see [Pattern Distance](#pattern-distance))
 - **Add Bookmark** / **Bookmark as "..."** — bookmark with optional label
 - **Range from here / Range to here** — select a line range for export or review
 - **Search from Ln N** — start searching from a specific line
@@ -184,6 +185,36 @@ Both are stored globally in `~/.logan/` and available across files.
 ## Search Configs & Sessions
 
 Save frequently-used search patterns with colors as **search configs**. Group related configs into **sessions** and batch-run them against any file. Results show colored ranges on the minimap.
+
+- **Live progress & counts** — adding, enabling, or applying a session runs all enabled configs together and shows a progress bar (plus the full-screen overlay on large files). Each chip's found-count `(N)` ticks up **live** as matches stream in, and the progress text shows a running total (e.g. `Searching 3 configs… 45% · 12,340 found`).
+- **Readable counts** — the `(N)` on each chip is a high-contrast pill, legible on any panel colour.
+- **Grouped results** — the results list is one row per line; a line matched by 2+ configs shows a coloured dot per config. The list shows up to `2,000 × (active configs)` lines (capped at 10,000).
+- **Export** — **Export All** writes every active config's matches to a text file next to the log.
+
+### Pattern Distance (between two configs)
+
+When two or more enabled configs have matches, a **📏 Distance** button appears. Pick two configs (A and B) and LOGAN measures, for each hit of A, the gap **in lines** to the nearest hit of B — answering *"do these two events travel together?"* You get:
+
+- Gap stats: **min / median / mean / max**
+- **within ≤5 / ≤20 / ≤100 lines** percentages (the narrow-down signal — a high % means they cluster)
+- A **histogram** of gap ranges (same line, 1–2, 3–5 … 500+)
+- The **top-20 closest co-occurrences**, each line number clickable to jump there
+
+It's computed instantly from results already in memory — no re-search.
+
+---
+
+## Pattern Distance
+
+Beyond the config-to-config tool above, you can measure distance for **any two patterns** ad hoc: select text in the log, right-click, and choose **Distance from "..."**. A dialog opens with the selection as the **anchor (A)**; type any **compare (B)** pattern (both accept regex/case toggles), pick a **direction**, and press **Measure**:
+
+- **nearest (either side)** — closest B before or after each A
+- **next after (A→B)** — the next B at or downstream of each A
+- **previous before (B←A)** — the previous B at or upstream of each A
+
+Results show the same gap stats plus a **diagram over the whole file**: anchor hits as ticks on the top lane, compare hits on the bottom lane, and a log-scaled distance curve between them (*far* up top, *near* at the bottom). **Click any point to jump** to that anchor line.
+
+Currently line-based with a single compare pattern; measuring by timestamp and comparing against multiple patterns are planned follow-ups.
 
 ---
 

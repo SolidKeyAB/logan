@@ -67,7 +67,8 @@ npm start
 - **Component analysis** — Investigate a specific component's health across the log
 - **Time-range analysis** — Focus on a specific time window
 - **Baseline comparison** — Save log fingerprints and compare future logs against them to detect regressions
-- **Search configs** — Persistent multi-pattern search with color-coded highlighting (Ctrl+8)
+- **Search configs** — Persistent multi-pattern search with color-coded highlighting, batched with live progress and per-config found-counts (Ctrl+8)
+- **Pattern distance** — Measure how far two patterns sit from each other (line gaps): between two search configs, or ad hoc via right-click → *Distance from "..."* with an over-the-log diagram and click-to-jump
 - **Trends** — Discover log variables (key=value/JSON), search them by name, and chart any field over time, as value-flips, or correlated with an event; booleans chart as a 0/1 step line
 - **Signals** — Overlay multiple numeric signals (including MF4 channels) on one shared time axis with normalize toggle and click-to-line
 - **Guided Investigate** — One-tap symptom recipes (crashed/froze/slow/…) that search, trend, and pin findings; save the agent's steps as re-runnable patterns

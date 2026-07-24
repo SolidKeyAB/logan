@@ -11102,6 +11102,11 @@ function closeDistancePanel(): void {
   elements.scDistanceResults.innerHTML = '';
 }
 
+// NOTE: nearestLineGaps / directionalLineGaps / the gap stats below are inline mirrors of
+// src/shared/patternDistance.ts, which is the canonical, unit-tested implementation
+// (src/tests/patternDistance.test.ts). The renderer is still a single global script (not an
+// ES module — see issue #15), so it can't import yet; keep the two copies in sync until it can.
+//
 // For each value in `from`, the smallest |from - to| against the sorted `to` array
 // (binary search for the insertion point, then check the two straddling neighbours).
 function nearestLineGaps(from: number[], to: number[]): Array<{ a: number; b: number; gap: number }> {
@@ -11251,6 +11256,7 @@ async function searchPatternLines(pattern: string, isRegex: boolean, matchCase: 
 // For each value in `from`, the gap to the relevant `to` hit given the direction.
 // 'nearest' = either side; 'after' = smallest b >= a; 'before' = largest b <= a. Anchor
 // hits with no qualifying compare hit on that side are dropped (correct: "no next B").
+// Mirror of src/shared/patternDistance.ts (unit-tested) — see the note above nearestLineGaps.
 function directionalLineGaps(from: number[], to: number[], dir: 'nearest' | 'after' | 'before'): DistPair[] {
   if (dir === 'nearest') return nearestLineGaps(from, to);
   const pairs: DistPair[] = [];
