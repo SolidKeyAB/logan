@@ -3371,10 +3371,12 @@ ipcMain.handle(IPC.SEARCH_CONFIG_BATCH, async (_, configs: Array<{ id: string; p
         wholeWord: cfg.wholeWord,
       };
 
-      const matches = await handler.search(searchOpts, (percent) => {
+      const matches = await handler.search(searchOpts, (percent, matchCount) => {
         // Overall bar = configs already finished + this one's fraction (approximate under parallelism).
         const overallPercent = Math.round(((completed + percent / 100) / totalConfigs) * 100);
-        mainWindow?.webContents.send(IPC.SEARCH_CONFIG_BATCH_PROGRESS, { percent: overallPercent, configId: cfg.id });
+        // matchCount is the running per-config total (ripgrep reports it every ~100ms),
+        // so the renderer can tick each chip's found-count up live without extra work.
+        mainWindow?.webContents.send(IPC.SEARCH_CONFIG_BATCH_PROGRESS, { percent: overallPercent, configId: cfg.id, matchCount });
       }, { cancelled: false });
 
       // Keep original lineNumber, add displayIndex when filtered
@@ -3402,7 +3404,7 @@ ipcMain.handle(IPC.SEARCH_CONFIG_BATCH, async (_, configs: Array<{ id: string; p
       results[cfg.id] = [];
     } finally {
       completed++;
-      mainWindow?.webContents.send(IPC.SEARCH_CONFIG_BATCH_PROGRESS, { percent: Math.round((completed / totalConfigs) * 100), configId: cfg.id });
+      mainWindow?.webContents.send(IPC.SEARCH_CONFIG_BATCH_PROGRESS, { percent: Math.round((completed / totalConfigs) * 100), configId: cfg.id, matchCount: results[cfg.id]?.length ?? 0 });
     }
   }));
 

@@ -10593,7 +10593,7 @@ async function addSearchConfig(): Promise<void> {
   await window.api.searchConfigSave(config);
   hideSearchConfigForm();
   renderSearchConfigsChips();
-  await runSearchConfigsBatch();
+  await runSearchConfigsBatch(true);
 }
 
 async function deleteSearchConfig(id: string): Promise<void> {
@@ -10614,14 +10614,33 @@ async function toggleSearchConfigEnabled(id: string): Promise<void> {
 
   if (config.enabled) {
     // Run batch just for this one
-    await runSearchConfigsBatch();
+    await runSearchConfigsBatch(true);
   } else {
     await renderSearchConfigsResults();
     renderVisibleLines();
   }
 }
 
-async function runSearchConfigsBatch(): Promise<void> {
+// `showUiProgress` drives the shared progress bar/overlay while the batch scans the
+// whole file. User-initiated runs (add config, toggle on, apply session) pass true so
+// the run isn't silent on big files; the auto-run on file open passes false because it
+// already runs under the "Opening file…"/"Building minimap…" overlay (and isn't awaited,
+// so its hideProgress() would race that overlay).
+// Tick a single chip's found-count up live during a running batch search — patches
+// just the count span instead of re-rendering the whole chip row (cheap enough to run
+// on every throttled progress event). The pulse class clears itself when the batch
+// finishes and renderSearchConfigsChips() rebuilds the chips.
+function updateSearchConfigChipLiveCount(configId: string, count: number): void {
+  const chip = elements.searchConfigsChips.querySelector(
+    `.search-config-chip[data-config-id="${CSS.escape(configId)}"]`
+  );
+  const countEl = chip?.querySelector('.sc-chip-count') as HTMLElement | null;
+  if (!countEl) return;
+  countEl.textContent = `(${count.toLocaleString()})`;
+  countEl.classList.add('sc-counting');
+}
+
+async function runSearchConfigsBatch(showUiProgress = false): Promise<void> {
   const enabledConfigs = state.searchConfigs.filter(c => c.enabled);
   if (enabledConfigs.length === 0) {
     state.searchConfigResults.clear();
@@ -10638,17 +10657,45 @@ async function runSearchConfigsBatch(): Promise<void> {
     wholeWord: c.wholeWord,
   }));
 
-  const result = await window.api.searchConfigBatch(batchArgs);
-  if (result.success && result.results) {
-    for (const [configId, matches] of Object.entries(result.results)) {
-      state.searchConfigResults.set(configId, matches as SearchResult[]);
-    }
-    // Clear results for configs that were removed
-    for (const key of state.searchConfigResults.keys()) {
-      if (!enabledConfigs.some(c => c.id === key)) {
-        state.searchConfigResults.delete(key);
+  // The main process already emits SEARCH_CONFIG_BATCH_PROGRESS (overall % across all
+  // configs) — subscribe so the run shows feedback instead of freezing silently. The
+  // event also carries a running per-config matchCount (ripgrep reports it every ~100ms),
+  // so we tick each chip's found-count up live AND show a running total in the progress
+  // text (visible even behind the big-file overlay that covers the chips).
+  let unsubscribeProgress: (() => void) | undefined;
+  if (showUiProgress) {
+    const label = enabledConfigs.length === 1
+      ? 'Searching config…'
+      : `Searching ${enabledConfigs.length} configs…`;
+    showProgress(`${label} 0%`);
+    const liveCounts = new Map<string, number>();
+    unsubscribeProgress = window.api.onSearchConfigBatchProgress(({ percent, configId, matchCount }) => {
+      if (configId && typeof matchCount === 'number') {
+        liveCounts.set(configId, matchCount);
+        updateSearchConfigChipLiveCount(configId, matchCount);
+      }
+      const total = Array.from(liveCounts.values()).reduce((a, b) => a + b, 0);
+      updateProgress(percent);
+      updateProgressText(total > 0 ? `${label} ${percent}% · ${total.toLocaleString()} found` : `${label} ${percent}%`);
+    });
+  }
+
+  try {
+    const result = await window.api.searchConfigBatch(batchArgs);
+    if (result.success && result.results) {
+      for (const [configId, matches] of Object.entries(result.results)) {
+        state.searchConfigResults.set(configId, matches as SearchResult[]);
+      }
+      // Clear results for configs that were removed
+      for (const key of state.searchConfigResults.keys()) {
+        if (!enabledConfigs.some(c => c.id === key)) {
+          state.searchConfigResults.delete(key);
+        }
       }
     }
+  } finally {
+    unsubscribeProgress?.();
+    if (showUiProgress) hideProgress();
   }
 
   renderSearchConfigsChips(); // Update counts
@@ -10685,7 +10732,7 @@ function renderSearchConfigsChips(): void {
     const count = document.createElement('span');
     count.className = 'sc-chip-count';
     const resultCount = state.searchConfigResults.get(config.id)?.length || 0;
-    count.textContent = config.enabled ? `(${resultCount})` : '';
+    count.textContent = config.enabled ? `(${resultCount.toLocaleString()})` : '';
 
     const toggleBtn = document.createElement('button');
     toggleBtn.className = 'sc-chip-toggle';
@@ -10784,7 +10831,10 @@ async function renderSearchConfigsResults(): Promise<void> {
 
   list.innerHTML = '';
 
-  const MAX_DISPLAY = 2000;
+  // Results are grouped by line, so with several active configs a flat 2,000-line cap
+  // fills up fast. Scale it per enabled config (~2,000 each) but keep a hard ceiling so
+  // the (non-virtualised) DOM stays responsive.
+  const MAX_DISPLAY = Math.min(2000 * Math.max(1, enabledConfigs.length), 10000);
   const totalCount = lineEntries.length;
   const multiCount = lineEntries.filter(e => e.configIds.size > 1).length;
   const displayResults = lineEntries.slice(0, MAX_DISPLAY);
@@ -11101,7 +11151,7 @@ async function applySearchConfigSession(sessionId: string): Promise<void> {
 
   // Run batch search
   if (state.searchConfigs.some(c => c.enabled)) {
-    await runSearchConfigsBatch();
+    await runSearchConfigsBatch(true);
   }
 }
 
