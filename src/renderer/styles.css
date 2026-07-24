@@ -5461,6 +5461,166 @@ kbd {
 }
 
 /* Results list */
+/* === Pattern Distance panel === */
+.sc-distance-panel {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.sc-distance-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sc-distance-select {
+  flex: 1 1 120px;
+  min-width: 100px;
+  max-width: 220px;
+  background: var(--input-bg, rgba(0,0,0,0.25));
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+.sc-distance-arrow {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.sc-distance-results {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.sc-distance-hint {
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 6px 0;
+}
+
+.sc-distance-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.sc-distance-arrow-inline {
+  color: var(--text-secondary);
+  font-size: 11px;
+  margin: 0 2px;
+}
+
+.sc-distance-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.sc-distance-stats,
+.sc-distance-within {
+  color: var(--text-secondary);
+  font-size: 11px;
+  margin-bottom: 3px;
+}
+
+.sc-distance-stats b,
+.sc-distance-within b {
+  color: var(--text-color);
+  font-variant-numeric: tabular-nums;
+}
+
+.sc-distance-hist {
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sc-hist-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.sc-hist-label {
+  flex: 0 0 62px;
+  text-align: right;
+  color: var(--text-secondary);
+}
+
+.sc-hist-bar-wrap {
+  flex: 1;
+  height: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.sc-hist-bar {
+  display: block;
+  height: 100%;
+  background: var(--accent-color);
+  border-radius: 3px;
+  min-width: 0;
+  transition: width 0.15s;
+}
+
+.sc-hist-count {
+  flex: 0 0 92px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.sc-distance-closest-title {
+  margin: 8px 0 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sc-distance-pairs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.sc-distance-pair {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 1px 0;
+}
+
+.sc-pair-line {
+  cursor: pointer;
+  color: var(--link-color, #6cb6ff);
+  font-variant-numeric: tabular-nums;
+}
+
+.sc-pair-line:hover {
+  text-decoration: underline;
+}
+
+.sc-pair-gap {
+  color: var(--text-secondary);
+  min-width: 66px;
+}
+
 .search-configs-results {
   flex: 1;
   overflow-y: auto;
