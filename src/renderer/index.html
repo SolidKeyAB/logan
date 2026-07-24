@@ -537,6 +537,7 @@
             <button id="btn-add-search-config" class="search-config-add-btn" title="Add search config">+ Add</button>
             <button id="btn-sc-export-all" class="search-config-add-btn" title="Export all results" style="display:none">Export All</button>
             <button id="btn-sc-distance" class="search-config-add-btn" title="Measure line distance between two configs" style="display:none">&#128207; Distance</button>
+            <button id="btn-sc-relations" class="search-config-add-btn" title="Relations matrix: how tightly every pattern clusters with every other" style="display:none">&#128376; Relations</button>
           </div>
           <div id="sc-distance-panel" class="sc-distance-panel hidden">
             <div class="sc-distance-controls">
@@ -547,6 +548,20 @@
               <button id="btn-sc-distance-close" class="sc-form-btn">Close</button>
             </div>
             <div id="sc-distance-results" class="sc-distance-results"></div>
+          </div>
+          <div id="sc-relations-panel" class="sc-relations-panel hidden">
+            <div class="sc-relations-controls">
+              <span class="sc-relations-title">Relations — how often, when a pattern fires, another is within</span>
+              <select id="sc-relations-window" class="sc-distance-select" title="Proximity window">
+                <option value="0">same line</option>
+                <option value="5" selected>5 lines</option>
+                <option value="20">20 lines</option>
+                <option value="100">100 lines</option>
+                <option value="500">500 lines</option>
+              </select>
+              <button id="btn-sc-relations-close" class="sc-form-btn">Close</button>
+            </div>
+            <div id="sc-relations-matrix" class="sc-relations-matrix"></div>
           </div>
           <div id="search-configs-form" class="search-configs-form hidden">
             <input type="text" id="sc-pattern-input" class="sc-pattern-input" placeholder="Search pattern...">
@@ -560,6 +575,7 @@
             <button id="btn-sc-save" class="sc-form-btn primary">Save</button>
             <button id="btn-sc-cancel" class="sc-form-btn">Cancel</button>
           </div>
+          <div id="sc-overview" class="sc-overview hidden"></div>
           <div id="search-configs-results" class="search-configs-results"></div>
         </div>
         <!-- Contexts tab -->

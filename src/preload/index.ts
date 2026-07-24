@@ -30,6 +30,7 @@ const IPC = {
   SEARCH_CONFIG_DELETE: 'search-config-delete',
   SEARCH_CONFIG_BATCH: 'search-config-batch',
   SEARCH_CONFIG_BATCH_PROGRESS: 'search-config-batch-progress',
+  SEARCH_CONFIG_BATCH_CHUNK: 'search-config-batch-chunk',
   SEARCH_CONFIG_EXPORT: 'search-config-export',
   SEARCH_CONFIG_EXPORT_ALL: 'search-config-export-all',
   SEARCH_CONFIG_SESSION_LIST: 'search-config-session-list',
@@ -444,6 +445,14 @@ const api = {
     const handler = (_: any, data: { percent: number; configId: string; matchCount?: number }) => callback(data);
     ipcRenderer.on(IPC.SEARCH_CONFIG_BATCH_PROGRESS, handler);
     return () => ipcRenderer.removeListener(IPC.SEARCH_CONFIG_BATCH_PROGRESS, handler);
+  },
+
+  // Streams matched line numbers per config AS ripgrep finds them, so the renderer can
+  // paint the overview/counts progressively instead of waiting for the whole file scan.
+  onSearchConfigBatchChunk: (callback: (data: { configId: string; lines: number[] }) => void): (() => void) => {
+    const handler = (_: any, data: { configId: string; lines: number[] }) => callback(data);
+    ipcRenderer.on(IPC.SEARCH_CONFIG_BATCH_CHUNK, handler);
+    return () => ipcRenderer.removeListener(IPC.SEARCH_CONFIG_BATCH_CHUNK, handler);
   },
 
   searchConfigExport: (configId: string, lines: string[]): Promise<{ success: boolean; filePath?: string; error?: string }> =>
