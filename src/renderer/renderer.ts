@@ -1005,6 +1005,10 @@ const elements = {
   distCompare: document.getElementById('dist-compare') as HTMLInputElement,
   distCompareRegex: document.getElementById('dist-compare-regex') as HTMLInputElement,
   distCompareCase: document.getElementById('dist-compare-case') as HTMLInputElement,
+  distCompareSwatch: document.getElementById('dist-compare-swatch') as HTMLSpanElement,
+  distCompareExtra: document.getElementById('dist-compare-extra') as HTMLDivElement,
+  btnDistAddCompare: document.getElementById('btn-dist-add-compare') as HTMLButtonElement,
+  btnDistAddConfigs: document.getElementById('btn-dist-add-configs') as HTMLButtonElement,
   btnDistMeasure: document.getElementById('btn-dist-measure') as HTMLButtonElement,
   distSummary: document.getElementById('dist-summary') as HTMLDivElement,
   distChart: document.getElementById('dist-chart') as HTMLCanvasElement,
@@ -11300,10 +11304,18 @@ function computeAndRenderDistance(): void {
 // patterns are arbitrary, not existing configs), then reuses the same gap maths.
 
 interface DistPair { a: number; b: number; gap: number; }
-const DIST_COLOR_A = '#ffcc55';
-const DIST_COLOR_B = '#4aa3ff';
+// A search hit tagged with the numeric "key" the distance maths runs on:
+// key = line number (lines mode) or epoch-ms (seconds/timestamp mode). The line is always
+// kept alongside so the chart can position by line across the file + click-to-jump, even
+// when the gap itself is measured in time.
+interface DistHit { line: number; key: number; }
+interface DistCompareSeries { pattern: string; isRegex: boolean; matchCase: boolean; color: string; configId?: string; }
+const DIST_COLOR_A = '#ffcc55'; // anchor (A) — compare (B) series take the palette colours below
+// Distinct colours so several compare series overlay legibly on the one over-log diagram.
+const DIST_SERIES_COLORS = ['#4aa3ff', '#ff6b6b', '#51cf66', '#cc5de8', '#ffa94d', '#22b8cf', '#f783ac', '#a9e34b'];
+function distSeriesColor(i: number): string { return DIST_SERIES_COLORS[i % DIST_SERIES_COLORS.length]; }
 // Held so the canvas click handler (wired once) can map an x-pixel back to an anchor line.
-let distChartState: { pairsByA: DistPair[]; maxLine: number; padL: number; plotW: number } | null = null;
+let distChartState: { pairsByA: Array<{ a: number }>; maxLine: number; padL: number; plotW: number } | null = null;
 
 function openDistanceExplorer(anchorText: string): void {
   if (!state.filePath) { showToast('Open a log file first'); return; }
@@ -11313,6 +11325,12 @@ function openDistanceExplorer(anchorText: string): void {
   elements.distCompare.value = '';
   elements.distCompareRegex.checked = false;
   elements.distCompareCase.checked = false;
+  elements.distCompare.dataset.configId = '';
+  elements.distCompare.dataset.color = distSeriesColor(0);
+  elements.distCompareSwatch.style.background = distSeriesColor(0);
+  elements.distCompareExtra.innerHTML = '';
+  const distUnitLines = document.querySelector('input[name="dist-unit"][value="lines"]') as HTMLInputElement | null;
+  if (distUnitLines) distUnitLines.checked = true;
   elements.distSummary.innerHTML = '';
   elements.distStats.innerHTML = '';
   elements.distChartLegend.innerHTML = '';
@@ -11353,20 +11371,145 @@ function directionalLineGaps(from: number[], to: number[], dir: 'nearest' | 'aft
   return pairs;
 }
 
+// Pair each anchor hit to the relevant compare hit by the hit's KEY (line or epoch-ms),
+// so the exact same maths drives both the lines and the seconds mode — only the key
+// changes. `toByKey` must be sorted ascending by .key. Returns gaps in key units.
+// Mirror of directionalLineGaps' logic, generalised over DistHit.key.
+function directionalHitGaps(from: DistHit[], toByKey: DistHit[], dir: 'nearest' | 'after' | 'before'): Array<{ a: DistHit; b: DistHit; gap: number }> {
+  const pairs: Array<{ a: DistHit; b: DistHit; gap: number }> = [];
+  if (toByKey.length === 0) return pairs;
+  for (const a of from) {
+    let lo = 0, hi = toByKey.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (toByKey[mid].key < a.key) lo = mid + 1; else hi = mid; }
+    if (dir === 'after') {
+      if (lo < toByKey.length) pairs.push({ a, b: toByKey[lo], gap: toByKey[lo].key - a.key });
+    } else if (dir === 'before') {
+      let idx = -1;
+      if (lo < toByKey.length && toByKey[lo].key === a.key) idx = lo;
+      else if (lo - 1 >= 0) idx = lo - 1;
+      if (idx >= 0) pairs.push({ a, b: toByKey[idx], gap: a.key - toByKey[idx].key });
+    } else { // nearest
+      let best = toByKey[Math.min(lo, toByKey.length - 1)];
+      let bestGap = Math.abs(a.key - best.key);
+      if (lo - 1 >= 0) { const g = Math.abs(a.key - toByKey[lo - 1].key); if (g < bestGap) { bestGap = g; best = toByKey[lo - 1]; } }
+      pairs.push({ a, b: best, gap: bestGap });
+    }
+  }
+  return pairs;
+}
+
+// Human-friendly duration for the seconds/timestamp mode. `sec` may be fractional.
+function formatDistSeconds(sec: number): string {
+  const a = Math.abs(sec);
+  if (a < 1) return `${Math.round(sec * 1000)} ms`;
+  if (a < 60) return `${sec.toFixed(a < 10 ? 2 : 1)} s`;
+  if (a < 3600) return `${Math.floor(sec / 60)}m ${Math.round(sec % 60)}s`;
+  return `${Math.floor(sec / 3600)}h ${Math.round((sec % 3600) / 60)}m`;
+}
+
+// Read every compare (B) series currently in the modal: the fixed first row plus any
+// added rows. Colour is per-row (a config-derived row carries its config colour); typed
+// rows fall back to the palette by position.
+function collectDistCompareSeries(): DistCompareSeries[] {
+  const out: DistCompareSeries[] = [];
+  const p0 = elements.distCompare.value.trim();
+  if (p0) {
+    out.push({
+      pattern: p0,
+      isRegex: elements.distCompareRegex.checked,
+      matchCase: elements.distCompareCase.checked,
+      color: elements.distCompare.dataset.color || distSeriesColor(0),
+      configId: elements.distCompare.dataset.configId || undefined,
+    });
+  }
+  elements.distCompareExtra.querySelectorAll('.dist-compare-row').forEach((row, i) => {
+    const el = row as HTMLElement;
+    const inp = el.querySelector('.dist-compare-input') as HTMLInputElement | null;
+    const pat = inp?.value.trim();
+    if (!pat) return;
+    out.push({
+      pattern: pat,
+      isRegex: (el.querySelector('.dist-compare-regex') as HTMLInputElement)?.checked || false,
+      matchCase: (el.querySelector('.dist-compare-case') as HTMLInputElement)?.checked || false,
+      color: el.dataset.color || distSeriesColor(i + 1),
+      configId: el.dataset.configId || undefined,
+    });
+  });
+  return out;
+}
+
+// Add one more compare (B) input row (typed, or pre-filled from a saved Search Config).
+function addDistCompareRow(prefill?: { pattern?: string; isRegex?: boolean; matchCase?: boolean; color?: string; configId?: string }): void {
+  const idx = 1 + elements.distCompareExtra.querySelectorAll('.dist-compare-row').length; // first row is index 0
+  const color = prefill?.color || distSeriesColor(idx);
+  const row = document.createElement('div');
+  row.className = 'dist-row dist-compare-row';
+  row.dataset.color = color;
+  if (prefill?.configId) row.dataset.configId = prefill.configId;
+  row.innerHTML =
+    `<span class="dist-label"></span>`
+    + `<span class="dist-swatch" style="background:${color}"></span>`
+    + `<input type="text" class="modal-input dist-compare-input" placeholder="text or pattern…">`
+    + `<label class="dist-flag"><input type="checkbox" class="dist-compare-regex"> regex</label>`
+    + `<label class="dist-flag"><input type="checkbox" class="dist-compare-case"> case</label>`
+    + `<button class="dist-remove-btn" type="button" title="Remove">&times;</button>`;
+  const inp = row.querySelector('.dist-compare-input') as HTMLInputElement;
+  if (prefill?.pattern) inp.value = prefill.pattern;
+  if (prefill?.isRegex) (row.querySelector('.dist-compare-regex') as HTMLInputElement).checked = true;
+  if (prefill?.matchCase) (row.querySelector('.dist-compare-case') as HTMLInputElement).checked = true;
+  inp.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') { e.preventDefault(); void runDistanceMeasure(); } });
+  row.querySelector('.dist-remove-btn')?.addEventListener('click', () => { row.remove(); });
+  elements.distCompareExtra.appendChild(row);
+  if (!prefill?.pattern) inp.focus();
+}
+
+// "＋ from Search Configs": pull every enabled config in as its own colour-coded compare
+// series (reusing its colour + flags). The first empty compare row is filled first, then
+// extra rows are added. Dedupes by pattern.
+function addDistSeriesFromConfigs(): void {
+  const configs = state.searchConfigs.filter(c => c.enabled && c.pattern);
+  if (configs.length === 0) { showToast('No enabled Search Configs to add'); return; }
+  const existing = new Set(collectDistCompareSeries().map(s => s.pattern));
+  let added = 0;
+  for (const c of configs) {
+    if (existing.has(c.pattern)) continue;
+    if (!elements.distCompare.value.trim()) {
+      // Fill the fixed first compare row.
+      elements.distCompare.value = c.pattern;
+      elements.distCompareRegex.checked = c.isRegex;
+      elements.distCompareCase.checked = c.matchCase;
+      elements.distCompare.dataset.configId = c.id;
+      elements.distCompare.dataset.color = c.color;
+      elements.distCompareSwatch.style.background = c.color;
+    } else {
+      addDistCompareRow({ pattern: c.pattern, isRegex: c.isRegex, matchCase: c.matchCase, color: c.color, configId: c.id });
+    }
+    existing.add(c.pattern);
+    added++;
+  }
+  if (added === 0) showToast('All enabled configs already added');
+}
+
+// Resolve a compare series to its matching line numbers. Config-derived series reuse the
+// already-computed Search Config results when present (no re-scan); otherwise search live.
+async function resolveDistSeriesLines(s: DistCompareSeries): Promise<number[]> {
+  if (s.configId) {
+    const cached = state.searchConfigResults.get(s.configId);
+    if (cached && cached.length) return cached.map(m => m.lineNumber).slice().sort((a, b) => a - b);
+  }
+  return searchPatternLines(s.pattern, s.isRegex, s.matchCase);
+}
+
 async function runDistanceMeasure(): Promise<void> {
   const anchor = elements.distAnchor.value.trim();
-  const compare = elements.distCompare.value.trim();
-  if (!anchor || !compare) { elements.distSummary.textContent = 'Enter both an anchor and a compare pattern.'; return; }
+  const series = collectDistCompareSeries();
+  if (!anchor || series.length === 0) { elements.distSummary.textContent = 'Enter an anchor and at least one compare pattern.'; return; }
   const dir = ((document.querySelector('input[name="dist-dir"]:checked') as HTMLInputElement)?.value as 'nearest' | 'after' | 'before') || 'nearest';
+  const unit = ((document.querySelector('input[name="dist-unit"]:checked') as HTMLInputElement)?.value as 'lines' | 'seconds') || 'lines';
 
   elements.distSummary.textContent = 'Searching…';
   elements.distStats.innerHTML = '';
   elements.distChartLegend.innerHTML = '';
-
-  const [aLines, bLines] = await Promise.all([
-    searchPatternLines(anchor, elements.distAnchorRegex.checked, elements.distAnchorCase.checked),
-    searchPatternLines(compare, elements.distCompareRegex.checked, elements.distCompareCase.checked),
-  ]);
 
   const clearChart = () => {
     distChartState = null;
@@ -11374,44 +11517,90 @@ async function runDistanceMeasure(): Promise<void> {
     if (ctx) ctx.clearRect(0, 0, elements.distChart.width, elements.distChart.height);
   };
 
-  if (aLines.length === 0 || bLines.length === 0) {
-    elements.distSummary.textContent = `No matches — anchor "${anchor}": ${aLines.length}, compare "${compare}": ${bLines.length}.`;
+  const anchorLines = await searchPatternLines(anchor, elements.distAnchorRegex.checked, elements.distAnchorCase.checked);
+  if (anchorLines.length === 0) { elements.distSummary.textContent = `No matches for anchor "${escapeHtml(anchor)}".`; clearChart(); return; }
+  const seriesLines = await Promise.all(series.map(s => resolveDistSeriesLines(s)));
+
+  // key = line (lines mode) or epoch-ms (seconds mode). In seconds mode fetch timestamps
+  // for the union of every involved line; hits without a parseable timestamp are dropped.
+  let keyOf: (line: number) => number | null;
+  if (unit === 'seconds') {
+    const all = new Set<number>(anchorLines);
+    for (const arr of seriesLines) for (const l of arr) all.add(l);
+    const ts = await window.api.getLineTimestamps(Array.from(all));
+    const map = new Map<number, number>();
+    for (const t of ts) map.set(t.lineNumber, t.epochMs);
+    keyOf = (line) => (map.has(line) ? (map.get(line) as number) : null);
+  } else {
+    keyOf = (line) => line;
+  }
+
+  const toHits = (lines: number[]): DistHit[] => {
+    const hits: DistHit[] = [];
+    for (const line of lines) { const k = keyOf(line); if (k != null) hits.push({ line, key: k }); }
+    hits.sort((x, y) => x.key - y.key);
+    return hits;
+  };
+
+  const anchorHits = toHits(anchorLines);
+  if (anchorHits.length === 0) {
+    elements.distSummary.textContent = unit === 'seconds' ? 'Anchor hits have no parseable timestamps — switch to lines.' : 'No anchor hits.';
     clearChart();
     return;
   }
 
-  const pairs = directionalLineGaps(aLines, bLines, dir);
-  if (pairs.length === 0) {
-    elements.distSummary.textContent = `No ${dir === 'after' ? 'downstream' : 'upstream'} compare hit for any anchor hit.`;
+  const built = series.map((s, i) => {
+    const compareHits = toHits(seriesLines[i]);
+    const pairs = directionalHitGaps(anchorHits, compareHits, dir);
+    return { series: s, compareHits, pairs };
+  }).filter(b => b.pairs.length > 0);
+
+  if (built.length === 0) {
+    elements.distSummary.textContent = unit === 'seconds'
+      ? 'No timestamped co-occurrences found.'
+      : `No ${dir === 'after' ? 'downstream' : dir === 'before' ? 'upstream' : 'nearby'} compare hit for any anchor hit.`;
     clearChart();
     return;
   }
 
-  const gaps = pairs.map(p => p.gap).sort((x, y) => x - y);
-  const n = gaps.length;
-  const min = gaps[0], max = gaps[n - 1];
-  const mean = Math.round(gaps.reduce((s, g) => s + g, 0) / n);
-  const median = n % 2 ? gaps[(n - 1) / 2] : Math.round((gaps[n / 2 - 1] + gaps[n / 2]) / 2);
-  const within = (t: number) => Math.round(100 * gaps.filter(g => g <= t).length / n);
   const dirLabel = dir === 'after' ? 'next after (A→B)' : dir === 'before' ? 'previous before (B←A)' : 'nearest (either side)';
-
   elements.distSummary.innerHTML =
-    `<span class="dist-dot" style="background:${DIST_COLOR_A}"></span><b>${escapeHtml(anchor)}</b> (${aLines.length.toLocaleString()})`
-    + ` <span class="dist-arrow">· ${escapeHtml(dirLabel)} ·</span> `
-    + `<span class="dist-dot" style="background:${DIST_COLOR_B}"></span><b>${escapeHtml(compare)}</b> (${bLines.length.toLocaleString()})`
-    + (pairs.length < aLines.length ? ` <span class="dist-note">— matched ${pairs.length.toLocaleString()} of ${aLines.length.toLocaleString()}</span>` : '');
+    `<span class="dist-dot" style="background:${DIST_COLOR_A}"></span><b>${escapeHtml(anchor)}</b> (${anchorLines.length.toLocaleString()})`
+    + ` <span class="dist-arrow">· ${escapeHtml(dirLabel)} · gap in ${unit} ·</span> `
+    + `<span class="dist-note">${built.length} compare series</span>`;
 
-  elements.distStats.innerHTML =
-    `<div>Gap in lines · min <b>${min.toLocaleString()}</b> · median <b>${median.toLocaleString()}</b> · mean <b>${mean.toLocaleString()}</b> · max <b>${max.toLocaleString()}</b></div>`
-    + `<div>within ≤5: <b>${within(5)}%</b> · ≤20: <b>${within(20)}%</b> · ≤100: <b>${within(100)}%</b></div>`;
+  // Per-series stats. Gaps are in key units (lines, or ms in seconds mode).
+  const withinThresh = unit === 'seconds' ? [1000, 5000, 30000] : [5, 20, 100];
+  const withinLabel = unit === 'seconds' ? ['≤1s', '≤5s', '≤30s'] : ['≤5', '≤20', '≤100'];
+  const fmtGap = (keyVal: number) => (unit === 'seconds' ? formatDistSeconds(keyVal / 1000) : Math.round(keyVal).toLocaleString());
+  const statHtml: string[] = [];
+  for (const b of built) {
+    const g = b.pairs.map(p => p.gap).sort((x, y) => x - y);
+    const n = g.length;
+    const min = g[0], max = g[n - 1];
+    const mean = g.reduce((s, v) => s + v, 0) / n;
+    const median = n % 2 ? g[(n - 1) / 2] : (g[n / 2 - 1] + g[n / 2]) / 2;
+    const within = (t: number) => Math.round(100 * g.filter(v => v <= t).length / n);
+    statHtml.push(`<div class="dist-series-stat"><span class="dist-dot" style="background:${b.series.color}"></span>`
+      + `<b>${escapeHtml(b.series.pattern)}</b> (${b.compareHits.length.toLocaleString()})`
+      + ` · min <b>${fmtGap(min)}</b> · median <b>${fmtGap(median)}</b> · mean <b>${fmtGap(mean)}</b> · max <b>${fmtGap(max)}</b>`
+      + ` · within ${withinLabel[0]} <b>${within(withinThresh[0])}%</b> · ${withinLabel[1]} <b>${within(withinThresh[1])}%</b> · ${withinLabel[2]} <b>${within(withinThresh[2])}%</b>`
+      + (b.pairs.length < anchorHits.length ? ` <span class="dist-note">— matched ${b.pairs.length.toLocaleString()}/${anchorHits.length.toLocaleString()}</span>` : '')
+      + `</div>`);
+  }
+  elements.distStats.innerHTML = statHtml.join('');
 
-  drawDistanceChart(pairs, aLines, bLines);
+  drawMultiDistanceChart(anchorHits, built, unit);
 }
 
-function drawDistanceChart(pairs: DistPair[], aLines: number[], bLines: number[]): void {
+function drawMultiDistanceChart(
+  anchorHits: DistHit[],
+  built: Array<{ series: DistCompareSeries; compareHits: DistHit[]; pairs: Array<{ a: DistHit; b: DistHit; gap: number }> }>,
+  unit: 'lines' | 'seconds',
+): void {
   const canvas = elements.distChart;
   const cssW = canvas.clientWidth || 600;
-  const cssH = 180;
+  const cssH = 200;
   const dpr = window.devicePixelRatio || 1;
   canvas.width = Math.round(cssW * dpr);
   canvas.height = Math.round(cssH * dpr);
@@ -11421,17 +11610,21 @@ function drawDistanceChart(pairs: DistPair[], aLines: number[], bLines: number[]
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssW, cssH);
 
-  const lastA = aLines.length ? aLines[aLines.length - 1] : 1;
-  const lastB = bLines.length ? bLines[bLines.length - 1] : 1;
-  const maxLine = Math.max(state.totalLines || 1, lastA, lastB, 1);
+  let maxLine = state.totalLines || 1;
+  for (const h of anchorHits) if (h.line > maxLine) maxLine = h.line;
+  for (const b of built) for (const h of b.compareHits) if (h.line > maxLine) maxLine = h.line;
+  maxLine = Math.max(maxLine, 1);
   const padL = 10, padR = 10;
   const plotW = Math.max(1, cssW - padL - padR);
-  const xOf = (ln: number) => padL + (ln / maxLine) * plotW;
+  const xOf = (line: number) => padL + (line / maxLine) * plotW;
 
-  const topY = 16, botY = cssH - 16;
-  const bandTop = topY + 8, bandBot = botY - 8;
-  const maxGap = Math.max(1, ...pairs.map(p => p.gap));
-  const yOf = (gap: number) => bandBot - (Math.log1p(gap) / Math.log1p(maxGap)) * (bandBot - bandTop);
+  const laneCount = Math.min(built.length, 6);
+  const topY = 16, botY = cssH - 22;
+  const bandTop = topY + 8, bandBot = botY - 8 - laneCount * 3;
+  const toDisp = (gapKey: number) => (unit === 'seconds' ? gapKey / 1000 : gapKey); // ms→s, else lines
+  let maxGap = 1;
+  for (const b of built) for (const p of b.pairs) { const d = toDisp(p.gap); if (d > maxGap) maxGap = d; }
+  const yOf = (gapDisp: number) => bandBot - (Math.log1p(gapDisp) / Math.log1p(maxGap)) * (bandBot - bandTop);
   const stepFor = (len: number, cap: number) => (len <= cap ? 1 : Math.ceil(len / cap));
 
   // Lane baselines
@@ -11442,49 +11635,57 @@ function drawDistanceChart(pairs: DistPair[], aLines: number[], bLines: number[]
 
   // Anchor instance ticks (top lane)
   ctx.strokeStyle = DIST_COLOR_A;
-  ctx.globalAlpha = 0.75;
-  for (let i = 0, s = stepFor(aLines.length, 2000); i < aLines.length; i += s) {
-    const x = xOf(aLines[i]);
+  ctx.globalAlpha = 0.8;
+  for (let i = 0, s = stepFor(anchorHits.length, 2000); i < anchorHits.length; i += s) {
+    const x = xOf(anchorHits[i].line);
     ctx.beginPath(); ctx.moveTo(x, topY - 5); ctx.lineTo(x, topY + 5); ctx.stroke();
-  }
-  // Compare instance ticks (bottom lane)
-  ctx.strokeStyle = DIST_COLOR_B;
-  for (let i = 0, s = stepFor(bLines.length, 2000); i < bLines.length; i += s) {
-    const x = xOf(bLines[i]);
-    ctx.beginPath(); ctx.moveTo(x, botY - 5); ctx.lineTo(x, botY + 5); ctx.stroke();
   }
   ctx.globalAlpha = 1;
 
-  // Distance curve + dots for each anchor hit
-  const byA = pairs.slice().sort((p, q) => p.a - q.a);
-  const s = stepFor(byA.length, 2000);
-  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  let started = false;
-  for (let i = 0; i < byA.length; i += s) {
-    const x = xOf(byA[i].a), y = yOf(byA[i].gap);
-    if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
-  ctx.fillStyle = DIST_COLOR_A;
-  for (let i = 0; i < byA.length; i += s) {
-    ctx.beginPath(); ctx.arc(xOf(byA[i].a), yOf(byA[i].gap), 1.6, 0, Math.PI * 2); ctx.fill();
-  }
+  // Each compare series: instance ticks (a bottom sub-lane) + its distance curve/dots.
+  built.forEach((b, si) => {
+    const color = b.series.color;
+    const laneY = botY - (si % 6) * 3;
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.7;
+    for (let i = 0, cs = stepFor(b.compareHits.length, 2000); i < b.compareHits.length; i += cs) {
+      const x = xOf(b.compareHits[i].line);
+      ctx.beginPath(); ctx.moveTo(x, laneY - 4); ctx.lineTo(x, laneY + 2); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
 
-  // y-axis hints (top = far, bottom = near)
+    const byA = b.pairs.slice().sort((p, q) => p.a.line - q.a.line);
+    const s = stepFor(byA.length, 2000);
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.55;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < byA.length; i += s) {
+      const x = xOf(byA[i].a.line), y = yOf(toDisp(byA[i].gap));
+      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = color;
+    for (let i = 0; i < byA.length; i += s) {
+      ctx.beginPath(); ctx.arc(xOf(byA[i].a.line), yOf(toDisp(byA[i].gap)), 1.5, 0, Math.PI * 2); ctx.fill();
+    }
+  });
+
+  // y-axis hints (top = far, bottom = near) + unit tag
   ctx.fillStyle = 'rgba(255,255,255,0.5)';
   ctx.font = '9px sans-serif';
   ctx.textBaseline = 'middle';
   ctx.fillText('far', 2, bandTop + 2);
   ctx.fillText('near', 2, bandBot - 2);
 
-  distChartState = { pairsByA: byA, maxLine, padL, plotW };
+  distChartState = { pairsByA: anchorHits.map(h => ({ a: h.line })), maxLine, padL, plotW };
 
-  elements.distChartLegend.innerHTML =
-    `<span><span class="dist-dot" style="background:${DIST_COLOR_A}"></span>anchor (top) + distance dots</span>`
-    + `<span><span class="dist-dot" style="background:${DIST_COLOR_B}"></span>compare (bottom)</span>`
-    + `<span class="dist-note">x = line across file · y = gap (log scale) · click a point to jump</span>`;
+  const legend: string[] = [`<span><span class="dist-dot" style="background:${DIST_COLOR_A}"></span>anchor (top)</span>`];
+  for (const b of built) legend.push(`<span><span class="dist-dot" style="background:${b.series.color}"></span>${escapeHtml(b.series.pattern)}</span>`);
+  legend.push(`<span class="dist-note">x = line · y = gap (log, ${unit}) · click to jump to nearest anchor</span>`);
+  elements.distChartLegend.innerHTML = legend.join('');
 }
 
 // === Search Config Sessions ===
@@ -17730,6 +17931,8 @@ function init(): void {
 
   // Pattern Distance explorer (right-click → dialog)
   elements.btnDistMeasure.addEventListener('click', () => { void runDistanceMeasure(); });
+  elements.btnDistAddCompare.addEventListener('click', () => addDistCompareRow());
+  elements.btnDistAddConfigs.addEventListener('click', () => addDistSeriesFromConfigs());
   [elements.distAnchor, elements.distCompare].forEach(inp => {
     inp.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); void runDistanceMeasure(); }
