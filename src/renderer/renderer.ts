@@ -988,6 +988,7 @@ const elements = {
   searchConfigsChips: document.getElementById('search-configs-chips') as HTMLDivElement,
   searchConfigsForm: document.getElementById('search-configs-form') as HTMLDivElement,
   searchConfigsResults: document.getElementById('search-configs-results') as HTMLDivElement,
+  scOverview: document.getElementById('sc-overview') as HTMLDivElement,
   btnAddSearchConfig: document.getElementById('btn-add-search-config') as HTMLButtonElement,
   btnScExportAll: document.getElementById('btn-sc-export-all') as HTMLButtonElement,
   btnScDistance: document.getElementById('btn-sc-distance') as HTMLButtonElement,
@@ -997,6 +998,11 @@ const elements = {
   btnScDistanceCompute: document.getElementById('btn-sc-distance-compute') as HTMLButtonElement,
   btnScDistanceClose: document.getElementById('btn-sc-distance-close') as HTMLButtonElement,
   scDistanceResults: document.getElementById('sc-distance-results') as HTMLDivElement,
+  btnScRelations: document.getElementById('btn-sc-relations') as HTMLButtonElement,
+  scRelationsPanel: document.getElementById('sc-relations-panel') as HTMLDivElement,
+  scRelationsWindow: document.getElementById('sc-relations-window') as HTMLSelectElement,
+  scRelationsMatrix: document.getElementById('sc-relations-matrix') as HTMLDivElement,
+  btnScRelationsClose: document.getElementById('btn-sc-relations-close') as HTMLButtonElement,
   // Pattern Distance explorer (right-click → dialog)
   distanceModal: document.getElementById('distance-modal') as HTMLDivElement,
   distAnchor: document.getElementById('dist-anchor') as HTMLInputElement,
@@ -10778,6 +10784,28 @@ async function runSearchConfigsBatchOnce(showUiProgress = false): Promise<void> 
       });
     }
 
+    // Progressive paint: stream matched line numbers into the overview as ripgrep finds
+    // them, so the big-picture map fills in from the top of the file during the scan
+    // instead of appearing all at once at the end. Clear the configs we're re-scanning so
+    // the streamed stubs build a fresh picture; the authoritative results (with text)
+    // replace these stubs when the scan completes.
+    for (const c of toScan) state.searchConfigResults.set(c.id, []);
+    let lastStreamPaint = 0;
+    const unsubscribeChunk = window.api.onSearchConfigBatchChunk(({ configId, lines }) => {
+      const arr = state.searchConfigResults.get(configId);
+      if (!arr) return;
+      for (const ln of lines) arr.push({ lineNumber: ln, column: 0, length: 0, text: '', lineText: '' });
+      // Only repaint while this panel is actually on screen — the stubs are enough for the
+      // overview (it reads line numbers), and the list/minimap finalize at completion.
+      if (state.activeBottomTab === 'search-configs') {
+        const now = Date.now();
+        if (now - lastStreamPaint > 180) {
+          lastStreamPaint = now;
+          renderSearchConfigsOverview();
+        }
+      }
+    });
+
     try {
       const result = await window.api.searchConfigBatch(batchArgs);
       if (result.success && result.results) {
@@ -10790,6 +10818,7 @@ async function runSearchConfigsBatchOnce(showUiProgress = false): Promise<void> 
         }
       }
     } finally {
+      unsubscribeChunk();
       unsubscribeProgress?.();
       if (showUiProgress) hideProgress();
     }
@@ -10879,16 +10908,24 @@ function renderSearchConfigsChips(): void {
   container.appendChild(addBtn);
   container.appendChild(elements.btnScExportAll);
   container.appendChild(elements.btnScDistance);
+  container.appendChild(elements.btnScRelations);
 
   // Show/hide Export All button based on whether any results exist
   const hasResults = state.searchConfigs.some(c => c.enabled && (state.searchConfigResults.get(c.id)?.length || 0) > 0);
   elements.btnScExportAll.style.display = hasResults ? '' : 'none';
 
-  // Distance needs at least two enabled configs that actually have matches to compare.
+  // Distance + Relations both need at least two enabled configs that actually have matches.
   const withResults = state.searchConfigs.filter(c => c.enabled && (state.searchConfigResults.get(c.id)?.length || 0) > 0);
   elements.btnScDistance.style.display = withResults.length >= 2 ? '' : 'none';
+  elements.btnScRelations.style.display = withResults.length >= 2 ? '' : 'none';
   if (withResults.length < 2 && !elements.scDistancePanel.classList.contains('hidden')) {
     closeDistancePanel();
+  }
+  if (withResults.length < 2 && !elements.scRelationsPanel.classList.contains('hidden')) {
+    closeRelationsPanel();
+  } else if (!elements.scRelationsPanel.classList.contains('hidden')) {
+    // Live-refresh the open matrix as configs/results change (e.g. streaming finishes).
+    renderRelationsMatrix();
   }
 
   // Update badge
@@ -10899,7 +10936,157 @@ function renderSearchConfigsChips(): void {
   }
 }
 
+// ─── Search Configs overview strip ─────────────────────────────────────────
+// A compact "big picture" of where every enabled config's matches land across
+// the WHOLE file: one horizontal lane per config, painted in the config's own
+// colour (opacity ∝ local match density, log-scaled). Lanes share the same
+// x → file-position mapping, so bright columns that line up vertically across
+// lanes mark file regions where several configs fire together. Click a lane to
+// jump to the nearest match in that region; hover shows the line + local count.
+function renderSearchConfigsOverview(): void {
+  const host = elements.scOverview;
+  if (!host) return;
+
+  const configs = state.searchConfigs.filter(
+    c => c.enabled && (state.searchConfigResults.get(c.id)?.length || 0) > 0
+  );
+
+  if (configs.length === 0) {
+    host.classList.add('hidden');
+    host.innerHTML = '';
+    return;
+  }
+  host.classList.remove('hidden');
+  host.innerHTML = '';
+
+  const totalLines = Math.max(1, getTotalLines());
+  const dpr = window.devicePixelRatio || 1;
+  const LANE_H = 12;
+
+  // Shared floating tooltip for all lanes.
+  const tip = document.createElement('div');
+  tip.className = 'sc-ov-tooltip hidden';
+  host.appendChild(tip);
+
+  for (const config of configs) {
+    const results = state.searchConfigResults.get(config.id) || [];
+
+    const lane = document.createElement('div');
+    lane.className = 'sc-ov-lane';
+
+    // Legend: swatch + truncated pattern + count.
+    const label = document.createElement('div');
+    label.className = 'sc-ov-label';
+    label.title = `${config.pattern} — ${results.length.toLocaleString()} match${results.length !== 1 ? 'es' : ''}`;
+    const swatch = document.createElement('span');
+    swatch.className = 'sc-ov-swatch';
+    swatch.style.backgroundColor = config.color;
+    const txt = document.createElement('span');
+    txt.className = 'sc-ov-label-text';
+    txt.textContent = config.pattern;
+    const cnt = document.createElement('span');
+    cnt.className = 'sc-ov-label-count';
+    cnt.textContent = results.length.toLocaleString();
+    label.appendChild(swatch);
+    label.appendChild(txt);
+    label.appendChild(cnt);
+
+    // Canvas strip (fills the remaining lane width via flex:1).
+    const canvas = document.createElement('canvas');
+    canvas.className = 'sc-ov-canvas';
+    canvas.style.height = `${LANE_H}px`;
+
+    lane.appendChild(label);
+    lane.appendChild(canvas);
+    host.appendChild(lane);
+
+    // Positions in *display* space (respect an active filter, mirroring the
+    // main minimap) plus the raw line to navigate to.
+    const pts = results
+      .map(r => {
+        const di = getFilteredDisplayIndex(r.lineNumber);
+        return { pos: di >= 0 ? di : r.lineNumber, raw: r.lineNumber };
+      })
+      .sort((a, b) => a.pos - b.pos);
+
+    // Defer the actual paint until layout has given the canvas a real width.
+    const paint = () => {
+      const stripW = Math.max(40, Math.floor(canvas.clientWidth));
+      const cw = Math.max(1, Math.floor(stripW * dpr));
+      const ch = Math.max(1, Math.floor(LANE_H * dpr));
+      canvas.width = cw;
+      canvas.height = ch;
+
+      const counts = new Uint32Array(cw);
+      let maxCount = 1;
+      for (const p of pts) {
+        const x = Math.min(cw - 1, Math.max(0, Math.floor((p.pos / totalLines) * cw)));
+        counts[x]++;
+        if (counts[x] > maxCount) maxCount = counts[x];
+      }
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.fillStyle = '#14141a';
+      ctx.fillRect(0, 0, cw, ch);
+      for (let x = 0; x < cw; x++) {
+        const n = counts[x];
+        if (n === 0) continue;
+        // Log scale + 40% floor so a single hit still reads clearly.
+        const a = 0.4 + 0.6 * (Math.log1p(n) / Math.log1p(maxCount));
+        ctx.fillStyle = hexToRgba(config.color, a);
+        ctx.fillRect(x, 0, 1, ch);
+      }
+    };
+    // clientWidth is 0 until laid out; rAF ensures flex has resolved.
+    requestAnimationFrame(paint);
+
+    // Nearest match (binary search over sorted display positions) for a given
+    // fractional x across the strip.
+    const nearestAt = (frac: number): { pos: number; raw: number } | null => {
+      if (pts.length === 0) return null;
+      const target = frac * totalLines;
+      let lo = 0, hi = pts.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (pts[mid].pos < target) lo = mid + 1; else hi = mid;
+      }
+      let best = pts[lo];
+      if (lo > 0 && Math.abs(pts[lo - 1].pos - target) < Math.abs(best.pos - target)) best = pts[lo - 1];
+      return best;
+    };
+
+    canvas.style.cursor = 'pointer';
+    canvas.addEventListener('click', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width === 0) return;
+      const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const hit = nearestAt(frac);
+      if (!hit) return;
+      goToLine(hit.pos, hit.raw);
+      renderVisibleLines();
+    });
+    canvas.addEventListener('mousemove', (e) => {
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width === 0) return;
+      const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const hit = nearestAt(frac);
+      if (!hit) { tip.classList.add('hidden'); return; }
+      tip.textContent = `${config.pattern} · line ${hit.raw + 1}`;
+      tip.classList.remove('hidden');
+      const hostRect = host.getBoundingClientRect();
+      let left = e.clientX - hostRect.left + 8;
+      // keep the tooltip inside the host horizontally
+      left = Math.min(left, hostRect.width - tip.offsetWidth - 6);
+      tip.style.left = `${Math.max(2, left)}px`;
+      tip.style.top = `${e.clientY - hostRect.top - 22}px`;
+    });
+    canvas.addEventListener('mouseleave', () => tip.classList.add('hidden'));
+  }
+}
+
 async function renderSearchConfigsResults(): Promise<void> {
+  renderSearchConfigsOverview();
   const list = elements.searchConfigsResults;
   const enabledConfigs = state.searchConfigs.filter(c => c.enabled);
 
@@ -11163,6 +11350,8 @@ function distanceConfigsWithResults(): SearchConfigDef[] {
 function openDistancePanel(): void {
   const withResults = distanceConfigsWithResults();
   if (withResults.length < 2) { showToast('Need two configs with matches to measure distance'); return; }
+  // Distance + Relations share the chip-row space — only one open at a time.
+  if (!elements.scRelationsPanel.classList.contains('hidden')) closeRelationsPanel();
 
   const optionsHtml = withResults.map(c => {
     const n = state.searchConfigResults.get(c.id)?.length || 0;
@@ -11295,6 +11484,101 @@ function computeAndRenderDistance(): void {
       renderVisibleLines();
     });
   });
+}
+
+// ─── Relations matrix ──────────────────────────────────────────────────────
+// An all-pairs "how do these patterns relate" grid, computed entirely from the
+// cached match line numbers (no file scan → instant regardless of file size).
+// Cell (row=A, col=B) = the share of A's hits that have a B-hit within the chosen
+// line window — i.e. "when A fires, how often is B right there?". It's directional
+// on purpose (A-near-B ≠ B-near-A). Click a cell to open the pairwise Distance
+// view for that pair; the diagonal shows each pattern's own match count.
+function openRelationsPanel(): void {
+  const withResults = distanceConfigsWithResults();
+  if (withResults.length < 2) { showToast('Need two configs with matches to see relations'); return; }
+  // The two panels share the chip row's space — only one open at a time.
+  if (!elements.scDistancePanel.classList.contains('hidden')) closeDistancePanel();
+  elements.scRelationsPanel.classList.remove('hidden');
+  renderRelationsMatrix();
+}
+
+function closeRelationsPanel(): void {
+  elements.scRelationsPanel.classList.add('hidden');
+  elements.scRelationsMatrix.innerHTML = '';
+}
+
+function renderRelationsMatrix(): void {
+  const configs = distanceConfigsWithResults();
+  if (configs.length < 2) {
+    elements.scRelationsMatrix.innerHTML = '<div class="sc-distance-hint">Need two configs with matches.</div>';
+    return;
+  }
+
+  const windowW = parseInt(elements.scRelationsWindow.value, 10) || 0;
+
+  // Sort each config's match lines once, shared across every pair.
+  const linesById = new Map<string, number[]>();
+  for (const c of configs) {
+    linesById.set(c.id, (state.searchConfigResults.get(c.id) || []).map(m => m.lineNumber).sort((x, y) => x - y));
+  }
+
+  // Directional strength: fraction of A's hits whose nearest B is within windowW lines.
+  const strength = (aId: string, bId: string): number => {
+    const a = linesById.get(aId)!;
+    const b = linesById.get(bId)!;
+    if (a.length === 0 || b.length === 0) return 0;
+    const pairs = nearestLineGaps(a, b);
+    if (pairs.length === 0) return 0;
+    let near = 0;
+    for (const p of pairs) if (p.gap <= windowW) near++;
+    return near / pairs.length;
+  };
+
+  const dot = (color: string) => `<span class="sc-rel-dot" style="background:${color}"></span>`;
+  const parts: string[] = [];
+  parts.push(`<div class="sc-rel-grid" style="grid-template-columns: minmax(84px, 1.3fr) repeat(${configs.length}, minmax(44px, 1fr));">`);
+
+  // Corner + column headers.
+  parts.push(`<div class="sc-rel-cell sc-rel-head sc-rel-corner-cell"><span class="sc-rel-corner">A&darr; B&rarr;</span></div>`);
+  for (const c of configs) {
+    parts.push(`<div class="sc-rel-cell sc-rel-head sc-rel-col-head">${dot(c.color)}<span class="sc-rel-head-text" title="${escapeHtml(c.pattern)}">${escapeHtml(c.pattern)}</span></div>`);
+  }
+
+  for (const rowC of configs) {
+    parts.push(`<div class="sc-rel-cell sc-rel-head sc-rel-row-head">${dot(rowC.color)}<span class="sc-rel-head-text" title="${escapeHtml(rowC.pattern)}">${escapeHtml(rowC.pattern)}</span></div>`);
+    for (const colC of configs) {
+      if (rowC.id === colC.id) {
+        const n = linesById.get(rowC.id)!.length;
+        parts.push(`<div class="sc-rel-cell sc-rel-diag"><span class="sc-rel-self">${n.toLocaleString()}</span></div>`);
+        continue;
+      }
+      const s = strength(rowC.id, colC.id);
+      const pct = Math.round(s * 100);
+      const bg = `rgba(90,160,255,${(0.06 + 0.74 * s).toFixed(3)})`;
+      parts.push(`<div class="sc-rel-cell sc-rel-data" data-a="${escapeHtml(rowC.id)}" data-b="${escapeHtml(colC.id)}" style="background:${bg}" title="When ${escapeHtml(rowC.pattern)} fires, ${escapeHtml(colC.pattern)} is within ${windowW} line${windowW === 1 ? '' : 's'} ${pct}% of the time — click to explore">${pct}<span class="sc-rel-pct">%</span></div>`);
+    }
+  }
+  parts.push('</div>');
+  parts.push(`<div class="sc-rel-legend">Cell = when the <b>row</b> pattern fires, the <b>column</b> pattern is within <b>${windowW === 0 ? 'the same line' : windowW + ' lines'}</b>. Darker = tighter. Diagonal = that pattern's match count. Click a cell for the full pairwise breakdown.</div>`);
+
+  elements.scRelationsMatrix.innerHTML = parts.join('');
+
+  elements.scRelationsMatrix.querySelectorAll('.sc-rel-data').forEach(el => {
+    el.addEventListener('click', () => {
+      const aId = (el as HTMLElement).dataset.a || '';
+      const bId = (el as HTMLElement).dataset.b || '';
+      openDistanceForPair(aId, bId);
+    });
+  });
+}
+
+// Open the pairwise Distance panel pre-set to a specific A→B pair (relations click-through).
+function openDistanceForPair(aId: string, bId: string): void {
+  closeRelationsPanel();
+  openDistancePanel();
+  elements.scDistanceA.value = aId;
+  elements.scDistanceB.value = bId;
+  computeAndRenderDistance();
 }
 
 // === Pattern Distance Explorer (right-click → dialog) ===
@@ -17924,10 +18208,23 @@ function init(): void {
   elements.btnAddSearchConfig.addEventListener('click', () => showSearchConfigForm());
   elements.btnScExportAll.addEventListener('click', exportAllSearchConfigResults);
   elements.btnScDistance.addEventListener('click', openDistancePanel);
+  // Repaint the config overview strip at the correct pixel width when the panel
+  // is resized (window or bottom-panel drag), but only while it's on screen.
+  if (elements.scOverview) {
+    const ro = new ResizeObserver(() => {
+      if (state.activeBottomTab === 'search-configs' && !elements.scOverview.classList.contains('hidden')) {
+        renderSearchConfigsOverview();
+      }
+    });
+    ro.observe(elements.scOverview);
+  }
   elements.btnScDistanceClose.addEventListener('click', closeDistancePanel);
   elements.btnScDistanceCompute.addEventListener('click', computeAndRenderDistance);
   elements.scDistanceA.addEventListener('change', computeAndRenderDistance);
   elements.scDistanceB.addEventListener('change', computeAndRenderDistance);
+  elements.btnScRelations.addEventListener('click', openRelationsPanel);
+  elements.btnScRelationsClose.addEventListener('click', closeRelationsPanel);
+  elements.scRelationsWindow.addEventListener('change', renderRelationsMatrix);
 
   // Pattern Distance explorer (right-click → dialog)
   elements.btnDistMeasure.addEventListener('click', () => { void runDistanceMeasure(); });
