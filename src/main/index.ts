@@ -3343,7 +3343,6 @@ ipcMain.handle(IPC.SEARCH_CONFIG_BATCH, async (_, configs: Array<{ id: string; p
   if (!handler) return { success: false, error: 'No file open' };
 
   const results: Record<string, Array<{ lineNumber: number; column: number; length: number; lineText: string; displayIndex?: number }>> = {};
-  const totalConfigs = configs.length;
 
   // Build filter lookup once (shared across all configs)
   const filteredIndices = getFilteredLines();
@@ -3355,58 +3354,50 @@ ipcMain.handle(IPC.SEARCH_CONFIG_BATCH, async (_, configs: Array<{ id: string; p
     filteredIndices.forEach((lineNum, idx) => lineToFilteredIndex!.set(lineNum, idx));
   }
 
-  // Run every config concurrently instead of one-after-another. Each handler.search()
-  // opens its own fd / spawns its own ripgrep process, so they don't share mutable
-  // state and are safe to run in parallel. On a 24M-line file this turns N sequential
-  // full-file scans into N overlapping ones — the difference between "config search is
-  // frozen" and near-instant with bundled ripgrep.
-  let completed = 0;
-  await Promise.all(configs.map(async (cfg) => {
-    try {
-      const searchOpts: SearchOptions = {
-        pattern: cfg.pattern,
-        isRegex: cfg.isRegex,
-        isWildcard: false,
-        matchCase: cfg.matchCase,
-        wholeWord: cfg.wholeWord,
-      };
+  // ONE combined ripgrep pass over the union of all config patterns instead of N
+  // concurrent full-file scans. Spawning a rg process per config looks parallel but a
+  // single rg already saturates disk + cores, so N of them just contend and re-read the
+  // file N times. searchMulti unions the patterns (multiple `-e` branches), reads the
+  // file once, and attributes each matching line back to the individual configs — a
+  // roughly N× win on big files. It streams per-config running counts for the live chip
+  // tickers, and falls back to the per-config path for CR-only files / no ripgrep.
+  let raw: Record<string, Array<{ lineNumber: number; column: number; length: number; lineText: string }>>;
+  try {
+    raw = await handler.searchMulti(configs, (counts, overallPercent) => {
+      const percent = Math.round(overallPercent);
+      for (const [configId, matchCount] of Object.entries(counts)) {
+        mainWindow?.webContents.send(IPC.SEARCH_CONFIG_BATCH_PROGRESS, { percent, configId, matchCount });
+      }
+    }, { cancelled: false });
+  } catch (error) {
+    console.error('Search config batch error:', error);
+    return { success: false, error: String(error) };
+  }
 
-      const matches = await handler.search(searchOpts, (percent, matchCount) => {
-        // Overall bar = configs already finished + this one's fraction (approximate under parallelism).
-        const overallPercent = Math.round(((completed + percent / 100) / totalConfigs) * 100);
-        // matchCount is the running per-config total (ripgrep reports it every ~100ms),
-        // so the renderer can tick each chip's found-count up live without extra work.
-        mainWindow?.webContents.send(IPC.SEARCH_CONFIG_BATCH_PROGRESS, { percent: overallPercent, configId: cfg.id, matchCount });
-      }, { cancelled: false });
-
-      // Keep original lineNumber, add displayIndex when filtered
-      // (matches the same pattern as the regular SEARCH handler)
-      if (filteredSet && lineToFilteredIndex) {
-        results[cfg.id] = matches
-          .filter(m => filteredSet!.has(m.lineNumber))
-          .map(m => ({
-            lineNumber: m.lineNumber,
-            column: m.column,
-            length: m.length,
-            lineText: m.lineText,
-            displayIndex: lineToFilteredIndex!.get(m.lineNumber),
-          }));
-      } else {
-        results[cfg.id] = matches.map(m => ({
+  // Keep original lineNumber, add displayIndex when a filter is active
+  // (matches the same pattern as the regular SEARCH handler).
+  for (const cfg of configs) {
+    const matches = raw[cfg.id] || [];
+    if (filteredSet && lineToFilteredIndex) {
+      results[cfg.id] = matches
+        .filter(m => filteredSet!.has(m.lineNumber))
+        .map(m => ({
           lineNumber: m.lineNumber,
           column: m.column,
           length: m.length,
           lineText: m.lineText,
+          displayIndex: lineToFilteredIndex!.get(m.lineNumber),
         }));
-      }
-    } catch (error) {
-      console.error(`Search config batch error for ${cfg.id}:`, error);
-      results[cfg.id] = [];
-    } finally {
-      completed++;
-      mainWindow?.webContents.send(IPC.SEARCH_CONFIG_BATCH_PROGRESS, { percent: Math.round((completed / totalConfigs) * 100), configId: cfg.id, matchCount: results[cfg.id]?.length ?? 0 });
+    } else {
+      results[cfg.id] = matches.map(m => ({
+        lineNumber: m.lineNumber,
+        column: m.column,
+        length: m.length,
+        lineText: m.lineText,
+      }));
     }
-  }));
+    mainWindow?.webContents.send(IPC.SEARCH_CONFIG_BATCH_PROGRESS, { percent: 100, configId: cfg.id, matchCount: results[cfg.id].length });
+  }
 
   return { success: true, results };
 });
