@@ -10687,6 +10687,20 @@ let searchConfigBatchRunning = false;
 let searchConfigBatchPending = false;
 let searchConfigBatchPendingShowUi = false;
 
+// Incremental scan bookkeeping. A full-file search is the expensive part, so we avoid
+// re-running it for configs that haven't changed. Each config's last-scanned "signature"
+// (pattern + flags + filter generation) is remembered; on the next run we only send the
+// configs whose signature changed (new config, edited pattern, or a filter change that
+// invalidates cached line/displayIndex mappings). Toggling a cached, unchanged config
+// back on then costs ZERO file scans — it just re-renders the results we already have.
+const searchConfigScanSignatures = new Map<string, string>();
+// Bumped whenever the active filter changes (applyFilter/clearFilter) so every config's
+// signature changes and results get recomputed against the new filtered set.
+let searchConfigFilterGeneration = 0;
+function searchConfigSignature(c: { pattern: string; isRegex: boolean; matchCase: boolean; wholeWord: boolean }): string {
+  return `${searchConfigFilterGeneration}|${c.pattern}|${c.isRegex ? 1 : 0}|${c.matchCase ? 1 : 0}|${c.wholeWord ? 1 : 0}`;
+}
+
 async function runSearchConfigsBatch(showUiProgress = false): Promise<void> {
   if (searchConfigBatchRunning) {
     searchConfigBatchPending = true;
@@ -10711,61 +10725,81 @@ async function runSearchConfigsBatchOnce(showUiProgress = false): Promise<void> 
   const enabledConfigs = state.searchConfigs.filter(c => c.enabled);
   if (enabledConfigs.length === 0) {
     state.searchConfigResults.clear();
+    searchConfigScanSignatures.clear();
     await renderSearchConfigsResults();
     renderVisibleLines();
     return;
   }
 
-  const batchArgs = enabledConfigs.map(c => ({
-    id: c.id,
-    pattern: c.pattern,
-    isRegex: c.isRegex,
-    matchCase: c.matchCase,
-    wholeWord: c.wholeWord,
-  }));
+  // Only (re)scan configs that actually changed since their last scan. A config needs a
+  // scan when we have no cached results for it, or its signature (pattern/flags/filter
+  // generation) differs. Unchanged configs keep their existing results untouched — so
+  // adding a 3rd config scans ONE pattern, not all three, and toggling a cached config
+  // on scans nothing at all. This is the main fix for "search configs eat the laptop":
+  // the file is no longer re-read for configs whose results we already have.
+  const toScan = enabledConfigs.filter(c =>
+    !state.searchConfigResults.has(c.id) ||
+    searchConfigScanSignatures.get(c.id) !== searchConfigSignature(c)
+  );
 
-  // The main process already emits SEARCH_CONFIG_BATCH_PROGRESS (overall % across all
-  // configs) — subscribe so the run shows feedback instead of freezing silently. The
-  // event also carries a running per-config matchCount (ripgrep reports it every ~100ms),
-  // so we tick each chip's found-count up live AND show a running total in the progress
-  // text (visible even behind the big-file overlay that covers the chips).
-  let unsubscribeProgress: (() => void) | undefined;
-  if (showUiProgress) {
-    const label = enabledConfigs.length === 1
-      ? 'Searching config…'
-      : `Searching ${enabledConfigs.length} configs…`;
-    showProgress(`${label} 0%`);
-    const liveCounts = new Map<string, number>();
-    unsubscribeProgress = window.api.onSearchConfigBatchProgress(({ percent, configId, matchCount }) => {
-      if (configId && typeof matchCount === 'number') {
-        liveCounts.set(configId, matchCount);
-        updateSearchConfigChipLiveCount(configId, matchCount);
-      }
-      const total = Array.from(liveCounts.values()).reduce((a, b) => a + b, 0);
-      updateProgress(percent);
-      updateProgressText(total > 0 ? `${label} ${percent}% · ${total.toLocaleString()} found` : `${label} ${percent}%`);
-    });
-  }
+  if (toScan.length > 0) {
+    const batchArgs = toScan.map(c => ({
+      id: c.id,
+      pattern: c.pattern,
+      isRegex: c.isRegex,
+      matchCase: c.matchCase,
+      wholeWord: c.wholeWord,
+    }));
 
-  try {
-    const result = await window.api.searchConfigBatch(batchArgs);
-    if (result.success && result.results) {
-      for (const [configId, matches] of Object.entries(result.results)) {
-        state.searchConfigResults.set(configId, matches as SearchResult[]);
-      }
-      // Drop results only for configs that no longer EXIST (deleted). Use live state —
-      // not the enabledConfigs snapshot taken at the top of this run — so a config added
-      // or toggled on mid-flight keeps its results instead of being wiped back to 0.
-      const liveIds = new Set(state.searchConfigs.map(c => c.id));
-      for (const key of state.searchConfigResults.keys()) {
-        if (!liveIds.has(key)) {
-          state.searchConfigResults.delete(key);
+    // The main process emits SEARCH_CONFIG_BATCH_PROGRESS (overall % across the scanned
+    // configs) — subscribe so the run shows feedback instead of freezing silently. The
+    // event also carries a running per-config matchCount (ripgrep reports it every
+    // ~100ms), so we tick each chip's found-count up live AND show a running total in the
+    // progress text (visible even behind the big-file overlay that covers the chips).
+    let unsubscribeProgress: (() => void) | undefined;
+    if (showUiProgress) {
+      const label = toScan.length === 1
+        ? 'Searching config…'
+        : `Searching ${toScan.length} configs…`;
+      showProgress(`${label} 0%`);
+      const liveCounts = new Map<string, number>();
+      unsubscribeProgress = window.api.onSearchConfigBatchProgress(({ percent, configId, matchCount }) => {
+        if (configId && typeof matchCount === 'number') {
+          liveCounts.set(configId, matchCount);
+          updateSearchConfigChipLiveCount(configId, matchCount);
+        }
+        const total = Array.from(liveCounts.values()).reduce((a, b) => a + b, 0);
+        updateProgress(percent);
+        updateProgressText(total > 0 ? `${label} ${percent}% · ${total.toLocaleString()} found` : `${label} ${percent}%`);
+      });
+    }
+
+    try {
+      const result = await window.api.searchConfigBatch(batchArgs);
+      if (result.success && result.results) {
+        for (const [configId, matches] of Object.entries(result.results)) {
+          state.searchConfigResults.set(configId, matches as SearchResult[]);
+        }
+        // Remember what each scanned config was scanned with, so an unchanged re-run skips it.
+        for (const c of toScan) {
+          searchConfigScanSignatures.set(c.id, searchConfigSignature(c));
         }
       }
+    } finally {
+      unsubscribeProgress?.();
+      if (showUiProgress) hideProgress();
     }
-  } finally {
-    unsubscribeProgress?.();
-    if (showUiProgress) hideProgress();
+  }
+
+  // Drop results/signatures only for configs that no longer EXIST (deleted). Use live
+  // state — not the enabledConfigs snapshot taken at the top of this run — so a config
+  // added or toggled on mid-flight keeps its results instead of being wiped back to 0.
+  const liveIds = new Set(state.searchConfigs.map(c => c.id));
+  for (const key of state.searchConfigResults.keys()) {
+    if (!liveIds.has(key)) state.searchConfigResults.delete(key);
+  }
+  for (const key of searchConfigScanSignatures.keys()) {
+    if (!liveIds.has(key)) searchConfigScanSignatures.delete(key);
   }
 
   renderSearchConfigsChips(); // Update counts
@@ -11058,6 +11092,7 @@ async function loadSearchConfigs(): Promise<void> {
     state.searchConfigs = [];
   }
   state.searchConfigResults.clear();
+  searchConfigScanSignatures.clear();
   renderSearchConfigsChips();
 
   // Auto-run batch if any enabled configs
@@ -13290,6 +13325,10 @@ function getFilteredDisplayIndex(lineNumber: number): number {
 }
 
 async function applyFilter(providedConfig?: FilterConfig): Promise<void> {
+  // Filtering changes the visible line set (and thus each config match's displayIndex),
+  // so invalidate the incremental-scan cache — the next config run recomputes against
+  // the new filtered set instead of reusing stale mappings.
+  searchConfigFilterGeneration++;
   let config: FilterConfig;
 
   if (providedConfig) {
@@ -13353,6 +13392,9 @@ async function applyFilter(providedConfig?: FilterConfig): Promise<void> {
 }
 
 async function clearFilter(): Promise<void> {
+  // Match set changes back to the full file — invalidate the incremental-scan cache
+  // so config results recompute against unfiltered line numbers (see applyFilter).
+  searchConfigFilterGeneration++;
   state.isFiltered = false;
   state.filteredLines = null;
   state.filteredLineNumbers = null;
