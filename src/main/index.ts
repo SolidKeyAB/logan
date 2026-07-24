@@ -3935,6 +3935,48 @@ ipcMain.handle('read-file-content', async (_, filePath: string) => {
   }
 });
 
+// Streams a (possibly huge) line range to an already-open file descriptor in bounded
+// batches, so we never build one giant string — V8 caps strings at ~512MB and a large
+// "save range" would otherwise throw `RangeError: Invalid string length`. When a filter
+// is active, `filteredRange` holds the visible line numbers to emit; otherwise the
+// contiguous [startLine..endLine] range is read via getLines. Each line is written
+// followed by '\n'. Returns the number of lines written.
+const SAVE_RANGE_READ_BATCH = 20000;
+const SAVE_RANGE_FLUSH_CHARS = 8 * 1024 * 1024; // flush the buffer well before any string-size limits
+function streamLineBodiesToFd(
+  fd: number,
+  handler: NonNullable<ReturnType<typeof getFileHandler>>,
+  startLine: number,
+  endLine: number,
+  filteredRange: number[] | null,
+  columnConfig?: ColumnConfig,
+): number {
+  let count = 0;
+  let buf = '';
+  const flush = () => { if (buf) { fs.writeSync(fd, buf); buf = ''; } };
+  const emit = (text: string) => {
+    buf += text + '\n';
+    count++;
+    if (buf.length >= SAVE_RANGE_FLUSH_CHARS) flush();
+  };
+  if (filteredRange) {
+    for (let i = 0; i < filteredRange.length; i++) {
+      const [line] = handler.getLines(filteredRange[i], 1);
+      if (line) emit(filterLineToVisibleColumns(line.text, columnConfig));
+      if ((i & 1023) === 1023) flush();
+    }
+  } else {
+    const total = endLine - startLine + 1;
+    for (let off = 0; off < total; off += SAVE_RANGE_READ_BATCH) {
+      const batch = handler.getLines(startLine + off, Math.min(SAVE_RANGE_READ_BATCH, total - off));
+      for (const line of batch) emit(filterLineToVisibleColumns(line.text, columnConfig));
+      flush();
+    }
+  }
+  flush();
+  return count;
+}
+
 // === Save Selected Lines ===
 
 ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: number, columnConfig?: ColumnConfig) => {
@@ -3942,23 +3984,16 @@ ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: numb
   if (!handler) return { success: false, error: 'No file open' };
 
   try {
-    // Get the lines - respect filter if active
+    // Plan which source line numbers to emit, respecting an active filter. The lines are
+    // streamed to disk in bounded batches (streamLineBodiesToFd) rather than materialized
+    // into one big array/string, so a huge range can't overflow V8's ~512MB string cap.
     const filteredIndices = getFilteredLines();
-    let lines;
-    if (filteredIndices) {
-      // Filter is active - only fetch visible lines within the range
-      const visibleLineNumbers = filteredIndices.filter(ln => ln >= startLine && ln <= endLine);
-      lines = [];
-      for (const ln of visibleLineNumbers) {
-        const [line] = handler.getLines(ln, 1);
-        if (line) lines.push(line);
-      }
-    } else {
-      const count = endLine - startLine + 1;
-      lines = handler.getLines(startLine, count);
-    }
+    const filteredRange: number[] | null = filteredIndices
+      ? filteredIndices.filter(ln => ln >= startLine && ln <= endLine)
+      : null;
+    const plannedCount = filteredRange ? filteredRange.length : Math.max(0, endLine - startLine + 1);
 
-    if (lines.length === 0) {
+    if (plannedCount === 0) {
       return { success: false, error: 'No lines to save' };
     }
 
@@ -3979,13 +4014,19 @@ ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: numb
     const filename = `${timestamp}.log`;
     const filePath = path.join(selectedDir, filename);
 
-    // Write lines to file, respecting column visibility
-    const content = lines.map(l => filterLineToVisibleColumns(l.text, columnConfig)).join('\n');
-    fs.writeFileSync(filePath, content, 'utf-8');
+    // Stream the range to disk in bounded batches (huge ranges would overflow the ~512MB
+    // string cap if joined into one string), respecting column visibility.
+    const fd = fs.openSync(filePath, 'w');
+    let lineCount: number;
+    try {
+      lineCount = streamLineBodiesToFd(fd, handler, startLine, endLine, filteredRange, columnConfig);
+    } finally {
+      fs.closeSync(fd);
+    }
 
     if (currentFilePath) logActivity(currentFilePath, 'lines_saved', { startLine, endLine });
 
-    return { success: true, filePath, lineCount: lines.length };
+    return { success: true, filePath, lineCount };
   } catch (error) {
     return { success: false, error: String(error) };
   }
@@ -4115,23 +4156,16 @@ ipcMain.handle('save-to-notes', async (
   if (!handler) return { success: false, error: 'No file open' };
 
   try {
-    // Get the lines - respect filter if active
+    // Plan which source line numbers to emit, respecting an active filter. The lines are
+    // streamed to disk in bounded batches (streamLineBodiesToFd) rather than materialized
+    // into one big array/string, so a huge range can't overflow V8's ~512MB string cap.
     const filteredIndices = getFilteredLines();
-    let lines;
-    if (filteredIndices) {
-      // Filter is active - only fetch visible lines within the range
-      const visibleLineNumbers = filteredIndices.filter(ln => ln >= startLine && ln <= endLine);
-      lines = [];
-      for (const ln of visibleLineNumbers) {
-        const [line] = handler.getLines(ln, 1);
-        if (line) lines.push(line);
-      }
-    } else {
-      const count = endLine - startLine + 1;
-      lines = handler.getLines(startLine, count);
-    }
+    const filteredRange: number[] | null = filteredIndices
+      ? filteredIndices.filter(ln => ln >= startLine && ln <= endLine)
+      : null;
+    const plannedCount = filteredRange ? filteredRange.length : Math.max(0, endLine - startLine + 1);
 
-    if (lines.length === 0) {
+    if (plannedCount === 0) {
       return { success: false, error: 'No lines to save' };
     }
 
@@ -4166,62 +4200,67 @@ ipcMain.handle('save-to-notes', async (
       isNewFile = true;
     }
 
-    // Build content
-    let content = '';
-
-    if (isNewFile) {
-      // Add header for new file
-      content = [
-        separator,
-        'LOGAN Notes',
-        `Source: ${fileInfo.path}`,
-        `Created: ${timestamp}`,
-        separator,
-        '',
-      ].join('\n');
-    }
-
-    // Build the note entry
+    // Header block (new file only) and the per-entry header line.
+    const header = isNewFile
+      ? [separator, 'LOGAN Notes', `Source: ${fileInfo.path}`, `Created: ${timestamp}`, separator, ''].join('\n')
+      : '';
     const noteDesc = note ? ` | ${note}` : '';
-    const newEntry = [
-      '',
-      `--- [${timestamp}] Lines ${startLine + 1}-${endLine + 1}${noteDesc} ---`,
-      ...lines.map(l => filterLineToVisibleColumns(l.text, columnConfig)),
-      '',
-    ].join('\n');
+    const entryHeader = `--- [${timestamp}] Lines ${startLine + 1}-${endLine + 1}${noteDesc} ---`;
+
+    // Stream the entry to disk. Reproduces exactly what
+    // `['', entryHeader, ...lines, ''].join('\n')` built — a leading blank line, the
+    // header, every line, and a trailing newline — but the line bodies go out in bounded
+    // batches so a million-line range no longer throws "Invalid string length".
+    let emitted = 0;
+    const writeEntry = (fd: number) => {
+      fs.writeSync(fd, `\n${entryHeader}\n`);
+      emitted = streamLineBodiesToFd(fd, handler, startLine, endLine, filteredRange, columnConfig);
+    };
 
     if (isNewFile) {
-      content += newEntry;
-      fs.writeFileSync(notesFilePath, content, 'utf-8');
+      const fd = fs.openSync(notesFilePath, 'w');
+      try {
+        if (header) fs.writeSync(fd, header);
+        writeEntry(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
     } else {
-      // Insert in line-number order among existing snippets
+      // Insert in line-number order among existing snippets.
       const existing = fs.readFileSync(notesFilePath, 'utf-8');
       const entryPattern = /\n--- \[.*?\] Lines (\d+)-/g;
-      // Collect positions and start-line numbers of existing entries
       const entries: { pos: number; line: number }[] = [];
       let match;
       while ((match = entryPattern.exec(existing)) !== null) {
         entries.push({ pos: match.index, line: parseInt(match[1], 10) });
       }
 
-      // Find insertion point: before the first entry whose start line > our start line
+      // Insert before the first existing entry whose start line is larger than ours.
       const newStartLine1 = startLine + 1; // 1-indexed as in the header
       let insertPos = -1;
       for (const e of entries) {
-        if (e.line > newStartLine1) {
-          insertPos = e.pos;
-          break;
-        }
+        if (e.line > newStartLine1) { insertPos = e.pos; break; }
       }
 
       if (insertPos === -1) {
-        // All existing entries have smaller line numbers — append at end
-        fs.appendFileSync(notesFilePath, newEntry, 'utf-8');
+        // All existing entries have smaller line numbers — stream straight onto the end.
+        const fd = fs.openSync(notesFilePath, 'a');
+        try { writeEntry(fd); } finally { fs.closeSync(fd); }
       } else {
-        // Insert before the entry with larger line number
+        // Insert mid-file — stream before + new entry + after into a temp file, then
+        // atomically replace, so the new entry is still written in bounded chunks.
         const before = existing.substring(0, insertPos);
         const after = existing.substring(insertPos);
-        fs.writeFileSync(notesFilePath, before + newEntry + after, 'utf-8');
+        const tmpPath = `${notesFilePath}.tmp-${process.pid}`;
+        const fd = fs.openSync(tmpPath, 'w');
+        try {
+          if (before) fs.writeSync(fd, before);
+          writeEntry(fd);
+          if (after) fs.writeSync(fd, after);
+        } finally {
+          fs.closeSync(fd);
+        }
+        fs.renameSync(tmpPath, notesFilePath);
       }
     }
 
@@ -4233,7 +4272,7 @@ ipcMain.handle('save-to-notes', async (
     return {
       success: true,
       filePath: notesFilePath,
-      lineCount: lines.length,
+      lineCount: emitted,
       isNewFile,
     };
   } catch (error) {
