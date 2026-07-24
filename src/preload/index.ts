@@ -90,6 +90,7 @@ const IPC = {
   CONNECTION_UPDATE: 'connection-update',
   // Trends notebook
   TREND_DISCOVER_FIELDS: 'trend-discover-fields',
+  TREND_DISCOVER_AXES: 'trend-discover-axes',
   TREND_SERIES: 'trend-series',
   TREND_SIGNAL_SERIES: 'trend-signal-series',
   TREND_TRANSITIONS: 'trend-transitions',
@@ -733,7 +734,9 @@ const api = {
   // Trends notebook
   trendDiscoverFields: (options?: { startLine?: number; endLine?: number; sampleSize?: number }): Promise<{ success: boolean; fields?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.TREND_DISCOVER_FIELDS, options),
-  trendSeries: (options: { field: string; startLine?: number; endLine?: number; bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string }): Promise<{ success: boolean; [key: string]: any }> =>
+  trendDiscoverAxes: (options?: { startLine?: number; endLine?: number; sampleSize?: number }): Promise<{ success: boolean; axes?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.TREND_DISCOVER_AXES, options),
+  trendSeries: (options: { field: string; startLine?: number; endLine?: number; bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string; xAxis?: any }): Promise<{ success: boolean; [key: string]: any }> =>
     ipcRenderer.invoke(IPC.TREND_SERIES, options),
   signalSeries: (options: { fields: string[]; xField?: string; startLine?: number; endLine?: number; maxPoints?: number }): Promise<{ success: boolean; [key: string]: any }> =>
     ipcRenderer.invoke(IPC.TREND_SIGNAL_SERIES, options),
