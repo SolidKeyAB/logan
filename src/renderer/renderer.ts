@@ -10599,10 +10599,18 @@ function hideSearchConfigForm(): void {
 async function addSearchConfig(): Promise<void> {
   const pattern = elements.scPatternInput.value.trim();
   if (!pattern) return;
+  // Capture the edit target and hide the form synchronously BEFORE any await. Save is
+  // wired to both the button click and Enter, so a fast double-tap could otherwise re-enter
+  // this handler with the same pattern and mint a second config (a "cloned" chip) plus a
+  // second batch search. Clearing + hiding the form first makes the second call read an
+  // empty pattern and bail.
+  const editingId = editingSearchConfigId;
   searchConfigHistory?.add(pattern);
+  hideSearchConfigForm();
+  elements.scPatternInput.value = '';
 
   const config: SearchConfigDef = {
-    id: editingSearchConfigId || `sc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    id: editingId || `sc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
     pattern,
     isRegex: elements.scRegex.checked,
     matchCase: elements.scMatchCase.checked,
@@ -10610,8 +10618,8 @@ async function addSearchConfig(): Promise<void> {
     color: elements.scColorInput.value,
     enabled: true,
     isGlobal: elements.scGlobal.checked,
-    createdAt: editingSearchConfigId
-      ? (state.searchConfigs.find(c => c.id === editingSearchConfigId)?.createdAt || Date.now())
+    createdAt: editingId
+      ? (state.searchConfigs.find(c => c.id === editingId)?.createdAt || Date.now())
       : Date.now(),
   };
 
@@ -10619,9 +10627,8 @@ async function addSearchConfig(): Promise<void> {
   state.searchConfigs = state.searchConfigs.filter(c => c.id !== config.id);
   state.searchConfigs.push(config);
 
-  await window.api.searchConfigSave(config);
-  hideSearchConfigForm();
   renderSearchConfigsChips();
+  await window.api.searchConfigSave(config);
   await runSearchConfigsBatch(true);
 }
 
@@ -10669,7 +10676,38 @@ function updateSearchConfigChipLiveCount(configId: string, count: number): void 
   countEl.classList.add('sc-counting');
 }
 
+// Only ONE config batch may run at a time. Two overlapping runs used to stomp on each
+// other: each captured its own `enabledConfigs` snapshot and, on finish, pruned every
+// result whose config wasn't in THAT snapshot — so a slower run finishing last would
+// delete the results a newer run had just added (chips stuck at "0"), and rapid clicks
+// kicked off several full-file scans at once ("indexing/searching multiple times"). We
+// now serialize: if a run is requested mid-flight, mark it pending and let the active
+// run trigger exactly one follow-up when it settles (picking up the latest configs).
+let searchConfigBatchRunning = false;
+let searchConfigBatchPending = false;
+let searchConfigBatchPendingShowUi = false;
+
 async function runSearchConfigsBatch(showUiProgress = false): Promise<void> {
+  if (searchConfigBatchRunning) {
+    searchConfigBatchPending = true;
+    searchConfigBatchPendingShowUi = searchConfigBatchPendingShowUi || showUiProgress;
+    return;
+  }
+  searchConfigBatchRunning = true;
+  try {
+    await runSearchConfigsBatchOnce(showUiProgress);
+  } finally {
+    searchConfigBatchRunning = false;
+    if (searchConfigBatchPending) {
+      searchConfigBatchPending = false;
+      const ui = searchConfigBatchPendingShowUi;
+      searchConfigBatchPendingShowUi = false;
+      await runSearchConfigsBatch(ui);
+    }
+  }
+}
+
+async function runSearchConfigsBatchOnce(showUiProgress = false): Promise<void> {
   const enabledConfigs = state.searchConfigs.filter(c => c.enabled);
   if (enabledConfigs.length === 0) {
     state.searchConfigResults.clear();
@@ -10715,9 +10753,12 @@ async function runSearchConfigsBatch(showUiProgress = false): Promise<void> {
       for (const [configId, matches] of Object.entries(result.results)) {
         state.searchConfigResults.set(configId, matches as SearchResult[]);
       }
-      // Clear results for configs that were removed
+      // Drop results only for configs that no longer EXIST (deleted). Use live state —
+      // not the enabledConfigs snapshot taken at the top of this run — so a config added
+      // or toggled on mid-flight keeps its results instead of being wiped back to 0.
+      const liveIds = new Set(state.searchConfigs.map(c => c.id));
       for (const key of state.searchConfigResults.keys()) {
-        if (!enabledConfigs.some(c => c.id === key)) {
+        if (!liveIds.has(key)) {
           state.searchConfigResults.delete(key);
         }
       }
