@@ -565,6 +565,7 @@ export class FileHandler {
     configs: Array<{ id: string; pattern: string; isRegex: boolean; matchCase: boolean; wholeWord: boolean }>,
     onProgress?: (counts: Record<string, number>, overallPercent: number) => void,
     signal?: { cancelled: boolean },
+    onMatches?: (deltaByConfig: Record<string, SearchMatch[]>) => void,
     maxMatchesPerConfig: number = DEFAULT_MAX_MATCHES
   ): Promise<Record<string, SearchMatch[]>> {
     const results: Record<string, SearchMatch[]> = {};
@@ -642,6 +643,26 @@ export class FileHandler {
       const counts: Record<string, number> = {};
       for (const a of active) counts[a.id] = 0;
 
+      // Per-config buffer of matches found since the last stream flush. Flushed via
+      // onMatches every ~150ms so the renderer can paint progressively; drained fully
+      // on close so nothing found in the final window is lost.
+      const pending: Record<string, SearchMatch[]> = {};
+      for (const a of active) pending[a.id] = [];
+      let lastMatchFlush = Date.now();
+      const flushMatches = () => {
+        if (!onMatches) return;
+        const delta: Record<string, SearchMatch[]> = {};
+        let has = false;
+        for (const a of active) {
+          if (pending[a.id].length > 0) {
+            delta[a.id] = pending[a.id];
+            pending[a.id] = [];
+            has = true;
+          }
+        }
+        if (has) onMatches(delta);
+      };
+
       proc.stdout.on('data', (data: Buffer) => {
         if (signal?.cancelled) {
           proc.kill();
@@ -675,12 +696,14 @@ export class FileHandler {
             if (results[a.id].length >= maxMatchesPerConfig) continue;
             const m = a.attrRe.exec(lineText);
             if (m) {
-              results[a.id].push({
+              const match: SearchMatch = {
                 lineNumber: adjustedLineNum,
                 column: m.index,
                 length: m[0].length,
                 lineText,
-              });
+              };
+              results[a.id].push(match);
+              pending[a.id].push(match);
               counts[a.id]++;
             }
           }
@@ -691,14 +714,20 @@ export class FileHandler {
           lastProgressUpdate = now;
           onProgress({ ...counts }, Math.min(90, unionCount / 100));
         }
+        if (onMatches && now - lastMatchFlush > 150) {
+          lastMatchFlush = now;
+          flushMatches();
+        }
       });
 
       proc.on('error', () => {
+        flushMatches();
         onProgress?.({ ...counts }, 100);
         resolve(results);
       });
 
       proc.on('close', () => {
+        flushMatches();
         onProgress?.({ ...counts }, 100);
         resolve(results);
       });
