@@ -8,9 +8,18 @@ const MONTH_MAP: Record<string, number> = {
 };
 
 // Pre-compiled regexes — checked in order of prevalence.
-const ISO_TIMESTAMP_REGEX = /(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/;
+// ISO now captures optional sub-second precision (…:SS.mmm) so millisecond-scale
+// trends aren't flattened into whole-second buckets.
+const ISO_TIMESTAMP_REGEX = /(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:[.,](\d{1,9}))?/;
 const EURO_TIMESTAMP_REGEX = /(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/;
 const SYSLOG_TIMESTAMP_REGEX = /([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})/;
+
+// Milliseconds from a captured fractional-seconds string of any length (e.g.
+// "5" → 500ms, "123456" → 123ms). Returns 0 when absent.
+function fracToMs(frac: string | undefined): number {
+  if (!frac) return 0;
+  return Math.floor(parseFloat('0.' + frac) * 1000);
+}
 
 export function parseTimestampFast(text: string): { date: Date; str: string } | null {
   // Check first 60 chars for performance (enough for most timestamp formats)
@@ -19,9 +28,9 @@ export function parseTimestampFast(text: string): { date: Date; str: string } | 
   // Try ISO format first (most common)
   const isoMatch = sample.match(ISO_TIMESTAMP_REGEX);
   if (isoMatch) {
-    const [match, year, month, day, hour, min, sec] = isoMatch;
+    const [match, year, month, day, hour, min, sec, frac] = isoMatch;
     return {
-      date: new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hour), parseInt(min), parseInt(sec)),
+      date: new Date(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hour), parseInt(min), parseInt(sec), fracToMs(frac)),
       str: match,
     };
   }

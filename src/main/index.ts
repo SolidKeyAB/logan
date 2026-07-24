@@ -4349,6 +4349,21 @@ ipcMain.handle(IPC.TREND_DISCOVER_FIELDS, async (_, options) => {
   }
 });
 
+ipcMain.handle(IPC.TREND_DISCOVER_AXES, async (_, options) => {
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+  try {
+    const axes = await runTrendJob('axes', handler, {
+      startLine: options?.startLine,
+      endLine: options?.endLine,
+      sampleSize: options?.sampleSize,
+    });
+    return { success: true, axes };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
 ipcMain.handle(IPC.TREND_SERIES, async (_, options) => {
   const handler = getFileHandler();
   if (!handler) return { success: false, error: 'No file open' };
@@ -4362,6 +4377,7 @@ ipcMain.handle(IPC.TREND_SERIES, async (_, options) => {
       maxPoints: options.maxPoints,
       pattern: options.pattern,
       patternFlags: options.patternFlags,
+      xAxis: options.xAxis,
     });
     return { success: true, ...result };
   } catch (error) {
