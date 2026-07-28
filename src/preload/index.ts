@@ -33,6 +33,7 @@ const IPC = {
   SEARCH_CONFIG_BATCH_CHUNK: 'search-config-batch-chunk',
   SEARCH_CONFIG_EXPORT: 'search-config-export',
   SEARCH_CONFIG_EXPORT_ALL: 'search-config-export-all',
+  SEARCH_CONFIG_EXPORT_IMAGE: 'search-config-export-image',
   SEARCH_CONFIG_SESSION_LIST: 'search-config-session-list',
   SEARCH_CONFIG_SESSION_SAVE: 'search-config-session-save',
   SEARCH_CONFIG_SESSION_DELETE: 'search-config-session-delete',
@@ -460,6 +461,9 @@ const api = {
 
   searchConfigExportAll: (content: string): Promise<{ success: boolean; filePath?: string; error?: string }> =>
     ipcRenderer.invoke(IPC.SEARCH_CONFIG_EXPORT_ALL, content),
+
+  searchConfigExportImage: (base64Png: string, label: string): Promise<{ success: boolean; filePath?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.SEARCH_CONFIG_EXPORT_IMAGE, base64Png, label),
 
   // Search config sessions
   searchConfigSessionList: (): Promise<{ success: boolean; sessions?: any[] }> =>

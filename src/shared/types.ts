@@ -326,6 +326,7 @@ export const IPC = {
   SEARCH_CONFIG_BATCH_CHUNK: 'search-config-batch-chunk',
   SEARCH_CONFIG_EXPORT: 'search-config-export',
   SEARCH_CONFIG_EXPORT_ALL: 'search-config-export-all',
+  SEARCH_CONFIG_EXPORT_IMAGE: 'search-config-export-image',
   SEARCH_CONFIG_SESSION_LIST: 'search-config-session-list',
   SEARCH_CONFIG_SESSION_SAVE: 'search-config-session-save',
   SEARCH_CONFIG_SESSION_DELETE: 'search-config-session-delete',
