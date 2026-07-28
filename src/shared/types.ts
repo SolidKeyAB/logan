@@ -153,6 +153,17 @@ export interface SearchConfig {
   createdAt: number;
 }
 
+// A reusable, named pattern-property: a regex whose 1st capture group (or the
+// whole match) is the tracked value, used by the Trends panel. Stored globally.
+export interface PatternProperty {
+  id: string;
+  name: string;
+  pattern: string;
+  patternFlags?: string;
+  unit?: string;
+  createdAt: number;
+}
+
 // Serial port types
 export interface SerialPortConfig {
   path: string;
@@ -327,6 +338,9 @@ export const IPC = {
   SEARCH_CONFIG_EXPORT: 'search-config-export',
   SEARCH_CONFIG_EXPORT_ALL: 'search-config-export-all',
   SEARCH_CONFIG_EXPORT_IMAGE: 'search-config-export-image',
+  PATTERN_PROP_LIST: 'pattern-prop-list',
+  PATTERN_PROP_SAVE: 'pattern-prop-save',
+  PATTERN_PROP_DELETE: 'pattern-prop-delete',
   SEARCH_CONFIG_SESSION_LIST: 'search-config-session-list',
   SEARCH_CONFIG_SESSION_SAVE: 'search-config-session-save',
   SEARCH_CONFIG_SESSION_DELETE: 'search-config-session-delete',
