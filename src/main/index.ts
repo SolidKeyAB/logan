@@ -19,7 +19,7 @@ if (process.platform !== 'linux') {
 import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
 import { getRipgrepPath } from './ripgrepPath';
 import { openWithAdapter, NormalizedSource } from './sourceAdapter';
-import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation } from '../shared/types';
+import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation, PatternProperty } from '../shared/types';
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
@@ -3468,6 +3468,60 @@ ipcMain.handle(IPC.SEARCH_CONFIG_EXPORT_IMAGE, async (_, base64Png: string, labe
   } catch (error) {
     return { success: false, error: String(error) };
   }
+});
+
+// === Pattern Properties (reusable named regex → tracked value, for Trends) ===
+
+const getPatternPropertiesPath = () => path.join(getConfigDir(), 'pattern-properties.json');
+
+function loadPatternPropertiesStore(): PatternProperty[] {
+  try {
+    ensureConfigDir();
+    const p = getPatternPropertiesPath();
+    if (fs.existsSync(p)) {
+      const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'));
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (error) {
+    console.error('Failed to load pattern properties:', error);
+  }
+  return [];
+}
+
+function savePatternPropertiesStore(props: PatternProperty[]): void {
+  try {
+    ensureConfigDir();
+    fs.writeFileSync(getPatternPropertiesPath(), JSON.stringify(props, null, 2), 'utf-8');
+  } catch (error) {
+    console.error('Failed to save pattern properties:', error);
+  }
+}
+
+ipcMain.handle(IPC.PATTERN_PROP_LIST, async () => {
+  return { success: true, properties: loadPatternPropertiesStore() };
+});
+
+ipcMain.handle(IPC.PATTERN_PROP_SAVE, async (_, prop: PatternProperty) => {
+  if (!prop || !prop.id || !prop.name || !prop.pattern) {
+    return { success: false, error: 'Invalid pattern property' };
+  }
+  // Validate the regex compiles before persisting.
+  try {
+    new RegExp(prop.pattern, prop.patternFlags || '');
+  } catch (e) {
+    return { success: false, error: `Invalid regex: ${String(e)}` };
+  }
+  const props = loadPatternPropertiesStore();
+  const idx = props.findIndex(p => p.id === prop.id);
+  if (idx >= 0) props[idx] = prop; else props.push(prop);
+  savePatternPropertiesStore(props);
+  return { success: true, properties: props };
+});
+
+ipcMain.handle(IPC.PATTERN_PROP_DELETE, async (_, id: string) => {
+  const props = loadPatternPropertiesStore().filter(p => p.id !== id);
+  savePatternPropertiesStore(props);
+  return { success: true, properties: props };
 });
 
 // === Search Config Sessions ===
