@@ -10994,6 +10994,38 @@ async function ensureOverviewTimestamps(lineNumbers: number[]): Promise<void> {
   for (const ln of missing) if (!scOverviewTsCache.has(ln)) scOverviewTsCache.set(ln, NaN);
 }
 
+// ── Overview lane ordering ──────────────────────────────────────────────
+// The user can drag a lane up/down to reorder the overview strip (handy for
+// stacking two patterns adjacently to compare their timing). This order is
+// scoped to the overview only — it does NOT touch chip/results order or the
+// config store — and is persisted by config id in localStorage.
+let scOverviewOrder: string[] = (() => {
+  try { return JSON.parse(localStorage.getItem('logan-sc-overview-order') || '[]'); }
+  catch { return []; }
+})();
+let scOvDraggingId: string | null = null;
+
+function scOverviewOrderRank(id: string): number {
+  const i = scOverviewOrder.indexOf(id);
+  return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+}
+
+// Move `draggedId` before/after `targetId` and persist. Rebuilds the order over
+// every current config id so ids not currently shown keep their relative place.
+function reorderScOverviewLane(draggedId: string, targetId: string, placeAfter: boolean): void {
+  if (draggedId === targetId) return;
+  const ids = state.searchConfigs
+    .map(c => c.id)
+    .sort((a, b) => scOverviewOrderRank(a) - scOverviewOrderRank(b)); // stable
+  const from = ids.indexOf(draggedId);
+  if (from !== -1) ids.splice(from, 1);
+  const ti = ids.indexOf(targetId);
+  if (ti === -1) return;
+  ids.splice(placeAfter ? ti + 1 : ti, 0, draggedId);
+  scOverviewOrder = ids;
+  localStorage.setItem('logan-sc-overview-order', JSON.stringify(scOverviewOrder));
+}
+
 async function renderSearchConfigsOverview(): Promise<void> {
   const host = elements.scOverview;
   if (!host) return;
@@ -11002,6 +11034,8 @@ async function renderSearchConfigsOverview(): Promise<void> {
   const configs = state.searchConfigs.filter(
     c => c.enabled && (state.searchConfigResults.get(c.id)?.length || 0) > 0
   );
+  // Apply the user's drag-reordered lane order (stable for un-ranked configs).
+  configs.sort((a, b) => scOverviewOrderRank(a.id) - scOverviewOrderRank(b.id));
 
   if (configs.length === 0) {
     host.classList.add('hidden');
@@ -11113,12 +11147,17 @@ async function renderSearchConfigsOverview(): Promise<void> {
     }
     pts.sort((a, b) => a.key - b.key);
 
-    // Legend: swatch + truncated pattern + count.
+    // Legend: drag-grip + swatch + truncated pattern + count. The label doubles
+    // as the drag handle for reordering lanes (the canvas keeps click-to-navigate).
     const label = document.createElement('div');
     label.className = 'sc-ov-label';
+    label.draggable = true;
     const timedNote = useTime && pts.length !== results.length
       ? ` (${pts.length.toLocaleString()} timestamped)` : '';
-    label.title = `${config.pattern} — ${results.length.toLocaleString()} match${results.length !== 1 ? 'es' : ''}${timedNote}`;
+    label.title = `${config.pattern} — ${results.length.toLocaleString()} match${results.length !== 1 ? 'es' : ''}${timedNote}\nDrag to reorder`;
+    const grip = document.createElement('span');
+    grip.className = 'sc-ov-grip';
+    grip.textContent = '⠿';
     const swatch = document.createElement('span');
     swatch.className = 'sc-ov-swatch';
     swatch.style.backgroundColor = config.color;
@@ -11128,6 +11167,7 @@ async function renderSearchConfigsOverview(): Promise<void> {
     const cnt = document.createElement('span');
     cnt.className = 'sc-ov-label-count';
     cnt.textContent = (useTime ? pts.length : results.length).toLocaleString();
+    label.appendChild(grip);
     label.appendChild(swatch);
     label.appendChild(txt);
     label.appendChild(cnt);
@@ -11140,6 +11180,42 @@ async function renderSearchConfigsOverview(): Promise<void> {
     lane.appendChild(label);
     lane.appendChild(canvas);
     host.appendChild(lane);
+
+    // Drag-to-reorder: the label is the handle; each lane is a drop target.
+    const clearDropCues = () => host.querySelectorAll('.sc-ov-lane').forEach(l =>
+      l.classList.remove('sc-ov-drop-before', 'sc-ov-drop-after'));
+    label.addEventListener('dragstart', (e) => {
+      scOvDraggingId = config.id;
+      if (e.dataTransfer) { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', config.id); }
+      lane.classList.add('sc-ov-lane-dragging');
+      tip.style.display = 'none';
+    });
+    label.addEventListener('dragend', () => {
+      scOvDraggingId = null;
+      lane.classList.remove('sc-ov-lane-dragging');
+      clearDropCues();
+    });
+    lane.addEventListener('dragover', (e) => {
+      if (!scOvDraggingId || scOvDraggingId === config.id) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      const r = lane.getBoundingClientRect();
+      const after = (e.clientY - r.top) > r.height / 2;
+      clearDropCues();
+      lane.classList.add(after ? 'sc-ov-drop-after' : 'sc-ov-drop-before');
+    });
+    lane.addEventListener('dragleave', () => {
+      lane.classList.remove('sc-ov-drop-before', 'sc-ov-drop-after');
+    });
+    lane.addEventListener('drop', (e) => {
+      if (!scOvDraggingId || scOvDraggingId === config.id) return;
+      e.preventDefault();
+      const r = lane.getBoundingClientRect();
+      const after = (e.clientY - r.top) > r.height / 2;
+      reorderScOverviewLane(scOvDraggingId, config.id, after);
+      scOvDraggingId = null;
+      renderSearchConfigsOverview();
+    });
 
     // Defer the actual paint until layout has given the canvas a real width.
     const paint = () => {
