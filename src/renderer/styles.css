@@ -5874,6 +5874,59 @@ kbd {
   display: none;
 }
 
+.sc-ov-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 1px;
+}
+
+.sc-ov-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.sc-ov-mode-btn {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 1px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.sc-ov-mode-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-color, #5b8def);
+}
+
+.sc-ov-axis {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-left: 128px; /* label width (120px) + lane gap (8px) */
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.sc-ov-axis-dur {
+  color: var(--text-secondary);
+}
+
+.sc-ov-note {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .sc-ov-lane {
   display: flex;
   align-items: center;
@@ -5922,8 +5975,8 @@ kbd {
 }
 
 .sc-ov-tooltip {
-  position: absolute;
-  z-index: 20;
+  position: fixed;
+  z-index: 9999;
   pointer-events: none;
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
