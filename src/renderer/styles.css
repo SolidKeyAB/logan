@@ -5882,6 +5882,12 @@ kbd {
   margin-bottom: 1px;
 }
 
+.sc-ov-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .sc-ov-title {
   font-size: 10px;
   text-transform: uppercase;
