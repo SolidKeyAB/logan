@@ -6055,6 +6055,10 @@ async function searchRecurrences(term: string): Promise<void> {
 let trendsPanelInited = false;
 let trendCellSeq = 0;
 
+// Reusable named pattern-properties (global; loaded from the main store on panel
+// init). Each is a named regex whose 1st capture group is the tracked value.
+let trendPatternProperties: PatternPropertyDef[] = [];
+
 // Detected X-axis candidates (from discoverAxes) and the currently-selected id.
 // The top candidate is the smart default ("auto") — e.g. relative-seconds for the
 // decoded .esotrace stream, wall-clock for ISO logs, else the line-number fallback.
@@ -6099,11 +6103,12 @@ async function reapplyTrendAxis(): Promise<void> {
   for (const root of Array.from(results.querySelectorAll<HTMLElement>('.trend-cell[data-trend-kind="series"]'))) {
     const field = root.dataset.trendField || '';
     const pattern = root.dataset.trendPattern || undefined;
+    const patternFlags = root.dataset.trendPatternFlags || '';
     const body = root.querySelector<HTMLDivElement>('.trend-cell-body');
     if (!field || !body) continue;
     body.innerHTML = '<p class="placeholder">Recomputing…</p>';
     try {
-      const res = await window.api.trendSeries({ field, pattern, xAxis });
+      const res = await window.api.trendSeries({ field, pattern, patternFlags, xAxis });
       if (res.success) renderSeriesCell(body, res as TrendSeriesResult);
       else body.innerHTML = `<p class="placeholder trend-error">${escapeHtml(res.error || 'Failed')}</p>`;
     } catch (e) {
@@ -6123,15 +6128,19 @@ function initTrendsPanel(): void {
   const fieldSelect = trendEl<HTMLInputElement>('trends-field-select');
   const patternInput = trendEl<HTMLInputElement>('trends-pattern-input');
 
+  const btnSaveProp = trendEl<HTMLButtonElement>('btn-save-trend-prop');
+
   const refreshAddEnabled = () => {
-    if (!btnAdd) return;
     const hasField = !!fieldSelect?.value.trim();
     const hasPattern = !!patternInput?.value.trim();
-    btnAdd.disabled = !hasField && !hasPattern;
+    if (btnAdd) btnAdd.disabled = !hasField && !hasPattern;
+    // Saving a property needs a regex (the whole point is a reusable pattern).
+    if (btnSaveProp) btnSaveProp.disabled = !hasPattern;
   };
 
   btnDiscover?.addEventListener('click', () => { void discoverTrendFields(); });
   btnAdd?.addEventListener('click', () => { void addTrendCell(); });
+  btnSaveProp?.addEventListener('click', () => { void saveCurrentTrendProperty(); });
   cellType?.addEventListener('change', () => {
     eventInput?.classList.toggle('hidden', cellType.value !== 'correlate');
   });
@@ -6146,6 +6155,106 @@ function initTrendsPanel(): void {
 
   const xaxisSel = trendEl<HTMLSelectElement>('trends-xaxis');
   xaxisSel?.addEventListener('change', () => { trendXAxisId = xaxisSel.value; void reapplyTrendAxis(); });
+
+  void loadTrendPatternProperties();
+}
+
+// ── Saved pattern-properties ────────────────────────────────────────────────
+
+async function loadTrendPatternProperties(): Promise<void> {
+  try {
+    const res = await window.api.patternPropList();
+    trendPatternProperties = (res.success && res.properties) ? res.properties : [];
+  } catch {
+    trendPatternProperties = [];
+  }
+  renderTrendPropChips();
+}
+
+// Save whatever regex is currently in the pattern box as a named, reusable
+// property. Uses the field-box text as the default name (it's the label anyway).
+async function saveCurrentTrendProperty(): Promise<void> {
+  const patternInput = trendEl<HTMLInputElement>('trends-pattern-input');
+  const fieldSelect = trendEl<HTMLInputElement>('trends-field-select');
+  const pattern = patternInput?.value.trim() || '';
+  if (!pattern) { showToast('Enter a regex pattern first'); return; }
+  try {
+    new RegExp(pattern); // fail fast on an invalid regex
+  } catch (e) {
+    showToast(`Invalid regex: ${String(e)}`);
+    return;
+  }
+  const defaultName = fieldSelect?.value.trim() || '';
+  const name = await showInputDialog('Save pattern property', 'Name (e.g. latency, temperature)', defaultName);
+  if (!name) return;
+
+  // Update in place if a property with this name already exists, else create.
+  const existing = trendPatternProperties.find(p => p.name.toLowerCase() === name.toLowerCase());
+  const prop: PatternPropertyDef = {
+    id: existing?.id || `pp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    name,
+    pattern,
+    patternFlags: '',
+    createdAt: existing?.createdAt || Date.now(),
+  };
+  const res = await window.api.patternPropSave(prop);
+  if (!res.success) { showToast(res.error || 'Save failed'); return; }
+  trendPatternProperties = res.properties || trendPatternProperties;
+  renderTrendPropChips();
+  showToast(`Saved property "${name}"`);
+}
+
+async function deleteTrendPatternProperty(id: string): Promise<void> {
+  const res = await window.api.patternPropDelete(id);
+  if (!res.success) { showToast(res.error || 'Delete failed'); return; }
+  trendPatternProperties = res.properties || [];
+  renderTrendPropChips();
+}
+
+// Chart a saved property using the currently-selected cell type / x-axis / event.
+function applyTrendProperty(prop: PatternPropertyDef): void {
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  // Reflect it in the inputs so the user sees what's being charted, then chart it
+  // via explicit override (carries the regex flags the inputs can't express).
+  const fieldSelect = trendEl<HTMLInputElement>('trends-field-select');
+  const patternInput = trendEl<HTMLInputElement>('trends-pattern-input');
+  if (fieldSelect) fieldSelect.value = prop.name;
+  if (patternInput) patternInput.value = prop.pattern;
+  void addTrendCell({ field: prop.name, pattern: prop.pattern, patternFlags: prop.patternFlags });
+}
+
+function renderTrendPropChips(): void {
+  const bar = trendEl<HTMLDivElement>('trends-props-bar');
+  if (!bar) return;
+  bar.innerHTML = '';
+  if (trendPatternProperties.length === 0) { bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+
+  const lead = document.createElement('span');
+  lead.className = 'trends-props-lead';
+  lead.textContent = 'Saved properties:';
+  bar.appendChild(lead);
+
+  for (const prop of trendPatternProperties) {
+    const chip = document.createElement('span');
+    chip.className = 'trend-prop-chip';
+    chip.title = `/${prop.pattern}/${prop.patternFlags || ''}  — click to chart with the selected cell type`;
+
+    const name = document.createElement('button');
+    name.className = 'trend-prop-name';
+    name.textContent = prop.name;
+    name.addEventListener('click', () => applyTrendProperty(prop));
+
+    const del = document.createElement('button');
+    del.className = 'trend-prop-del';
+    del.textContent = '×';
+    del.title = `Delete property "${prop.name}"`;
+    del.addEventListener('click', (e) => { e.stopPropagation(); void deleteTrendPatternProperty(prop.id); });
+
+    chip.appendChild(name);
+    chip.appendChild(del);
+    bar.appendChild(chip);
+  }
 }
 
 async function discoverTrendFields(): Promise<void> {
@@ -6257,15 +6366,19 @@ function createTrendCellShell(type: string, label: string, byAgent = false): Tre
   };
 }
 
-async function addTrendCell(): Promise<void> {
+// `override` lets a saved pattern-property chart itself without going through the
+// toolbar inputs: it carries an explicit label (field), regex and flags. When
+// omitted, values are read from the field/pattern inputs as before.
+async function addTrendCell(override?: { field?: string; pattern?: string; patternFlags?: string }): Promise<void> {
   if (!state.filePath) { showToast('Open a log file first'); return; }
   const fieldSelect = trendEl<HTMLInputElement>('trends-field-select');
   const cellTypeSel = trendEl<HTMLSelectElement>('trends-cell-type');
   const eventInput = trendEl<HTMLInputElement>('trends-event-input');
   const patternInput = trendEl<HTMLInputElement>('trends-pattern-input');
 
-  const field = fieldSelect?.value.trim() || '';
-  const pattern = patternInput?.value.trim() || '';
+  const field = (override?.field ?? fieldSelect?.value.trim()) || '';
+  const pattern = (override?.pattern ?? patternInput?.value.trim()) || '';
+  const patternFlags = override?.patternFlags || '';
   if (!field && !pattern) { showToast('Pick a field or enter a regex pattern'); return; }
 
   const type = cellTypeSel?.value || 'series';
@@ -6284,18 +6397,19 @@ async function addTrendCell(): Promise<void> {
         root.dataset.trendKind = 'series';
         root.dataset.trendField = fieldArg;
         if (patternOpt) root.dataset.trendPattern = patternOpt;
+        if (patternFlags) root.dataset.trendPatternFlags = patternFlags;
       }
-      const res = await window.api.trendSeries({ field: fieldArg, pattern: patternOpt, xAxis: resolveTrendAxis() });
+      const res = await window.api.trendSeries({ field: fieldArg, pattern: patternOpt, patternFlags, xAxis: resolveTrendAxis() });
       if (!res.success) { cell.error(res.error || 'Failed'); return; }
       renderSeriesCell(cell.body, res as TrendSeriesResult);
     } else if (type === 'transitions') {
-      const res = await window.api.trendTransitions({ field: fieldArg, pattern: patternOpt });
+      const res = await window.api.trendTransitions({ field: fieldArg, pattern: patternOpt, patternFlags });
       if (!res.success) { cell.error(res.error || 'Failed'); return; }
       renderTransitionsCell(cell.body, res as TrendTransitionsResult);
     } else if (type === 'correlate') {
       const event = eventInput?.value.trim() || '';
       if (!event) { cell.error('Enter an event substring to correlate against'); return; }
-      const res = await window.api.trendCorrelate({ field: fieldArg, pattern: patternOpt, event });
+      const res = await window.api.trendCorrelate({ field: fieldArg, pattern: patternOpt, patternFlags, event });
       if (!res.success) { cell.error(res.error || 'Failed'); return; }
       renderCorrelateCell(cell.body, res as TrendCorrelateResult);
     }

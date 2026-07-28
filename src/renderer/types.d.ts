@@ -181,6 +181,18 @@ interface SearchConfigDef {
   createdAt: number;
 }
 
+// A reusable, named pattern-property: a regex whose 1st capture group (or whole
+// match) is the tracked value. Saved globally and reusable across files in the
+// Trends panel (chart value-over-time / flips / correlate).
+interface PatternPropertyDef {
+  id: string;
+  name: string;
+  pattern: string;
+  patternFlags?: string;
+  unit?: string;
+  createdAt: number;
+}
+
 interface SshProfile {
   id: string;
   name: string;
@@ -534,6 +546,9 @@ interface Api {
   searchConfigExport: (configId: string, lines: string[]) => Promise<{ success: boolean; filePath?: string; error?: string }>;
   searchConfigExportAll: (content: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
   searchConfigExportImage: (base64Png: string, label: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
+  patternPropList: () => Promise<{ success: boolean; properties?: PatternPropertyDef[]; error?: string }>;
+  patternPropSave: (prop: PatternPropertyDef) => Promise<{ success: boolean; properties?: PatternPropertyDef[]; error?: string }>;
+  patternPropDelete: (id: string) => Promise<{ success: boolean; properties?: PatternPropertyDef[]; error?: string }>;
   searchConfigSessionList: () => Promise<{ success: boolean; sessions?: SearchConfigSessionDef[] }>;
   searchConfigSessionSave: (session: SearchConfigSessionDef) => Promise<{ success: boolean }>;
   searchConfigSessionDelete: (sessionId: string, isGlobal: boolean) => Promise<{ success: boolean }>;
