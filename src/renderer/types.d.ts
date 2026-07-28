@@ -533,6 +533,7 @@ interface Api {
   onSearchConfigBatchChunk: (callback: (data: { configId: string; lines: number[] }) => void) => () => void;
   searchConfigExport: (configId: string, lines: string[]) => Promise<{ success: boolean; filePath?: string; error?: string }>;
   searchConfigExportAll: (content: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
+  searchConfigExportImage: (base64Png: string, label: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
   searchConfigSessionList: () => Promise<{ success: boolean; sessions?: SearchConfigSessionDef[] }>;
   searchConfigSessionSave: (session: SearchConfigSessionDef) => Promise<{ success: boolean }>;
   searchConfigSessionDelete: (sessionId: string, isGlobal: boolean) => Promise<{ success: boolean }>;

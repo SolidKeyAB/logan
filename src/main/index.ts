@@ -3453,6 +3453,23 @@ ipcMain.handle(IPC.SEARCH_CONFIG_EXPORT_ALL, async (_, content: string) => {
   }
 });
 
+// Save a rendered PNG (base64, no data-URL prefix) next to the current log file.
+ipcMain.handle(IPC.SEARCH_CONFIG_EXPORT_IMAGE, async (_, base64Png: string, label?: string) => {
+  if (!currentFilePath) return { success: false, error: 'No file open' };
+
+  try {
+    const baseName = path.basename(currentFilePath, path.extname(currentFilePath));
+    const date = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+    const suffix = (label || 'timeline').replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'timeline';
+    const exportName = `${baseName}_${suffix}_${date}.png`;
+    const exportPath = path.join(path.dirname(currentFilePath), exportName);
+    fs.writeFileSync(exportPath, Buffer.from(base64Png, 'base64'));
+    return { success: true, filePath: exportPath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
 // === Search Config Sessions ===
 
 const getSearchConfigSessionsPath = () => path.join(getConfigDir(), 'search-config-sessions.json');
