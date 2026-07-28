@@ -866,6 +866,34 @@ server.tool(
   }
 );
 
+// === Tool: logan_evidence_pack ===
+server.tool(
+  'logan_evidence_pack',
+  'Fetch this FIRST. Assembles one compact "evidence pack" for the open log — severity, level counts, grouped crashes, top failing components, top time gaps, the discovered field vocabulary, filter hints, and (optionally) a baseline delta — in a single call. Everything is references (viewerLine) + counts, NOT raw log text, so you spend tokens on judgement, not on ingesting the file. Then drill down with logan_get_lines / logan_search / logan_trend_show and pin issues with logan_report_finding.',
+  {
+    thresholdSeconds: z.number().min(1).default(60).describe('Minimum time gap (seconds) to report'),
+    fieldSampleSize: z.number().min(100).optional().describe('Lines to sample for field discovery (default ~3000)'),
+    topFields: z.number().min(1).default(25).describe('Max discovered fields to include (most frequent first)'),
+    topGaps: z.number().min(1).default(8).describe('Max time gaps to include (largest first)'),
+    baselineId: z.string().optional().describe('If set, include a delta vs. this saved baseline'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+  },
+  async ({ thresholdSeconds, fieldSampleSize, topFields, topGaps, baselineId, redact }) => {
+    try {
+      const result = await apiCall('POST', '/api/evidence-pack', {
+        thresholdSeconds, fieldSampleSize, topFields, topGaps, baselineId,
+      });
+      if (!result.success) {
+        return { content: [{ type: 'text', text: `Error: ${result.error || 'evidence pack failed'}` }], isError: true };
+      }
+      const output = redact ? maybeRedact(result.pack, true) : result.pack;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_investigate_crashes ===
 server.tool(
   'logan_investigate_crashes',

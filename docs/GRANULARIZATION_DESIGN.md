@@ -128,10 +128,10 @@ Conventions layered onto the **existing** MCP tools so the agent stays cheap:
 | Trends / transitions / correlate / time-gaps / crashes | ✅ built |
 | Baseline compare (level shift / new crash / error-rate spike) | ✅ built |
 | Click-to-line finding system (`logan_report_finding`) | ✅ built |
+| **Evidence-pack assembler + single MCP fetch call** (`logan_evidence_pack`) | ✅ built — composes analyze + time-gaps + trend-fields + baseline, returns refs not raw text |
 | **Record stitching → stable `unit_id`s** | 🔨 new |
 | **Persisted per-file structured index** | 🔨 new (persist what `trend_fields` computes) |
 | **Layered map-reduce summaries** | 🔨 new |
-| **Evidence-pack assembler + single MCP fetch call** | 🔨 new |
 | **Payload caps + by-reference conventions across tools** | 🔨 wiring |
 
 The new pieces are mostly *composition and persistence* of primitives LOGAN already has
@@ -142,13 +142,18 @@ The new pieces are mostly *composition and persistence* of primitives LOGAN alre
 ## Build order (recommended)
 
 1. **This spec** (done).
-2. **Structured index + record stitching** — extend the existing timestamp/level pass to
+2. **Evidence-pack assembler** ✅ **done** — `logan_evidence_pack` MCP tool →
+   `POST /api/evidence-pack` composes analyze + time-gaps + trend-fields + optional
+   baseline delta into one compact briefing (severity, level counts, grouped crashes,
+   top components, top gaps, field vocabulary, filter hints), returning `viewerLine`
+   references + counts rather than raw log text. Journaled as one replayable step.
+   Built first because it delivers the headline value with zero changes to the hot
+   parsing path.
+3. **Structured index + record stitching** — extend the existing timestamp/level pass to
    emit stitched records with stable `unit_id`s; persist the `trend_fields` output as a
-   per-file index sidecar.
-3. **Layered summaries** — whole-file / per-component / per-chunk rollups over the units.
-4. **Evidence-pack assembler** — one function that gathers fields + rollups + crashes +
-   gaps + baseline deltas + anomaly flags, exposed as a single MCP tool the agent calls
-   first (e.g. `logan_evidence_pack`).
+   per-file index sidecar. This lets the evidence pack reference stable `unit_id`s.
+4. **Layered summaries** — whole-file / per-component / per-chunk rollups over the units,
+   folded into the evidence pack as the "zoom" layers.
 5. **Payload caps + by-reference drill-down** conventions across the existing MCP tools.
 
 Net: same analytical power, a fraction of the tokens — LOGAN hands the LLM a **briefing,
