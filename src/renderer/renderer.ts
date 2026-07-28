@@ -332,6 +332,8 @@ interface AppState {
   timeAlignTimestamps: Map<string, Array<{ lineNumber: number; epochMs: number }>>;
   timeAlignMinTime: number;
   timeAlignMaxTime: number;
+  // Search Configs overview strip: align lanes by wall-clock time (shared axis) vs. by line position
+  scOverviewAlignByTime: boolean;
 }
 
 const state: AppState = {
@@ -400,6 +402,7 @@ const state: AppState = {
   timeAlignTimestamps: new Map<string, Array<{ lineNumber: number; epochMs: number }>>(),
   timeAlignMinTime: 0,
   timeAlignMaxTime: 0,
+  scOverviewAlignByTime: localStorage.getItem('logan-sc-overview-time') === 'true',
 };
 
 // Constants
@@ -10959,9 +10962,42 @@ function renderSearchConfigsChips(): void {
 // x → file-position mapping, so bright columns that line up vertically across
 // lanes mark file regions where several configs fire together. Click a lane to
 // jump to the nearest match in that region; hover shows the line + local count.
-function renderSearchConfigsOverview(): void {
+// Cache of line-number → epochMs for the overview strip's time-alignment mode.
+// Persists across resize repaints; cleared when config results change (see
+// renderSearchConfigsResults). A NaN sentinel marks a line we already know has
+// no parseable timestamp, so we never re-request it.
+let scOverviewTsCache = new Map<number, number>();
+// Bumped on every overview render; a render that awaits (time mode) bails if a
+// newer one started meanwhile, so concurrent repaints can't double-append lanes.
+let scOverviewRenderSeq = 0;
+
+// Single body-level tooltip (position:fixed) shared by every lane. Living on
+// <body> — not inside the scrollable panel — keeps it from being clipped or
+// hidden behind the panel's upper section (chips/form/header).
+let scOvTooltipEl: HTMLDivElement | null = null;
+function getScOverviewTooltip(): HTMLDivElement {
+  if (!scOvTooltipEl) {
+    scOvTooltipEl = document.createElement('div');
+    scOvTooltipEl.className = 'sc-ov-tooltip';
+    scOvTooltipEl.style.display = 'none';
+    document.body.appendChild(scOvTooltipEl);
+  }
+  return scOvTooltipEl;
+}
+
+async function ensureOverviewTimestamps(lineNumbers: number[]): Promise<void> {
+  const missing = lineNumbers.filter(ln => !scOverviewTsCache.has(ln));
+  if (missing.length === 0) return;
+  const timestamps = await window.api.getLineTimestamps(missing);
+  for (const t of timestamps) scOverviewTsCache.set(t.lineNumber, t.epochMs);
+  // Any requested line not returned has no timestamp — remember that.
+  for (const ln of missing) if (!scOverviewTsCache.has(ln)) scOverviewTsCache.set(ln, NaN);
+}
+
+async function renderSearchConfigsOverview(): Promise<void> {
   const host = elements.scOverview;
   if (!host) return;
+  const mySeq = ++scOverviewRenderSeq;
 
   const configs = state.searchConfigs.filter(
     c => c.enabled && (state.searchConfigResults.get(c.id)?.length || 0) > 0
@@ -10979,10 +11015,81 @@ function renderSearchConfigsOverview(): void {
   const dpr = window.devicePixelRatio || 1;
   const LANE_H = 12;
 
-  // Shared floating tooltip for all lanes.
-  const tip = document.createElement('div');
-  tip.className = 'sc-ov-tooltip hidden';
-  host.appendChild(tip);
+  // ── Header: title + line/time alignment toggle ──
+  const header = document.createElement('div');
+  header.className = 'sc-ov-header';
+  const title = document.createElement('span');
+  title.className = 'sc-ov-title';
+  title.textContent = 'Overview';
+  const toggle = document.createElement('button');
+  toggle.className = 'sc-ov-mode-btn';
+  toggle.textContent = state.scOverviewAlignByTime ? '⏱ By time' : '↔ By line';
+  toggle.title = state.scOverviewAlignByTime
+    ? 'Lanes share one wall-clock time axis, so matches line up by WHEN they occurred — compare the order/timing across patterns. Click to switch back to line-position axis.'
+    : 'Lanes share the file line-position axis. Click to align every lane on the same timestamp axis so you can compare the order/timing of matches across patterns.';
+  toggle.addEventListener('click', () => {
+    state.scOverviewAlignByTime = !state.scOverviewAlignByTime;
+    localStorage.setItem('logan-sc-overview-time', String(state.scOverviewAlignByTime));
+    renderSearchConfigsOverview();
+  });
+  header.appendChild(title);
+  header.appendChild(toggle);
+  host.appendChild(header);
+
+  // Shared floating tooltip for all lanes (body-level, position:fixed).
+  const tip = getScOverviewTooltip();
+  tip.style.display = 'none';
+
+  // ── Resolve the alignment domain (line position vs. shared time axis) ──
+  let useTime = state.scOverviewAlignByTime;
+  let timeMin = 0, timeMax = 0;
+  if (useTime) {
+    // Fetch timestamps for every match line (cached across resize repaints).
+    const allLines = new Set<number>();
+    for (const config of configs) {
+      for (const r of (state.searchConfigResults.get(config.id) || [])) allLines.add(r.lineNumber);
+    }
+    await ensureOverviewTimestamps(Array.from(allLines));
+    if (mySeq !== scOverviewRenderSeq) return; // a newer render superseded this one
+    timeMin = Infinity; timeMax = -Infinity;
+    for (const ln of allLines) {
+      const ep = scOverviewTsCache.get(ln);
+      if (ep !== undefined && !Number.isNaN(ep)) {
+        if (ep < timeMin) timeMin = ep;
+        if (ep > timeMax) timeMax = ep;
+      }
+    }
+    if (!(timeMax > timeMin)) {
+      // No usable timestamps (or all identical) → fall back to line position.
+      useTime = false;
+      const note = document.createElement('div');
+      note.className = 'sc-ov-note';
+      note.textContent = timeMax === -Infinity
+        ? 'No parseable timestamps in matches — showing by line position.'
+        : 'Matches span too little time — showing by line position.';
+      host.appendChild(note);
+    }
+  }
+
+  // Shared time axis (start … duration … end) when aligned by time.
+  if (useTime) {
+    const axis = document.createElement('div');
+    axis.className = 'sc-ov-axis';
+    const start = document.createElement('span');
+    start.textContent = formatTimestamp(timeMin);
+    const dur = document.createElement('span');
+    dur.className = 'sc-ov-axis-dur';
+    dur.textContent = formatDurationMs(timeMax - timeMin);
+    const end = document.createElement('span');
+    end.textContent = formatTimestamp(timeMax);
+    axis.appendChild(start);
+    axis.appendChild(dur);
+    axis.appendChild(end);
+    host.appendChild(axis);
+  }
+
+  const domainMin = useTime ? timeMin : 0;
+  const domainSpan = useTime ? Math.max(1, timeMax - timeMin) : totalLines;
 
   for (const config of configs) {
     const results = state.searchConfigResults.get(config.id) || [];
@@ -10990,10 +11097,28 @@ function renderSearchConfigsOverview(): void {
     const lane = document.createElement('div');
     lane.className = 'sc-ov-lane';
 
+    // Build points in the active domain. key = domain coordinate (line-display
+    // index or epochMs); pos = display index used for navigation; raw = line.
+    const pts: Array<{ key: number; pos: number; raw: number }> = [];
+    for (const r of results) {
+      const di = getFilteredDisplayIndex(r.lineNumber);
+      const pos = di >= 0 ? di : r.lineNumber;
+      if (useTime) {
+        const ep = scOverviewTsCache.get(r.lineNumber);
+        if (ep === undefined || Number.isNaN(ep)) continue; // no timestamp → omit from time view
+        pts.push({ key: ep, pos, raw: r.lineNumber });
+      } else {
+        pts.push({ key: pos, pos, raw: r.lineNumber });
+      }
+    }
+    pts.sort((a, b) => a.key - b.key);
+
     // Legend: swatch + truncated pattern + count.
     const label = document.createElement('div');
     label.className = 'sc-ov-label';
-    label.title = `${config.pattern} — ${results.length.toLocaleString()} match${results.length !== 1 ? 'es' : ''}`;
+    const timedNote = useTime && pts.length !== results.length
+      ? ` (${pts.length.toLocaleString()} timestamped)` : '';
+    label.title = `${config.pattern} — ${results.length.toLocaleString()} match${results.length !== 1 ? 'es' : ''}${timedNote}`;
     const swatch = document.createElement('span');
     swatch.className = 'sc-ov-swatch';
     swatch.style.backgroundColor = config.color;
@@ -11002,7 +11127,7 @@ function renderSearchConfigsOverview(): void {
     txt.textContent = config.pattern;
     const cnt = document.createElement('span');
     cnt.className = 'sc-ov-label-count';
-    cnt.textContent = results.length.toLocaleString();
+    cnt.textContent = (useTime ? pts.length : results.length).toLocaleString();
     label.appendChild(swatch);
     label.appendChild(txt);
     label.appendChild(cnt);
@@ -11016,15 +11141,6 @@ function renderSearchConfigsOverview(): void {
     lane.appendChild(canvas);
     host.appendChild(lane);
 
-    // Positions in *display* space (respect an active filter, mirroring the
-    // main minimap) plus the raw line to navigate to.
-    const pts = results
-      .map(r => {
-        const di = getFilteredDisplayIndex(r.lineNumber);
-        return { pos: di >= 0 ? di : r.lineNumber, raw: r.lineNumber };
-      })
-      .sort((a, b) => a.pos - b.pos);
-
     // Defer the actual paint until layout has given the canvas a real width.
     const paint = () => {
       const stripW = Math.max(40, Math.floor(canvas.clientWidth));
@@ -11036,7 +11152,7 @@ function renderSearchConfigsOverview(): void {
       const counts = new Uint32Array(cw);
       let maxCount = 1;
       for (const p of pts) {
-        const x = Math.min(cw - 1, Math.max(0, Math.floor((p.pos / totalLines) * cw)));
+        const x = Math.min(cw - 1, Math.max(0, Math.floor(((p.key - domainMin) / domainSpan) * cw)));
         counts[x]++;
         if (counts[x] > maxCount) maxCount = counts[x];
       }
@@ -11057,18 +11173,18 @@ function renderSearchConfigsOverview(): void {
     // clientWidth is 0 until laid out; rAF ensures flex has resolved.
     requestAnimationFrame(paint);
 
-    // Nearest match (binary search over sorted display positions) for a given
+    // Nearest match (binary search over sorted domain keys) for a given
     // fractional x across the strip.
-    const nearestAt = (frac: number): { pos: number; raw: number } | null => {
+    const nearestAt = (frac: number): { key: number; pos: number; raw: number } | null => {
       if (pts.length === 0) return null;
-      const target = frac * totalLines;
+      const target = domainMin + frac * domainSpan;
       let lo = 0, hi = pts.length - 1;
       while (lo < hi) {
         const mid = (lo + hi) >> 1;
-        if (pts[mid].pos < target) lo = mid + 1; else hi = mid;
+        if (pts[mid].key < target) lo = mid + 1; else hi = mid;
       }
       let best = pts[lo];
-      if (lo > 0 && Math.abs(pts[lo - 1].pos - target) < Math.abs(best.pos - target)) best = pts[lo - 1];
+      if (lo > 0 && Math.abs(pts[lo - 1].key - target) < Math.abs(best.key - target)) best = pts[lo - 1];
       return best;
     };
 
@@ -11087,21 +11203,29 @@ function renderSearchConfigsOverview(): void {
       if (rect.width === 0) return;
       const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
       const hit = nearestAt(frac);
-      if (!hit) { tip.classList.add('hidden'); return; }
-      tip.textContent = `${config.pattern} · line ${hit.raw + 1}`;
-      tip.classList.remove('hidden');
-      const hostRect = host.getBoundingClientRect();
-      let left = e.clientX - hostRect.left + 8;
-      // keep the tooltip inside the host horizontally
-      left = Math.min(left, hostRect.width - tip.offsetWidth - 6);
-      tip.style.left = `${Math.max(2, left)}px`;
-      tip.style.top = `${e.clientY - hostRect.top - 22}px`;
+      if (!hit) { tip.style.display = 'none'; return; }
+      tip.textContent = useTime
+        ? `${config.pattern} · ${formatTimestamp(hit.key)} · line ${hit.raw + 1}`
+        : `${config.pattern} · line ${hit.raw + 1}`;
+      tip.style.display = 'block';
+      // Viewport-fixed coords, clamped on-screen. Prefer above-right of the
+      // cursor; flip below/left when there's no room.
+      const tw = tip.offsetWidth, th = tip.offsetHeight;
+      let left = e.clientX + 12;
+      if (left + tw > window.innerWidth - 4) left = e.clientX - tw - 12;
+      let top = e.clientY - th - 8;
+      if (top < 4) top = e.clientY + 18;
+      tip.style.left = `${Math.max(4, left)}px`;
+      tip.style.top = `${top}px`;
     });
-    canvas.addEventListener('mouseleave', () => tip.classList.add('hidden'));
+    canvas.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
   }
 }
 
 async function renderSearchConfigsResults(): Promise<void> {
+  // Match sets may have changed (config edited/re-run, or a new file) — drop
+  // any cached line→timestamp mappings so the time-aligned overview refetches.
+  scOverviewTsCache.clear();
   renderSearchConfigsOverview();
   const list = elements.searchConfigsResults;
   const enabledConfigs = state.searchConfigs.filter(c => c.enabled);
