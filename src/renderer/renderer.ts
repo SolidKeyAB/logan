@@ -11066,8 +11066,17 @@ async function renderSearchConfigsOverview(): Promise<void> {
     localStorage.setItem('logan-sc-overview-time', String(state.scOverviewAlignByTime));
     renderSearchConfigsOverview();
   });
+  const exportBtn = document.createElement('button');
+  exportBtn.className = 'sc-ov-mode-btn';
+  exportBtn.textContent = '⤓ PNG';
+  exportBtn.title = 'Export this timeline as a PNG image (saved next to the log file)';
+  exportBtn.addEventListener('click', () => { exportSearchConfigsOverviewImage(); });
+  const actions = document.createElement('div');
+  actions.className = 'sc-ov-actions';
+  actions.appendChild(toggle);
+  actions.appendChild(exportBtn);
   header.appendChild(title);
-  header.appendChild(toggle);
+  header.appendChild(actions);
   host.appendChild(header);
 
   // Shared floating tooltip for all lanes (body-level, position:fixed).
@@ -11295,6 +11304,173 @@ async function renderSearchConfigsOverview(): Promise<void> {
       tip.style.top = `${top}px`;
     });
     canvas.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+  }
+}
+
+// Render the overview timeline (current mode + lane order) to a standalone PNG
+// and save it next to the log file. Drawn from the data — not a DOM screenshot —
+// so the image is crisp and always carries a title, axis and per-lane labels
+// regardless of the on-screen panel size.
+async function exportSearchConfigsOverviewImage(): Promise<void> {
+  const configs = state.searchConfigs
+    .filter(c => c.enabled && (state.searchConfigResults.get(c.id)?.length || 0) > 0)
+    .sort((a, b) => scOverviewOrderRank(a.id) - scOverviewOrderRank(b.id));
+  if (configs.length === 0) { showToast('No timeline to export'); return; }
+
+  // Resolve the alignment domain (mirrors renderSearchConfigsOverview).
+  const totalLines = Math.max(1, getTotalLines());
+  let useTime = state.scOverviewAlignByTime;
+  let timeMin = 0, timeMax = 0;
+  if (useTime) {
+    const allLines = new Set<number>();
+    for (const c of configs) for (const r of (state.searchConfigResults.get(c.id) || [])) allLines.add(r.lineNumber);
+    await ensureOverviewTimestamps(Array.from(allLines));
+    timeMin = Infinity; timeMax = -Infinity;
+    for (const ln of allLines) {
+      const ep = scOverviewTsCache.get(ln);
+      if (ep !== undefined && !Number.isNaN(ep)) { if (ep < timeMin) timeMin = ep; if (ep > timeMax) timeMax = ep; }
+    }
+    if (!(timeMax > timeMin)) useTime = false; // no usable timestamps → line domain
+  }
+  const domainMin = useTime ? timeMin : 0;
+  const domainSpan = useTime ? Math.max(1, timeMax - timeMin) : totalLines;
+
+  // ── Geometry (logical px; scaled up for a crisp raster) ──
+  const SCALE = 2;
+  const PAD = 18;
+  const W = 960;
+  const labelW = 230;
+  const gap = 12;
+  const stripX = PAD + labelW + gap;
+  const stripW = W - PAD - stripX;
+  const rowH = 22;
+  const stripH = 13;
+  const titleY = PAD + 13;
+  const subY = titleY + 17;
+  const axisY = subY + 22;
+  const lanesTop = axisY + 8;
+  const lanesH = configs.length * rowH;
+  const footerY = lanesTop + lanesH + 16;
+  const H = footerY + PAD - 8;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(W * SCALE);
+  canvas.height = Math.round(H * SCALE);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) { showToast('Export failed: no canvas context'); return; }
+  ctx.scale(SCALE, SCALE);
+
+  // Truncate a string with an ellipsis to fit maxW (uses the current ctx font).
+  const fitText = (s: string, maxW: number): string => {
+    if (ctx.measureText(s).width <= maxW) return s;
+    let lo = 0, hi = s.length;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (ctx.measureText(s.slice(0, mid) + '…').width <= maxW) lo = mid; else hi = mid - 1;
+    }
+    return s.slice(0, lo) + '…';
+  };
+
+  ctx.fillStyle = '#1b1b22';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#eaeaee';
+  ctx.font = '600 15px -apple-system, "Segoe UI", system-ui, sans-serif';
+  ctx.fillText(`Search Configs — Timeline (${useTime ? 'by time' : 'by line'})`, PAD, titleY);
+
+  ctx.fillStyle = '#9a9aa2';
+  ctx.font = '11px -apple-system, "Segoe UI", system-ui, sans-serif';
+  const fileName = state.filePath ? (state.filePath.split(/[\\/]/).pop() || '') : '';
+  const rangeStr = useTime
+    ? `${formatTimestamp(timeMin)} → ${formatTimestamp(timeMax)}  ·  ${formatDurationMs(timeMax - timeMin)}`
+    : `lines 1 – ${totalLines.toLocaleString()}`;
+  ctx.fillText(`${fileName ? fileName + '   ·   ' : ''}${rangeStr}`, PAD, subY);
+
+  // Axis: evenly-spaced gridlines across the strip column, labelled at top.
+  const ticks = 5;
+  ctx.font = '10px ui-monospace, Menlo, monospace';
+  for (let i = 0; i <= ticks; i++) {
+    const frac = i / ticks;
+    const x = stripX + frac * stripW;
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.beginPath();
+    ctx.moveTo(Math.round(x) + 0.5, lanesTop - 2);
+    ctx.lineTo(Math.round(x) + 0.5, lanesTop + lanesH + 2);
+    ctx.stroke();
+    ctx.fillStyle = '#8a8a92';
+    ctx.textAlign = i === 0 ? 'left' : i === ticks ? 'right' : 'center';
+    const lbl = useTime
+      ? formatTimestamp(domainMin + frac * domainSpan)
+      : Math.round(domainMin + frac * domainSpan + 1).toLocaleString();
+    ctx.fillText(lbl, x, axisY);
+  }
+  ctx.textAlign = 'left';
+
+  configs.forEach((config, idx) => {
+    const y = lanesTop + idx * rowH;
+    const results = state.searchConfigResults.get(config.id) || [];
+    const sy = y + (rowH - stripH) / 2;
+
+    // swatch
+    ctx.fillStyle = config.color;
+    ctx.fillRect(PAD, y + rowH / 2 - 4, 9, 9);
+
+    // Density counts across the strip columns (same log-scale as the live strip).
+    const cols = Math.max(1, Math.floor(stripW));
+    const counts = new Uint32Array(cols);
+    let maxCount = 1, counted = 0;
+    for (const r of results) {
+      let key: number;
+      if (useTime) {
+        const ep = scOverviewTsCache.get(r.lineNumber);
+        if (ep === undefined || Number.isNaN(ep)) continue;
+        key = ep;
+      } else {
+        const di = getFilteredDisplayIndex(r.lineNumber);
+        key = di >= 0 ? di : r.lineNumber;
+      }
+      const cx = Math.min(cols - 1, Math.max(0, Math.floor(((key - domainMin) / domainSpan) * cols)));
+      counts[cx]++; counted++;
+      if (counts[cx] > maxCount) maxCount = counts[cx];
+    }
+
+    // count (right-aligned in the label column) + pattern (left, truncated)
+    ctx.font = '11px ui-monospace, Menlo, monospace';
+    const countStr = (useTime ? counted : results.length).toLocaleString();
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#8a8a92';
+    ctx.fillText(countStr, PAD + labelW - 2, y + rowH / 2 + 4);
+    const countW = ctx.measureText(countStr).width;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#d4d4d8';
+    ctx.fillText(fitText(config.pattern, labelW - 14 - countW - 10), PAD + 14, y + rowH / 2 + 4);
+
+    // strip background + density bars
+    ctx.fillStyle = '#14141a';
+    ctx.fillRect(stripX, sy, stripW, stripH);
+    for (let x = 0; x < cols; x++) {
+      const n = counts[x];
+      if (n === 0) continue;
+      const a = 0.4 + 0.6 * (Math.log1p(n) / Math.log1p(maxCount));
+      ctx.fillStyle = hexToRgba(config.color, a);
+      ctx.fillRect(stripX + x, sy, 1, stripH);
+    }
+  });
+
+  ctx.fillStyle = '#6a6a72';
+  ctx.font = '10px -apple-system, "Segoe UI", system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('Exported by LOGAN', PAD, footerY);
+
+  const base64 = (canvas.toDataURL('image/png').split(',')[1]) || '';
+  try {
+    const res = await window.api.searchConfigExportImage(base64, useTime ? 'timeline-by-time' : 'timeline-by-line');
+    if (res.success && res.filePath) showToast(`Saved timeline → ${res.filePath.split(/[\\/]/).pop()}`);
+    else showToast(`Export failed: ${res.error || 'unknown error'}`);
+  } catch (e) {
+    showToast(`Export failed: ${String(e)}`);
   }
 }
 
