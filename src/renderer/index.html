@@ -457,8 +457,10 @@
             </select>
             <input id="trends-event-input" class="trends-input trends-event hidden" type="text" placeholder="event substring (e.g. ERROR)">
             <input id="trends-pattern-input" class="trends-input trends-pattern" type="text" placeholder="regex pattern (optional, 1st group = value)">
+            <button id="btn-save-trend-prop" class="secondary-btn small" title="Save the current regex as a reusable named property" disabled>&#128190; Save property</button>
             <button id="btn-add-trend-cell" class="secondary-btn small" disabled>Add cell</button>
           </div>
+          <div id="trends-props-bar" class="trends-props-bar hidden"></div>
           <div id="trends-fields-bar" class="trends-fields-bar hidden"></div>
           <div id="trends-results" class="trends-content">
             <p class="placeholder">Click <strong>Discover Fields</strong> to scan the log for variables, then add a cell to chart one over time.</p>

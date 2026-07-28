@@ -34,6 +34,9 @@ const IPC = {
   SEARCH_CONFIG_EXPORT: 'search-config-export',
   SEARCH_CONFIG_EXPORT_ALL: 'search-config-export-all',
   SEARCH_CONFIG_EXPORT_IMAGE: 'search-config-export-image',
+  PATTERN_PROP_LIST: 'pattern-prop-list',
+  PATTERN_PROP_SAVE: 'pattern-prop-save',
+  PATTERN_PROP_DELETE: 'pattern-prop-delete',
   SEARCH_CONFIG_SESSION_LIST: 'search-config-session-list',
   SEARCH_CONFIG_SESSION_SAVE: 'search-config-session-save',
   SEARCH_CONFIG_SESSION_DELETE: 'search-config-session-delete',
@@ -464,6 +467,14 @@ const api = {
 
   searchConfigExportImage: (base64Png: string, label: string): Promise<{ success: boolean; filePath?: string; error?: string }> =>
     ipcRenderer.invoke(IPC.SEARCH_CONFIG_EXPORT_IMAGE, base64Png, label),
+
+  // Reusable named pattern-properties (global, for the Trends panel).
+  patternPropList: (): Promise<{ success: boolean; properties?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.PATTERN_PROP_LIST),
+  patternPropSave: (prop: any): Promise<{ success: boolean; properties?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.PATTERN_PROP_SAVE, prop),
+  patternPropDelete: (id: string): Promise<{ success: boolean; properties?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.PATTERN_PROP_DELETE, id),
 
   // Search config sessions
   searchConfigSessionList: (): Promise<{ success: boolean; sessions?: any[] }> =>
