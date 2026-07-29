@@ -5,6 +5,7 @@ import * as os from 'os';
 import * as http from 'http';
 import { spawn, execSync, spawnSync } from 'child_process';
 import { randomUUID, createHash } from 'crypto';
+import { marked } from 'marked';
 // Lazy-loaded: node-pty causes SIGSEGV on Linux when bindings mismatch
 let pty: typeof import('node-pty') | null = null;
 if (process.platform !== 'linux') {
@@ -5999,6 +6000,80 @@ ipcMain.handle('save-notes-as', async (_e: any, content: string) => {
   }
   fs.writeFileSync(result.filePath, content, 'utf-8');
   return { success: true, filePath: result.filePath };
+});
+
+// Wrap the notes (treated as Markdown) in a print-styled HTML document.
+function notesToHtml(md: string, title: string): string {
+  const bodyHtml = marked.parse(md && md.trim() ? md : '_(empty notes)_', { async: false }) as string;
+  const safeTitle = String(title).replace(/[<>&]/g, '');
+  return `<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  @page { size: A4; margin: 1.6cm; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 12px; line-height: 1.5; color: #1a1a1a; }
+  h1, h2, h3, h4 { line-height: 1.25; margin: 1.1em 0 0.5em; }
+  h1 { font-size: 20px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+  h2 { font-size: 16px; } h3 { font-size: 14px; }
+  p, li { font-size: 12px; }
+  code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; background: #f2f2f4; padding: 1px 4px; border-radius: 3px; }
+  pre { background: #f2f2f4; padding: 10px 12px; border-radius: 5px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  blockquote { margin: 0.6em 0; padding: 2px 12px; border-left: 3px solid #ccc; color: #555; }
+  table { border-collapse: collapse; } th, td { border: 1px solid #ccc; padding: 4px 8px; font-size: 11px; }
+  a { color: #2a6ad6; }
+  img { max-width: 100%; }
+  .notes-doc-header { color: #888; font-size: 10px; margin-bottom: 14px; }
+</style></head>
+<body>
+  <div class="notes-doc-header">${safeTitle} · exported from LOGAN</div>
+  ${bodyHtml}
+</body></html>`;
+}
+
+// Render an HTML string to a PDF Buffer via a hidden window + printToPDF. Uses a
+// temp file (not a data URL) so arbitrarily large notes don't hit URL limits.
+async function renderNotesPdf(html: string): Promise<Buffer> {
+  const tmpPath = path.join(os.tmpdir(), `logan-notes-${Date.now()}-${Math.floor(Math.random() * 1e6)}.html`);
+  fs.writeFileSync(tmpPath, html, 'utf-8');
+  const win = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true } });
+  try {
+    await win.loadFile(tmpPath);
+    await new Promise((r) => setTimeout(r, 150)); // let layout/fonts settle
+    return await win.webContents.printToPDF({ printBackground: true, preferCSSPageSize: true });
+  } finally {
+    win.destroy();
+    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+  }
+}
+
+// Export notes as Markdown (verbatim) or PDF (rendered), via a native save dialog.
+ipcMain.handle('notes-export', async (_e: any, content: string, format: 'md' | 'pdf') => {
+  if (!mainWindow) return { success: false, error: 'No window' };
+  if (!content || !content.trim()) return { success: false, error: 'Notes are empty' };
+
+  const base = currentFilePath ? path.basename(currentFilePath) : 'notes';
+  const ext = format === 'pdf' ? 'pdf' : 'md';
+  const result = await showSaveDialog({
+    title: `Export Notes as ${ext.toUpperCase()}`,
+    defaultPath: `${base}.notes.${ext}`,
+    filters: format === 'pdf'
+      ? [{ name: 'PDF', extensions: ['pdf'] }]
+      : [{ name: 'Markdown', extensions: ['md'] }, { name: 'All Files', extensions: ['*'] }],
+  });
+  if (result.canceled || !result.filePath) return { success: false, error: 'Cancelled' };
+
+  try {
+    if (format === 'pdf') {
+      const pdf = await renderNotesPdf(notesToHtml(content, base));
+      fs.writeFileSync(result.filePath, pdf);
+    } else {
+      fs.writeFileSync(result.filePath, content, 'utf-8');
+    }
+    return { success: true, filePath: result.filePath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
 });
 
 // Agent chat — user sends message from renderer
