@@ -5,7 +5,9 @@ import * as os from 'os';
 import * as http from 'http';
 import { spawn, execSync, spawnSync } from 'child_process';
 import { randomUUID, createHash } from 'crypto';
-import { marked } from 'marked';
+// marked v17 is ESM-only ("type":"module"), so a static `import`/`require('marked')`
+// throws "require() of ES Module …" under our CommonJS main build. Load its UMD
+// build (CommonJS-compatible) lazily by absolute file path instead — see getMarked().
 // Lazy-loaded: node-pty causes SIGSEGV on Linux when bindings mismatch
 let pty: typeof import('node-pty') | null = null;
 if (process.platform !== 'linux') {
@@ -6002,8 +6004,21 @@ ipcMain.handle('save-notes-as', async (_e: any, content: string) => {
   return { success: true, filePath: result.filePath };
 });
 
+// Lazily load marked (ESM-only in v17) via a genuine dynamic import(). A static
+// `import`/`require('marked')` compiles to require() under our CommonJS main build
+// and throws "require() of ES Module …". The `new Function` wrapper preserves a
+// real import() through TypeScript's CommonJS downleveling (which would otherwise
+// rewrite import() → require()). Cached as a promise so it loads at most once.
+const dynamicImport = new Function('specifier', 'return import(specifier)') as (s: string) => Promise<any>;
+let markedPromise: Promise<{ parse: (md: string, opts?: any) => string }> | null = null;
+function getMarked(): Promise<{ parse: (md: string, opts?: any) => string }> {
+  if (!markedPromise) markedPromise = dynamicImport('marked');
+  return markedPromise;
+}
+
 // Wrap the notes (treated as Markdown) in a print-styled HTML document.
-function notesToHtml(md: string, title: string): string {
+async function notesToHtml(md: string, title: string): Promise<string> {
+  const marked = await getMarked();
   const bodyHtml = marked.parse(md && md.trim() ? md : '_(empty notes)_', { async: false }) as string;
   const safeTitle = String(title).replace(/[<>&]/g, '');
   return `<!doctype html>
@@ -6065,7 +6080,7 @@ ipcMain.handle('notes-export', async (_e: any, content: string, format: 'md' | '
 
   try {
     if (format === 'pdf') {
-      const pdf = await renderNotesPdf(notesToHtml(content, base));
+      const pdf = await renderNotesPdf(await notesToHtml(content, base));
       fs.writeFileSync(result.filePath, pdf);
     } else {
       fs.writeFileSync(result.filePath, content, 'utf-8');
