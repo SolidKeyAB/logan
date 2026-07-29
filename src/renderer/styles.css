@@ -4616,6 +4616,28 @@ kbd {
   transition: color 0.2s;
 }
 
+.notes-header-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.notes-export-btn {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.notes-export-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-color, #5b8def);
+}
+
 .notes-save-status.saving {
   color: var(--accent-color);
 }
