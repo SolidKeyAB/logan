@@ -7792,10 +7792,14 @@ function renderTimeAlignLanes(): void {
       mark.dataset.lineNumber = String(entry.lineNumber);
       mark.dataset.epochMs = String(entry.epochMs);
 
-      // Click to navigate
+      // Click to navigate. Pass BOTH the filtered display index (scroll target)
+      // and the raw line number (selection/cursor) — otherwise, with a filter
+      // active, we'd scroll to display-position N instead of line N, landing on
+      // the wrong line (see the overview strip's goToLine(pos, raw) pattern).
       mark.addEventListener('click', (e) => {
         e.stopPropagation();
-        goToLine(entry.lineNumber);
+        const di = getFilteredDisplayIndex(entry.lineNumber);
+        goToLine(di >= 0 ? di : entry.lineNumber, entry.lineNumber);
       });
 
       // Hover tooltip
