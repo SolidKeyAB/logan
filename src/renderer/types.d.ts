@@ -535,6 +535,7 @@ interface Api {
   loadNotes: () => Promise<{ success: boolean; content?: string }>;
   saveNotes: (content: string) => Promise<{ success: boolean; error?: string }>;
   saveNotesAs: (content: string) => Promise<{ success: boolean; filePath?: string; error?: string }>;
+  exportNotes: (content: string, format: 'md' | 'pdf') => Promise<{ success: boolean; filePath?: string; error?: string }>;
 
   // Search configs
   searchConfigSave: (config: SearchConfigDef) => Promise<{ success: boolean }>;

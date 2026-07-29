@@ -8995,6 +8995,30 @@ function saveNotesDebounced(): void {
   }, 1000);
 }
 
+async function exportNotes(format: 'md' | 'pdf'): Promise<void> {
+  const content = elements.notesTextarea.value;
+  if (!content.trim()) { showToast('Notes are empty'); return; }
+  const status = elements.notesSaveStatus;
+  const prev = status.textContent;
+  status.textContent = `Exporting ${format.toUpperCase()}…`;
+  try {
+    const result = await window.api.exportNotes(content, format);
+    if (result.success && result.filePath) {
+      const name = result.filePath.split(/[\\/]/).pop();
+      status.textContent = `Exported → ${name}`;
+      setTimeout(() => { if (status.textContent?.startsWith('Exported')) status.textContent = ''; }, 3000);
+    } else if (result.error === 'Cancelled') {
+      status.textContent = prev || '';
+    } else {
+      status.textContent = '';
+      showToast(`Export failed: ${result.error || 'unknown error'}`);
+    }
+  } catch (e) {
+    status.textContent = '';
+    showToast(`Export failed: ${String(e)}`);
+  }
+}
+
 function showNotesContextMenu(e: MouseEvent): void {
   const existing = document.querySelector('.tab-context-menu');
   if (existing) existing.remove();
@@ -18636,6 +18660,8 @@ function init(): void {
   elements.btnSearchToggle?.addEventListener('click', toggleSearchPanel);
   elements.btnSearchPanelClose?.addEventListener('click', hideSearchPanel);
   elements.notesTextarea.addEventListener('input', saveNotesDebounced);
+  document.getElementById('btn-export-notes-md')?.addEventListener('click', () => { void exportNotes('md'); });
+  document.getElementById('btn-export-notes-pdf')?.addEventListener('click', () => { void exportNotes('pdf'); });
 
   // Agent Chat event listeners
   elements.chatSendBtn.addEventListener('click', sendChatMessage);

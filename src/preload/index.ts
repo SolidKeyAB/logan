@@ -422,6 +422,9 @@ const api = {
   saveNotesAs: (content: string): Promise<{ success: boolean; filePath?: string; error?: string }> =>
     ipcRenderer.invoke('save-notes-as', content),
 
+  exportNotes: (content: string, format: 'md' | 'pdf'): Promise<{ success: boolean; filePath?: string; error?: string }> =>
+    ipcRenderer.invoke('notes-export', content, format),
+
   // File context menu actions
   showItemInFolder: (filePath: string): Promise<void> =>
     ipcRenderer.invoke('show-item-in-folder', filePath),
