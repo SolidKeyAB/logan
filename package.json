@@ -95,7 +95,8 @@
       "node_modules/serialport/**",
       "node_modules/@serialport/**",
       "node_modules/@vscode/ripgrep/**",
-      "node_modules/@vscode/ripgrep-*/**"
+      "node_modules/@vscode/ripgrep-*/**",
+      "node_modules/marked/**"
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
