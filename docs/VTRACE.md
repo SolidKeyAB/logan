@@ -100,28 +100,40 @@ monotonic — see the `monotonic repair` test.
 
 ---
 
-## 4. Timestamps & absolute wall-clock (optional, future)
+## 4. Timestamps & absolute wall-clock
 
-The decoder emits **relative device-uptime seconds** (monotonic, correct). The
-trace timestamp is the device `CLOCK_MONOTONIC` in ns — the same value that appears
-inline in messages as `monotonicTimestamp=…`.
+The record timestamp is the device `CLOCK_MONOTONIC` in ns — the same value that
+appears inline in messages as `monotonicTimestamp=…`. On its own that's device
+uptime, not a calendar date.
 
-The capture *bundle* (the directory the `.esotrace` files sit in) carries sidecars
-that can map this to absolute time. For a future enhancement:
+**In-message anchor (implemented).** Some messages carry BOTH an absolute
+`timestamp=<epoch-ms>` and a `monotonicTimestamp=<ns>`. One such pair pins
+uptime-0 to epoch:
+
+```
+epoch0_ms = timestamp_ms − monotonicTimestamp_ns / 1e6
+line_time = epoch0_ms + record_uptime_ns / 1e6   →  "YYYY-MM-DD HH:MM:SS.mmm"
+```
+
+`findEpochAnchorMs(buf)` (`vtraceParse.ts`) scans for the first such pair —
+early-exiting at the usual boot/session banner near the file head — with a
+plausibility window (2001–2096) that rejects unit mismatches. When it resolves,
+every emitted line is prefixed with a real date, so LOGAN's timestamp parser,
+time-gaps and the ⏱ timeline all operate on wall-clock time. When it doesn't
+(no anchor message in that file), the decoder falls back to the relative
+device-uptime seconds it has always emitted — nothing breaks.
+
+**Sidecar anchor (future).** The capture *bundle* also carries sidecars:
 
 - `loggertime/loggertime_<sid>.json` — a linear map `{x1,y1,x2,y2}` from a logger
   clock to epoch-ms. (Note: it maps the *logger* clock, not `CLOCK_MONOTONIC`; the
   two differ by a boot offset.)
-- Messages that contain both `timestamp=<epoch-ms>` and
-  `monotonicTimestamp=<ns>` give a direct anchor: `epoch_ns ≈ timestamp*1e6 −
-  monotonicTimestamp`. The standalone parser accepts `--epoch-ns <value>` to fold
-  this in and emit `YYYY-MM-DD HH:MM:SS.mmm`.
 - `session.json` / `segments.json` describe session boundaries and 1-second
   segments; `de.esolutions.fw.tools.trace.versioninfo/` lists per-app versions.
 
-To add absolute timestamps to the adapter, read the `loggertime`/anchor sidecar in
-`normalize()` and pass an `epochNs` into `parseVtraceToFile`. Out of scope for the
-initial "make it open" stage.
+`parseVtraceToFile` already accepts `{ epochMsAnchor }`, so a sidecar-derived
+anchor would just be read in the adapter's `normalize()` and passed straight
+through — no decoder change needed.
 
 ### Level mapping caveat
 `level` (uint16) is a 0–4 enum; the names `CRITICAL/ERROR/WARNING/INFO/DEBUG` are a
