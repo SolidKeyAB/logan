@@ -3,7 +3,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { VtraceAdapter, pickAdapter, adapterRegistry } from '../main/sourceAdapter';
-import { decodeVtrace, parseVtraceToFile, VtraceRecord } from '../main/vtraceParse';
+import { decodeVtrace, parseVtraceToFile, findEpochAnchorMs, VtraceRecord } from '../main/vtraceParse';
+import { parseTimestampFast } from '../main/timestampParse';
 
 // ── Minimal vtrace fixture builder ───────────────────────────────────────────
 // Builds a buffer shaped like a real trace stream: a header carrying the
@@ -154,5 +155,70 @@ describe('VtraceAdapter', () => {
     expect(caps.isBinary).toBe(true);
     expect(caps.supportsAppend).toBe(false);
     expect(caps.needsSchema).toBe(false);
+  });
+});
+
+// ── Absolute wall-clock anchor (in-message timestamp + monotonicTimestamp) ─────
+describe('vtrace absolute wall-clock anchor', () => {
+  // uptime 296.000000s; the message pins that uptime to epoch-ms 1_700_000_296_000,
+  // so uptime-0 → 1_700_000_000_000 (2023-11-14 22:13:20 UTC).
+  const ANCHORED = buildFixture([
+    record(296_000_000_000, 2, '[1:2:3] session start timestamp=1700000296000 monotonicTimestamp=296000000000'),
+    record(296_005_000_000, 3, '[9:9:9] later event, no fields here'),
+  ]);
+
+  it('findEpochAnchorMs derives uptime-0 → epoch-ms from an in-message pair', () => {
+    expect(findEpochAnchorMs(ANCHORED)).toBe(1_700_000_000_000);
+  });
+
+  it('findEpochAnchorMs returns null when no message carries the pair', () => {
+    expect(findEpochAnchorMs(SAMPLE)).toBeNull();
+  });
+
+  it('findEpochAnchorMs rejects an implausible pair (unit mismatch) → null', () => {
+    // epoch-SECONDS mistakenly in the field would land in 1970; must not anchor.
+    const bad = buildFixture([
+      record(1_000_000_000, 2, 'boot timestamp=1700000296 monotonicTimestamp=1000000000'),
+    ]);
+    expect(findEpochAnchorMs(bad)).toBeNull();
+  });
+
+  it('parseVtraceToFile emits absolute "YYYY-MM-DD HH:MM:SS.mmm" lines when anchored', async () => {
+    const p = tmpVtrace(ANCHORED);
+    const outPath = path.join(os.tmpdir(), `logan-vtrace-abs-${process.pid}-${Math.random().toString(36).slice(2)}.norm`);
+    try {
+      await parseVtraceToFile(p, outPath);
+      const lines = fs.readFileSync(outPath, 'utf-8').split('\n');
+      expect(lines).toHaveLength(2);
+      // Absolute date prefix (not the relative "296.xxxxxx" form). Millisecond part
+      // is timezone-independent: uptime .000000s → .000, +5ms → .005.
+      expect(lines[0]).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.000 WARNING /);
+      expect(lines[1]).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.005 INFO /);
+      // Round-trips through LOGAN's own parser; the 5ms uptime gap is preserved and
+      // TZ-independent (both lines share the runner's zone).
+      const t0 = parseTimestampFast(lines[0]);
+      const t1 = parseTimestampFast(lines[1]);
+      expect(t0).not.toBeNull();
+      expect(t1).not.toBeNull();
+      expect(t1!.date.getTime() - t0!.date.getTime()).toBe(5);
+    } finally {
+      fs.unlinkSync(p);
+      if (fs.existsSync(outPath)) fs.unlinkSync(outPath);
+    }
+  });
+
+  it('parseVtraceToFile honours a supplied epochMsAnchor (sidecar hook)', async () => {
+    const p = tmpVtrace(SAMPLE); // SAMPLE has no in-message anchor
+    const outPath = path.join(os.tmpdir(), `logan-vtrace-abs2-${process.pid}-${Math.random().toString(36).slice(2)}.norm`);
+    try {
+      await parseVtraceToFile(p, outPath, undefined, { epochMsAnchor: 1_700_000_000_000 });
+      const lines = fs.readFileSync(outPath, 'utf-8').split('\n');
+      // SAMPLE record 0 is uptime 296.000000s → +296000ms from the supplied anchor.
+      expect(lines[0]).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.000 WARNING /);
+      expect(parseTimestampFast(lines[0])!.date.getTime()).toBe(1_700_000_296_000);
+    } finally {
+      fs.unlinkSync(p);
+      if (fs.existsSync(outPath)) fs.unlinkSync(outPath);
+    }
   });
 });

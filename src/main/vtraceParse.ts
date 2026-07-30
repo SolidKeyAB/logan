@@ -34,10 +34,12 @@ import * as path from 'path';
  *    its 40 bits; we detect it and carry the last good timestamp forward (accurate
  *    to a few ms) so the emitted stream stays strictly monotonic.
  *
- * Output: one normalized line per record, `"<seconds> <LEVEL> <message>"`, with any
- * embedded CR/LF folded to spaces so FileHandler keeps a 1:1 record-to-line map and
- * its level detection keys on the LEVEL token. Timestamps are monotonic device
- * uptime in seconds; see docs/VTRACE.md for the absolute-wall-clock mapping.
+ * Output: one normalized line per record, with any embedded CR/LF folded to spaces
+ * so FileHandler keeps a 1:1 record-to-line map and its level detection keys on the
+ * LEVEL token. The timestamp prefix is an absolute `"YYYY-MM-DD HH:MM:SS.mmm"` date
+ * when a wall-clock anchor is resolved (from an in-message timestamp/monotonicTimestamp
+ * pair — see findEpochAnchorMs and docs/VTRACE.md §4), else the relative monotonic
+ * device-uptime `"<seconds>"` it has always emitted.
  */
 
 const HDR = 39; // fixed tail length for the common record shape
@@ -46,6 +48,33 @@ const TS_MAX = 0xffffffffff; // 2^40 - 1: a real ns uptime fits in 40 bits
 
 /** Magic identity string present in a valid file's header (a marker of the input). */
 const IDENTITY = Buffer.from('traceserverIVI', 'latin1');
+
+// ── Absolute wall-clock anchor (in-message) ──────────────────────────────────
+// The record timestamp is device CLOCK_MONOTONIC uptime, not a calendar date. But
+// some messages carry BOTH an absolute `timestamp=<epoch-ms>` and the matching
+// `monotonicTimestamp=<ns>` (the same monotonic clock as the record uptime). One
+// such pair pins uptime-0 to epoch: epoch0_ms = timestamp_ms − monotonic_ns/1e6.
+// Adding a record's uptime back then gives its absolute time. See docs/VTRACE.md §4.
+// `timestamp=` is matched case-sensitively and must not be preceded by a letter, so
+// it never captures the tail of `monotonicTimestamp=`.
+const EPOCH_MS_RE = /(?:^|[^A-Za-z])timestamp=(\d{10,})/;
+const MONO_NS_RE = /monotonicTimestamp=(\d+)/;
+// Plausible epoch-ms window (2001-09 … 2096) — rejects unit mismatches (e.g. an
+// epoch-seconds field) so a bad pair falls back to relative seconds, never a
+// wildly-wrong date.
+const EPOCH_MS_MIN = 1_000_000_000_000;
+const EPOCH_MS_MAX = 4_000_000_000_000;
+
+/** Format an absolute epoch-ms as "YYYY-MM-DD HH:MM:SS.mmm" in LOCAL time — the
+ * same calendar convention parseTimestampFast reads back, so the emitted line
+ * round-trips to the same instant regardless of the viewer's timezone. */
+function formatAbsoluteMs(ms: number): string {
+  const d = new Date(ms);
+  const p2 = (x: number): string => String(x).padStart(2, '0');
+  const p3 = (x: number): string => String(x).padStart(3, '0');
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ` +
+    `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}.${p3(d.getMilliseconds())}`;
+}
 
 export const VTRACE_LEVELS: Record<number, string> = {
   0: 'CRITICAL', 1: 'ERROR', 2: 'WARNING', 3: 'INFO', 4: 'DEBUG', 5: 'VERBOSE',
@@ -107,6 +136,43 @@ function repairTs(rawTs: number, lastTs: number): number {
 }
 
 /**
+ * Scan records for the first message carrying BOTH an absolute `timestamp=<epoch-ms>`
+ * and a `monotonicTimestamp=<ns>`, and return the epoch-ms that corresponds to
+ * device-uptime 0 (fractional): `epoch0_ms = timestamp_ms − monotonic_ns/1e6`.
+ * Adding any record's uptime-ms back yields its absolute wall-clock time.
+ *
+ * Returns null when no plausible anchor exists in the file — the caller then keeps
+ * the relative device-uptime seconds it emits today. Early-exits at the first good
+ * pair (typically a boot/session banner near the file head), so it's usually cheap;
+ * only pays a full extra scan when the file has no anchor at all.
+ */
+export function findEpochAnchorMs(buf: Buffer): number | null {
+  const n = buf.length;
+  let t = HDR;
+  while (t < n - 4) {
+    const rec = recordAt(buf, t, n);
+    if (rec === null) { t += 1; continue; }
+    const sl = rec[2];
+    const text = buf.toString('utf8', t, t + sl);
+    // Cheap pre-filter: only the rare anchor message mentions the monotonic field.
+    if (text.indexOf('monotonicTimestamp=') !== -1) {
+      const mono = MONO_NS_RE.exec(text);
+      const epoch = EPOCH_MS_RE.exec(text);
+      if (mono && epoch) {
+        const epochMs = Number(epoch[1]);
+        const monoNs = Number(mono[1]);
+        if (Number.isFinite(epochMs) && Number.isFinite(monoNs)) {
+          const anchor = epochMs - monoNs / 1e6;
+          if (anchor >= EPOCH_MS_MIN && anchor <= EPOCH_MS_MAX) return anchor;
+        }
+      }
+    }
+    t += sl + HDR;
+  }
+  return null;
+}
+
+/**
  * Decode every trace message in `buf`, invoking `emit` for each in file order.
  * Returns the number of records emitted. Timestamps are repaired to be monotonic.
  */
@@ -138,16 +204,28 @@ export function isVtrace(filePath: string, head: Buffer): boolean {
  * Stream-decode a vtrace file to a newline-delimited normalized text file the
  * FileHandler indexer can consume unchanged. Mirrors mf4Parse's buffered writer
  * (flush ~every 1 MB) and progress contract.
+ *
+ * When an absolute wall-clock anchor can be resolved (from `opts.epochMsAnchor`, or
+ * auto-detected in-message via findEpochAnchorMs), each line is prefixed with a real
+ * "YYYY-MM-DD HH:MM:SS.mmm" date so LOGAN's timestamp parser, time-gaps and the
+ * timeline all work on wall-clock time. Otherwise it falls back to the relative
+ * device-uptime seconds it has always emitted. (`opts.epochMsAnchor` is the hook a
+ * future sidecar-based anchor would use.)
  */
 export async function parseVtraceToFile(
   filePath: string,
   outPath: string,
   onProgress?: (percent: number) => void,
+  opts?: { epochMsAnchor?: number | null },
 ): Promise<void> {
   const buf = fs.readFileSync(filePath);
   if (!buf.includes(IDENTITY)) {
     throw new Error(`Not a vtrace file: ${path.basename(filePath)}`);
   }
+
+  // Resolve the wall-clock anchor once up front (uptime-0 → epoch ms). A supplied
+  // anchor wins; otherwise auto-detect from an in-message timestamp/monotonic pair.
+  const epochMsAnchor = opts?.epochMsAnchor ?? findEpochAnchorMs(buf);
 
   const fd = fs.openSync(outPath, 'w');
   let started = false;
@@ -170,9 +248,11 @@ export async function parseVtraceToFile(
       const [rawTs, level, sl] = rec;
       const ts = repairTs(rawTs, lastTs);
       lastTs = ts;
-      const secs = (ts / 1e9).toFixed(6);
+      const stamp = epochMsAnchor !== null
+        ? formatAbsoluteMs(epochMsAnchor + ts / 1e6)   // absolute wall-clock
+        : (ts / 1e9).toFixed(6);                        // relative uptime seconds
       const lvl = VTRACE_LEVELS[level] ?? `L${level}`;
-      writeLine(`${secs} ${lvl} ${oneLine(buf.toString('utf8', t, t + sl))}`);
+      writeLine(`${stamp} ${lvl} ${oneLine(buf.toString('utf8', t, t + sl))}`);
       t += sl + HDR;
       if (onProgress) {
         const pct = Math.min(99, Math.floor((t / n) * 100));
