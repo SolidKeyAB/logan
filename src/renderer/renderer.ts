@@ -11388,13 +11388,18 @@ async function renderSearchConfigsOverview(): Promise<void> {
       if (!ctx) return;
       ctx.fillStyle = '#14141a';
       ctx.fillRect(0, 0, cw, ch);
+      // A minimum bar width (~2 CSS px) so a single/sparse match reads as a real
+      // mark instead of a near-invisible 1px sliver on a wide strip. Dense runs
+      // stay contiguous. Marks are centred on their column and edge-clamped.
+      const minW = Math.max(1, Math.round(2 * dpr));
       for (let x = 0; x < cw; x++) {
         const n = counts[x];
         if (n === 0) continue;
-        // Log scale + 40% floor so a single hit still reads clearly.
-        const a = 0.4 + 0.6 * (Math.log1p(n) / Math.log1p(maxCount));
+        // Log scale + 55% floor (was 40%) so a lone hit is clearly visible.
+        const a = 0.55 + 0.45 * (Math.log1p(n) / Math.log1p(maxCount));
         ctx.fillStyle = hexToRgba(config.color, a);
-        ctx.fillRect(x, 0, 1, ch);
+        const bx = Math.max(0, Math.min(cw - minW, x - (minW >> 1)));
+        ctx.fillRect(bx, 0, minW, ch);
       }
     };
     // clientWidth is 0 until laid out; rAF ensures flex has resolved.
@@ -11589,15 +11594,18 @@ async function exportSearchConfigsOverviewImage(): Promise<void> {
     ctx.fillStyle = '#d4d4d8';
     ctx.fillText(fitText(config.pattern, labelW - 14 - countW - 10), PAD + 14, y + rowH / 2 + 4);
 
-    // strip background + density bars
+    // strip background + density bars (same visibility rules as the live strip:
+    // ≥2px min width + 55% opacity floor so a single/sparse match stands out).
     ctx.fillStyle = '#14141a';
     ctx.fillRect(stripX, sy, stripW, stripH);
+    const minW = 2;
     for (let x = 0; x < cols; x++) {
       const n = counts[x];
       if (n === 0) continue;
-      const a = 0.4 + 0.6 * (Math.log1p(n) / Math.log1p(maxCount));
+      const a = 0.55 + 0.45 * (Math.log1p(n) / Math.log1p(maxCount));
       ctx.fillStyle = hexToRgba(config.color, a);
-      ctx.fillRect(stripX + x, sy, 1, stripH);
+      const bx = Math.max(0, Math.min(cols - minW, x - (minW >> 1)));
+      ctx.fillRect(stripX + bx, sy, minW, stripH);
     }
   });
 
