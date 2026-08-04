@@ -30,6 +30,7 @@ import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessa
 import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
 import { BaselineStore, buildFingerprint } from './baselineStore';
 import { parseTimestampFast } from './timestampParse';
+import { carryForwardTimestamps, buildOriginTags, formatWallClock } from './mergeTimeline';
 import { compileColumnPattern, makeColumnExtractor, ColumnPatternSpec } from './columnPattern';
 import { parseVtraceToFile } from './vtraceParse';
 import { runTrendJob } from './trendWorkerClient';
@@ -6151,6 +6152,154 @@ ipcMain.handle('time-sync-merge', async (_, filePaths: string[], opts?: { maxRow
 });
 
 // === Merge multiple files → one new, time-ordered file with an origin column ===
+// The write-to-disk counterpart of time-sync-merge: instead of a sampled preview,
+// it interleaves EVERY line of every file in wall-clock order and streams the
+// result to a user-chosen file. Each emitted line is:
+//     <normalized timestamp> | <origin> | <original line>
+// Untimestamped lines inherit the previous timestamp (carry-forward) so multi-line
+// entries (stack traces, wrapped messages) stay intact and adjacent to their anchor.
+ipcMain.handle('merge-files-to-file', async (_, filePaths: string[], opts?: { includeHeader?: boolean; separator?: string }) => {
+  try {
+    if (!Array.isArray(filePaths) || filePaths.length < 1) {
+      return { success: false, error: 'Add at least one file to merge' };
+    }
+    const SEP = typeof opts?.separator === 'string' ? (opts as any).separator : ' | ';
+    const includeHeader = opts?.includeHeader !== false;
+    const SCAN_CAP = 3_000_000;    // max lines scanned per file
+    const COLLECT_CAP = 3_000_000; // max lines held before the sort
+    const BATCH = 8000;
+
+    // Resolve a FileHandler per path: reuse the cache, else open through the
+    // adapter layer (so binary formats normalize to text) and cache it.
+    const handlers: (FileHandler | null)[] = [];
+    for (const fp of filePaths) {
+      let h = fileHandlerCache.get(fp);
+      if (h && h.isStale()) { evictFromCache(fp); h = undefined; }
+      if (!h) {
+        try {
+          const nh = new FileHandler();
+          const opened = await openWithAdapter(nh, fp, () => {});
+          sourceRegistry.set(fp, opened.source);
+          addToCache(fp, nh);
+          h = nh;
+        } catch { handlers.push(null); continue; }
+      }
+      handlers.push(h);
+    }
+
+    const tags = buildOriginTags(filePaths);
+    const entries: { f: number; ln: number; ms: number }[] = [];
+    const skipped: string[] = [];
+    const contributed = new Set<number>();
+    let collectCapped = false;
+    let scanCapped = false;
+
+    for (let fi = 0; fi < handlers.length; fi++) {
+      const h = handlers[fi];
+      if (!h) { skipped.push(`${tags[fi]} (couldn't open)`); continue; }
+      const total = h.getTotalLines();
+      const scanTo = Math.min(total, SCAN_CAP);
+      if (total > SCAN_CAP) scanCapped = true;
+
+      // Collect the file's lines with their raw (possibly-null) timestamps.
+      const lns: number[] = [];
+      const msRaw: (number | null)[] = [];
+      let tsCount = 0;
+      for (let start = 0; start < scanTo && !collectCapped; start += BATCH) {
+        const batch = h.getLines(start, Math.min(BATCH, scanTo - start));
+        for (const line of batch) {
+          const parsed = parseTimestampFast(line.text);
+          const ms = parsed ? parsed.date.getTime() : null;
+          if (ms !== null) tsCount++;
+          lns.push(line.lineNumber);
+          msRaw.push(ms);
+        }
+      }
+      if (tsCount === 0) { skipped.push(`${tags[fi]} (no timestamps)`); continue; }
+
+      // Fill untimestamped lines by carry-forward, then queue every line.
+      const eff = carryForwardTimestamps(msRaw);
+      for (let i = 0; i < eff.length; i++) {
+        const ms = eff[i];
+        if (ms === null) continue;
+        if (entries.length >= COLLECT_CAP) { collectCapped = true; break; }
+        entries.push({ f: fi, ln: lns[i], ms });
+        contributed.add(fi);
+      }
+      if (collectCapped) break;
+    }
+
+    if (entries.length === 0) {
+      return {
+        success: false,
+        error: 'No timestamped lines to merge' + (skipped.length ? ` — skipped: ${skipped.join(', ')}` : ''),
+      };
+    }
+
+    // Stable merge by time; tie-break by file then line keeps each file's own
+    // order (and carried-forward continuation lines) intact.
+    entries.sort((a, b) => a.ms - b.ms || a.f - b.f || a.ln - b.ln);
+    const minMs = entries[0].ms;
+    const maxMs = entries[entries.length - 1].ms;
+
+    // Ask where to write; default next to the first file.
+    const firstDir = path.dirname(filePaths[0]);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+    const dialogRes = await showSaveDialog({
+      title: 'Save merged timeline',
+      defaultPath: path.join(firstDir, `merged-timeline_${stamp}.log`),
+      filters: [{ name: 'Log', extensions: ['log', 'txt'] }, { name: 'All Files', extensions: ['*'] }],
+    });
+    if (dialogRes.canceled || !dialogRes.filePath) return { success: false, error: 'Cancelled' };
+    const outPath = dialogRes.filePath;
+
+    const padWidth = tags.reduce((m, t, i) => (contributed.has(i) ? Math.max(m, t.length) : m), 0);
+    const fd = fs.openSync(outPath, 'w');
+    let written = 0;
+    try {
+      let buf = '';
+      const flush = () => { if (buf) { fs.writeSync(fd, buf); buf = ''; } };
+      const emit = (s: string) => { buf += s + '\n'; if (buf.length >= SAVE_RANGE_FLUSH_CHARS) flush(); };
+
+      if (includeHeader) {
+        emit(`# LOGAN merged timeline · ${contributed.size} files · ${entries.length.toLocaleString('en-US')} lines · ${formatWallClock(minMs)} → ${formatWallClock(maxMs)}`);
+        for (let i = 0; i < filePaths.length; i++) {
+          if (contributed.has(i)) emit(`#   ${tags[i]} ⟵ ${filePaths[i]}`);
+        }
+        if (skipped.length) emit(`#   skipped: ${skipped.join(', ')}`);
+        emit(`# format: <timestamp>${SEP}<origin>${SEP}<original line>`);
+      }
+
+      for (const e of entries) {
+        const h = handlers[e.f];
+        let text = '';
+        if (h) { const ls = h.getLines(e.ln, 1); if (ls.length) text = ls[0].text; }
+        emit(`${formatWallClock(e.ms)}${SEP}${tags[e.f].padEnd(padWidth)}${SEP}${text}`);
+        written++;
+      }
+      flush();
+    } finally {
+      fs.closeSync(fd);
+    }
+
+    if (currentFilePath) logActivity(currentFilePath, 'files_merged', { files: contributed.size, lines: written });
+
+    return {
+      success: true,
+      filePath: outPath,
+      lineCount: written,
+      fileCount: contributed.size,
+      minMs,
+      maxMs,
+      skipped,
+      collectCapped,
+      scanCapped,
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
 // === Terminal (tabbed, multi-session) ===
 
 interface TerminalSession {
