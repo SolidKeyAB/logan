@@ -313,6 +313,19 @@ const api = {
   formatJsonFile: (filePath: string): Promise<{ success: boolean; formattedPath?: string; error?: string }> =>
     ipcRenderer.invoke('format-json-file', filePath),
 
+  // Pattern Columns (paint / grok / regex → named columns)
+  columnPatternPreview: (
+    spec: { mode: 'grok' | 'regex' | 'paint'; pattern?: string; sample?: string; spans?: Array<{ start: number; end: number; name: string }>; flags?: string },
+    opts?: { sampleLines?: number }
+  ): Promise<{ success: boolean; regex?: string; flags?: string; fields?: string[]; named?: boolean; rows?: string[][]; matched?: number; scanned?: number; error?: string }> =>
+    ipcRenderer.invoke('column-pattern-preview', spec, opts),
+  columnPatternList: (): Promise<{ success: boolean; patterns?: any[] }> =>
+    ipcRenderer.invoke('column-pattern-list'),
+  columnPatternSave: (pattern: any): Promise<{ success: boolean; patterns?: any[]; error?: string }> =>
+    ipcRenderer.invoke('column-pattern-save', pattern),
+  columnPatternDelete: (id: string): Promise<{ success: boolean; patterns?: any[] }> =>
+    ipcRenderer.invoke('column-pattern-delete', id),
+
   // Datadog
   datadogLoadConfig: (): Promise<{ success: boolean; config?: { site: string; hasApiKey: boolean; hasAppKey: boolean } | null }> =>
     ipcRenderer.invoke(IPC.DATADOG_LOAD_CONFIG),
