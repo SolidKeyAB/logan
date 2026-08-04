@@ -349,6 +349,125 @@ function sendError(res: http.ServerResponse, message: string, status = 400): voi
   sendJson(res, { success: false, error: message }, status);
 }
 
+// Options for the compact "evidence pack" briefing (see buildEvidencePack).
+export interface EvidencePackOptions {
+  thresholdSeconds?: number;
+  topFields?: number;
+  topGaps?: number;
+  topComponents?: number;
+  fieldSampleSize?: number;
+  analyzerName?: string;
+  baselineId?: string;
+}
+
+// Compose a compact "evidence pack" — one briefing (severity, level counts,
+// grouped crashes, top failing components, top time gaps, discovered fields).
+// Reuses existing primitives (analyze / time-gaps / trend-fields / baseline)
+// in-process; returns counts + references (viewerLine), not raw log text.
+// Shared by the /api/evidence-pack handler (AI path) and the EVIDENCE_PACK IPC
+// (native "📋 Brief" button) — one implementation, no duplication.
+export async function buildEvidencePack(
+  ctx: ApiContext,
+  opts: EvidencePackOptions = {}
+): Promise<{ success: boolean; pack?: any; error?: string }> {
+  const filePath = ctx.getCurrentFilePath();
+  const handler = ctx.getFileHandler();
+  if (!filePath || !handler) return { success: false, error: 'No file open' };
+  const totalLines = handler.getTotalLines();
+
+  const thresholdSeconds = opts.thresholdSeconds ?? 60;
+  const topFieldsN = opts.topFields ?? 25;
+  const topGapsN = opts.topGaps ?? 8;
+  const topComponentsN = opts.topComponents ?? 10;
+
+  // 1. Analysis (also caches getAnalysisResult() for the baseline step)
+  const analysisResp = await ctx.analyze(opts.analyzerName);
+  const aresult = analysisResp?.success ? analysisResp.result : (analysisResp?.result ?? null);
+  const levelCounts = aresult?.levelCounts || {};
+  const totalAnalyzed = aresult?.stats?.analyzedLines || totalLines;
+  const errorCount = levelCounts['error'] || 0;
+  const warningCount = levelCounts['warning'] || 0;
+  const errorPercent = totalAnalyzed > 0 ? (errorCount / totalAnalyzed) * 100 : 0;
+  const warningPercent = totalAnalyzed > 0 ? (warningCount / totalAnalyzed) * 100 : 0;
+  const crashes = aresult?.insights?.crashes || [];
+  const topFailingComponents = aresult?.insights?.topFailingComponents || [];
+  const filterSuggestions = aresult?.insights?.filterSuggestions || [];
+
+  // 2. Time gaps (top N, with 1-based viewerLine)
+  const gapsResp = await ctx.detectTimeGaps({ thresholdSeconds });
+  const allGaps = gapsResp?.success ? (gapsResp.gaps || []) : [];
+  const timeGaps = allGaps.slice(0, topGapsN).map((g: any) => ({
+    viewerLine: g.lineNumber + 1,
+    gapSeconds: Math.round(g.gapSeconds),
+    from: g.prevTimestamp,
+    to: g.currTimestamp,
+    preview: g.linePreview,
+  }));
+
+  // 3. Discovered fields (the agent's vocabulary) — top N by frequency
+  const fieldsResp = await ctx.trendDiscoverFields({ sampleSize: opts.fieldSampleSize });
+  const allFields = fieldsResp?.success ? (fieldsResp.fields || []) : [];
+  const fields = allFields.slice(0, topFieldsN).map((f: any) => ({
+    name: f.name, type: f.type, occurrences: f.occurrences,
+    distinct: f.distinct, examples: f.examples,
+  }));
+
+  // Group crashes by keyword, keep first-occurrence viewerLine
+  const crashGroups: Record<string, { keyword: string; count: number; viewerLine: number; sample: string }> = {};
+  for (const c of crashes) {
+    if (!crashGroups[c.keyword]) {
+      crashGroups[c.keyword] = { keyword: c.keyword, count: 0, viewerLine: c.lineNumber + 1, sample: c.text };
+    }
+    crashGroups[c.keyword].count++;
+  }
+
+  // Severity + one-line summary (same rubric as logan_triage)
+  let severity: 'healthy' | 'warning' | 'critical' = 'healthy';
+  if (crashes.length > 0 || errorPercent > 20) {
+    severity = 'critical';
+  } else if (errorPercent > 5 || timeGaps.some((g: any) => g.gapSeconds > 300) || topFailingComponents.length > 3) {
+    severity = 'warning';
+  }
+  const parts = [`${totalLines.toLocaleString()} lines`];
+  if (errorCount > 0) parts.push(`${errorCount.toLocaleString()} errors (${errorPercent.toFixed(1)}%)`);
+  if (crashes.length > 0) parts.push(`${crashes.length} crashes`);
+  if (allGaps.length > 0) parts.push(`${allGaps.length} time gaps`);
+  if (allFields.length > 0) parts.push(`${allFields.length} fields`);
+
+  // 4. Optional baseline delta (analysis just ran, so getAnalysisResult() is set)
+  let baselineDelta: any = null;
+  if (opts.baselineId) {
+    const ar = ctx.getAnalysisResult();
+    if (ar) {
+      const fp = buildFingerprint(filePath, ar, handler);
+      baselineDelta = ctx.getBaselineStore().compare(fp, opts.baselineId) || null;
+    }
+  }
+
+  const pack = {
+    file: { path: filePath, totalLines, timeRange: aresult?.timeRange || null },
+    severity,
+    summary: parts.join(', '),
+    levels: {
+      ...levelCounts,
+      errorPercent: Math.round(errorPercent * 100) / 100,
+      warningPercent: Math.round(warningPercent * 100) / 100,
+    },
+    crashes: Object.values(crashGroups),
+    topComponents: topFailingComponents.slice(0, topComponentsN),
+    timeGaps,
+    fields,
+    filterSuggestions: filterSuggestions.slice(0, 5),
+    baselineDelta,
+    caps: {
+      fields: { shown: fields.length, total: allFields.length, truncated: allFields.length > fields.length },
+      timeGaps: { shown: timeGaps.length, total: allGaps.length, truncated: allGaps.length > timeGaps.length },
+      note: 'Compact briefing. Drill into any viewerLine with logan_get_lines; chart any field with logan_trend_show; pin issues with logan_report_finding.',
+    },
+  };
+  return { success: true, pack };
+}
+
 export function startApiServer(ctx: ApiContext): void {
   server = http.createServer(async (req, res) => {
     // Localhost-only: reject non-loopback connections
@@ -964,102 +1083,17 @@ export function startApiServer(ctx: ApiContext): void {
         // primitives (analyze / time-gaps / trend-fields / baseline) in-process;
         // returns counts + references (viewerLine), not raw log text.
         if (url === '/api/evidence-pack') {
-          const filePath = ctx.getCurrentFilePath();
-          const handler = ctx.getFileHandler();
-          if (!filePath || !handler) return sendError(res, 'No file open');
-          const totalLines = handler.getTotalLines();
-
-          const thresholdSeconds = body.thresholdSeconds ?? 60;
-          const topFieldsN = body.topFields ?? 25;
-          const topGapsN = body.topGaps ?? 8;
-          const topComponentsN = body.topComponents ?? 10;
-
-          // 1. Analysis (also caches getAnalysisResult() for the baseline step)
-          const analysisResp = await ctx.analyze(body.analyzerName);
-          const aresult = analysisResp?.success ? analysisResp.result : (analysisResp?.result ?? null);
-          const levelCounts = aresult?.levelCounts || {};
-          const totalAnalyzed = aresult?.stats?.analyzedLines || totalLines;
-          const errorCount = levelCounts['error'] || 0;
-          const warningCount = levelCounts['warning'] || 0;
-          const errorPercent = totalAnalyzed > 0 ? (errorCount / totalAnalyzed) * 100 : 0;
-          const warningPercent = totalAnalyzed > 0 ? (warningCount / totalAnalyzed) * 100 : 0;
-          const crashes = aresult?.insights?.crashes || [];
-          const topFailingComponents = aresult?.insights?.topFailingComponents || [];
-          const filterSuggestions = aresult?.insights?.filterSuggestions || [];
-
-          // 2. Time gaps (top N, with 1-based viewerLine)
-          const gapsResp = await ctx.detectTimeGaps({ thresholdSeconds });
-          const allGaps = gapsResp?.success ? (gapsResp.gaps || []) : [];
-          const timeGaps = allGaps.slice(0, topGapsN).map((g: any) => ({
-            viewerLine: g.lineNumber + 1,
-            gapSeconds: Math.round(g.gapSeconds),
-            from: g.prevTimestamp,
-            to: g.currTimestamp,
-            preview: g.linePreview,
-          }));
-
-          // 3. Discovered fields (the agent's vocabulary) — top N by frequency
-          const fieldsResp = await ctx.trendDiscoverFields({ sampleSize: body.fieldSampleSize });
-          const allFields = fieldsResp?.success ? (fieldsResp.fields || []) : [];
-          const fields = allFields.slice(0, topFieldsN).map((f: any) => ({
-            name: f.name, type: f.type, occurrences: f.occurrences,
-            distinct: f.distinct, examples: f.examples,
-          }));
-
-          // Group crashes by keyword, keep first-occurrence viewerLine
-          const crashGroups: Record<string, { keyword: string; count: number; viewerLine: number; sample: string }> = {};
-          for (const c of crashes) {
-            if (!crashGroups[c.keyword]) {
-              crashGroups[c.keyword] = { keyword: c.keyword, count: 0, viewerLine: c.lineNumber + 1, sample: c.text };
-            }
-            crashGroups[c.keyword].count++;
-          }
-
-          // Severity + one-line summary (same rubric as logan_triage)
-          let severity: 'healthy' | 'warning' | 'critical' = 'healthy';
-          if (crashes.length > 0 || errorPercent > 20) {
-            severity = 'critical';
-          } else if (errorPercent > 5 || timeGaps.some((g: any) => g.gapSeconds > 300) || topFailingComponents.length > 3) {
-            severity = 'warning';
-          }
-          const parts = [`${totalLines.toLocaleString()} lines`];
-          if (errorCount > 0) parts.push(`${errorCount.toLocaleString()} errors (${errorPercent.toFixed(1)}%)`);
-          if (crashes.length > 0) parts.push(`${crashes.length} crashes`);
-          if (allGaps.length > 0) parts.push(`${allGaps.length} time gaps`);
-          if (allFields.length > 0) parts.push(`${allFields.length} fields`);
-
-          // 4. Optional baseline delta (analysis just ran, so getAnalysisResult() is set)
-          let baselineDelta: any = null;
-          if (body.baselineId) {
-            const ar = ctx.getAnalysisResult();
-            if (ar) {
-              const fp = buildFingerprint(filePath, ar, handler);
-              baselineDelta = ctx.getBaselineStore().compare(fp, body.baselineId) || null;
-            }
-          }
-
-          const pack = {
-            file: { path: filePath, totalLines, timeRange: aresult?.timeRange || null },
-            severity,
-            summary: parts.join(', '),
-            levels: {
-              ...levelCounts,
-              errorPercent: Math.round(errorPercent * 100) / 100,
-              warningPercent: Math.round(warningPercent * 100) / 100,
-            },
-            crashes: Object.values(crashGroups),
-            topComponents: topFailingComponents.slice(0, topComponentsN),
-            timeGaps,
-            fields,
-            filterSuggestions: filterSuggestions.slice(0, 5),
-            baselineDelta,
-            caps: {
-              fields: { shown: fields.length, total: allFields.length, truncated: allFields.length > fields.length },
-              timeGaps: { shown: timeGaps.length, total: allGaps.length, truncated: allGaps.length > timeGaps.length },
-              note: 'Compact briefing. Drill into any viewerLine with logan_get_lines; chart any field with logan_trend_show; pin issues with logan_report_finding.',
-            },
-          };
-          sendJson(res, { success: true, pack });
+          const result = await buildEvidencePack(ctx, {
+            thresholdSeconds: body.thresholdSeconds,
+            topFields: body.topFields,
+            topGaps: body.topGaps,
+            topComponents: body.topComponents,
+            fieldSampleSize: body.fieldSampleSize,
+            analyzerName: body.analyzerName,
+            baselineId: body.baselineId,
+          });
+          if (!result.success) return sendError(res, result.error || 'No file open');
+          sendJson(res, result);
           return;
         }
 

@@ -102,6 +102,8 @@ const IPC = {
   TREND_CORRELATE: 'trend-correlate',
   // Guided triage
   TRIAGE_RECIPE: 'triage-recipe',
+  // Evidence pack (native "📋 Brief")
+  EVIDENCE_PACK: 'evidence-pack',
   // Usage Monitor (per-feature usage counts, split human vs AI)
   USAGE_BUMP: 'usage-bump',
   USAGE_GET: 'usage-get',
@@ -872,6 +874,10 @@ const api = {
   // Guided triage — run a symptom recipe and pin findings
   triageRecipe: (options: { symptom: string; domain?: string; component?: string; sinceLine?: number; field?: string; expect?: string; baselineId?: string; maxFindings?: number; pin?: boolean }): Promise<{ success: boolean; [key: string]: any }> =>
     ipcRenderer.invoke(IPC.TRIAGE_RECIPE, options),
+
+  // Evidence pack — native "📋 Brief" (same briefing the AI's logan_evidence_pack builds)
+  getEvidencePack: (options?: { thresholdSeconds?: number; topFields?: number; topGaps?: number; topComponents?: number; fieldSampleSize?: number; analyzerName?: string; baselineId?: string }): Promise<{ success: boolean; pack?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.EVIDENCE_PACK, options),
 
   // Usage Monitor (per-feature usage counts, split human vs AI)
   bumpUsage: (verb: string): Promise<void> =>
