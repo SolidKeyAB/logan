@@ -4209,7 +4209,60 @@ function handleContextMenu(event: MouseEvent): void {
       menu.remove();
     });
     menu.appendChild(distanceItem);
+
+    // ── Selection → verb parity: send the selection to another tool ──────
+    menu.appendChild(menuSeparator());
+
+    // 🔍 Search "<sel>" — literal search via the existing search entry point.
+    const searchSel = menuItem('\u{1F50D}', `Search "${filterText}${selectedText.trim().length > 30 ? '...' : ''}"`);
+    searchSel.addEventListener('click', () => {
+      menu.remove();
+      searchRecurrences(selectedText.trim());
+    });
+    menu.appendChild(searchSel);
+
+    // 🔤 Save as constant… — name + persist {name, value} to the constants store.
+    const saveConstItem = menuItem('\u{1F524}', `Save as constant "${filterText}${selectedText.trim().length > 30 ? '...' : ''}"…`);
+    saveConstItem.addEventListener('click', async () => {
+      menu.remove();
+      const value = selectedText.trim();
+      const name = (window.prompt('Constant name:', '') || '').trim();
+      if (!name) return;
+      const res = await window.api.saveConstant(name, value);
+      if (res && res.success) {
+        showToast(`Saved constant "${name}"`);
+      } else {
+        showToast('Failed to save constant');
+      }
+    });
+    menu.appendChild(saveConstItem);
   }
+
+  // 💬 Comment… — prompt for a note and add an annotation at the selected line.
+  // Uses the same annotation-add path (window.api.addAnnotation) the agent uses;
+  // main records logActivity 'annotation_added' and pushes the change back.
+  menu.appendChild(menuSeparator());
+  const commentItem = menuItem('\u{1F4AC}', `Comment on Ln ${lineNumber + 1}…`);
+  commentItem.addEventListener('click', async () => {
+    menu.remove();
+    const text = (window.prompt(`Comment on line ${lineNumber + 1}:`, '') || '').trim();
+    if (!text) return;
+    const ann = {
+      id: `comment-${lineNumber}-${Date.now()}`,
+      lineNumber,
+      text,
+      agentName: 'You',
+      timestamp: Date.now(),
+      severity: 'info' as const,
+    };
+    const res = await window.api.addAnnotation(ann);
+    if (res && res.success) {
+      showToast(`Comment added on Ln ${lineNumber + 1}`);
+    } else {
+      showToast('Failed to add comment');
+    }
+  });
+  menu.appendChild(commentItem);
 
   menu.appendChild(menuSeparator());
 

@@ -735,6 +735,11 @@ interface Api {
   getPatternLog: () => Promise<{ success: boolean; entries?: Array<{ id: string; ts: string; operator: 'human' | 'ai'; mode: string; source: string; scope: string; scanned: number; matched: number; hid: number; sampleHits: number[]; ms: number; capped: boolean; valid: boolean; error?: string }> }>;
   clearPatternLog: () => Promise<{ success: boolean }>;
 
+  // Named constants (captured from a selection via "Save as constant…")
+  saveConstant: (name: string, value: string) => Promise<{ success: boolean; error?: string }>;
+  getConstants: () => Promise<{ success: boolean; entries?: Array<{ name: string; value: string; createdAt: string; updatedAt: string }> }>;
+  deleteConstant: (name: string) => Promise<{ success: boolean; removed?: boolean }>;
+
   // Window controls
   windowMinimize: () => Promise<void>;
   windowMaximize: () => Promise<void>;
