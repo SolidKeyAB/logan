@@ -401,6 +401,7 @@
           <button class="bottom-tab-btn" data-bottom-tab="image" data-help="View images referenced in log files.&#10;Drag and drop or open image files for side-by-side analysis.">Image</button>
           <button class="bottom-tab-btn" data-bottom-tab="live" data-help="Connect to live log sources: Serial ports, ADB logcat, or SSH.&#10;Up to 4 parallel connections with real-time streaming.">Live</button>
           <button class="bottom-tab-btn" data-bottom-tab="time-align" data-help="Visually align search config results by timestamp.&#10;Each enabled config becomes a draggable timeline lane.&#10;Drag lanes left/right to apply time offsets and correlate events.">Time Align</button>
+          <button class="bottom-tab-btn" data-bottom-tab="time-sync" data-help="Merge MULTIPLE log files onto one shared wall-clock timeline.&#10;LOGAN reads each file's timestamps (no AI) and interleaves every line in time order, colour-tagged by file.&#10;Click any row to jump to that exact line in its file.">Time Sync</button>
           <button class="bottom-tab-btn" data-bottom-tab="pattern-columns" data-help="Turn a log line's shape into named COLUMNS — no delimiter needed.&#10;Type a %{name} pattern, paint a sample line's fields, or paste a regex; LOGAN compiles it to a named-capture regex and previews the extracted columns over this file. No AI.">Pattern Columns</button>
           <button class="bottom-tab-btn" data-bottom-tab="traceback" data-help="Reverse timeline from any error line.&#10;Right-click a line → Traceback from here.&#10;Shows what led to the error: same component, warnings, escalations.">Traceback</button>
           <button class="bottom-tab-btn" data-bottom-tab="chat" data-help="Chat with an AI agent connected via MCP or HTTP API.&#10;The agent can search, navigate, analyze, and bookmark for you.">Agent Chat</button>
@@ -457,6 +458,18 @@
           </div>
           <div id="conclusion-content" class="conclusion-content">
             <p class="placeholder">Click <strong>Build conclusion</strong> — LOGAN scans natively (analysis + time gaps + your pinned findings), finds the <strong>first anomaly (the trigger)</strong>, orders the key events on a timeline, and writes a plain-language root-cause verdict. <em>No AI needed.</em> Click any event to jump to that line.</p>
+          </div>
+        </div>
+        <!-- Time Sync tab (merge multiple files on one wall-clock timeline) -->
+        <div class="bottom-tab-view" data-bottom-tab="time-sync">
+          <div class="bottom-tab-sub-header time-sync-toolbar">
+            <button id="btn-time-sync-merge" class="secondary-btn small">⏱ Merge by time</button>
+            <button id="btn-time-sync-add" class="secondary-btn small" title="Add another log file to the sync set">＋ Add file…</button>
+            <span id="time-sync-status" class="conclusion-status"></span>
+          </div>
+          <div id="time-sync-files" class="time-sync-files"></div>
+          <div id="time-sync-content" class="time-sync-content">
+            <p class="placeholder">Pick 2+ log files (the current file and any auto-detected companions are pre-filled) and click <strong>⏱ Merge by time</strong>. LOGAN reads each file's timestamps and interleaves every line onto one shared wall-clock timeline, colour-tagged by file. <em>No AI needed.</em> Click any row to jump to that exact line in its file.</p>
           </div>
         </div>
         <!-- Pattern Columns tab (paint / grok / regex → named columns) -->

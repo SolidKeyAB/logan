@@ -6048,6 +6048,109 @@ ipcMain.handle('decode-esotrace-folder', async (_, folderPath: string) => {
   }
 });
 
+// ── Multi-file time-sync (merge N logs onto one wall-clock timeline) ──────────
+// Deterministic, no AI: read each file's per-line timestamp with the SAME
+// parseTimestampFast the rest of LOGAN uses, keep only lines that carry a
+// wall-clock timestamp (the sync key), and merge-sort every file's lines by epoch
+// ms. Binary companions (.esotrace/.mf4) are opened through openWithAdapter so they
+// decode to timestamped text first. Returns per-file coverage stats + a bounded,
+// time-ordered (or evenly time-sampled) row set the renderer paints as one stream.
+ipcMain.handle('time-sync-merge', async (_, filePaths: string[], opts?: { maxRows?: number }) => {
+  try {
+    const maxRows = Math.max(100, Math.min(20000, opts?.maxRows ?? 4000));
+    const SCAN_CAP = 1_000_000;   // max lines scanned per file
+    const COLLECT_CAP = 800_000;  // max timestamped entries held before sort
+    const BATCH = 4000;
+
+    // Resolve a FileHandler per path: reuse the cache, else open through the adapter
+    // layer (so binary formats normalize to text) and cache it for click-through.
+    const handlers: (FileHandler | null)[] = [];
+    for (const fp of filePaths) {
+      let h = fileHandlerCache.get(fp);
+      if (h && h.isStale()) { evictFromCache(fp); h = undefined; }
+      if (!h) {
+        try {
+          const nh = new FileHandler();
+          const opened = await openWithAdapter(nh, fp, () => {});
+          sourceRegistry.set(fp, opened.source);
+          addToCache(fp, nh);
+          h = nh;
+        } catch {
+          handlers.push(null);
+          continue;
+        }
+      }
+      handlers.push(h);
+    }
+
+    const fileStats = filePaths.map((p, i) => ({
+      path: p, index: i, totalLines: 0, timestamped: 0,
+      firstMs: null as number | null, lastMs: null as number | null, scanCapped: false,
+    }));
+
+    // Lightweight collection (no text yet) so millions of lines stay cheap.
+    const entries: { f: number; ln: number; ms: number }[] = [];
+    let collectCapped = false;
+
+    for (let fi = 0; fi < handlers.length; fi++) {
+      const h = handlers[fi];
+      if (!h) continue;
+      const total = h.getTotalLines();
+      fileStats[fi].totalLines = total;
+      const scanTo = Math.min(total, SCAN_CAP);
+      if (total > SCAN_CAP) fileStats[fi].scanCapped = true;
+      for (let start = 0; start < scanTo && !collectCapped; start += BATCH) {
+        const batch = h.getLines(start, Math.min(BATCH, scanTo - start));
+        for (const line of batch) {
+          const parsed = parseTimestampFast(line.text);
+          if (!parsed) continue;
+          const ms = parsed.date.getTime();
+          fileStats[fi].timestamped++;
+          if (fileStats[fi].firstMs === null) fileStats[fi].firstMs = ms;
+          fileStats[fi].lastMs = ms;
+          if (entries.length < COLLECT_CAP) entries.push({ f: fi, ln: line.lineNumber, ms });
+          else { collectCapped = true; break; }
+        }
+      }
+    }
+
+    // Merge by time; deterministic tie-break by file then line.
+    entries.sort((a, b) => a.ms - b.ms || a.f - b.f || a.ln - b.ln);
+
+    const totalSynced = entries.length;
+    let selected = entries;
+    let sampled = false;
+    if (entries.length > maxRows) {
+      sampled = true;
+      const step = entries.length / maxRows;
+      selected = [];
+      for (let k = 0; k < maxRows; k++) selected.push(entries[Math.floor(k * step)]);
+    }
+
+    // Fetch text only for the rows we actually return.
+    const rows = selected.map((e) => {
+      const h = handlers[e.f];
+      let text = '';
+      if (h) { const ls = h.getLines(e.ln, 1); if (ls.length) text = ls[0].text; }
+      return { f: e.f, ln: e.ln, ms: e.ms, text };
+    });
+
+    const withTs = fileStats.filter(s => s.firstMs !== null);
+    const minMs = withTs.length ? Math.min(...withTs.map(s => s.firstMs as number)) : null;
+    const maxMs = withTs.length ? Math.max(...withTs.map(s => s.lastMs as number)) : null;
+
+    return {
+      success: true,
+      files: fileStats,
+      overall: { minMs, maxMs, totalSynced, returned: rows.length, sampled, collectCapped },
+      rows,
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// === Merge multiple files → one new, time-ordered file with an origin column ===
 // === Terminal (tabbed, multi-session) ===
 
 interface TerminalSession {

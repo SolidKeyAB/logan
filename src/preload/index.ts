@@ -345,6 +345,19 @@ const api = {
   }> =>
     ipcRenderer.invoke('decode-esotrace-folder', folderPath),
 
+  // Multi-file time-sync merge
+  timeSyncMerge: (
+    filePaths: string[],
+    opts?: { maxRows?: number }
+  ): Promise<{
+    success: boolean;
+    files?: Array<{ path: string; index: number; totalLines: number; timestamped: number; firstMs: number | null; lastMs: number | null; scanCapped: boolean }>;
+    overall?: { minMs: number | null; maxMs: number | null; totalSynced: number; returned: number; sampled: boolean; collectCapped: boolean };
+    rows?: Array<{ f: number; ln: number; ms: number; text: string }>;
+    error?: string;
+  }> =>
+    ipcRenderer.invoke('time-sync-merge', filePaths, opts),
+
   // Pattern Columns (paint / grok / regex → named columns)
   columnPatternPreview: (
     spec: { mode: 'grok' | 'regex' | 'paint'; pattern?: string; sample?: string; spans?: Array<{ start: number; end: number; name: string }>; flags?: string },
