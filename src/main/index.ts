@@ -26,7 +26,7 @@ import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, 
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
-import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession, broadcastInterrupt, API_PORT } from './api-server';
+import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession, broadcastInterrupt, API_PORT, buildEvidencePack } from './api-server';
 import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
 import { BaselineStore, buildFingerprint } from './baselineStore';
 import { bumpUsage, getUsage, clearUsage } from './usageStore';
@@ -72,6 +72,9 @@ let mainWindow: BrowserWindow | null = null;
 let searchSignal: { cancelled: boolean } = { cancelled: false };
 let diffSignal: { cancelled: boolean } = { cancelled: false };
 let currentFilePath: string | null = null;
+// Set in app.whenReady(); reused by top-level IPC handlers that need the same
+// in-process bridge the API server uses (e.g. the native "📋 Brief" evidence pack).
+let apiContext: ApiContext | null = null;
 
 // Built-in agent child process
 import type { ChildProcess } from 'child_process';
@@ -837,7 +840,7 @@ app.whenReady().then(() => {
   }
 
   // Start HTTP API server for MCP integration
-  const apiContext: ApiContext = {
+  apiContext = {
     getMainWindow: () => mainWindow,
     getCurrentFilePath: () => currentFilePath,
     getFileHandler: () => getFileHandler(),
@@ -4701,6 +4704,26 @@ ipcMain.handle(IPC.TRIAGE_RECIPE, async (_, options: RecipeOptions) => {
   try {
     const result = await runRecipe(selfApiCall, options);
     return { success: true, ...result };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// Evidence pack (native "📋 Brief") — reuses the SAME buildEvidencePack the AI's
+// /api/evidence-pack path uses. Sensible defaults match the MCP tool; redaction
+// is off (this is the local human view).
+ipcMain.handle(IPC.EVIDENCE_PACK, async (_, options) => {
+  if (!apiContext) return { success: false, error: 'Not ready' };
+  try {
+    return await buildEvidencePack(apiContext, {
+      thresholdSeconds: options?.thresholdSeconds ?? 60,
+      topFields: options?.topFields ?? 25,
+      topGaps: options?.topGaps ?? 8,
+      topComponents: options?.topComponents,
+      fieldSampleSize: options?.fieldSampleSize,
+      analyzerName: options?.analyzerName,
+      baselineId: options?.baselineId,
+    });
   } catch (error) {
     return { success: false, error: String(error) };
   }

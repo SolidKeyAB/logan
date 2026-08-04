@@ -414,6 +414,8 @@ export const IPC = {
   TREND_CORRELATE: 'trend-correlate',
   // Guided triage
   TRIAGE_RECIPE: 'triage-recipe',
+  // Evidence pack (native "📋 Brief" — same briefing the AI's logan_evidence_pack builds)
+  EVIDENCE_PACK: 'evidence-pack',
   // Usage Monitor (per-feature usage counts, split human vs AI)
   USAGE_BUMP: 'usage-bump',
   USAGE_GET: 'usage-get',

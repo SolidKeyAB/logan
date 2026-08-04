@@ -780,6 +780,8 @@ const elements = {
   folderSearchResults: document.getElementById('folder-search-results') as HTMLDivElement,
   fileStats: document.getElementById('file-stats') as HTMLDivElement,
   analysisResults: document.getElementById('analysis-results') as HTMLDivElement,
+  briefResults: document.getElementById('brief-results') as HTMLDivElement,
+  btnBrief: document.getElementById('btn-brief') as HTMLButtonElement,
   conclusionContent: document.getElementById('conclusion-content') as HTMLDivElement,
   conclusionStatus: document.getElementById('conclusion-status') as HTMLSpanElement,
   btnBuildConclusion: document.getElementById('btn-build-conclusion') as HTMLButtonElement,
@@ -18018,6 +18020,171 @@ function updateAnalysisUI(): void {
   updateBaselineUI();
 }
 
+// ── 📋 Brief (native counterpart to the AI's logan_evidence_pack) ──
+// Fetches the SAME compact briefing the agent gets and renders it below the
+// analysis output, with clickable rows that jump to the referenced viewerLine.
+async function showBrief(): Promise<void> {
+  const el = elements.briefResults;
+  if (!el) return;
+  if (!state.filePath) {
+    el.innerHTML = '<p class="placeholder">Open a log file first to build a Brief.</p>';
+    return;
+  }
+  el.innerHTML = '<p class="placeholder">Building brief…</p>';
+  if (elements.btnBrief) elements.btnBrief.disabled = true;
+  try {
+    const res = await window.api.getEvidencePack();
+    if (!res?.success || !res.pack) {
+      el.innerHTML = `<p class="placeholder" style="color: var(--error-color);">Brief failed: ${escapeHtml(res?.error || 'unknown error')}</p>`;
+      return;
+    }
+    renderBrief(res.pack);
+  } catch (error) {
+    el.innerHTML = `<p class="placeholder" style="color: var(--error-color);">Brief error: ${escapeHtml(String(error))}</p>`;
+  } finally {
+    if (elements.btnBrief) elements.btnBrief.disabled = false;
+  }
+}
+
+// Render an EvidencePack defensively (guard every field) into #brief-results.
+// Rows carrying a 1-based viewerLine become clickable → navigateTo(viewerLine-1).
+function renderBrief(pack: EvidencePack): void {
+  const el = elements.briefResults;
+  if (!el) return;
+
+  const sev = pack.severity || 'healthy';
+  const sevColor = sev === 'critical' ? 'var(--error-color, #e05252)'
+    : sev === 'warning' ? 'var(--warning-color, #d79a3a)'
+    : 'var(--success-color, #4a9d5b)';
+
+  const sections: string[] = [];
+
+  // Header: severity + one-line summary
+  sections.push(`
+    <div class="insight-section">
+      <div class="insight-header">
+        <span style="color: ${sevColor}; text-transform: uppercase; letter-spacing: 0.5px;">${escapeHtml(sev)}</span>
+      </div>
+      <div style="font-size: 12px; color: var(--text-secondary);">${escapeHtml(pack.summary || '')}</div>
+      ${pack.file?.timeRange?.start ? `<div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px;">${escapeHtml(pack.file.timeRange.start)} – ${escapeHtml(pack.file.timeRange.end || '')}</div>` : ''}
+    </div>
+  `);
+
+  // Level counts (non-clickable badges — errorPercent/warningPercent excluded)
+  const levels = pack.levels || {};
+  const levelEntries = Object.entries(levels).filter(
+    ([k, v]) => k !== 'errorPercent' && k !== 'warningPercent' && typeof v === 'number' && v > 0
+  );
+  if (levelEntries.length > 0) {
+    let levelHtml = '<div class="level-counts">';
+    for (const [level, count] of levelEntries) {
+      levelHtml += `<span class="level-badge ${escapeHtml(level)}">${escapeHtml(level)}: ${(count as number).toLocaleString()}</span>`;
+    }
+    levelHtml += '</div>';
+    sections.push(`
+      <div class="insight-section">
+        <div class="insight-header">Levels${typeof levels.errorPercent === 'number' ? ` — ${levels.errorPercent}% errors` : ''}</div>
+        ${levelHtml}
+      </div>
+    `);
+  }
+
+  // Grouped crashes (clickable → viewerLine)
+  const crashes = pack.crashes || [];
+  if (crashes.length > 0) {
+    sections.push(`
+      <div class="insight-section crash-section">
+        <div class="insight-header">Crashes & Failures (${crashes.length})</div>
+        ${crashes.map(c => `
+          <div class="crash-item brief-row" data-viewer-line="${c.viewerLine ?? ''}" title="${c.viewerLine ? `Line ${c.viewerLine}` : ''}">
+            <div class="crash-line">
+              <span class="crash-keyword">${escapeHtml(c.keyword || '')}</span>
+              <span class="crash-line-num">${c.count ? `×${c.count}` : ''}${c.viewerLine ? ` · line ${c.viewerLine}` : ''}</span>
+            </div>
+            ${c.sample ? `<div class="crash-text">${escapeHtml(c.sample.length > 100 ? c.sample.substring(0, 100) + '…' : c.sample)}</div>` : ''}
+          </div>
+        `).join('')}
+      </div>
+    `);
+  }
+
+  // Top failing components (clickable → sampleLine)
+  const comps = pack.topComponents || [];
+  if (comps.length > 0) {
+    const maxErrors = Math.max(1, ...comps.map(c => c.errorCount || 0));
+    sections.push(`
+      <div class="insight-section components-section">
+        <div class="insight-header">Top Failing Components</div>
+        ${comps.map(comp => {
+          const vLine = typeof comp.sampleLine === 'number' && comp.sampleLine > 0 ? comp.sampleLine : null;
+          return `
+          <div class="component-item brief-row" data-viewer-line="${vLine ?? ''}" title="${(comp.errorCount || 0)} errors, ${(comp.warningCount || 0)} warnings">
+            <div class="component-header">
+              <span class="component-name">${escapeHtml(comp.name || '')}</span>
+              <span class="component-errors">${comp.errorCount || 0} err${(comp.warningCount || 0) > 0 ? ` / ${comp.warningCount} warn` : ''}</span>
+            </div>
+            <div class="component-bar" style="width: ${Math.max(Math.round((comp.errorCount || 0) / maxErrors * 100), 4)}%"></div>
+          </div>`;
+        }).join('')}
+      </div>
+    `);
+  }
+
+  // Top time gaps (clickable → viewerLine)
+  const gaps = pack.timeGaps || [];
+  if (gaps.length > 0) {
+    const cap = pack.caps?.timeGaps;
+    const capNote = cap?.truncated ? ` (top ${cap.shown} of ${cap.total})` : '';
+    sections.push(`
+      <div class="insight-section">
+        <div class="insight-header">Time Gaps${capNote}</div>
+        ${gaps.map(g => `
+          <div class="crash-item brief-row" data-viewer-line="${g.viewerLine ?? ''}" title="${g.viewerLine ? `Line ${g.viewerLine}` : ''}">
+            <div class="crash-line">
+              <span class="crash-keyword">${escapeHtml(formatGapSeconds(g.gapSeconds || 0))}</span>
+              <span class="crash-line-num">${g.viewerLine ? `line ${g.viewerLine}` : ''}</span>
+            </div>
+            ${g.preview ? `<div class="crash-text">${escapeHtml(g.preview.length > 100 ? g.preview.substring(0, 100) + '…' : g.preview)}</div>` : ''}
+          </div>
+        `).join('')}
+      </div>
+    `);
+  }
+
+  // Discovered fields (not line-clickable; informational vocabulary)
+  const fields = pack.fields || [];
+  if (fields.length > 0) {
+    const cap = pack.caps?.fields;
+    const capNote = cap?.truncated ? ` (top ${cap.shown} of ${cap.total})` : '';
+    sections.push(`
+      <div class="insight-section">
+        <div class="insight-header">Discovered Fields${capNote}</div>
+        <div class="level-counts">
+          ${fields.map(f => `<span class="level-badge" title="${escapeHtml(f.type || '')}${typeof f.distinct === 'number' ? ` · ${f.distinct} distinct` : ''}">${escapeHtml(f.name || '')}${typeof f.occurrences === 'number' ? `: ${f.occurrences.toLocaleString()}` : ''}</span>`).join('')}
+        </div>
+      </div>
+    `);
+  }
+
+  el.innerHTML = sections.join('');
+
+  // Wire clickable rows → navigate to (viewerLine - 1) 0-based absolute line
+  el.querySelectorAll('.brief-row[data-viewer-line]').forEach((row) => {
+    const raw = (row as HTMLElement).dataset.viewerLine;
+    const vLine = raw ? parseInt(raw, 10) : NaN;
+    if (Number.isNaN(vLine) || vLine <= 0) return;
+    (row as HTMLElement).style.cursor = 'pointer';
+    row.addEventListener('click', () => navigateTo(vLine - 1));
+  });
+}
+
+// Compact human-readable gap duration.
+function formatGapSeconds(seconds: number): string {
+  if (seconds < 60) return `${seconds}s gap`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m gap`;
+  return `${(seconds / 3600).toFixed(1)}h gap`;
+}
+
 async function loadBaselineList(): Promise<void> {
   try {
     const result = await window.api.baselineList();
@@ -20361,6 +20528,7 @@ function init(): void {
   // Analysis
   elements.btnAnalyze.addEventListener('click', analyzeFile);
   document.getElementById('btn-run-analysis')?.addEventListener('click', analyzeFile);
+  elements.btnBrief?.addEventListener('click', showBrief);
 
   // Conclusion (native root-cause synthesis)
   elements.btnBuildConclusion.addEventListener('click', () => buildConclusion());
