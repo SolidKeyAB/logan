@@ -489,6 +489,10 @@ interface Api {
   detectTimeGaps: (options: { thresholdSeconds: number; startLine?: number; endLine?: number; startPattern?: string; endPattern?: string }) => Promise<{ success: boolean; gaps?: Array<{ lineNumber: number; prevLineNumber: number; gapSeconds: number; prevTimestamp: string; currTimestamp: string; linePreview: string }>; totalLines?: number; error?: string }>;
   cancelTimeGaps: () => Promise<{ success: boolean }>;
   onTimeGapProgress: (callback: (data: { percent: number }) => void) => () => void;
+  detectCadence: (options: { pattern: string; isRegex?: boolean; matchCase?: boolean; toleranceFactor?: number; startLine?: number; endLine?: number }) => Promise<any>;
+  cancelCadence: () => Promise<{ success: boolean }>;
+  suggestCadenceEvents: () => Promise<any>;
+  onCadenceProgress: (callback: (data: { percent: number }) => void) => () => void;
 
   // Column Analysis
   analyzeColumns: () => Promise<{ success: boolean; analysis?: ColumnAnalysis; error?: string }>;
