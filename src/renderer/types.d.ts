@@ -703,6 +703,11 @@ interface Api {
   // Guided triage
   triageRecipe: (options: { symptom: string; domain?: string; component?: string; sinceLine?: number; field?: string; expect?: string; baselineId?: string; maxFindings?: number; pin?: boolean }) => Promise<{ success: boolean; error?: string; [key: string]: any }>;
 
+  // Usage Monitor (per-feature usage counts, split human vs AI)
+  bumpUsage: (verb: string) => Promise<void>;
+  getUsage: () => Promise<{ success: boolean; entries?: Array<{ verb: string; operator: 'human' | 'ai'; count: number; firstUsed: string; lastUsed: string; daily: Record<string, number> }> }>;
+  clearUsage: () => Promise<{ success: boolean }>;
+
   // Window controls
   windowMinimize: () => Promise<void>;
   windowMaximize: () => Promise<void>;

@@ -5623,10 +5623,65 @@ async function terminalCdToFile(filePath: string): Promise<void> {
 
 let notesSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Usage Monitor: record a human panel/feature open (fire-and-forget, count-only).
+function trackUsage(verb: string): void {
+  try {
+    void window.api.bumpUsage(verb);
+  } catch { /* usage stats are non-critical */ }
+}
+
+// ─── Usage Monitor panel ─────────────────────────────────────────────
+// Sort order for the Usage panel: 'desc' = most-used first (default),
+// 'asc' = least-used first (surfaces near-dead features).
+let usageSortAsc = false;
+
+async function renderUsagePanel(): Promise<void> {
+  const content = document.getElementById('usage-content');
+  const status = document.getElementById('usage-status');
+  if (!content) return;
+  content.innerHTML = '<p class="placeholder">Loading usage stats…</p>';
+  let entries: Array<{ verb: string; operator: 'human' | 'ai'; count: number; firstUsed: string; lastUsed: string; daily: Record<string, number> }> = [];
+  try {
+    const res = await window.api.getUsage();
+    if (res.success && res.entries) entries = res.entries;
+  } catch { /* non-critical */ }
+
+  if (entries.length === 0) {
+    content.innerHTML = '<p class="placeholder">No usage recorded yet. As you (and the AI agent) use panels, searches, filters and other features, counts appear here — sorted so your workhorses and dead features stand out. <em>Features never used simply won\'t appear.</em> Local-only; counts, never content.</p>';
+    if (status) status.textContent = '';
+    return;
+  }
+
+  // getUsage() already sorts by count desc; reverse for ascending view.
+  const rows = usageSortAsc ? [...entries].reverse() : entries;
+  const total = entries.reduce((sum, e) => sum + e.count, 0);
+  const maxCount = Math.max(...entries.map(e => e.count), 1);
+
+  const rowsHtml = rows.map(e => {
+    const pct = Math.round((e.count / maxCount) * 100);
+    const badgeClass = e.operator === 'ai' ? 'usage-badge-ai' : 'usage-badge-human';
+    const badgeLabel = e.operator === 'ai' ? 'AI' : 'HUMAN';
+    return `
+      <div class="usage-row">
+        <div class="usage-row-main">
+          <span class="usage-badge ${badgeClass}">${badgeLabel}</span>
+          <span class="usage-verb" title="${escapeHtml(e.verb)}">${escapeHtml(e.verb)}</span>
+          <span class="usage-count">${e.count.toLocaleString()}</span>
+        </div>
+        <div class="usage-bar"><div class="usage-bar-fill" style="width:${pct}%"></div></div>
+        <div class="usage-meta">last used ${escapeHtml(getRelativeTime(e.lastUsed))}</div>
+      </div>`;
+  }).join('');
+
+  content.innerHTML = `<div class="usage-list">${rowsHtml}</div>`;
+  if (status) status.textContent = `${entries.length} features · ${total.toLocaleString()} total uses`;
+}
+
 function openBottomTab(tabId: string): void {
   state.bottomPanelVisible = true;
   state.activeBottomTab = tabId;
   state.lastActiveBottomTab = tabId;
+  trackUsage(`panel:${tabId}`);
 
   // Show the panel
   elements.bottomPanel.classList.remove('hidden');
@@ -5695,6 +5750,9 @@ function openBottomTab(tabId: string): void {
   }
   if (tabId === 'pattern-columns') {
     initPatternColumnsPanel();
+  }
+  if (tabId === 'usage') {
+    renderUsagePanel();
   }
   if (tabId === 'time-align') {
     if (state.timeAlignTimestamps.size === 0 && state.searchConfigResults.size > 0) {
@@ -18698,6 +18756,7 @@ function togglePanel(panelId: string): void {
 function openPanel(panelId: string): void {
   activePanel = panelId;
   lastActivePanel = panelId;
+  trackUsage(`panel:${panelId}`);
 
   // Show panel container
   elements.panelContainer.classList.remove('hidden');
@@ -20003,6 +20062,20 @@ function init(): void {
 
   setupBottomPanelResize();
   restoreBottomPanelState();
+
+  // Usage Monitor panel controls
+  document.getElementById('btn-usage-refresh')?.addEventListener('click', () => renderUsagePanel());
+  document.getElementById('btn-usage-sort')?.addEventListener('click', () => {
+    usageSortAsc = !usageSortAsc;
+    const btn = document.getElementById('btn-usage-sort');
+    if (btn) btn.textContent = usageSortAsc ? 'Sort: least used' : 'Sort: most used';
+    renderUsagePanel();
+  });
+  document.getElementById('btn-usage-clear')?.addEventListener('click', async () => {
+    if (!confirm('Clear all usage stats? This cannot be undone.')) return;
+    try { await window.api.clearUsage(); } catch { /* non-critical */ }
+    renderUsagePanel();
+  });
 
   // Traceback sort/filter
   elements.tracebackSort.addEventListener('change', () => {
