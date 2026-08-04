@@ -5687,6 +5687,9 @@ function openBottomTab(tabId: string): void {
   if (tabId === 'conclusion') {
     initConclusionPanel();
   }
+  if (tabId === 'time-sync') {
+    initTimeSyncPanel();
+  }
   if (tabId === 'cadence') {
     initCadencePanel();
   }
@@ -13561,6 +13564,158 @@ async function decodeEsotraceFilesInFolder(folderPath: string): Promise<void> {
   }
 }
 
+// ─── Time Sync panel (merge multiple files on one wall-clock timeline) ────────
+// Deterministic multi-file correlation: LOGAN reads each file's per-line timestamp
+// and interleaves every timestamped line in wall-clock order, colour-tagged by file.
+// No AI. Click a row → jump to that exact line in its file.
+const TIME_SYNC_COLORS = ['#4f9cff', '#ff7a59', '#38c172', '#f6c343', '#a78bfa', '#ff5d8f', '#22d3ee', '#c084fc'];
+let timeSyncFileSet: string[] = [];
+let timeSyncRows: Array<{ f: number; ln: number; ms: number; text: string }> = [];
+
+function tsPad(n: number, len = 2): string { return String(n).padStart(len, '0'); }
+function fmtTsFull(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${tsPad(d.getMonth() + 1)}-${tsPad(d.getDate())} ` +
+    `${tsPad(d.getHours())}:${tsPad(d.getMinutes())}:${tsPad(d.getSeconds())}.${tsPad(d.getMilliseconds(), 3)}`;
+}
+function fmtTsTime(ms: number): string {
+  const d = new Date(ms);
+  return `${tsPad(d.getHours())}:${tsPad(d.getMinutes())}:${tsPad(d.getSeconds())}.${tsPad(d.getMilliseconds(), 3)}`;
+}
+function tsBaseName(p: string): string { return p.split(/[\\/]/).pop() || p; }
+
+function initTimeSyncPanel(): void {
+  // Seed the file set from the current file + any auto-detected companions.
+  if (timeSyncFileSet.length === 0) {
+    const set: string[] = [];
+    if (state.filePath) set.push(state.filePath);
+    for (const f of state.splitFiles) if (!set.includes(f)) set.push(f);
+    timeSyncFileSet = set;
+  }
+  renderTimeSyncFiles();
+}
+
+function renderTimeSyncFiles(): void {
+  const el = document.getElementById('time-sync-files');
+  if (!el) return;
+  if (timeSyncFileSet.length === 0) {
+    el.innerHTML = '<span class="placeholder">No files selected — use <strong>＋ Add file…</strong>.</span>';
+    return;
+  }
+  el.innerHTML = timeSyncFileSet.map((p, i) => {
+    const color = TIME_SYNC_COLORS[i % TIME_SYNC_COLORS.length];
+    return `<span class="time-sync-chip"><span class="ts-swatch" style="background:${color}"></span>` +
+      `<span class="ts-chip-name" title="${escapeHtml(p)}">${escapeHtml(tsBaseName(p))}</span>` +
+      `<button class="ts-chip-remove" data-idx="${i}" title="Remove">×</button></span>`;
+  }).join('');
+  el.querySelectorAll('.ts-chip-remove').forEach(b => b.addEventListener('click', (e) => {
+    const idx = parseInt((e.currentTarget as HTMLElement).dataset.idx || '-1', 10);
+    if (idx >= 0) { timeSyncFileSet.splice(idx, 1); renderTimeSyncFiles(); }
+  }));
+}
+
+async function addTimeSyncFile(): Promise<void> {
+  const p = await window.api.openFileDialog();
+  if (p && !timeSyncFileSet.includes(p)) { timeSyncFileSet.push(p); renderTimeSyncFiles(); }
+}
+
+async function runTimeSyncMerge(): Promise<void> {
+  const status = document.getElementById('time-sync-status');
+  const content = document.getElementById('time-sync-content');
+  if (timeSyncFileSet.length < 1) { if (status) status.textContent = 'Add at least one file.'; return; }
+  if (status) status.textContent = 'Merging…';
+  if (content) content.innerHTML = '<p class="placeholder">Reading timestamps and merging…</p>';
+  showProgress('Merging files by time…');
+  try {
+    const result = await (window.api as any).timeSyncMerge(timeSyncFileSet, { maxRows: 4000 });
+    if (!result || !result.success) {
+      if (status) status.textContent = 'Failed';
+      if (content) content.innerHTML = `<p class="placeholder">Merge failed: ${escapeHtml(result?.error || 'unknown error')}</p>`;
+      return;
+    }
+    timeSyncRows = result.rows || [];
+    renderTimeSyncResult(result);
+    const synced = result.overall?.totalSynced ?? 0;
+    if (status) status.textContent = `${synced.toLocaleString()} synced events`;
+  } catch (e) {
+    if (status) status.textContent = 'Failed';
+    if (content) content.innerHTML = `<p class="placeholder">Merge failed: ${escapeHtml(String(e))}</p>`;
+  } finally {
+    hideProgress();
+  }
+}
+
+function renderTimeSyncResult(result: any): void {
+  const content = document.getElementById('time-sync-content');
+  if (!content) return;
+  const files = result.files || [];
+  const o = result.overall || {};
+  const span = (o.minMs != null && o.maxMs != null) ? `${fmtTsFull(o.minMs)} → ${fmtTsFull(o.maxMs)}` : '—';
+
+  const fileRows = files.map((f: any) => {
+    const color = TIME_SYNC_COLORS[f.index % TIME_SYNC_COLORS.length];
+    return `<tr><td><span class="ts-swatch" style="background:${color}"></span></td>` +
+      `<td class="ts-file-name" title="${escapeHtml(f.path)}">${escapeHtml(tsBaseName(f.path))}</td>` +
+      `<td>${(f.totalLines || 0).toLocaleString()}${f.scanCapped ? ' <span class="ts-cap">capped</span>' : ''}</td>` +
+      `<td>${(f.timestamped || 0).toLocaleString()}</td>` +
+      `<td>${f.firstMs != null ? fmtTsFull(f.firstMs) : '—'}</td>` +
+      `<td>${f.lastMs != null ? fmtTsFull(f.lastMs) : '—'}</td></tr>`;
+  }).join('');
+
+  let notes = '';
+  if (o.sampled) notes += `<div class="ts-note">Showing an even time-sample of ${(o.returned || 0).toLocaleString()} of ${(o.totalSynced || 0).toLocaleString()} synced events — click any row to open that exact line.</div>`;
+  if (o.collectCapped) notes += `<div class="ts-note">⚠ Reached the ${'800,000'}-event scan cap — later events may be omitted.</div>`;
+  const noTs = files.filter((f: any) => f.timestamped === 0).map((f: any) => tsBaseName(f.path));
+  if (noTs.length) notes += `<div class="ts-note">⚠ No wall-clock timestamps found in: ${escapeHtml(noTs.join(', '))} (can't be time-synced).</div>`;
+
+  const statHtml =
+    `<div class="ts-stats">` +
+    `<div class="ts-span"><strong>Timeline span:</strong> ${span}</div>` +
+    `<table class="ts-file-table"><thead><tr><th></th><th>File</th><th>Lines</th><th>Timestamped</th><th>From</th><th>To</th></tr></thead>` +
+    `<tbody>${fileRows}</tbody></table>${notes}</div>`;
+
+  const rowsHtml = (result.rows || []).map((r: any, i: number) => {
+    const color = TIME_SYNC_COLORS[r.f % TIME_SYNC_COLORS.length];
+    const name = files[r.f] ? tsBaseName(files[r.f].path) : '';
+    return `<div class="ts-row" data-idx="${i}">` +
+      `<span class="ts-swatch" style="background:${color}" title="${escapeHtml(name)}"></span>` +
+      `<span class="ts-time">${fmtTsTime(r.ms)}</span>` +
+      `<span class="ts-text">${escapeHtml(r.text)}</span></div>`;
+  }).join('');
+
+  content.innerHTML = statHtml + `<div class="ts-rows">${rowsHtml}</div>`;
+
+  const rowsEl = content.querySelector('.ts-rows');
+  if (rowsEl) {
+    rowsEl.addEventListener('click', (e) => {
+      const row = (e.target as HTMLElement).closest('.ts-row') as HTMLElement | null;
+      if (!row) return;
+      const idx = parseInt(row.dataset.idx || '-1', 10);
+      const r = timeSyncRows[idx];
+      if (r) jumpToTimeSyncRow(r.f, r.ln);
+    });
+  }
+}
+
+// Write the full (un-sampled) merged timeline to a NEW file, each line prefixed
+// with a normalized timestamp and its origin (source filename). Counterpart to
+// the on-screen "Merge by time" preview above.
+async function jumpToTimeSyncRow(fileIndex: number, ln: number): Promise<void> {
+  const filePath = timeSyncFileSet[fileIndex];
+  if (!filePath) return;
+  if (filePath !== state.filePath) {
+    await loadFile(filePath, false);
+  }
+  // navigateTo pre-warms the cache and resolves the filtered display index — the
+  // robust path for a cold cross-file jump (goToLine can flash a blank frame).
+  await navigateTo(ln);
+}
+
+// ─── Pattern Columns panel (paint / grok / regex → named columns) ────────────
+// Author a pattern three ways — %{name} grok, painted sample-line tokens, or a
+// raw regex — LOGAN compiles it (in the main process, via the tested engine) to
+// one named-capture regex and previews the extracted columns over this file.
+// No AI. Save a pattern to reuse it on any log.
 type PatcolMode = 'grok' | 'regex' | 'paint';
 interface PatcolToken { start: number; end: number; text: string; varName: string | null }
 let patcolMode: PatcolMode = 'grok';
@@ -20130,6 +20285,8 @@ function init(): void {
   // JSON formatting toggle
   elements.btnJsonFormat.addEventListener('click', formatAndLoadJson);
   elements.btnEsotraceDecode.addEventListener('click', decodeEsotraceAndLoad);
+  document.getElementById('btn-time-sync-merge')?.addEventListener('click', runTimeSyncMerge);
+  document.getElementById('btn-time-sync-add')?.addEventListener('click', addTimeSyncFile);
 
   // Pattern Columns panel
   document.querySelectorAll('.patcol-mode-btn').forEach((b) => b.addEventListener('click', (e) => {
