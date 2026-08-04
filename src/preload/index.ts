@@ -358,6 +358,24 @@ const api = {
   }> =>
     ipcRenderer.invoke('time-sync-merge', filePaths, opts),
 
+  // Merge multiple files into one new, time-ordered file with an origin column
+  mergeFilesToFile: (
+    filePaths: string[],
+    opts?: { includeHeader?: boolean; separator?: string }
+  ): Promise<{
+    success: boolean;
+    filePath?: string;
+    lineCount?: number;
+    fileCount?: number;
+    minMs?: number;
+    maxMs?: number;
+    skipped?: string[];
+    collectCapped?: boolean;
+    scanCapped?: boolean;
+    error?: string;
+  }> =>
+    ipcRenderer.invoke('merge-files-to-file', filePaths, opts),
+
   // Pattern Columns (paint / grok / regex → named columns)
   columnPatternPreview: (
     spec: { mode: 'grok' | 'regex' | 'paint'; pattern?: string; sample?: string; spans?: Array<{ start: number; end: number; name: string }>; flags?: string },
