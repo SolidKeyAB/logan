@@ -396,6 +396,7 @@
           <button class="bottom-tab-btn" data-bottom-tab="image" data-help="View images referenced in log files.&#10;Drag and drop or open image files for side-by-side analysis.">Image</button>
           <button class="bottom-tab-btn" data-bottom-tab="live" data-help="Connect to live log sources: Serial ports, ADB logcat, or SSH.&#10;Up to 4 parallel connections with real-time streaming.">Live</button>
           <button class="bottom-tab-btn" data-bottom-tab="time-align" data-help="Visually align search config results by timestamp.&#10;Each enabled config becomes a draggable timeline lane.&#10;Drag lanes left/right to apply time offsets and correlate events.">Time Align</button>
+          <button class="bottom-tab-btn" data-bottom-tab="pattern-columns" data-help="Turn a log line's shape into named COLUMNS — no delimiter needed.&#10;Type a %{name} pattern, paint a sample line's fields, or paste a regex; LOGAN compiles it to a named-capture regex and previews the extracted columns over this file. No AI.">Pattern Columns</button>
           <button class="bottom-tab-btn" data-bottom-tab="traceback" data-help="Reverse timeline from any error line.&#10;Right-click a line → Traceback from here.&#10;Shows what led to the error: same component, warnings, escalations.">Traceback</button>
           <button class="bottom-tab-btn" data-bottom-tab="chat" data-help="Chat with an AI agent connected via MCP or HTTP API.&#10;The agent can search, navigate, analyze, and bookmark for you.">Agent Chat</button>
           <button class="bottom-tab-btn" data-bottom-tab="notes" data-help="Freeform notes saved per file as .logan/filename.notes.txt.&#10;Use Save Snippet to append selected log lines to notes.">Notes</button>
@@ -439,6 +440,42 @@
           </div>
           <div id="investigate-results" class="investigate-content">
             <p class="placeholder">Pick a <strong>symptom</strong> above — LOGAN runs the matching recipe and pins findings you can click to jump to.</p>
+          </div>
+        </div>
+        <!-- Pattern Columns tab (paint / grok / regex → named columns) -->
+        <div class="bottom-tab-view" data-bottom-tab="pattern-columns">
+          <div class="bottom-tab-sub-header patcol-toolbar">
+            <div class="patcol-modes" id="patcol-modes">
+              <button class="patcol-mode-btn active" data-patcol-mode="grok">Pattern</button>
+              <button class="patcol-mode-btn" data-patcol-mode="paint">Paint</button>
+              <button class="patcol-mode-btn" data-patcol-mode="regex">Regex</button>
+            </div>
+            <button id="btn-patcol-sample" class="secondary-btn small" title="Pull the current / selected line as the sample">↻ Sample</button>
+            <button id="btn-patcol-copy" class="secondary-btn small" title="Copy the compiled regex to the clipboard">⧉ Copy regex</button>
+            <button id="btn-patcol-save" class="secondary-btn small" title="Save this pattern for reuse across files">💾 Save…</button>
+            <span id="patcol-status" class="conclusion-status"></span>
+          </div>
+          <div id="patcol-saved" class="patcol-saved"></div>
+          <div class="patcol-editor">
+            <label class="patcol-label">Sample line</label>
+            <input type="text" id="patcol-sample-input" class="patcol-input" placeholder="Paste or ↻-pull a representative log line…" />
+            <div id="patcol-grok-wrap" class="patcol-mode-panel">
+              <label class="patcol-label">Pattern — literal text with <code>%{name}</code> placeholders (optionally <code>%{name:sub-regex}</code>)</label>
+              <input type="text" id="patcol-grok-input" class="patcol-input" placeholder="%{date} %{level} %{msg}" />
+            </div>
+            <div id="patcol-regex-wrap" class="patcol-mode-panel hidden">
+              <label class="patcol-label">Raw regex — named groups <code>(?&lt;name&gt;…)</code> become the columns</label>
+              <input type="text" id="patcol-regex-input" class="patcol-input" placeholder="(?<k>\w+)=(?<v>\d+)" />
+            </div>
+            <div id="patcol-paint-wrap" class="patcol-mode-panel hidden">
+              <label class="patcol-label">Paint — click tokens to mark them as columns; un-marked tokens are static glue</label>
+              <div id="patcol-paint-tokens" class="patcol-tokens"></div>
+              <div id="patcol-paint-fields" class="patcol-fields"></div>
+            </div>
+            <div class="patcol-compiled"><span class="patcol-label">Regex</span> <code id="patcol-regex-out">—</code></div>
+          </div>
+          <div id="patcol-content" class="patcol-content">
+            <p class="placeholder">Pick a mode, author a pattern, and LOGAN previews the named columns it extracts from this file. <em>No AI.</em> Save a pattern to reuse it on any log.</p>
           </div>
         </div>
         <!-- Trends tab (notebook) -->
