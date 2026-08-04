@@ -102,6 +102,10 @@ const IPC = {
   TREND_CORRELATE: 'trend-correlate',
   // Guided triage
   TRIAGE_RECIPE: 'triage-recipe',
+  // Usage Monitor (per-feature usage counts, split human vs AI)
+  USAGE_BUMP: 'usage-bump',
+  USAGE_GET: 'usage-get',
+  USAGE_CLEAR: 'usage-clear',
 } as const;
 
 // API exposed to renderer
@@ -865,6 +869,14 @@ const api = {
   // Guided triage — run a symptom recipe and pin findings
   triageRecipe: (options: { symptom: string; domain?: string; component?: string; sinceLine?: number; field?: string; expect?: string; baselineId?: string; maxFindings?: number; pin?: boolean }): Promise<{ success: boolean; [key: string]: any }> =>
     ipcRenderer.invoke(IPC.TRIAGE_RECIPE, options),
+
+  // Usage Monitor (per-feature usage counts, split human vs AI)
+  bumpUsage: (verb: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.USAGE_BUMP, verb),
+  getUsage: (): Promise<{ success: boolean; entries?: any[] }> =>
+    ipcRenderer.invoke(IPC.USAGE_GET),
+  clearUsage: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.USAGE_CLEAR),
 
   // Window controls
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),
