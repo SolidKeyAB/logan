@@ -30,6 +30,7 @@ import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessa
 import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
 import { BaselineStore, buildFingerprint } from './baselineStore';
 import { parseTimestampFast } from './timestampParse';
+import { compileColumnPattern, makeColumnExtractor, ColumnPatternSpec } from './columnPattern';
 import { runTrendJob } from './trendWorkerClient';
 // Native-dependent modules — lazy-loaded to prevent SIGSEGV if bindings aren't built
 let SerialHandler: any = null;
@@ -3525,6 +3526,107 @@ ipcMain.handle(IPC.PATTERN_PROP_DELETE, async (_, id: string) => {
   const props = loadPatternPropertiesStore().filter(p => p.id !== id);
   savePatternPropertiesStore(props);
   return { success: true, properties: props };
+});
+
+// === Pattern Columns (paint / grok / regex → named columns) ===
+// Compile a pattern spec to a named-capture regex and preview the extracted
+// columns over the current file's first lines; plus a small global store so
+// authored patterns are reusable across sessions (mirrors pattern-properties).
+
+interface ColumnPatternSaved {
+  id: string;
+  name: string;
+  spec: ColumnPatternSpec; // how it was authored, so it can reload into the editor
+  regex: string;
+  flags: string;
+  fields: string[];
+}
+
+const getColumnPatternsPath = () => path.join(getConfigDir(), 'column-patterns.json');
+
+function loadColumnPatternsStore(): ColumnPatternSaved[] {
+  try {
+    ensureConfigDir();
+    const p = getColumnPatternsPath();
+    if (fs.existsSync(p)) {
+      const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'));
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (error) {
+    console.error('Failed to load column patterns:', error);
+  }
+  return [];
+}
+
+function saveColumnPatternsStore(items: ColumnPatternSaved[]): void {
+  try {
+    ensureConfigDir();
+    fs.writeFileSync(getColumnPatternsPath(), JSON.stringify(items, null, 2), 'utf-8');
+  } catch (error) {
+    console.error('Failed to save column patterns:', error);
+  }
+}
+
+ipcMain.handle('column-pattern-preview', async (_, spec: ColumnPatternSpec, opts?: { sampleLines?: number }) => {
+  try {
+    const compiled = compileColumnPattern(spec);
+    const extractor = makeColumnExtractor(compiled);
+    const N = Math.max(1, Math.min(500, opts?.sampleLines ?? 200));
+    const rows: string[][] = [];
+    let matched = 0;
+    let scanned = 0;
+    const pushLine = (text: string) => {
+      scanned++;
+      const vals = extractor(text);
+      if (vals) { matched++; if (rows.length < N) rows.push(vals); }
+    };
+    // Always test the user's own sample line first (they author against it).
+    if (spec.sample && spec.sample.trim()) pushLine(spec.sample);
+    const handler = getFileHandler();
+    if (handler) {
+      const total = handler.getTotalLines();
+      const scanTo = Math.min(total, N * 4);
+      const batch = handler.getLines(0, scanTo);
+      for (const line of batch) {
+        if (rows.length >= N) break;
+        if (!line.text.trim()) continue;
+        pushLine(line.text);
+      }
+    }
+    return {
+      success: true,
+      regex: compiled.regex, flags: compiled.flags, fields: compiled.fields, named: compiled.named,
+      rows, matched, scanned,
+    };
+  } catch (e) {
+    return { success: false, error: String(e instanceof Error ? e.message : e) };
+  }
+});
+
+ipcMain.handle('column-pattern-list', async () => {
+  return { success: true, patterns: loadColumnPatternsStore() };
+});
+
+ipcMain.handle('column-pattern-save', async (_, pattern: ColumnPatternSaved) => {
+  if (!pattern || !pattern.id || !pattern.name || !pattern.regex) {
+    return { success: false, error: 'Invalid column pattern' };
+  }
+  try {
+    new RegExp(pattern.regex, (pattern.flags || '').replace(/[gy]/g, ''));
+  } catch (e) {
+    return { success: false, error: `Invalid regex: ${String(e)}` };
+  }
+  const items = loadColumnPatternsStore();
+  const idx = items.findIndex(p => p.id === pattern.id);
+  if (idx >= 0) items[idx] = pattern; else items.push(pattern);
+  saveColumnPatternsStore(items);
+  return { success: true, patterns: items };
+});
+
+ipcMain.handle('column-pattern-delete', async (_, id: string) => {
+  const items = loadColumnPatternsStore().filter(p => p.id !== id);
+  saveColumnPatternsStore(items);
+  return { success: true, patterns: items };
 });
 
 // === Search Config Sessions ===
