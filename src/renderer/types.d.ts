@@ -708,6 +708,10 @@ interface Api {
   getUsage: () => Promise<{ success: boolean; entries?: Array<{ verb: string; operator: 'human' | 'ai'; count: number; firstUsed: string; lastUsed: string; daily: Record<string, number> }> }>;
   clearUsage: () => Promise<{ success: boolean }>;
 
+  // Pattern log ("flight recorder" of pattern applications)
+  getPatternLog: () => Promise<{ success: boolean; entries?: Array<{ id: string; ts: string; operator: 'human' | 'ai'; mode: string; source: string; scope: string; scanned: number; matched: number; hid: number; sampleHits: number[]; ms: number; capped: boolean; valid: boolean; error?: string }> }>;
+  clearPatternLog: () => Promise<{ success: boolean }>;
+
   // Window controls
   windowMinimize: () => Promise<void>;
   windowMaximize: () => Promise<void>;
