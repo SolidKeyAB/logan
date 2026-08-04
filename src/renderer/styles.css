@@ -9108,6 +9108,58 @@ kbd {
   color: var(--text-secondary);
 }
 
+/* ─── Time Sync panel (merge multiple files on one wall-clock timeline) ─── */
+.time-sync-toolbar { display: flex; align-items: center; gap: 8px; }
+.time-sync-files {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-color);
+}
+.time-sync-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 6px 2px 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.ts-swatch {
+  display: inline-block; width: 10px; height: 10px;
+  border-radius: 2px; flex: 0 0 auto;
+}
+.ts-chip-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ts-chip-remove {
+  background: none; border: none; color: var(--text-secondary);
+  cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px;
+}
+.ts-chip-remove:hover { color: var(--error-color); }
+.time-sync-content { padding: 8px 10px; overflow: auto; }
+.ts-stats { margin-bottom: 8px; font-size: 12px; }
+.ts-span { margin-bottom: 6px; color: var(--text-primary); }
+.ts-file-table { border-collapse: collapse; width: 100%; margin-bottom: 4px; }
+.ts-file-table th, .ts-file-table td {
+  text-align: left; padding: 2px 8px 2px 0;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-secondary); white-space: nowrap;
+}
+.ts-file-table td.ts-file-name { color: var(--text-primary); max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+.ts-cap { color: var(--warning-color); font-size: 11px; }
+.ts-note { color: var(--warning-color); font-size: 12px; margin-top: 4px; }
+.ts-rows {
+  font-family: var(--font-mono); font-size: 12px;
+  border-top: 1px solid var(--border-color); margin-top: 6px;
+}
+.ts-row {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 1px 4px; cursor: pointer; border-radius: 3px;
+  white-space: pre; overflow: hidden;
+}
+.ts-row:hover { background: var(--bg-hover); }
+.ts-row .ts-swatch { align-self: center; }
+.ts-time { color: var(--text-secondary); flex: 0 0 auto; }
+.ts-text { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; }
+
 /* ─── Cadence / Missing-Sequence tab ───────────────────────────── */
 .cadence-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .cadence-input {
