@@ -123,6 +123,7 @@ export interface ActivityEntry {
     | 'analysis_run'
     | 'notes_saved'
     | 'lines_saved'
+    | 'files_merged'
     | 'annotation_added';
   details: Record<string, unknown>;
 }
