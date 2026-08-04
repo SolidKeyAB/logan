@@ -561,6 +561,8 @@ let lastFindSignature: string | null = null;
 // JSON formatting setting
 let jsonFormattingEnabled = false;
 let jsonOriginalFile: string | null = null; // Track original file when viewing formatted JSON
+let esotraceDecodeEnabled = false;
+let esotraceOriginalFile: string | null = null; // Track original file when viewing decoded esotrace
 
 // Check if text contains JSON
 function containsJson(text: string): boolean {
@@ -814,6 +816,7 @@ const elements = {
   btnColumns: document.getElementById('btn-columns') as HTMLButtonElement,
   btnWordWrap: document.getElementById('btn-word-wrap') as HTMLButtonElement,
   btnJsonFormat: document.getElementById('btn-json-format') as HTMLButtonElement,
+  btnEsotraceDecode: document.getElementById('btn-esotrace-decode') as HTMLButtonElement,
   columnsModal: document.getElementById('columns-modal') as HTMLDivElement,
   columnsLoading: document.getElementById('columns-loading') as HTMLDivElement,
   columnsContent: document.getElementById('columns-content') as HTMLDivElement,
@@ -13382,6 +13385,7 @@ function toggleContextShowIncomplete(): void {
 }
 
 let jsonFormatInProgress = false;
+let esotraceDecodeInProgress = false;
 
 async function formatAndLoadJson(): Promise<void> {
   if (!state.filePath) return;
@@ -13437,6 +13441,99 @@ async function formatAndLoadJson(): Promise<void> {
       await loadFile(jsonOriginalFile);
       jsonOriginalFile = null;
     }
+  }
+}
+
+// Force-decode the current file as a binary esotrace/vtrace trace and show the text.
+// Mirrors formatAndLoadJson: toggle on → decode to a temp file and load it; toggle
+// off → return to the raw original. Unlike the auto-detecting adapter this ignores
+// the file's extension, so it recovers traces whose extension was renamed or whose
+// magic bytes sit past the 4 KB detection head.
+async function decodeEsotraceAndLoad(): Promise<void> {
+  if (!state.filePath) return;
+  if (esotraceDecodeInProgress) return;
+
+  if (!esotraceDecodeEnabled) {
+    esotraceDecodeInProgress = true;
+    elements.btnEsotraceDecode.classList.add('active');
+    elements.btnEsotraceDecode.disabled = true;
+    const originalPath = state.filePath;
+
+    showProgress('Decoding esotrace... 0%');
+    const unsub = (window.api as any).onEsotraceDecodeProgress?.((data: { percent: number }) => {
+      updateProgress(data.percent);
+      updateProgressText(`Decoding esotrace... ${data.percent}%`);
+    });
+    try {
+      const result = await (window.api as any).decodeEsotraceFile(originalPath);
+      if (unsub) unsub();
+      if (result.success && result.decodedPath) {
+        esotraceDecodeEnabled = true;
+        esotraceOriginalFile = originalPath;
+        await loadFile(result.decodedPath);
+      } else {
+        elements.btnEsotraceDecode.classList.remove('active');
+        hideProgress();
+        // Surface the failure in the same warning bar the JSON formatter uses.
+        const warningText = elements.longLinesWarning.querySelector('.warning-text');
+        if (warningText) {
+          warningText.innerHTML = `<strong>Not an esotrace trace:</strong> ${escapeHtml(result.error || 'no traceserverIVI records found in this file')}`;
+          elements.longLinesWarning.classList.remove('hidden');
+          elements.btnFormatWarning.classList.add('hidden');
+        }
+      }
+    } catch (error) {
+      if (unsub) unsub();
+      elements.btnEsotraceDecode.classList.remove('active');
+      hideProgress();
+    } finally {
+      esotraceDecodeInProgress = false;
+      elements.btnEsotraceDecode.disabled = false;
+    }
+  } else {
+    // Toggle off — return to the raw original file.
+    esotraceDecodeEnabled = false;
+    elements.btnEsotraceDecode.classList.remove('active');
+    if (esotraceOriginalFile) {
+      await loadFile(esotraceOriginalFile);
+      esotraceOriginalFile = null;
+    }
+  }
+}
+
+// Batch-decode every esotrace file in a folder (right-click a folder → "Decode
+// esotrace files here"). Writes each `<name>.decoded.txt` next to its original,
+// then refreshes the folder tree so the outputs appear.
+async function decodeEsotraceFilesInFolder(folderPath: string): Promise<void> {
+  showProgress('Scanning folder for esotrace files…');
+  const unsub = (window.api as any).onEsotraceDecodeFolderProgress?.((d: { current: number; total: number; name: string }) => {
+    if (d.total === 0) { updateProgressText('No esotrace files found'); return; }
+    updateProgress(Math.round((d.current / d.total) * 100));
+    updateProgressText(`Decoding esotrace ${d.current}/${d.total}${d.name ? ' — ' + d.name : ''}…`);
+  });
+  try {
+    const result = await (window.api as any).decodeEsotraceFolder(folderPath);
+    if (unsub) unsub();
+    if (!result || !result.success) {
+      showToast(`Decode failed: ${result?.error || 'unknown error'}`);
+      return;
+    }
+    const n = (result.decoded || []).length;
+    const errN = (result.errors || []).length;
+    if (n === 0 && errN === 0) {
+      showToast('No esotrace files found in this folder');
+    } else {
+      let msg = `Decoded ${n} esotrace file${n === 1 ? '' : 's'} → *.decoded.txt`;
+      if (errN) msg += ` — ${errN} failed`;
+      showToast(msg);
+      // Surface the new .decoded.txt files in the folder tree.
+      await refreshFolders();
+    }
+  } catch (e) {
+    if (unsub) unsub();
+    showToast(`Decode failed: ${String(e)}`);
+  } finally {
+    hideProgress();
   }
 }
 
@@ -13831,6 +13928,14 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
           // Don't render the raw long-lined file — go straight to formatting
           formatAndLoadJson();
         }
+      }
+
+      // Reset esotrace decode state unless we're loading the decoded output itself
+      // (the temp path carries a `.decoded.` marker so the toggle stays active).
+      if (!filePath.includes('.decoded.')) {
+        esotraceDecodeEnabled = false;
+        esotraceOriginalFile = null;
+        elements.btnEsotraceDecode.classList.remove('active');
       }
 
       // Reset scroll slowness detection
@@ -19394,6 +19499,7 @@ function init(): void {
 
   // JSON formatting toggle
   elements.btnJsonFormat.addEventListener('click', formatAndLoadJson);
+  elements.btnEsotraceDecode.addEventListener('click', decodeEsotraceAndLoad);
 
   // Pattern Columns panel
   document.querySelectorAll('.patcol-mode-btn').forEach((b) => b.addEventListener('click', (e) => {
@@ -20217,6 +20323,7 @@ function showFolderContextMenu(e: MouseEvent, folderPath: string): void {
   const menu = document.createElement('div');
   menu.className = 'tab-context-menu';
   menu.innerHTML = `<div class="tab-context-item" data-action="open-terminal">Open Terminal Here</div>`
+    + `<div class="tab-context-item" data-action="decode-esotrace-folder">Decode esotrace files here</div>`
     + `<div class="tab-context-separator"></div>`
     + `<div class="tab-context-item" data-action="copy-path">Copy Path</div>`;
   menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;`;
@@ -20224,6 +20331,10 @@ function showFolderContextMenu(e: MouseEvent, folderPath: string): void {
   menu.querySelector('[data-action="open-terminal"]')?.addEventListener('click', () => {
     menu.remove();
     void openTerminalAtFolder(folderPath);
+  });
+  menu.querySelector('[data-action="decode-esotrace-folder"]')?.addEventListener('click', () => {
+    menu.remove();
+    void decodeEsotraceFilesInFolder(folderPath);
   });
   menu.querySelector('[data-action="copy-path"]')?.addEventListener('click', () => {
     navigator.clipboard.writeText(folderPath);
