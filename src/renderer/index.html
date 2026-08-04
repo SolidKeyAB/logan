@@ -393,6 +393,7 @@
           <button class="bottom-tab-btn" data-bottom-tab="trends" data-help="Trend any field over time. Click Discover to auto-find log variables (key=value, JSON), then chart a field as value-over-time, value flips, or correlation.&#10;Click a chart point to jump to that line.">Trends</button>
           <button class="bottom-tab-btn" data-bottom-tab="signals" data-help="Overlay multiple numeric signals (e.g. MF4 channels) on one shared time axis.&#10;Check signals on the left to plot them; click a point to jump to that record.">Signals</button>
           <button class="bottom-tab-btn" data-bottom-tab="time-gaps" data-help="Find gaps in log timestamps where no events were recorded.&#10;Useful for detecting hangs, freezes, or missing data periods.">Time Gaps</button>
+          <button class="bottom-tab-btn" data-bottom-tab="cadence" data-help="Missing-Sequence / cadence tool — the negative-space instrument.&#10;Pick a repeating event (heartbeat, poll, keepalive, periodic status). LOGAN reads the timestamps of every match, AUTO-DETECTS the period, then flags every SKIPPED occurrence and any drift in the rhythm.&#10;It shows you the events that DIDN'T happen. No AI — click a gap to jump to where the sequence broke.">Cadence</button>
           <button class="bottom-tab-btn" data-bottom-tab="search-results" data-help="Results from Ctrl+F search. Click a result to jump to that line.&#10;Supports regex, wildcard, case-sensitive, and whole-word modes.">Search Results</button>
           <button class="bottom-tab-btn" data-bottom-tab="search-configs" data-help="Save and reuse complex search patterns across files.&#10;Each config stores pattern, regex/case/word flags, and a label.">Search Configs</button>
           <button class="bottom-tab-btn" data-bottom-tab="contexts" data-help="Define must+clue patterns to find correlated log events.&#10;Example: must:&quot;ERROR&quot; + clue:&quot;timeout&quot; within 10 lines.&#10;Lanes view shows each context as a colored row for comparison.">Contexts</button>
@@ -492,6 +493,25 @@
           </div>
           <div id="patcol-content" class="patcol-content">
             <p class="placeholder">Pick a mode, author a pattern, and LOGAN previews the named columns it extracts from this file. <em>No AI.</em> Save a pattern to reuse it on any log.</p>
+          </div>
+        </div>
+        <!-- Cadence tab (missing-sequence / negative-space instrument) -->
+        <div class="bottom-tab-view" data-bottom-tab="cadence">
+          <div class="bottom-tab-sub-header cadence-toolbar">
+            <input type="text" id="cadence-pattern" class="cadence-input" placeholder="Repeating event — e.g. heartbeat, poll, keepalive…" />
+            <label class="cadence-toggle" title="Treat the pattern as a regular expression"><input type="checkbox" id="cadence-regex" /> .*</label>
+            <label class="cadence-toggle" title="Match case"><input type="checkbox" id="cadence-case" /> Aa</label>
+            <label class="cadence-tol" title="Flag a gap when it is at least this many times the auto-detected period">≥&nbsp;<input type="number" id="cadence-tolerance" class="cadence-num" value="1.5" min="1.1" step="0.1" />×&nbsp;period</label>
+            <button id="btn-detect-cadence" class="secondary-btn small">🫀 Detect cadence</button>
+            <button id="btn-cancel-cadence" class="secondary-btn small hidden">■ Cancel</button>
+            <button id="btn-suggest-cadence" class="secondary-btn small" title="Let LOGAN scan the file and suggest recurring events">✨ Suggest events</button>
+            <button id="btn-pin-cadence" class="secondary-btn small hidden" title="Pin every skipped occurrence as a finding annotation">📌 Pin misses</button>
+            <span id="cadence-status" class="conclusion-status"></span>
+          </div>
+          <div id="cadence-summary" class="cadence-summary"></div>
+          <canvas id="cadence-strip" class="cadence-strip hidden"></canvas>
+          <div id="cadence-content" class="cadence-content">
+            <p class="placeholder">Pick a <strong>repeating event</strong> — a heartbeat, poll, keepalive, or periodic status — and click <strong>🫀 Detect cadence</strong>. LOGAN reads the timestamps of every match, <strong>auto-detects the period</strong>, then flags every <strong>skipped occurrence</strong> and any <strong>drift</strong> in the rhythm. <em>No AI needed.</em> Click a gap to jump to where the sequence broke. Not sure what repeats? Click <strong>✨ Suggest events</strong>.</p>
           </div>
         </div>
         <!-- Trends tab (notebook) -->

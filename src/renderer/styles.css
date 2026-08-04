@@ -9108,6 +9108,71 @@ kbd {
   color: var(--text-secondary);
 }
 
+/* ─── Cadence / Missing-Sequence tab ───────────────────────────── */
+.cadence-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cadence-input {
+  flex: 1 1 260px; min-width: 180px;
+  background: var(--bg-primary); color: var(--text-primary);
+  border: 1px solid var(--border-color); border-radius: 4px;
+  padding: 4px 8px; font-size: 12px;
+}
+.cadence-toggle {
+  display: inline-flex; align-items: center; gap: 3px;
+  color: var(--text-secondary); font-size: 12px; cursor: pointer; user-select: none;
+}
+.cadence-tol { display: inline-flex; align-items: center; color: var(--text-secondary); font-size: 12px; }
+.cadence-num {
+  width: 46px; background: var(--bg-primary); color: var(--text-primary);
+  border: 1px solid var(--border-color); border-radius: 4px; padding: 2px 4px; font-size: 12px;
+}
+.cadence-summary {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  padding: 8px 10px 0 10px;
+}
+.cadence-summary:empty { display: none; }
+.cad-card {
+  background: var(--bg-secondary); border: 1px solid var(--border-color);
+  border-radius: 6px; padding: 6px 10px; min-width: 96px;
+}
+.cad-card-val { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+.cad-card-val.err { color: #f48771; }
+.cad-card-val.ok { color: #73c991; }
+.cad-card-val.warn { color: #cca700; }
+.cad-card-label { font-size: 10px; color: var(--text-secondary); margin-top: 2px; }
+.cadence-strip {
+  display: block; width: calc(100% - 20px); margin: 8px 10px 0 10px;
+  background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 6px;
+}
+.cadence-content { padding: 8px 10px; overflow: auto; }
+.cad-list-head { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+.cadence-item {
+  border: 1px solid var(--border-color); border-left: 3px solid #f48771;
+  border-radius: 4px; padding: 5px 8px; margin-bottom: 5px; cursor: pointer;
+}
+.cadence-item:hover { background: var(--bg-hover); }
+.cadence-item.active { background: var(--bg-active); }
+.cad-item-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.cad-item-missing { color: #f48771; font-weight: 600; font-size: 12px; }
+.cad-item-gap { color: var(--text-primary); font-size: 12px; }
+.cad-item-line { color: var(--text-secondary); font-size: 11px; margin-left: auto; }
+.cad-item-times { color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px; margin-top: 2px; }
+.cad-item-note { color: var(--text-secondary); font-size: 11px; margin-top: 2px; font-style: italic; }
+.cadence-suggest {
+  border: 1px solid var(--border-color); border-radius: 4px;
+  padding: 5px 8px; margin-bottom: 5px; cursor: pointer;
+}
+.cadence-suggest:hover { background: var(--bg-hover); }
+.cad-sug-head { font-size: 12px; color: var(--text-primary); }
+.cad-sug-count { color: #73c991; font-weight: 600; margin-right: 4px; }
+.cad-sug-head code {
+  background: var(--bg-primary); border: 1px solid var(--border-color);
+  border-radius: 3px; padding: 1px 5px; font-family: var(--font-mono);
+}
+.cad-sug-sample {
+  color: var(--text-secondary); font-family: var(--font-mono); font-size: 11px;
+  margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
 /* ─── Pattern Columns panel ─────────────────────────────────────────────── */
 .patcol-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .patcol-modes { display: inline-flex; border: 1px solid var(--border-color); border-radius: 4px; overflow: hidden; }
