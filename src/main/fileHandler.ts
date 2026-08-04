@@ -29,6 +29,47 @@ export interface ColumnConfig {
   columns: Array<{ index: number; visible: boolean }>;
 }
 
+// Canonical column splitter — the SINGLE source of truth used by both the
+// column analyzer (analyze-columns) and every filter/search path. All three
+// must split identically or the modal's column indices won't line up with what
+// the filter actually hides. Semantics:
+//   - space: collapse runs of whitespace, ignore leading/trailing padding so an
+//            indented line has the same column indices as a non-indented one
+//   - tab:   plain split (empty fields are significant)
+//   - other: quote-aware (CSV-style) so a quoted field containing the delimiter
+//            counts as one column, matching the analyzer's view
+export function splitLineIntoColumns(line: string, delimiter: string): string[] {
+  if (delimiter === ' ') {
+    const trimmed = line.trim();
+    return trimmed.length ? trimmed.split(/\s+/) : [];
+  }
+  if (delimiter === '\t') {
+    return line.split('\t');
+  }
+
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && i + 1 < line.length && line[i + 1] === '"') {
+        current += '"';
+        i++; // escaped quote inside a quoted field
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === delimiter && !inQuotes) {
+      result.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  result.push(current);
+  return result;
+}
+
 export function filterLineToVisibleColumns(
   line: string,
   columnConfig: ColumnConfig | undefined
@@ -37,11 +78,19 @@ export function filterLineToVisibleColumns(
   if (!columnConfig.columns.some(c => !c.visible)) return line;
 
   const { delimiter, columns } = columnConfig;
-  const parts = delimiter === ' ' ? line.split(/\s+/) : line.split(delimiter);
+  const parts = splitLineIntoColumns(line, delimiter);
   const visibleParts = parts.filter((_, idx) =>
     idx < columns.length ? columns[idx].visible : true
   );
-  return visibleParts.join(delimiter === ' ' ? ' ' : delimiter);
+
+  if (delimiter === ' ' || delimiter === '\t') {
+    return visibleParts.join(delimiter);
+  }
+  // CSV-style: re-quote any surviving field that itself contains the delimiter
+  // or a quote, so the rejoined line stays structurally valid.
+  return visibleParts
+    .map(p => (p.includes(delimiter) || p.includes('"')) ? `"${p.replace(/"/g, '""')}"` : p)
+    .join(delimiter);
 }
 
 // Check if ripgrep is available
