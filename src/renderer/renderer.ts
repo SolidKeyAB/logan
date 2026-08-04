@@ -13700,6 +13700,33 @@ function renderTimeSyncResult(result: any): void {
 // Write the full (un-sampled) merged timeline to a NEW file, each line prefixed
 // with a normalized timestamp and its origin (source filename). Counterpart to
 // the on-screen "Merge by time" preview above.
+async function exportMergedFile(): Promise<void> {
+  const status = document.getElementById('time-sync-status');
+  if (timeSyncFileSet.length < 1) { if (status) status.textContent = 'Add at least one file.'; return; }
+  if (status) status.textContent = 'Writing merged file…';
+  showProgress('Merging files into a new file…');
+  try {
+    const res = await (window.api as any).mergeFilesToFile(timeSyncFileSet, { includeHeader: true });
+    if (!res || !res.success) {
+      if (res && res.error === 'Cancelled') { if (status) status.textContent = ''; return; }
+      if (status) status.textContent = 'Failed';
+      showToast(res?.error || 'Merge-to-file failed');
+      return;
+    }
+    const name = tsBaseName(res.filePath || '');
+    if (status) status.textContent = `Wrote ${(res.lineCount || 0).toLocaleString()} lines → ${name}`;
+    let msg = `Merged ${res.fileCount || 0} file(s) → ${(res.lineCount || 0).toLocaleString()} lines: ${name}`;
+    if (res.skipped && res.skipped.length) msg += ` · skipped ${res.skipped.length}`;
+    if (res.collectCapped || res.scanCapped) msg += ' · capped (very large input)';
+    showToast(msg);
+  } catch (e) {
+    if (status) status.textContent = 'Failed';
+    showToast('Merge-to-file failed: ' + String(e));
+  } finally {
+    hideProgress();
+  }
+}
+
 async function jumpToTimeSyncRow(fileIndex: number, ln: number): Promise<void> {
   const filePath = timeSyncFileSet[fileIndex];
   if (!filePath) return;
@@ -20287,6 +20314,7 @@ function init(): void {
   elements.btnEsotraceDecode.addEventListener('click', decodeEsotraceAndLoad);
   document.getElementById('btn-time-sync-merge')?.addEventListener('click', runTimeSyncMerge);
   document.getElementById('btn-time-sync-add')?.addEventListener('click', addTimeSyncFile);
+  document.getElementById('btn-time-sync-export')?.addEventListener('click', exportMergedFile);
 
   // Pattern Columns panel
   document.querySelectorAll('.patcol-mode-btn').forEach((b) => b.addEventListener('click', (e) => {
