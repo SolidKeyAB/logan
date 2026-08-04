@@ -19359,6 +19359,18 @@ function init(): void {
   // JSON formatting toggle
   elements.btnJsonFormat.addEventListener('click', formatAndLoadJson);
 
+  // Pattern Columns panel
+  document.querySelectorAll('.patcol-mode-btn').forEach((b) => b.addEventListener('click', (e) => {
+    const mode = (e.currentTarget as HTMLElement).dataset.patcolMode as PatcolMode;
+    if (mode) patcolSetMode(mode);
+  }));
+  document.getElementById('btn-patcol-sample')?.addEventListener('click', patcolPullSample);
+  document.getElementById('btn-patcol-copy')?.addEventListener('click', patcolCopyRegex);
+  document.getElementById('btn-patcol-save')?.addEventListener('click', patcolSavePattern);
+  document.getElementById('patcol-sample-input')?.addEventListener('input', () => { if (patcolMode === 'paint') patcolTokenize(); patcolPreviewSoon(); });
+  document.getElementById('patcol-grok-input')?.addEventListener('input', patcolPreviewSoon);
+  document.getElementById('patcol-regex-input')?.addEventListener('input', patcolPreviewSoon);
+
   // Long lines warning buttons
   elements.btnFormatWarning.addEventListener('click', formatAndLoadJson);
   elements.btnDismissWarning.addEventListener('click', () => {
