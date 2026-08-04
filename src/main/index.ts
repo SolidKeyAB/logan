@@ -30,6 +30,7 @@ import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessa
 import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
 import { BaselineStore, buildFingerprint } from './baselineStore';
 import { bumpUsage, getUsage, clearUsage } from './usageStore';
+import { saveConstant, getConstants, deleteConstant } from './constantsStore';
 import { getPatternLog, clearPatternLog } from './patternLog';
 import { parseTimestampFast } from './timestampParse';
 import { carryForwardTimestamps, buildOriginTags, formatWallClock } from './mergeTimeline';
@@ -7333,6 +7334,22 @@ ipcMain.handle(IPC.PATTERN_LOG_GET, () => {
 ipcMain.handle(IPC.PATTERN_LOG_CLEAR, () => {
   clearPatternLog();
   return { success: true };
+});
+
+// ── Named constants IPC ────────────────────────────────────────────────
+// Captured from a selection via the log viewer's "Save as constant…" gesture.
+// Persistence-only this brick; a viewer/consumer brick lands later.
+ipcMain.handle(IPC.CONSTANTS_SAVE, (_, name: string, value: string) => {
+  saveConstant(name, value);
+  return { success: true };
+});
+
+ipcMain.handle(IPC.CONSTANTS_GET, () => {
+  return { success: true, entries: getConstants() };
+});
+
+ipcMain.handle(IPC.CONSTANTS_DELETE, (_, name: string) => {
+  return { success: true, removed: deleteConstant(name) };
 });
 
 
