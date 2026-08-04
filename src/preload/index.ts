@@ -293,6 +293,22 @@ const api = {
     return () => ipcRenderer.removeListener('time-gap-progress', handler);
   },
 
+  // Cadence / Missing-Sequence Detection
+  detectCadence: (options: { pattern: string; isRegex?: boolean; matchCase?: boolean; toleranceFactor?: number; startLine?: number; endLine?: number }): Promise<any> =>
+    ipcRenderer.invoke('detect-cadence', options),
+
+  cancelCadence: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('cancel-cadence'),
+
+  suggestCadenceEvents: (): Promise<any> =>
+    ipcRenderer.invoke('suggest-cadence-events'),
+
+  onCadenceProgress: (callback: (data: { percent: number }) => void): (() => void) => {
+    const handler = (_: any, data: { percent: number }) => callback(data);
+    ipcRenderer.on('cadence-progress', handler);
+    return () => ipcRenderer.removeListener('cadence-progress', handler);
+  },
+
   onAnalyzeProgress: (callback: (data: { phase: string; percent: number; message?: string }) => void): (() => void) => {
     const handler = (_: any, data: { phase: string; percent: number; message?: string }) => callback(data);
     ipcRenderer.on('analyze-progress', handler);
