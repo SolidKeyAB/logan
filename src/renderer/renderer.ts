@@ -14047,6 +14047,41 @@ function setAllColumnsVisibility(visible: boolean): void {
   });
 }
 
+// Canonical column splitter — MUST stay identical to splitLineIntoColumns() in
+// src/main/fileHandler.ts (the analyzer + search paths use that one). If the two
+// diverge, the column indices shown in the modal stop matching what gets hidden.
+function splitLineIntoColumns(text: string, delimiter: string): string[] {
+  if (delimiter === ' ') {
+    const trimmed = text.trim();
+    return trimmed.length ? trimmed.split(/\s+/) : [];
+  }
+  if (delimiter === '\t') {
+    return text.split('\t');
+  }
+
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') {
+      if (inQuotes && i + 1 < text.length && text[i + 1] === '"') {
+        current += '"';
+        i++; // escaped quote inside a quoted field
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === delimiter && !inQuotes) {
+      result.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  result.push(current);
+  return result;
+}
+
 // Apply column filter to a line of text
 function applyColumnFilter(text: string): string {
   if (!state.columnConfig || state.columnConfig.columns.every(c => c.visible)) {
@@ -14054,20 +14089,21 @@ function applyColumnFilter(text: string): string {
   }
 
   const { delimiter, columns } = state.columnConfig;
-  let parts: string[];
-
-  if (delimiter === ' ') {
-    parts = text.split(/\s+/);
-  } else {
-    parts = text.split(delimiter);
-  }
+  const parts = splitLineIntoColumns(text, delimiter);
 
   // Build filtered text with only visible columns
   const visibleParts = parts.filter((_, idx) => {
     return idx < columns.length ? columns[idx].visible : true;
   });
 
-  return visibleParts.join(delimiter === ' ' ? ' ' : delimiter);
+  if (delimiter === ' ' || delimiter === '\t') {
+    return visibleParts.join(delimiter);
+  }
+  // CSV-style: re-quote any surviving field that contains the delimiter or a
+  // quote so the rejoined line stays structurally valid.
+  return visibleParts
+    .map(p => (p.includes(delimiter) || p.includes('"')) ? `"${p.replace(/"/g, '""')}"` : p)
+    .join(delimiter);
 }
 
 // Search
