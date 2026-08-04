@@ -5356,6 +5356,298 @@ ipcMain.handle('cancel-time-gaps', async () => {
   return { success: true };
 });
 
+// === Cadence / Missing-Sequence Detection ===
+// The "negative-space" instrument: given a repeating event (a pattern), read the
+// timestamps of every match, AUTO-DETECT the period, then flag every SKIPPED
+// occurrence and any drift in the rhythm. It surfaces the events that DID NOT
+// happen. Purely native — no AI. Modelled on the time-gap scanner above.
+
+interface CadenceOptions {
+  pattern: string;
+  isRegex?: boolean;
+  matchCase?: boolean;
+  toleranceFactor?: number; // gap >= factor * period -> flagged as a skip (default 1.5)
+  startLine?: number;
+  endLine?: number;
+}
+
+interface CadenceMiss {
+  afterLineNumber: number;   // 0-based; last occurrence before the gap
+  beforeLineNumber: number;  // 0-based; next occurrence after the gap
+  afterTs: string;
+  beforeTs: string;
+  afterEpochMs: number;
+  beforeEpochMs: number;
+  gapMs: number;
+  missingCount: number;      // estimated number of skipped occurrences
+}
+
+let cadenceSignal = { cancelled: false };
+
+function cadenceMedian(nums: number[]): number {
+  if (nums.length === 0) return 0;
+  const s = [...nums].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+// Normalize a line to a stable "template" by masking variable tokens (numbers,
+// hex, UUIDs). Used only for the auto-suggest of recurring events.
+function cadenceTemplate(text: string): string {
+  let t = text;
+  const parsed = parseTimestampFast(t);
+  if (parsed && parsed.str && t.startsWith(parsed.str)) t = t.slice(parsed.str.length);
+  return t
+    .replace(/\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g, '#')
+    .replace(/0x[0-9a-fA-F]+/g, '#')
+    .replace(/\b[0-9a-fA-F]{6,}\b/g, '#')
+    .replace(/\d+/g, '#')
+    .replace(/#[#\s.:,_\-/]*#/g, '#')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120);
+}
+
+// Derive a literal search string from a template: the contiguous run with the
+// most letters (a distinctive, stable substring to match the event on).
+function cadenceLiteral(tmpl: string): string {
+  let best = '';
+  let bestLetters = 0;
+  for (const seg of tmpl.split('#')) {
+    const trimmed = seg.trim();
+    const letters = (trimmed.match(/[A-Za-z]/g) || []).length;
+    if (letters > bestLetters) { best = trimmed; bestLetters = letters; }
+  }
+  return best;
+}
+
+ipcMain.handle('detect-cadence', async (_, options: CadenceOptions) => {
+  const handler = getFileHandler();
+  if (!handler || !currentFilePath) {
+    return { success: false, error: 'No file open' };
+  }
+  if (!options || !options.pattern || !options.pattern.trim()) {
+    return { success: false, error: 'Enter a repeating-event pattern' };
+  }
+
+  cadenceSignal = { cancelled: false };
+
+  try {
+    const totalLines = handler.getTotalLines();
+    const toleranceFactor = options.toleranceFactor && options.toleranceFactor > 1 ? options.toleranceFactor : 1.5;
+
+    // Build the matcher (regex or case-aware substring).
+    let regex: RegExp | null = null;
+    if (options.isRegex) {
+      try {
+        regex = new RegExp(options.pattern, options.matchCase ? '' : 'i');
+      } catch (e) {
+        return { success: false, error: 'Invalid regex: ' + String(e) };
+      }
+    }
+    const needle = options.matchCase ? options.pattern : options.pattern.toLowerCase();
+    const matches = (text: string): boolean => {
+      if (regex) return regex.test(text);
+      return (options.matchCase ? text : text.toLowerCase()).includes(needle);
+    };
+
+    let scanStartLine = 0;
+    let scanEndLine = totalLines - 1;
+    if (options.startLine && options.startLine > 0) scanStartLine = options.startLine - 1;
+    if (options.endLine && options.endLine > 0) scanEndLine = Math.min(options.endLine - 1, totalLines - 1);
+
+    const MAX_OCC = 300000;
+    const occLines: number[] = [];
+    const occEpoch: number[] = [];
+    const occStr: string[] = [];
+    let untimedMatches = 0;
+    let totalMatches = 0;
+    let occCapped = false;
+
+    const linesToScan = Math.max(1, scanEndLine - scanStartLine + 1);
+    const batchSize = linesToScan > 100000 ? 2000 : 5000;
+    let processedLines = 0;
+    let lastProgressUpdate = Date.now();
+
+    for (let start = scanStartLine; start <= scanEndLine; start += batchSize) {
+      if (cadenceSignal.cancelled) return { success: false, error: 'Cancelled' };
+      const count = Math.min(batchSize, scanEndLine - start + 1);
+      const lines = handler.getLines(start, count);
+      for (const line of lines) {
+        if (!matches(line.text)) continue;
+        totalMatches++;
+        const parsed = parseTimestampFast(line.text);
+        if (parsed) {
+          if (occLines.length < MAX_OCC) {
+            occLines.push(line.lineNumber);
+            occEpoch.push(parsed.date.getTime());
+            occStr.push(parsed.str);
+          } else {
+            occCapped = true;
+          }
+        } else {
+          untimedMatches++;
+        }
+      }
+      processedLines += count;
+      const now = Date.now();
+      if (now - lastProgressUpdate > 50) {
+        await yieldToEventLoop();
+        const progress = Math.round((processedLines / linesToScan) * 100);
+        mainWindow?.webContents.send('cadence-progress', { percent: progress });
+        lastProgressUpdate = now;
+      }
+    }
+
+    const timedMatches = occLines.length;
+    if (timedMatches < 3) {
+      return {
+        success: true,
+        pattern: options.pattern, isRegex: !!options.isRegex,
+        totalMatches, timedMatches, untimedMatches,
+        periodMs: null, misses: [], missingTotal: 0, drift: null,
+        occurrences: [], totalLines,
+        note: timedMatches === 0
+          ? 'No timestamped lines matched — cadence needs matches that carry a timestamp.'
+          : `Only ${timedMatches} timestamped match${timedMatches === 1 ? '' : 'es'} — need at least 3 to establish a cadence.`,
+      };
+    }
+
+    // Inter-arrival intervals (positive only, for a robust median period).
+    const deltas: number[] = [];
+    for (let i = 1; i < occEpoch.length; i++) {
+      const d = occEpoch[i] - occEpoch[i - 1];
+      if (d > 0) deltas.push(d);
+    }
+    const periodMs = cadenceMedian(deltas) || 0;
+    const minIntervalMs = deltas.length ? Math.min(...deltas) : 0;
+    const maxIntervalMs = deltas.length ? Math.max(...deltas) : 0;
+
+    // Misses: consecutive pairs whose gap >= toleranceFactor * period.
+    const misses: CadenceMiss[] = [];
+    let missingTotal = 0;
+    const MAX_MISSES = 2000;
+    let missTruncated = false;
+    if (periodMs > 0) {
+      const threshold = toleranceFactor * periodMs;
+      for (let i = 1; i < occEpoch.length; i++) {
+        const d = occEpoch[i] - occEpoch[i - 1];
+        if (d >= threshold) {
+          const missingCount = Math.max(1, Math.round(d / periodMs) - 1);
+          missingTotal += missingCount;
+          if (misses.length < MAX_MISSES) {
+            misses.push({
+              afterLineNumber: occLines[i - 1],
+              beforeLineNumber: occLines[i],
+              afterTs: occStr[i - 1],
+              beforeTs: occStr[i],
+              afterEpochMs: occEpoch[i - 1],
+              beforeEpochMs: occEpoch[i],
+              gapMs: d,
+              missingCount,
+            });
+          } else {
+            missTruncated = true;
+          }
+        }
+      }
+    }
+
+    // Drift: compare early-third vs late-third median interval.
+    let drift: { earlyPeriodMs: number; latePeriodMs: number; driftPct: number } | null = null;
+    if (deltas.length >= 6) {
+      const third = Math.max(1, Math.floor(deltas.length / 3));
+      const early = cadenceMedian(deltas.slice(0, third));
+      const late = cadenceMedian(deltas.slice(deltas.length - third));
+      if (early > 0) drift = { earlyPeriodMs: early, latePeriodMs: late, driftPct: ((late - early) / early) * 100 };
+    }
+
+    // Sampled occurrences for the strip visualization.
+    const MAX_STRIP = 4000;
+    const occurrences: { lineNumber: number; epochMs: number }[] = [];
+    let occurrencesSampled = false;
+    if (timedMatches <= MAX_STRIP) {
+      for (let i = 0; i < timedMatches; i++) occurrences.push({ lineNumber: occLines[i], epochMs: occEpoch[i] });
+    } else {
+      occurrencesSampled = true;
+      const step = timedMatches / MAX_STRIP;
+      for (let k = 0; k < MAX_STRIP; k++) {
+        const i = Math.floor(k * step);
+        occurrences.push({ lineNumber: occLines[i], epochMs: occEpoch[i] });
+      }
+    }
+
+    const firstEpochMs = occEpoch[0];
+    const lastEpochMs = occEpoch[occEpoch.length - 1];
+    const spanMs = Math.max(0, lastEpochMs - firstEpochMs);
+    const expectedCount = periodMs > 0 && spanMs > 0 ? Math.round(spanMs / periodMs) + 1 : timedMatches;
+
+    if (currentFilePath) logActivity(currentFilePath, 'cadence_analysis', { pattern: options.pattern, timedMatches, missing: missingTotal });
+
+    return {
+      success: true,
+      pattern: options.pattern, isRegex: !!options.isRegex, toleranceFactor,
+      totalMatches, timedMatches, untimedMatches, occCapped,
+      periodMs, minIntervalMs, maxIntervalMs,
+      firstLineNumber: occLines[0], lastLineNumber: occLines[occLines.length - 1],
+      firstTs: occStr[0], lastTs: occStr[occStr.length - 1],
+      firstEpochMs, lastEpochMs, spanMs,
+      expectedCount, missingTotal,
+      misses, missTruncated,
+      drift,
+      occurrences, occurrencesSampled,
+      totalLines,
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle('cancel-cadence', async () => {
+  cadenceSignal.cancelled = true;
+  return { success: true };
+});
+
+// Auto-suggest: scan the file for frequently-recurring line "templates" and
+// return the strongest candidates as clickable patterns for cadence detection.
+ipcMain.handle('suggest-cadence-events', async () => {
+  const handler = getFileHandler();
+  if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
+  try {
+    const totalLines = handler.getTotalLines();
+    // Sample evenly across the file to keep this cheap on huge logs.
+    const SAMPLE = 40000;
+    const step = totalLines > SAMPLE ? Math.floor(totalLines / SAMPLE) : 1;
+    const counts = new Map<string, { count: number; sample: string; timed: number }>();
+    const batchSize = 5000;
+    let lastYield = Date.now();
+    for (let start = 0; start < totalLines; start += batchSize) {
+      const count = Math.min(batchSize, totalLines - start);
+      const lines = handler.getLines(start, count);
+      for (const line of lines) {
+        if (step > 1 && (line.lineNumber % step) !== 0) continue;
+        const tmpl = cadenceTemplate(line.text);
+        if (!tmpl || tmpl.length < 4) continue;
+        const hasTs = parseTimestampFast(line.text) ? 1 : 0;
+        const e = counts.get(tmpl);
+        if (e) { e.count++; e.timed += hasTs; }
+        else counts.set(tmpl, { count: 1, sample: line.text.slice(0, 160), timed: hasTs });
+      }
+      const now = Date.now();
+      if (now - lastYield > 50) { await yieldToEventLoop(); lastYield = now; }
+    }
+    const suggestions = [...counts.entries()]
+      .filter(([, v]) => v.count >= 5 && v.timed > 0)
+      .map(([tmpl, v]) => ({ template: tmpl, count: v.count, sample: v.sample, pattern: cadenceLiteral(tmpl) }))
+      .filter(s => s.pattern && s.pattern.length >= 4)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 12);
+    return { success: true, suggestions, sampledStep: step, totalLines };
+  } catch (e) {
+    return { success: false, error: String(e) };
+  }
+});
+
 // === Split File ===
 
 interface SplitOptions {

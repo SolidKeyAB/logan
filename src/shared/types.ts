@@ -119,6 +119,7 @@ export interface ActivityEntry {
     | 'highlight_cleared'
     | 'diff_compared'
     | 'time_gap_analysis'
+    | 'cadence_analysis'
     | 'analysis_run'
     | 'notes_saved'
     | 'lines_saved'
