@@ -780,6 +780,11 @@ const elements = {
   folderSearchResults: document.getElementById('folder-search-results') as HTMLDivElement,
   fileStats: document.getElementById('file-stats') as HTMLDivElement,
   analysisResults: document.getElementById('analysis-results') as HTMLDivElement,
+  conclusionContent: document.getElementById('conclusion-content') as HTMLDivElement,
+  conclusionStatus: document.getElementById('conclusion-status') as HTMLSpanElement,
+  btnBuildConclusion: document.getElementById('btn-build-conclusion') as HTMLButtonElement,
+  btnExportConclusionMd: document.getElementById('btn-export-conclusion-md') as HTMLButtonElement,
+  btnExportConclusionPdf: document.getElementById('btn-export-conclusion-pdf') as HTMLButtonElement,
   baselineSection: document.getElementById('baseline-section') as HTMLDivElement,
   baselineControls: document.getElementById('baseline-controls') as HTMLDivElement,
   baselineComparisonResults: document.getElementById('baseline-comparison-results') as HTMLDivElement,
@@ -5665,6 +5670,9 @@ function openBottomTab(tabId: string): void {
   }
   if (tabId === 'investigate') {
     initInvestigatePanel();
+  }
+  if (tabId === 'conclusion') {
+    initConclusionPanel();
   }
   if (tabId === 'pattern-columns') {
     initPatternColumnsPanel();
@@ -14052,6 +14060,338 @@ async function analyzeFile(): Promise<void> {
   }
 }
 
+// ─── Conclusion: native root-cause synthesis (no AI) ─────────────────────────
+// One click turns everything LOGAN already computes — analysis (crashes, levels,
+// failing components), time gaps, and pinned findings — into a plain verdict:
+// the FIRST anomaly (the trigger), the likely root cause, a chronological
+// timeline of key events, and the supporting evidence. Fully deterministic;
+// the AI agent is optional (it only contributes by pinning findings).
+
+interface ConclusionEvent {
+  lineNumber: number;                                   // 0-based internal (viewer shows +1)
+  kind: 'crash' | 'error' | 'gap' | 'warning' | 'finding';
+  label: string;
+  detail?: string;
+  severity: 'error' | 'warning' | 'info';
+  timestampStr?: string;                                // wall-clock, resolved lazily
+  gapSeconds?: number;
+}
+
+interface ConclusionReport {
+  generatedAt: number;
+  sourceFilePath: string | null;
+  fileName: string;
+  totalLines: number;
+  levelCounts: Record<string, number>;
+  errorRate: number;
+  verdict: { kind: string; headline: string; detail: string; severity: 'error' | 'warning' | 'info' };
+  firstAnomaly: ConclusionEvent | null;
+  rootCause: ConclusionEvent | null;
+  timeline: ConclusionEvent[];
+  topComponents: FailingComponent[];
+}
+
+let conclusionReport: ConclusionReport | null = null;
+
+// Re-render on tab open if we have a fresh report for the current file; drop a stale one.
+function initConclusionPanel(): void {
+  if (conclusionReport && conclusionReport.sourceFilePath === state.filePath) {
+    renderConclusion(conclusionReport);
+    elements.btnExportConclusionMd.disabled = false;
+    elements.btnExportConclusionPdf.disabled = false;
+  } else if (conclusionReport) {
+    conclusionReport = null;
+    elements.btnExportConclusionMd.disabled = true;
+    elements.btnExportConclusionPdf.disabled = true;
+    elements.conclusionContent.innerHTML = '<p class="placeholder">Click <strong>Build conclusion</strong> to analyze this file — LOGAN finds the first anomaly, builds a timeline, and writes a verdict. <em>No AI needed.</em></p>';
+  }
+}
+
+// Orchestrator: gather native signals, synthesize, resolve timestamps, render.
+async function buildConclusion(): Promise<void> {
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  const btn = elements.btnBuildConclusion;
+  btn.disabled = true;
+  elements.conclusionStatus.textContent = 'Scanning…';
+  showProgress('Building conclusion…');
+  try {
+    // 1) Analysis (full-file native scan) — reuse the cached result if present.
+    if (!state.analysisResult) {
+      updateProgressText('Analyzing…');
+      updateProgress(20);
+      const res = await window.api.analyzeFile();
+      if (res.success && res.result) state.analysisResult = res.result;
+    }
+    // 2) Time gaps (native) — 10s catches stalls without drowning in noise.
+    updateProgressText('Detecting stalls…');
+    updateProgress(60);
+    let gaps: TimeGap[] = [];
+    try {
+      const gapRes = await window.api.detectTimeGaps({ thresholdSeconds: 10 });
+      if (gapRes.success && gapRes.gaps) gaps = gapRes.gaps as TimeGap[];
+    } catch { /* gaps optional */ }
+    // 3) Pinned findings (optional — agent or manual annotations).
+    const annotations: any[] = Array.isArray(state.annotations) ? state.annotations : [];
+    // 4) Synthesize deterministically.
+    updateProgressText('Synthesizing…');
+    updateProgress(85);
+    const report = synthesizeConclusion(state.analysisResult, gaps, annotations);
+    // 5) Resolve wall-clock timestamps for the key events (cheap, a few lookups).
+    await enrichConclusionTimestamps(report);
+    conclusionReport = report;
+    renderConclusion(report);
+    elements.btnExportConclusionMd.disabled = false;
+    elements.btnExportConclusionPdf.disabled = false;
+    elements.conclusionStatus.textContent = `Done · ${report.timeline.length} key event${report.timeline.length === 1 ? '' : 's'}`;
+  } catch (e) {
+    elements.conclusionContent.innerHTML = `<p class="placeholder" style="color: var(--error-color);">Could not build conclusion: ${escapeHtml(String(e))}</p>`;
+    elements.conclusionStatus.textContent = '';
+  } finally {
+    hideProgress();
+    btn.disabled = false;
+  }
+}
+
+// Pure, deterministic synthesis from LOGAN's existing native signals.
+function synthesizeConclusion(analysis: AnalysisResult | null, gaps: TimeGap[], annotations: any[]): ConclusionReport {
+  const events: ConclusionEvent[] = [];
+  const levelCounts: Record<string, number> = (analysis && analysis.levelCounts) || {};
+  const totalLines = (analysis && analysis.stats && analysis.stats.totalLines) || getTotalLines();
+  const analyzed = (analysis && analysis.stats && analysis.stats.analyzedLines) || totalLines || 1;
+  const fatal = levelCounts['fatal'] || 0;
+  const errors = levelCounts['error'] || 0;
+  const warnings = levelCounts['warning'] || 0;
+  const errorRate = (fatal + errors) / Math.max(1, analyzed);
+
+  // Crashes → error events
+  const crashes: CrashEntry[] = (analysis && analysis.insights && analysis.insights.crashes) || [];
+  for (const c of crashes) {
+    events.push({
+      lineNumber: c.lineNumber,
+      kind: 'crash',
+      label: `Crash: “${c.keyword}”${c.channel ? ' in ' + c.channel : ''}`,
+      detail: c.text,
+      severity: 'error',
+    });
+  }
+  // First error per failing component
+  const comps: FailingComponent[] = (analysis && analysis.insights && analysis.insights.topFailingComponents) || [];
+  for (const comp of comps) {
+    if (comp.errorCount > 0 && comp.sampleLine >= 0) {
+      events.push({
+        lineNumber: comp.sampleLine,
+        kind: 'error',
+        label: `First error in ${comp.name} (${comp.errorCount} error${comp.errorCount === 1 ? '' : 's'})`,
+        severity: 'error',
+      });
+    }
+  }
+  // Biggest stalls
+  const sortedGaps = [...gaps].sort((a, b) => b.gapSeconds - a.gapSeconds).slice(0, 5);
+  for (const g of sortedGaps) {
+    events.push({
+      lineNumber: g.lineNumber,
+      kind: 'gap',
+      label: `${formatDuration(g.gapSeconds)} stall (no events logged)`,
+      detail: g.linePreview,
+      severity: g.gapSeconds >= 60 ? 'warning' : 'info',
+      timestampStr: g.currTimestamp,
+      gapSeconds: g.gapSeconds,
+    });
+  }
+  // Pinned findings
+  for (const a of annotations) {
+    if (typeof a.lineNumber !== 'number') continue;
+    const sev: ConclusionEvent['severity'] = (a.severity === 'error' || a.severity === 'warning') ? a.severity : 'info';
+    events.push({
+      lineNumber: a.lineNumber,
+      kind: 'finding',
+      label: `Pinned: ${a.text || a.title || 'finding'}`,
+      severity: sev,
+    });
+  }
+
+  // Chronological order (line number is monotonic with time within one log).
+  events.sort((a, b) => a.lineNumber - b.lineNumber);
+
+  // First anomaly = earliest error/warning event (the trigger).
+  const firstAnomaly = events.find(e => e.severity === 'error' || e.severity === 'warning') || events[0] || null;
+
+  const firstCrash = events.filter(e => e.kind === 'crash')[0] || null;
+  const firstError = events.filter(e => e.kind === 'error')[0] || null;
+  const biggestGap = sortedGaps[0] || null;
+
+  let rootCause: ConclusionEvent | null = null;
+  let verdict: ConclusionReport['verdict'];
+  if (firstCrash) {
+    rootCause = firstCrash;
+    const earlierTrigger = firstAnomaly && firstAnomaly.lineNumber < firstCrash.lineNumber
+      ? ` An earlier anomaly at line ${firstAnomaly.lineNumber + 1} may be the trigger.` : '';
+    verdict = {
+      kind: 'crash', severity: 'error',
+      headline: `Crash detected — likely root cause at line ${firstCrash.lineNumber + 1}`,
+      detail: `First crash: ${firstCrash.label}.${earlierTrigger}`,
+    };
+  } else if (errorRate >= 0.05 || (comps[0] && comps[0].errorCount >= 5)) {
+    rootCause = firstError;
+    const worst = comps[0];
+    verdict = {
+      kind: 'error-storm', severity: 'error',
+      headline: worst ? `Error storm — ${worst.name} is the top failing component` : `Elevated error rate (${(errorRate * 100).toFixed(1)}%)`,
+      detail: worst
+        ? `${worst.name}: ${worst.errorCount} errors, first at line ${worst.sampleLine + 1}. Overall error rate ${(errorRate * 100).toFixed(1)}%.`
+        : `${errors} errors across ${analyzed.toLocaleString()} lines.`,
+    };
+  } else if (biggestGap && biggestGap.gapSeconds >= 30) {
+    rootCause = events.find(e => e.kind === 'gap' && e.lineNumber === biggestGap.lineNumber) || null;
+    verdict = {
+      kind: 'stall', severity: 'warning',
+      headline: `Possible hang — ${formatDuration(biggestGap.gapSeconds)} with no events`,
+      detail: `Largest stall before line ${biggestGap.lineNumber + 1} (${biggestGap.prevTimestamp} → ${biggestGap.currTimestamp}).`,
+    };
+  } else if (warnings > 0 || errors > 0) {
+    verdict = {
+      kind: 'warnings', severity: 'warning',
+      headline: `No crashes — ${errors} error${errors === 1 ? '' : 's'}, ${warnings} warning${warnings === 1 ? '' : 's'} to review`,
+      detail: `No fatal/crash keywords found, and no major stalls. Review the events below.`,
+    };
+  } else {
+    verdict = {
+      kind: 'clean', severity: 'info',
+      headline: `No critical anomalies detected`,
+      detail: `${totalLines.toLocaleString()} lines scanned. No crashes, no error storm, no major stalls.`,
+    };
+  }
+
+  return {
+    generatedAt: Date.now(),
+    sourceFilePath: state.filePath,
+    fileName: state.filePath ? (state.filePath.split(/[\\/]/).pop() || 'log') : 'log',
+    totalLines,
+    levelCounts,
+    errorRate,
+    verdict,
+    firstAnomaly,
+    rootCause,
+    timeline: events.slice(0, 40),
+    topComponents: comps.slice(0, 5),
+  };
+}
+
+// Resolve wall-clock timestamps for the key events (idempotent, a handful of reads).
+async function enrichConclusionTimestamps(report: ConclusionReport): Promise<void> {
+  const targets = new Set<ConclusionEvent>();
+  for (const e of report.timeline) if (!e.timestampStr) targets.add(e);
+  if (report.firstAnomaly && !report.firstAnomaly.timestampStr) targets.add(report.firstAnomaly);
+  if (report.rootCause && !report.rootCause.timestampStr) targets.add(report.rootCause);
+  await Promise.all(Array.from(targets).map(async (e) => {
+    try {
+      const r = await window.api.getLineTimestamp(e.lineNumber);
+      if (r && r.timestampStr) e.timestampStr = r.timestampStr;
+    } catch { /* leave blank */ }
+  }));
+}
+
+function renderConclusion(report: ConclusionReport): void {
+  const sev = (s: string) => (s === 'fatal' ? 'error' : s);
+  const dot = (s: string) => `<span class="concl-dot sev-${sev(s)}"></span>`;
+  const evRow = (e: ConclusionEvent, big?: boolean) => {
+    const ts = e.timestampStr ? `<span class="concl-ts">${escapeHtml(e.timestampStr)}</span>` : '';
+    const detail = e.detail && big ? `<div class="concl-detail">${escapeHtml(e.detail)}</div>` : '';
+    return `<div class="concl-event sev-${sev(e.severity)}${big ? ' concl-event-big' : ''}" data-line="${e.lineNumber}" title="Jump to line ${e.lineNumber + 1}">`
+      + `<div class="concl-event-row">${dot(e.severity)}<span class="concl-line">L${e.lineNumber + 1}</span>${ts}<span class="concl-label">${escapeHtml(e.label)}</span></div>`
+      + detail
+      + `</div>`;
+  };
+
+  let html = '';
+  html += `<div class="concl-verdict sev-${sev(report.verdict.severity)}">`
+    + `<div class="concl-verdict-headline">${escapeHtml(report.verdict.headline)}</div>`
+    + `<div class="concl-verdict-detail">${escapeHtml(report.verdict.detail)}</div>`
+    + `</div>`;
+
+  html += `<div class="concl-cards">`;
+  if (report.firstAnomaly) {
+    html += `<div class="concl-card"><div class="concl-card-title">🎯 First anomaly — the trigger</div>${evRow(report.firstAnomaly, true)}</div>`;
+  }
+  if (report.rootCause && (!report.firstAnomaly || report.rootCause.lineNumber !== report.firstAnomaly.lineNumber)) {
+    html += `<div class="concl-card"><div class="concl-card-title">🧩 Likely root cause</div>${evRow(report.rootCause, true)}</div>`;
+  }
+  html += `</div>`;
+
+  if (report.timeline.length) {
+    html += `<div class="concl-section-title">Timeline of key events (${report.timeline.length})</div>`;
+    html += `<div class="concl-timeline">${report.timeline.map(e => evRow(e)).join('')}</div>`;
+  }
+
+  const lc = report.levelCounts;
+  const pills = ['fatal', 'error', 'warning', 'info', 'debug', 'verbose']
+    .filter(l => lc[l])
+    .map(l => `<span class="concl-pill sev-${sev(l)}">${l}: ${lc[l].toLocaleString()}</span>`)
+    .join('');
+  html += `<div class="concl-section-title">Evidence</div>`;
+  html += `<div class="concl-pills">${pills || '<span class="concl-pill">no level data — run Analysis</span>'}</div>`;
+  if (report.topComponents.length) {
+    html += `<div class="concl-comp-list">` + report.topComponents.map(c =>
+      `<div class="concl-event sev-error" data-line="${c.sampleLine}" title="Jump to first error in ${escapeHtml(c.name)}">`
+      + `<div class="concl-event-row">${dot('error')}<span class="concl-line">L${c.sampleLine + 1}</span>`
+      + `<span class="concl-label">${escapeHtml(c.name)} — ${c.errorCount} errors, ${c.warningCount} warnings</span></div></div>`).join('') + `</div>`;
+  }
+
+  html += `<div class="concl-foot">Built natively from analysis + time gaps + pinned findings — no AI used · ${new Date(report.generatedAt).toLocaleTimeString()}</div>`;
+
+  elements.conclusionContent.innerHTML = html;
+  elements.conclusionContent.querySelectorAll('[data-line]').forEach(el => {
+    el.addEventListener('click', () => {
+      const ln = Number((el as HTMLElement).dataset.line);
+      if (!Number.isNaN(ln)) navigateTo(ln);
+    });
+  });
+}
+
+function conclusionReportToMarkdown(r: ConclusionReport): string {
+  const L = (n: number) => `L${n + 1}`;
+  let md = `# Root-cause conclusion — ${r.fileName}\n\n`;
+  md += `_Generated ${new Date(r.generatedAt).toLocaleString()} · ${r.totalLines.toLocaleString()} lines · built natively (no AI)_\n\n`;
+  md += `## Verdict\n\n**${r.verdict.headline}**\n\n${r.verdict.detail}\n\n`;
+  if (r.firstAnomaly) md += `## First anomaly (the trigger)\n\n- ${L(r.firstAnomaly.lineNumber)}${r.firstAnomaly.timestampStr ? ` (${r.firstAnomaly.timestampStr})` : ''} — ${r.firstAnomaly.label}\n\n`;
+  if (r.rootCause) md += `## Likely root cause\n\n- ${L(r.rootCause.lineNumber)}${r.rootCause.timestampStr ? ` (${r.rootCause.timestampStr})` : ''} — ${r.rootCause.label}\n\n`;
+  if (r.timeline.length) {
+    md += `## Timeline of key events\n\n`;
+    for (const e of r.timeline) md += `- **${L(e.lineNumber)}**${e.timestampStr ? ` \`${e.timestampStr}\`` : ''} — [${e.severity}] ${e.label}\n`;
+    md += `\n`;
+  }
+  md += `## Evidence\n\n`;
+  md += Object.keys(r.levelCounts).map(k => `- ${k}: ${r.levelCounts[k].toLocaleString()}`).join('\n') + `\n\n`;
+  if (r.topComponents.length) {
+    md += `### Top failing components\n\n`;
+    for (const c of r.topComponents) md += `- ${c.name}: ${c.errorCount} errors, ${c.warningCount} warnings (first at ${L(c.sampleLine)})\n`;
+  }
+  return md;
+}
+
+async function exportConclusion(format: 'md' | 'pdf'): Promise<void> {
+  if (!conclusionReport) { showToast('Build a conclusion first'); return; }
+  const md = conclusionReportToMarkdown(conclusionReport);
+  elements.conclusionStatus.textContent = `Exporting ${format.toUpperCase()}…`;
+  try {
+    const res = await window.api.exportNotes(md, format);
+    if (res.success && res.filePath) {
+      const name = res.filePath.split(/[\\/]/).pop();
+      elements.conclusionStatus.textContent = `Exported → ${name}`;
+      setTimeout(() => { if (elements.conclusionStatus.textContent?.startsWith('Exported')) elements.conclusionStatus.textContent = ''; }, 3000);
+    } else if (res.error === 'Cancelled') {
+      elements.conclusionStatus.textContent = '';
+    } else {
+      elements.conclusionStatus.textContent = '';
+      showToast(`Export failed: ${res.error || 'unknown error'}`);
+    }
+  } catch (e) {
+    elements.conclusionStatus.textContent = '';
+    showToast(`Export failed: ${String(e)}`);
+  }
+}
+
 // Column visibility
 async function showColumnsModal(): Promise<void> {
   if (!state.filePath) return;
@@ -19481,6 +19821,11 @@ function init(): void {
   // Analysis
   elements.btnAnalyze.addEventListener('click', analyzeFile);
   document.getElementById('btn-run-analysis')?.addEventListener('click', analyzeFile);
+
+  // Conclusion (native root-cause synthesis)
+  elements.btnBuildConclusion.addEventListener('click', () => buildConclusion());
+  elements.btnExportConclusionMd.addEventListener('click', () => exportConclusion('md'));
+  elements.btnExportConclusionPdf.addEventListener('click', () => exportConclusion('pdf'));
 
   // Split
   elements.btnSplit.addEventListener('click', showSplitModal);
