@@ -734,6 +734,10 @@ interface Api {
   // Pattern log ("flight recorder" of pattern applications)
   getPatternLog: () => Promise<{ success: boolean; entries?: Array<{ id: string; ts: string; operator: 'human' | 'ai'; mode: string; source: string; scope: string; scanned: number; matched: number; hid: number; sampleHits: number[]; ms: number; capped: boolean; valid: boolean; error?: string }> }>;
   clearPatternLog: () => Promise<{ success: boolean }>;
+  addPatternLog: (entry: { mode?: string; source?: string; scope?: string; scanned?: number; matched?: number; hid?: number; sampleHits?: number[]; ms?: number; capped?: boolean; valid?: boolean; error?: string; at?: number }) => Promise<{ success: boolean }>;
+
+  // Controlled-pattern compiler ("Make pattern… from selection")
+  compilePattern: (input: { mode: 'plain' | 'grok' | 'paint' | 'regex'; text?: string; sample?: string; spans?: Array<{ start: number; end: number; name: string }>; flags?: string; matchCase?: boolean; wholeWord?: boolean; invert?: boolean }) => Promise<{ ok: boolean; source: string; flags: string; error?: string; warnings: string[]; mode: string }>;
 
   // Named constants (captured from a selection via "Save as constant…")
   saveConstant: (name: string, value: string) => Promise<{ success: boolean; error?: string }>;

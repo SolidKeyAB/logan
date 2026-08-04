@@ -31,7 +31,8 @@ import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
 import { BaselineStore, buildFingerprint } from './baselineStore';
 import { bumpUsage, getUsage, clearUsage } from './usageStore';
 import { saveConstant, getConstants, deleteConstant } from './constantsStore';
-import { getPatternLog, clearPatternLog } from './patternLog';
+import { getPatternLog, clearPatternLog, logPattern, PatternLogEntry } from './patternLog';
+import { compilePattern, CompileInput } from './compilePattern';
 import { parseTimestampFast } from './timestampParse';
 import { carryForwardTimestamps, buildOriginTags, formatWallClock } from './mergeTimeline';
 import { compileColumnPattern, makeColumnExtractor, ColumnPatternSpec } from './columnPattern';
@@ -7334,6 +7335,42 @@ ipcMain.handle(IPC.PATTERN_LOG_GET, () => {
 ipcMain.handle(IPC.PATTERN_LOG_CLEAR, () => {
   clearPatternLog();
   return { success: true };
+});
+
+// Record a human-driven pattern application (from "Make pattern… from selection"
+// applying to Search / Filter / Highlight). operator is forced to 'human' here —
+// AI applications are logged server-side. Never throws (patternLog swallows).
+ipcMain.handle(IPC.PATTERN_LOG_ADD, (_, entry: Partial<PatternLogEntry> & { at?: number }) => {
+  logPattern({
+    operator: 'human',
+    mode: entry.mode ?? '',
+    source: entry.source ?? '',
+    scope: entry.scope ?? '',
+    scanned: entry.scanned ?? 0,
+    matched: entry.matched ?? 0,
+    hid: entry.hid ?? 0,
+    sampleHits: entry.sampleHits ?? [],
+    ms: entry.ms ?? 0,
+    capped: entry.capped ?? false,
+    valid: entry.valid ?? true,
+    error: entry.error,
+    at: entry.at,
+  });
+  return { success: true };
+});
+
+// ── Controlled-pattern compiler IPC ("Make pattern… from selection") ────
+// The renderer is a non-module script and can't import main modules, so it calls
+// compilePattern() over IPC. A live RegExp can't cross the IPC boundary, so we
+// strip it and return only { ok, source, flags, error, warnings, mode }; the
+// renderer rebuilds `new RegExp(source, flags)` locally for match counting.
+ipcMain.handle(IPC.COMPILE_PATTERN, (_, input: CompileInput) => {
+  try {
+    const r = compilePattern(input);
+    return { ok: r.ok, source: r.source, flags: r.flags, error: r.error, warnings: r.warnings, mode: r.mode };
+  } catch (e) {
+    return { ok: false, source: '', flags: '', error: e instanceof Error ? e.message : String(e), warnings: [], mode: input?.mode ?? 'paint' };
+  }
 });
 
 // ── Named constants IPC ────────────────────────────────────────────────

@@ -1119,6 +1119,44 @@
       </div>
     </div>
 
+    <!-- Make Pattern Modal ("Make pattern… from selection") -->
+    <div id="makepattern-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-content makepattern-modal-content">
+        <div class="modal-header">
+          <h3>&#10024; Make pattern from selection</h3>
+          <button class="modal-close" data-modal="makepattern-modal" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="makepattern-intro">Click a token to toggle it <b>variable</b> (it can match anything), or drag-select any range in the sample and press <b>Mark variable</b>. Unmarked text stays a literal constant.</p>
+          <div class="makepattern-toolbar">
+            <button id="btn-mp-mark" class="secondary-btn" type="button" disabled>Mark variable</button>
+            <button id="btn-mp-clear" class="secondary-btn" type="button">Clear spans</button>
+            <label class="checkbox-label mp-flag"><input type="checkbox" id="mp-ignorecase"> ignore case</label>
+          </div>
+          <div class="makepattern-sample-label">Sample</div>
+          <div id="mp-sample" class="makepattern-sample" tabindex="0"></div>
+          <div id="mp-spans-list" class="makepattern-spans"></div>
+          <div class="makepattern-preview">
+            <div class="mp-preview-row">
+              <span class="mp-preview-key">Regex</span>
+              <code id="mp-regex-source" class="mp-regex-source">&mdash;</code>
+            </div>
+            <div class="mp-preview-row">
+              <span class="mp-preview-key">Matches</span>
+              <span id="mp-match-count" class="mp-match-count">&mdash;</span>
+            </div>
+            <div id="mp-warnings" class="mp-warnings"></div>
+          </div>
+        </div>
+        <div class="modal-footer makepattern-footer">
+          <span class="makepattern-dest-label">Send to&#58;</span>
+          <button id="btn-mp-search" class="secondary-btn" type="button" disabled>&#128269; Search</button>
+          <button id="btn-mp-filter" class="secondary-btn" type="button" disabled>&#43; Filter (include)</button>
+          <button id="btn-mp-highlight" class="primary-btn" type="button" disabled>&#128396; Highlight</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Highlight Modal -->
     <div id="highlight-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-content">
