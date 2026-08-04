@@ -8,6 +8,7 @@ import { FileHandler } from './fileHandler';
 import { type BaselineStore, buildFingerprint } from './baselineStore';
 import { AnalysisResult } from './analyzers/types';
 import { JournalEntry, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps } from './investigationStore';
+import { bumpUsage } from './usageStore';
 
 export const API_PORT = 19532;
 const PORT_FILE = path.join(os.homedir(), '.logan', 'mcp-port');
@@ -24,6 +25,17 @@ const INVESTIGATIVE_PATHS = new Set<string>([
 ]);
 const JOURNAL_CAP = 200;
 let agentJournal: JournalEntry[] = [];
+
+// --- Usage Monitor (AI tap) ---
+// Housekeeping / connection-management POST paths that are NOT real tool verbs;
+// excluded from the per-feature usage counts. Everything else under /api/... is
+// counted (as verb = path without the '/api/' prefix, operator = 'ai').
+const USAGE_SKIP_PATHS = new Set<string>([
+  '/api/status', '/api/agent-status', '/api/agent-register', '/api/agent-message',
+  '/api/user-message', '/api/events', '/api/messages', '/api/shutdown',
+  '/api/agent-memory', '/api/agent-memory-clear',
+  '/api/investigation-log', '/api/investigation-clear',
+]);
 
 function journalLabel(p: string, body: Record<string, any>): string {
   const name = p.replace('/api/', '');
@@ -491,7 +503,14 @@ export function startApiServer(ctx: ApiContext): void {
 
         // Record investigative calls into the journal — unless this is a replay
         // (internal call from runTemplate), which would pollute the recording.
-        if (req.headers['x-logan-replay'] !== '1') recordJournal(url, body);
+        if (req.headers['x-logan-replay'] !== '1') {
+          recordJournal(url, body);
+          // Usage Monitor: count every real AI tool call (verb = path minus
+          // '/api/'). Skip replay + housekeeping paths. Fire-and-forget.
+          if (url?.startsWith('/api/') && !USAGE_SKIP_PATHS.has(url)) {
+            bumpUsage(url.replace('/api/', ''), 'ai');
+          }
+        }
 
         // --- Investigation templates (capture → save → replay) ---
         if (url === '/api/investigation-log') {

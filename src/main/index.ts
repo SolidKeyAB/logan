@@ -29,6 +29,7 @@ import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogL
 import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession, broadcastInterrupt, API_PORT } from './api-server';
 import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
 import { BaselineStore, buildFingerprint } from './baselineStore';
+import { bumpUsage, getUsage, clearUsage } from './usageStore';
 import { parseTimestampFast } from './timestampParse';
 import { carryForwardTimestamps, buildOriginTags, formatWallClock } from './mergeTimeline';
 import { compileColumnPattern, makeColumnExtractor, ColumnPatternSpec } from './columnPattern';
@@ -370,6 +371,10 @@ const ACTIVITY_HISTORY_CAP = 500;
 const ACTIVITY_HISTORY_TRIM_TO = 400;
 
 function logActivity(filePath: string, action: ActivityEntry['action'], details: Record<string, unknown>): void {
+  // Count every recorded human action for the Usage Monitor (before the
+  // canWriteLocal gate, so read-only-dir sessions still get counted; usage
+  // stats live in the global ~/.logan/usage.json, not the per-file sidecar).
+  bumpUsage(action, 'human');
   if (!canWriteLocal(filePath)) return;
   try {
     const data = loadLocalFileData(filePath);
@@ -7274,6 +7279,22 @@ ipcMain.handle('filter-presets-save', (_, preset: FilterPreset) => {
 
 ipcMain.handle('filter-presets-delete', (_, id: string) => {
   saveFilterPresets(loadFilterPresets().filter(p => p.id !== id));
+  return { success: true };
+});
+
+// ── Usage Monitor IPC ─────────────────────────────────────────────────
+// Renderer records human PANEL OPENS here (fire-and-forget). Human ACTIONS are
+// counted inside logActivity(); AI tool calls are counted in api-server.ts.
+ipcMain.handle(IPC.USAGE_BUMP, (_, verb: string) => {
+  bumpUsage(verb, 'human');
+});
+
+ipcMain.handle(IPC.USAGE_GET, () => {
+  return { success: true, entries: getUsage() };
+});
+
+ipcMain.handle(IPC.USAGE_CLEAR, () => {
+  clearUsage();
   return { success: true };
 });
 
