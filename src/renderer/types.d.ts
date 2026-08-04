@@ -39,6 +39,7 @@ interface SearchOptions {
   isWildcard: boolean;
   matchCase: boolean;
   wholeWord: boolean;
+  silent?: boolean; // background count only: skip history/telemetry/progress + separate cancel signal
   columnConfig?: SearchColumnConfig;
 }
 
