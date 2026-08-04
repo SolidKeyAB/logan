@@ -34,6 +34,7 @@ export interface SearchOptions {
   columnConfig?: SearchColumnConfig;
   filteredLineIndices?: number[]; // When filter is active, only search these lines
   maxMatches?: number; // Cap on matches to collect (default DEFAULT_MAX_MATCHES). Raise for batch/config searches on huge files.
+  silent?: boolean; // Background count only: skip logActivity + SEARCH_PROGRESS + don't touch the shared user search cancel signal (used by the Make-pattern live preview count).
 }
 
 export interface Bookmark {
