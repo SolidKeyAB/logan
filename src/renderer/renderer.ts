@@ -5663,6 +5663,9 @@ function openBottomTab(tabId: string): void {
   if (tabId === 'investigate') {
     initInvestigatePanel();
   }
+  if (tabId === 'pattern-columns') {
+    initPatternColumnsPanel();
+  }
   if (tabId === 'time-align') {
     if (state.timeAlignTimestamps.size === 0 && state.searchConfigResults.size > 0) {
       buildTimeAlignData();
@@ -13435,6 +13438,230 @@ async function formatAndLoadJson(): Promise<void> {
       jsonOriginalFile = null;
     }
   }
+}
+
+type PatcolMode = 'grok' | 'regex' | 'paint';
+interface PatcolToken { start: number; end: number; text: string; varName: string | null }
+let patcolMode: PatcolMode = 'grok';
+let patcolTokens: PatcolToken[] = [];
+let patcolCompiled: { regex: string; flags: string; fields: string[]; named: boolean } | null = null;
+let patcolSaved: any[] = [];
+let patcolDebounce: number | null = null;
+
+function initPatternColumnsPanel(): void {
+  const sampleInput = document.getElementById('patcol-sample-input') as HTMLInputElement | null;
+  if (sampleInput && !sampleInput.value) { patcolPullSample(); }
+  patcolRefreshSaved();
+  patcolSetMode(patcolMode);
+}
+
+async function patcolPullSample(): Promise<void> {
+  const sampleInput = document.getElementById('patcol-sample-input') as HTMLInputElement | null;
+  if (!sampleInput || !state.filePath) return;
+  const ln = state.selectedLine != null ? state.selectedLine : (state.visibleStartLine ?? 0);
+  try {
+    const r = await window.api.getLines(ln, 1);
+    const text = r && r.success && r.lines && r.lines[0] ? r.lines[0].text : '';
+    if (text) { sampleInput.value = text; patcolTokenize(); patcolPreviewSoon(); }
+  } catch { /* ignore */ }
+}
+
+function patcolSetMode(mode: PatcolMode): void {
+  patcolMode = mode;
+  document.querySelectorAll('.patcol-mode-btn').forEach((b) => {
+    b.classList.toggle('active', (b as HTMLElement).dataset.patcolMode === mode);
+  });
+  const show = (id: string, on: boolean) => { const el = document.getElementById(id); if (el) el.classList.toggle('hidden', !on); };
+  show('patcol-grok-wrap', mode === 'grok');
+  show('patcol-regex-wrap', mode === 'regex');
+  show('patcol-paint-wrap', mode === 'paint');
+  if (mode === 'paint') patcolTokenize();
+  patcolPreviewSoon();
+}
+
+// Whitespace-tokenize the sample line, remembering each token's char offsets so
+// painted spans map straight onto the compile engine's span model.
+function patcolTokenize(): void {
+  const sampleInput = document.getElementById('patcol-sample-input') as HTMLInputElement | null;
+  const sample = sampleInput ? sampleInput.value : '';
+  const prevNames = new Map<string, string>();
+  for (const t of patcolTokens) { if (t.varName) prevNames.set(`${t.start}:${t.end}`, t.varName); }
+  patcolTokens = [];
+  const re = /\S+/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(sample)) !== null) {
+    const key = `${m.index}:${m.index + m[0].length}`;
+    patcolTokens.push({ start: m.index, end: m.index + m[0].length, text: m[0], varName: prevNames.get(key) ?? null });
+  }
+  patcolRenderTokens();
+}
+
+function patcolRenderTokens(): void {
+  const wrap = document.getElementById('patcol-paint-tokens');
+  const fieldsWrap = document.getElementById('patcol-paint-fields');
+  if (!wrap) return;
+  if (patcolTokens.length === 0) {
+    wrap.innerHTML = '<span class="placeholder">Pull or paste a sample line above, then click its tokens.</span>';
+    if (fieldsWrap) fieldsWrap.innerHTML = '';
+    return;
+  }
+  wrap.innerHTML = patcolTokens.map((t, i) =>
+    `<span class="patcol-token${t.varName ? ' var' : ''}" data-i="${i}" title="${t.varName ? 'Column: ' + escapeHtml(t.varName) : 'Click to make a column'}">${escapeHtml(t.text)}</span>`
+  ).join(' ');
+  wrap.querySelectorAll('.patcol-token').forEach((el) => el.addEventListener('click', (e) => {
+    const i = parseInt((e.currentTarget as HTMLElement).dataset.i || '-1', 10);
+    if (i < 0) return;
+    const t = patcolTokens[i];
+    if (t.varName) { t.varName = null; }
+    else { t.varName = 'col' + (patcolTokens.filter(x => x.varName).length + 1); }
+    patcolRenderTokens();
+    patcolPreviewSoon();
+  }));
+  // Rename inputs for the marked tokens, in order.
+  if (fieldsWrap) {
+    const vars = patcolTokens.map((t, i) => ({ t, i })).filter(x => x.t.varName);
+    fieldsWrap.innerHTML = vars.map(x =>
+      `<label class="patcol-fieldname">col name <input type="text" data-i="${x.i}" value="${escapeHtml(x.t.varName || '')}" /></label>`
+    ).join('');
+    fieldsWrap.querySelectorAll('input').forEach((inp) => inp.addEventListener('input', (e) => {
+      const el = e.currentTarget as HTMLInputElement;
+      const i = parseInt(el.dataset.i || '-1', 10);
+      if (i >= 0 && patcolTokens[i]) { patcolTokens[i].varName = el.value; patcolPreviewSoon(); }
+    }));
+  }
+}
+
+function patcolBuildSpec(): any {
+  const sample = (document.getElementById('patcol-sample-input') as HTMLInputElement | null)?.value || '';
+  if (patcolMode === 'grok') {
+    return { mode: 'grok', pattern: (document.getElementById('patcol-grok-input') as HTMLInputElement | null)?.value || '', sample };
+  }
+  if (patcolMode === 'regex') {
+    return { mode: 'regex', pattern: (document.getElementById('patcol-regex-input') as HTMLInputElement | null)?.value || '', sample };
+  }
+  const spans = patcolTokens.filter(t => t.varName).map(t => ({ start: t.start, end: t.end, name: t.varName as string }));
+  return { mode: 'paint', sample, spans };
+}
+
+function patcolPreviewSoon(): void {
+  if (patcolDebounce) window.clearTimeout(patcolDebounce);
+  patcolDebounce = window.setTimeout(patcolPreview, 250);
+}
+
+async function patcolPreview(): Promise<void> {
+  const status = document.getElementById('patcol-status');
+  const out = document.getElementById('patcol-regex-out');
+  const content = document.getElementById('patcol-content');
+  const spec = patcolBuildSpec();
+  const empty = (spec.mode === 'paint') ? (spec.spans.length === 0) : !String(spec.pattern || '').trim();
+  if (empty) { patcolCompiled = null; if (out) out.textContent = '—'; if (status) status.textContent = ''; return; }
+  try {
+    const res = await (window.api as any).columnPatternPreview(spec, { sampleLines: 200 });
+    if (!res || !res.success) {
+      patcolCompiled = null;
+      if (out) out.textContent = '—';
+      if (status) status.textContent = res?.error ? '⚠ ' + res.error : 'Failed';
+      if (content) content.innerHTML = `<p class="placeholder">${escapeHtml(res?.error || 'Could not compile pattern.')}</p>`;
+      return;
+    }
+    patcolCompiled = { regex: res.regex, flags: res.flags || '', fields: res.fields || [], named: !!res.named };
+    if (out) out.textContent = res.regex || '—';
+    const rate = res.scanned ? Math.round((res.matched / res.scanned) * 100) : 0;
+    if (status) status.textContent = `${res.fields.length} cols · matched ${(res.matched || 0).toLocaleString()}/${(res.scanned || 0).toLocaleString()} (${rate}%)`;
+    patcolRenderPreview(res);
+  } catch (e) {
+    if (status) status.textContent = 'Failed';
+    if (content) content.innerHTML = `<p class="placeholder">Preview failed: ${escapeHtml(String(e))}</p>`;
+  }
+}
+
+function patcolRenderPreview(res: any): void {
+  const content = document.getElementById('patcol-content');
+  if (!content) return;
+  const fields: string[] = res.fields || [];
+  const rows: string[][] = res.rows || [];
+  if (rows.length === 0) {
+    content.innerHTML = '<p class="placeholder">Pattern compiled, but no lines in this file matched it. Adjust the pattern or pull a different sample line.</p>';
+    return;
+  }
+  const head = `<tr><th class="patcol-rownum">#</th>${fields.map(f => `<th>${escapeHtml(f)}</th>`).join('')}</tr>`;
+  const body = rows.slice(0, 200).map((r, i) =>
+    `<tr><td class="patcol-rownum">${i + 1}</td>${fields.map((_, ci) => `<td>${escapeHtml(r[ci] ?? '')}</td>`).join('')}</tr>`
+  ).join('');
+  content.innerHTML = `<div class="patcol-table-wrap"><table class="patcol-table"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+}
+
+function patcolCopyRegex(): void {
+  if (!patcolCompiled) { showToast('Author a pattern first'); return; }
+  navigator.clipboard.writeText(patcolCompiled.regex).then(
+    () => showToast('Regex copied'),
+    () => showToast('Copy failed')
+  );
+}
+
+async function patcolSavePattern(): Promise<void> {
+  if (!patcolCompiled) { showToast('Author a valid pattern first'); return; }
+  const name = window.prompt('Name this pattern (e.g. "http-access", "sensor-line"):', '');
+  if (!name || !name.trim()) return;
+  const id = 'cp_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 1e6).toString(36);
+  const item = { id, name: name.trim(), spec: patcolBuildSpec(), regex: patcolCompiled.regex, flags: patcolCompiled.flags, fields: patcolCompiled.fields };
+  const res = await (window.api as any).columnPatternSave(item);
+  if (!res || !res.success) { showToast(res?.error || 'Save failed'); return; }
+  patcolSaved = res.patterns || [];
+  renderPatcolSaved();
+  showToast(`Saved pattern "${name.trim()}"`);
+}
+
+async function patcolRefreshSaved(): Promise<void> {
+  try {
+    const res = await (window.api as any).columnPatternList();
+    patcolSaved = (res && res.patterns) || [];
+  } catch { patcolSaved = []; }
+  renderPatcolSaved();
+}
+
+function renderPatcolSaved(): void {
+  const el = document.getElementById('patcol-saved');
+  if (!el) return;
+  if (patcolSaved.length === 0) { el.innerHTML = ''; return; }
+  el.innerHTML = '<span class="patcol-saved-label">Saved:</span>' + patcolSaved.map(p =>
+    `<span class="patcol-chip" data-id="${escapeHtml(p.id)}"><span class="patcol-chip-name" title="${escapeHtml((p.fields || []).join(', '))}">${escapeHtml(p.name)}</span><button class="patcol-chip-x" data-id="${escapeHtml(p.id)}" title="Delete">×</button></span>`
+  ).join('');
+  el.querySelectorAll('.patcol-chip-name').forEach((b) => b.addEventListener('click', (e) => {
+    const id = ((e.currentTarget as HTMLElement).closest('.patcol-chip') as HTMLElement)?.dataset.id;
+    const item = patcolSaved.find(p => p.id === id);
+    if (item) patcolLoadSaved(item);
+  }));
+  el.querySelectorAll('.patcol-chip-x').forEach((b) => b.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const id = (e.currentTarget as HTMLElement).dataset.id;
+    if (!id) return;
+    const res = await (window.api as any).columnPatternDelete(id);
+    patcolSaved = (res && res.patterns) || patcolSaved.filter(p => p.id !== id);
+    renderPatcolSaved();
+  }));
+}
+
+function patcolLoadSaved(item: any): void {
+  const spec = item.spec || {};
+  const sampleInput = document.getElementById('patcol-sample-input') as HTMLInputElement | null;
+  if (sampleInput && spec.sample) sampleInput.value = spec.sample;
+  if (spec.mode === 'grok') {
+    const inp = document.getElementById('patcol-grok-input') as HTMLInputElement | null;
+    if (inp) inp.value = spec.pattern || '';
+  } else if (spec.mode === 'regex') {
+    const inp = document.getElementById('patcol-regex-input') as HTMLInputElement | null;
+    if (inp) inp.value = spec.pattern || '';
+  } else if (spec.mode === 'paint') {
+    patcolTokenize();
+    // Re-mark tokens whose offsets match a saved span.
+    for (const sp of (spec.spans || [])) {
+      const t = patcolTokens.find(x => x.start === sp.start && x.end === sp.end);
+      if (t) t.varName = sp.name;
+    }
+    patcolRenderTokens();
+  }
+  patcolSetMode(spec.mode || 'grok');
 }
 
 async function loadFile(filePath: string, createNewTab: boolean = true): Promise<void> {

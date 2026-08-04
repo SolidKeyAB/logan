@@ -1,0 +1,172 @@
+// Pattern-based column extraction ("paint or grok → named columns").
+//
+// Three authoring modes compile down to ONE named-capture regex whose groups
+// are the emitted columns:
+//   • grok  — literal text with %{name} / %{name:subpattern} placeholders
+//   • paint — a sample line with char-offset spans marked VARIABLE (each named);
+//             the un-marked text between spans is treated as static glue
+//   • regex — a raw regex the user typed (named groups → columns; else numbered)
+//
+// Kept free of Electron / FileHandler deps so the compile + extract logic stays
+// unit-testable. The IPC layer in index.ts calls these to preview and persist.
+
+export interface PaintSpan { start: number; end: number; name: string }
+
+export interface ColumnPatternSpec {
+  mode: 'grok' | 'regex' | 'paint';
+  pattern?: string;            // grok text or raw regex
+  sample?: string;             // paint: the sample line the spans index into
+  spans?: PaintSpan[];         // paint: variable spans (char offsets into sample)
+  flags?: string;              // extra regex flags (default '')
+}
+
+export interface CompiledColumnPattern {
+  regex: string;
+  flags: string;
+  fields: string[];
+  named: boolean;              // true → extract by group name, false → by index
+}
+
+const REGEX_SPECIALS = /[.*+?^${}()|[\]\\]/g;
+function escapeRegex(s: string): string {
+  return s.replace(REGEX_SPECIALS, '\\$&');
+}
+
+// Turn a literal chunk into a forgiving regex: runs of whitespace match `\s+`
+// (so re-indented / differently-spaced lines still line up) and everything else
+// is escaped to match verbatim.
+function staticToRegex(s: string): string {
+  if (!s) return '';
+  return s.replace(/\s+|[^\s]+/g, (chunk) => (/^\s+$/.test(chunk) ? '\\s+' : escapeRegex(chunk)));
+}
+
+// Coerce an arbitrary field label into a valid, unique JS regex group name.
+function sanitizeName(raw: string, used: Set<string>): string {
+  let name = (raw || '').trim().replace(/[^A-Za-z0-9_]/g, '_');
+  if (!name || /^[0-9]/.test(name)) name = '_' + name;
+  if (name === '_') name = 'col';
+  let unique = name;
+  let n = 2;
+  while (used.has(unique)) unique = `${name}_${n++}`;
+  used.add(unique);
+  return unique;
+}
+
+// Number of capturing groups in a regex, without needing a matching input:
+// appending `|` makes an always-matching empty alternation whose result array
+// length (minus the whole match) is the group count.
+function countCaptureGroups(source: string, flags: string): number {
+  try {
+    const m = new RegExp(source + '|', flags.replace(/[gy]/g, '')).exec('');
+    return m ? m.length - 1 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+const NAMED_GROUP_RE = /\(\?<([A-Za-z_$][\w$]*)>/g;
+
+function compileGrok(pattern: string, flags: string): CompiledColumnPattern {
+  const FIELD_RE = /%\{([^}]+)\}/g;
+  const used = new Set<string>();
+  interface Part { kind: 'static' | 'field'; body: string }
+  const parts: Part[] = [];
+  const fields: string[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = FIELD_RE.exec(pattern)) !== null) {
+    if (m.index > last) parts.push({ kind: 'static', body: staticToRegex(pattern.slice(last, m.index)) });
+    const spec = m[1];
+    const ci = spec.indexOf(':');
+    const rawName = ci >= 0 ? spec.slice(0, ci) : spec;
+    const sub = ci >= 0 ? spec.slice(ci + 1) : '';
+    const name = sanitizeName(rawName, used);
+    fields.push(name);
+    parts.push({ kind: 'field', body: `(?<${name}>${sub || '.+?'})` });
+    last = m.index + m[0].length;
+  }
+  if (last < pattern.length) parts.push({ kind: 'static', body: staticToRegex(pattern.slice(last)) });
+
+  // Make the final field greedy when nothing follows it, so it soaks up the
+  // rest of the line instead of matching as little as possible.
+  const lastFieldIdx = parts.map(p => p.kind).lastIndexOf('field');
+  const followedByStatic = parts.slice(lastFieldIdx + 1).some(p => p.kind === 'static' && p.body.length > 0);
+  if (lastFieldIdx >= 0 && !followedByStatic) {
+    parts[lastFieldIdx].body = parts[lastFieldIdx].body.replace('.+?)', '.+)');
+  }
+
+  return { regex: parts.map(p => p.body).join(''), flags, fields, named: true };
+}
+
+function compilePaint(sample: string, spans: PaintSpan[], flags: string): CompiledColumnPattern {
+  const clean = (spans || [])
+    .filter(s => s && s.end > s.start && s.start >= 0 && s.end <= sample.length)
+    .sort((a, b) => a.start - b.start);
+  const used = new Set<string>();
+  const fields: string[] = [];
+  let out = '';
+  let cursor = 0;
+  for (let i = 0; i < clean.length; i++) {
+    const sp = clean[i];
+    if (sp.start < cursor) continue; // skip overlaps
+    out += staticToRegex(sample.slice(cursor, sp.start));
+    const name = sanitizeName(sp.name, used);
+    fields.push(name);
+    const chunk = sample.slice(sp.start, sp.end);
+    const isLast = i === clean.length - 1 && sp.end >= sample.length;
+    const hasWs = /\s/.test(chunk);
+    const body = hasWs ? (isLast ? '.+' : '.+?') : (isLast ? '\\S+' : '\\S+?');
+    out += `(?<${name}>${body})`;
+    cursor = sp.end;
+  }
+  out += staticToRegex(sample.slice(cursor));
+  return { regex: out, flags, fields, named: true };
+}
+
+function compileRawRegex(pattern: string, flags: string): CompiledColumnPattern {
+  new RegExp(pattern, flags); // throws on invalid — caller surfaces the message
+  const names: string[] = [];
+  let m: RegExpExecArray | null;
+  NAMED_GROUP_RE.lastIndex = 0;
+  while ((m = NAMED_GROUP_RE.exec(pattern)) !== null) names.push(m[1]);
+  if (names.length) return { regex: pattern, flags, fields: names, named: true };
+  const groups = countCaptureGroups(pattern, flags);
+  if (groups > 0) {
+    return { regex: pattern, flags, fields: Array.from({ length: groups }, (_, i) => `col${i + 1}`), named: false };
+  }
+  return { regex: pattern, flags, fields: ['match'], named: false };
+}
+
+/** Compile any spec to a single named/numbered-capture regex + ordered fields. */
+export function compileColumnPattern(spec: ColumnPatternSpec): CompiledColumnPattern {
+  const flags = spec.flags || '';
+  if (spec.mode === 'grok') {
+    if (!spec.pattern) throw new Error('Empty pattern');
+    return compileGrok(spec.pattern, flags);
+  }
+  if (spec.mode === 'paint') {
+    if (!spec.sample) throw new Error('No sample line to paint');
+    if (!spec.spans || spec.spans.length === 0) throw new Error('Mark at least one field span');
+    return compilePaint(spec.sample, spec.spans, flags);
+  }
+  if (!spec.pattern) throw new Error('Empty regex');
+  return compileRawRegex(spec.pattern, flags);
+}
+
+/**
+ * Build a reusable extractor. Returns the values aligned to `fields`, or null
+ * when the line doesn't match. Missing optional groups come back as ''.
+ */
+export function makeColumnExtractor(compiled: CompiledColumnPattern): (line: string) => string[] | null {
+  const re = new RegExp(compiled.regex, compiled.flags.replace(/[gy]/g, ''));
+  return (line: string): string[] | null => {
+    const m = re.exec(line);
+    if (!m) return null;
+    if (compiled.named) {
+      const g = m.groups || {};
+      return compiled.fields.map(f => (g[f] != null ? g[f] : ''));
+    }
+    if (compiled.fields.length === 1 && compiled.fields[0] === 'match') return [m[0]];
+    return compiled.fields.map((_, i) => (m[i + 1] != null ? m[i + 1] : ''));
+  };
+}
