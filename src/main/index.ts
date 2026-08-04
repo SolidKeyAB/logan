@@ -31,6 +31,7 @@ import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
 import { BaselineStore, buildFingerprint } from './baselineStore';
 import { parseTimestampFast } from './timestampParse';
 import { compileColumnPattern, makeColumnExtractor, ColumnPatternSpec } from './columnPattern';
+import { parseVtraceToFile } from './vtraceParse';
 import { runTrendJob } from './trendWorkerClient';
 // Native-dependent modules — lazy-loaded to prevent SIGSEGV if bindings aren't built
 let SerialHandler: any = null;
@@ -5659,6 +5660,98 @@ ipcMain.handle('format-json-file', async (_, filePath: string) => {
     return { success: true, formattedPath };
   } catch (error) {
     console.error(`[JSON Format] Error:`, error);
+    return { success: false, error: String(error) };
+  }
+});
+
+// Manually decode a binary esotrace/vtrace file to normalized text, on demand.
+// This is the explicit counterpart to the auto-detecting VtraceAdapter, which only
+// fires when a file BOTH ends in `.esotrace` AND carries the `traceserverIVI` magic
+// in its first 4 KB. The button force-runs the SAME decoder (parseVtraceToFile) on
+// the current file regardless of extension, so a renamed capture — or a file whose
+// magic sits past the detection head — still decodes. parseVtraceToFile throws when
+// the file has no traceserverIVI record anywhere, which surfaces as a clean error.
+ipcMain.handle('decode-esotrace-file', async (_, filePath: string) => {
+  try {
+    const baseName = path.basename(filePath, path.extname(filePath));
+    // Write to a temp `.txt` so it indexes as plain text and does NOT re-trigger the
+    // vtrace adapter (which needs a `.esotrace` extension). The `.decoded.` marker in
+    // the name tells the renderer to keep the "decoded" toggle active across reload.
+    const decodedPath = path.join(
+      os.tmpdir(),
+      `${baseName}.decoded.${process.pid}-${Date.now().toString(36)}.txt`
+    );
+    await parseVtraceToFile(filePath, decodedPath, (percent) => {
+      mainWindow?.webContents.send('esotrace-decode-progress', { percent });
+    });
+    return { success: true, decodedPath };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// Batch-decode every esotrace/vtrace file in a folder (right-click → "Decode
+// esotrace files here"). Non-recursive: the folder's direct files only. Detection
+// is extension-agnostic like the single-file button — a file qualifies if it ends
+// in `.esotrace` OR carries the `traceserverIVI` magic in its head — so renamed
+// captures are caught too. Each decode is written next to the original as
+// `<name>.decoded.txt` (persistent, unlike the single-file temp). Prior outputs
+// (name contains `.decoded.`) are skipped so re-runs are idempotent.
+ipcMain.handle('decode-esotrace-folder', async (_, folderPath: string) => {
+  try {
+    const IDENTITY = Buffer.from('traceserverIVI', 'latin1');
+    const names = await fs.promises.readdir(folderPath);
+
+    // Find candidate esotrace files (by extension or magic bytes).
+    const candidates: string[] = [];
+    for (const name of names) {
+      if (name.startsWith('.')) continue;
+      if (name.includes('.decoded.')) continue; // don't re-decode our own output
+      const full = path.join(folderPath, name);
+      let st: fs.Stats;
+      try { st = fs.statSync(full); } catch { continue; }
+      if (!st.isFile()) continue;
+      let isEso = /\.esotrace$/i.test(name);
+      if (!isEso && st.size > 0) {
+        // Sniff the head for the identity marker so non-.esotrace captures qualify.
+        let fd: number | null = null;
+        try {
+          fd = fs.openSync(full, 'r');
+          const len = Math.min(4096, st.size);
+          const head = Buffer.alloc(len);
+          fs.readSync(fd, head, 0, len, 0);
+          isEso = head.includes(IDENTITY);
+        } catch { isEso = false; } finally { if (fd !== null) fs.closeSync(fd); }
+      }
+      if (isEso) candidates.push(full);
+    }
+
+    const decoded: Array<{ original: string; decoded: string }> = [];
+    const errors: Array<{ file: string; error: string }> = [];
+    for (let i = 0; i < candidates.length; i++) {
+      const src = candidates[i];
+      // Keep the original extension in the output name so `a.esotrace` and `a.bin`
+      // can't collide on the same `.decoded.txt`.
+      const outPath = path.join(folderPath, `${path.basename(src)}.decoded.txt`);
+      mainWindow?.webContents.send('esotrace-decode-folder-progress', {
+        current: i, total: candidates.length, name: path.basename(src),
+      });
+      try {
+        await parseVtraceToFile(src, outPath);
+        decoded.push({ original: src, decoded: outPath });
+      } catch (e) {
+        errors.push({ file: src, error: String(e) });
+      }
+      // Let the event loop breathe between files so progress paints and the UI
+      // stays responsive (each decode itself runs on the main thread).
+      await new Promise<void>((r) => setImmediate(r));
+    }
+    mainWindow?.webContents.send('esotrace-decode-folder-progress', {
+      current: candidates.length, total: candidates.length, name: '',
+    });
+
+    return { success: true, folderPath, scanned: names.length, candidates: candidates.length, decoded, errors };
+  } catch (error) {
     return { success: false, error: String(error) };
   }
 });
