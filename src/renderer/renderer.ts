@@ -3981,6 +3981,386 @@ function handleLogClick(event: MouseEvent): void {
   }
 }
 
+// ─── Make Pattern from selection ─────────────────────────────────────────────
+// Turns a selected example line into a CONTROLLED regex by marking which spans
+// VARY. The user marks variable char-ranges (drag-select + "Mark variable", or
+// click word/whitespace tokens to toggle); everything unmarked stays a literal
+// constant. Spans -> compilePattern paint mode (over IPC) -> live regex preview +
+// match count. Destinations reuse the existing Search / Filter / Highlight paths.
+
+interface MakePatternSpan { start: number; end: number; name: string }
+
+const makePatternState: {
+  sample: string;
+  spans: MakePatternSpan[];
+  autoSeq: number;
+  lastSource: string;
+  lastFlags: string;
+  countTimer: ReturnType<typeof setTimeout> | null;
+} = { sample: '', spans: [], autoSeq: 0, lastSource: '', lastFlags: '', countTimer: null };
+
+function mpEl<T extends HTMLElement>(id: string): T | null {
+  return document.getElementById(id) as T | null;
+}
+
+// Split the sample into word / whitespace tokens with their char offsets so each
+// can be clicked to toggle variable. This is the reliable chip fallback; free
+// drag-select over the same element also works (see the mouseup handler).
+function mpTokenize(sample: string): { start: number; end: number; text: string; ws: boolean }[] {
+  const out: { start: number; end: number; text: string; ws: boolean }[] = [];
+  const re = /\s+|\S+/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(sample)) !== null) {
+    out.push({ start: m.index, end: m.index + m[0].length, text: m[0], ws: /^\s+$/.test(m[0]) });
+  }
+  return out;
+}
+
+function mpNextName(): string {
+  makePatternState.autoSeq += 1;
+  return `v${makePatternState.autoSeq}`;
+}
+
+// A char offset [start,end) is variable iff it lies inside any marked span.
+function mpOffsetIsVar(offset: number): boolean {
+  return makePatternState.spans.some(s => offset >= s.start && offset < s.end);
+}
+
+// Merge/dedupe overlapping spans after an add, keeping the earliest name.
+function mpNormalizeSpans(): void {
+  const spans = makePatternState.spans
+    .filter(s => s.end > s.start && s.start >= 0 && s.end <= makePatternState.sample.length)
+    .sort((a, b) => a.start - b.start);
+  const merged: MakePatternSpan[] = [];
+  for (const s of spans) {
+    const prev = merged[merged.length - 1];
+    if (prev && s.start <= prev.end) {
+      prev.end = Math.max(prev.end, s.end); // extend, keep prev.name
+    } else {
+      merged.push({ ...s });
+    }
+  }
+  makePatternState.spans = merged;
+}
+
+// Render the sample as clickable tokens; variable tokens get the .mp-var style.
+function mpRenderSample(): void {
+  const host = mpEl<HTMLDivElement>('mp-sample');
+  if (!host) return;
+  const sample = makePatternState.sample;
+  const tokens = mpTokenize(sample);
+  host.innerHTML = tokens.map(t => {
+    const isVar = mpOffsetIsVar(t.start);
+    const cls = 'mp-token' + (t.ws ? ' mp-ws' : '') + (isVar ? ' mp-var' : '');
+    return `<span class="${cls}" data-start="${t.start}" data-end="${t.end}">${escapeHtml(t.text)}</span>`;
+  }).join('');
+  // Token click toggles that token variable (auto-named). Range spanning multiple
+  // tokens is handled by drag-select + the Mark-variable button.
+  host.querySelectorAll<HTMLElement>('.mp-token').forEach(el => {
+    el.addEventListener('click', (ev) => {
+      // Ignore click if the user actually drag-selected text (handled on mouseup).
+      const sel = window.getSelection();
+      if (sel && sel.toString().length > 0) return;
+      ev.stopPropagation();
+      const start = parseInt(el.dataset.start || '0', 10);
+      const end = parseInt(el.dataset.end || '0', 10);
+      mpToggleRange(start, end);
+    });
+  });
+}
+
+// Toggle a char range variable: if it exactly matches (or is fully covered by) an
+// existing span, remove; otherwise add a new named span.
+function mpToggleRange(start: number, end: number, name?: string): void {
+  if (end <= start) return;
+  const covering = makePatternState.spans.find(s => s.start <= start && s.end >= end);
+  if (covering && covering.start === start && covering.end === end) {
+    makePatternState.spans = makePatternState.spans.filter(s => s !== covering);
+  } else {
+    makePatternState.spans.push({ start, end, name: name || mpNextName() });
+    mpNormalizeSpans();
+  }
+  mpRenderSample();
+  mpRenderSpanChips();
+  mpRefreshPreview();
+}
+
+function mpRenderSpanChips(): void {
+  const host = mpEl<HTMLDivElement>('mp-spans-list');
+  if (!host) return;
+  if (makePatternState.spans.length === 0) {
+    host.innerHTML = '<span class="makepattern-dest-label">No variable spans yet — everything is a constant.</span>';
+    return;
+  }
+  host.innerHTML = makePatternState.spans
+    .map((s, i) => {
+      const frag = makePatternState.sample.slice(s.start, s.end);
+      const short = frag.length > 18 ? frag.slice(0, 18) + '…' : frag;
+      return `<span class="mp-span-chip" data-idx="${i}"><b>${escapeHtml(s.name)}</b>=<span>${escapeHtml(short)}</span><button class="mp-span-remove" data-idx="${i}" title="Remove span">&times;</button></span>`;
+    })
+    .join('');
+  host.querySelectorAll<HTMLButtonElement>('.mp-span-remove').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx || '-1', 10);
+      if (idx >= 0) {
+        makePatternState.spans.splice(idx, 1);
+        mpRenderSample();
+        mpRenderSpanChips();
+        mpRefreshPreview();
+      }
+    });
+  });
+}
+
+// Compile via IPC (paint mode) → update regex source, warnings, enable/disable
+// destinations, and kick off a debounced match count.
+async function mpRefreshPreview(): Promise<void> {
+  const sourceEl = mpEl<HTMLElement>('mp-regex-source');
+  const warnEl = mpEl<HTMLDivElement>('mp-warnings');
+  const countEl = mpEl<HTMLElement>('mp-match-count');
+  const ignoreCase = mpEl<HTMLInputElement>('mp-ignorecase')?.checked ?? false;
+  const destBtns = ['btn-mp-search', 'btn-mp-filter', 'btn-mp-highlight'].map(id => mpEl<HTMLButtonElement>(id));
+
+  const setDisabled = (v: boolean) => destBtns.forEach(b => { if (b) b.disabled = v; });
+
+  if (makePatternState.spans.length === 0) {
+    if (sourceEl) sourceEl.textContent = '—';
+    if (warnEl) { warnEl.className = 'mp-warnings'; warnEl.innerHTML = '<span class="mp-warn">Mark at least one variable span.</span>'; }
+    if (countEl) countEl.textContent = '—';
+    makePatternState.lastSource = '';
+    setDisabled(true);
+    return;
+  }
+
+  const res = await window.api.compilePattern({
+    mode: 'paint',
+    sample: makePatternState.sample,
+    spans: makePatternState.spans,
+    matchCase: ignoreCase ? false : true,
+  });
+
+  if (!res.ok) {
+    if (sourceEl) sourceEl.textContent = res.source || '—';
+    if (warnEl) { warnEl.className = 'mp-warnings mp-error'; warnEl.innerHTML = `<span class="mp-warn">${escapeHtml(res.error || 'Could not compile pattern')}</span>`; }
+    if (countEl) countEl.textContent = '—';
+    makePatternState.lastSource = '';
+    setDisabled(true);
+    return;
+  }
+
+  makePatternState.lastSource = res.source;
+  makePatternState.lastFlags = res.flags;
+  if (sourceEl) sourceEl.textContent = res.source;
+  if (warnEl) {
+    warnEl.className = 'mp-warnings';
+    warnEl.innerHTML = res.warnings.length
+      ? res.warnings.map(w => `<span class="mp-warn">⚠ ${escapeHtml(w)}</span>`).join('')
+      : '';
+  }
+  setDisabled(false);
+
+  // Debounced match count — reuse the real full-file regex search primitive so the
+  // count matches what the "→ Search" destination will actually find.
+  if (makePatternState.countTimer) clearTimeout(makePatternState.countTimer);
+  if (countEl) countEl.textContent = 'counting…';
+  makePatternState.countTimer = setTimeout(async () => {
+    makePatternState.countTimer = null;
+    try {
+      const searchRes = await window.api.search({
+        pattern: res.source,
+        isRegex: true,
+        isWildcard: false,
+        matchCase: !res.flags.includes('i'),
+        wholeWord: false,
+      });
+      const el = mpEl<HTMLElement>('mp-match-count');
+      if (!el) return;
+      if (searchRes.success && searchRes.matches) {
+        const capped = (searchRes as any).capped ? '+' : '';
+        el.textContent = `${searchRes.matches.length}${capped} line${searchRes.matches.length === 1 ? '' : 's'} in file`;
+      } else {
+        el.textContent = '—';
+      }
+    } catch {
+      const el = mpEl<HTMLElement>('mp-match-count');
+      if (el) el.textContent = '—';
+    }
+  }, 250);
+}
+
+// Log a human pattern application to the flight recorder (fire-and-forget).
+function mpLogApplication(scope: string, matched: number): void {
+  try {
+    void window.api.addPatternLog({
+      mode: 'paint',
+      source: makePatternState.lastSource,
+      scope,
+      scanned: 0,
+      matched,
+      hid: 0,
+      sampleHits: [],
+      ms: 0,
+      capped: false,
+      valid: true,
+    });
+  } catch { /* non-critical telemetry */ }
+}
+
+function mpClose(): void {
+  const modal = mpEl<HTMLDivElement>('makepattern-modal');
+  if (modal) modal.classList.add('hidden');
+  if (makePatternState.countTimer) { clearTimeout(makePatternState.countTimer); makePatternState.countTimer = null; }
+}
+
+// Drive the EXISTING regex-mode search with the compiled source, then close.
+async function mpApplyToSearch(): Promise<void> {
+  if (!makePatternState.lastSource) return;
+  if (elements.searchPanel) elements.searchPanel.classList.remove('hidden');
+  elements.searchInput.value = makePatternState.lastSource;
+  if (elements.searchRegex) elements.searchRegex.checked = true;
+  if (elements.searchWildcard) elements.searchWildcard.checked = false;
+  if (elements.searchCase) elements.searchCase.checked = !makePatternState.lastFlags.includes('i');
+  if (elements.searchWholeWord) elements.searchWholeWord.checked = false;
+  mpLogApplication('search', state.searchResults.length);
+  mpClose();
+  await performSearch();
+}
+
+// Reuse addToFilterPattern (the same path the menu's Include item uses). The
+// filter engine treats include entries as regex-capable; a controlled regex works.
+function mpApplyToFilter(): void {
+  if (!makePatternState.lastSource) return;
+  mpLogApplication('filter', 0);
+  addToFilterPattern(makePatternState.lastSource, 'include');
+  mpClose();
+}
+
+// Reuse the highlight-create path (commitHighlight) with a regex highlight.
+async function mpApplyToHighlight(): Promise<void> {
+  if (!makePatternState.lastSource) return;
+  const colorResult = await window.api.getNextHighlightColor();
+  const backgroundColor = colorResult.success && colorResult.color ? colorResult.color : '#ffff00';
+  const ok = await commitHighlight({
+    id: `highlight-${Date.now()}`,
+    pattern: makePatternState.lastSource,
+    isRegex: true,
+    matchCase: !makePatternState.lastFlags.includes('i'),
+    wholeWord: false,
+    backgroundColor,
+    textColor: '#000000',
+    includeWhitespace: false,
+    highlightAll: true,
+  });
+  if (ok) { mpLogApplication('highlight', 0); showToast('Highlight added from pattern'); }
+  mpClose();
+}
+
+let makePatternWired = false;
+function mpWireOnce(): void {
+  if (makePatternWired) return;
+  makePatternWired = true;
+
+  mpEl<HTMLButtonElement>('btn-mp-clear')?.addEventListener('click', () => {
+    makePatternState.spans = [];
+    makePatternState.autoSeq = 0;
+    mpRenderSample();
+    mpRenderSpanChips();
+    mpRefreshPreview();
+  });
+
+  // "Mark variable" — mark the current drag-selection inside the sample.
+  mpEl<HTMLButtonElement>('btn-mp-mark')?.addEventListener('click', () => {
+    const range = mpCurrentSelectionRange();
+    if (!range) { showToast('Select part of the sample first'); return; }
+    const name = (window.prompt('Variable name:', mpPeekNextName()) || '').trim() || mpNextName();
+    mpToggleRange(range.start, range.end, name);
+    window.getSelection()?.removeAllRanges();
+    mpUpdateMarkBtn();
+  });
+
+  mpEl<HTMLInputElement>('mp-ignorecase')?.addEventListener('change', () => { void mpRefreshPreview(); });
+
+  // Enable "Mark variable" only when there's a selection inside the sample.
+  const host = mpEl<HTMLDivElement>('mp-sample');
+  host?.addEventListener('mouseup', () => setTimeout(mpUpdateMarkBtn, 0));
+  document.addEventListener('selectionchange', () => {
+    if (!mpEl<HTMLDivElement>('makepattern-modal')?.classList.contains('hidden')) mpUpdateMarkBtn();
+  });
+
+  mpEl<HTMLButtonElement>('btn-mp-search')?.addEventListener('click', () => { void mpApplyToSearch(); });
+  mpEl<HTMLButtonElement>('btn-mp-filter')?.addEventListener('click', () => { mpApplyToFilter(); });
+  mpEl<HTMLButtonElement>('btn-mp-highlight')?.addEventListener('click', () => { void mpApplyToHighlight(); });
+  mpEl<HTMLDivElement>('makepattern-modal')?.querySelector('.modal-close')?.addEventListener('click', mpClose);
+}
+
+// Peek the name the next auto-span would get (without consuming the counter).
+function mpPeekNextName(): string { return `v${makePatternState.autoSeq + 1}`; }
+
+function mpUpdateMarkBtn(): void {
+  const btn = mpEl<HTMLButtonElement>('btn-mp-mark');
+  if (btn) btn.disabled = mpCurrentSelectionRange() === null;
+}
+
+// Resolve the current window selection to char offsets INTO the sample string,
+// but only if the whole selection is inside the #mp-sample element.
+function mpCurrentSelectionRange(): { start: number; end: number } | null {
+  const host = mpEl<HTMLDivElement>('mp-sample');
+  const sel = window.getSelection();
+  if (!host || !sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+  const range = sel.getRangeAt(0);
+  if (!host.contains(range.startContainer) || !host.contains(range.endContainer)) return null;
+  const start = mpOffsetOf(host, range.startContainer, range.startOffset);
+  const end = mpOffsetOf(host, range.endContainer, range.endOffset);
+  if (start === null || end === null || end <= start) return null;
+  return { start, end };
+}
+
+// Walk the text nodes of the sample host to convert a (node, offset) into an
+// absolute char offset in the sample string. The rendered text equals the sample
+// verbatim (tokens are just spans over the same characters), so offsets align.
+function mpOffsetOf(host: HTMLElement, node: Node, offset: number): number | null {
+  let acc = 0;
+  const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+  let n: Node | null = walker.nextNode();
+  while (n) {
+    if (n === node) return acc + offset;
+    acc += (n.textContent || '').length;
+    n = walker.nextNode();
+  }
+  // If the boundary node is an element (e.g. selection ends at a span boundary),
+  // fall back to counting text up to that element.
+  if (node.nodeType === Node.ELEMENT_NODE) {
+    acc = 0;
+    const w2 = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+    let t: Node | null = w2.nextNode();
+    while (t) {
+      if (node.contains(t)) return acc;
+      acc += (t.textContent || '').length;
+      t = w2.nextNode();
+    }
+  }
+  return null;
+}
+
+function openMakePatternModal(sample: string): void {
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  const clean = (sample || '').replace(/\r?\n/g, ' ').trim();
+  if (!clean) { showToast('Select some text first'); return; }
+  mpWireOnce();
+  makePatternState.sample = clean;
+  makePatternState.spans = [];
+  makePatternState.autoSeq = 0;
+  makePatternState.lastSource = '';
+  makePatternState.lastFlags = '';
+  const ignore = mpEl<HTMLInputElement>('mp-ignorecase');
+  if (ignore) ignore.checked = false;
+  mpRenderSample();
+  mpRenderSpanChips();
+  void mpRefreshPreview();
+  mpUpdateMarkBtn();
+  mpEl<HTMLDivElement>('makepattern-modal')?.classList.remove('hidden');
+}
+
 function handleContextMenu(event: MouseEvent): void {
   event.preventDefault();
 
@@ -4220,6 +4600,15 @@ function handleContextMenu(event: MouseEvent): void {
       searchRecurrences(selectedText.trim());
     });
     menu.appendChild(searchSel);
+
+    // ✨ Make pattern… — turn the selection into a controlled regex by marking
+    // which spans vary, then send it to Search / Filter / Highlight.
+    const makePatternItem = menuItem('\u{2728}', 'Make pattern…');
+    makePatternItem.addEventListener('click', () => {
+      menu.remove();
+      openMakePatternModal(selectedText.trim());
+    });
+    menu.appendChild(makePatternItem);
 
     // 🔤 Save as constant… — name + persist {name, value} to the constants store.
     const saveConstItem = menuItem('\u{1F524}', `Save as constant "${filterText}${selectedText.trim().length > 30 ? '...' : ''}"…`);

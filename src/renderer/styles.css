@@ -5753,6 +5753,154 @@ kbd {
 }
 
 /* === Pattern Distance explorer modal === */
+/* ── Make Pattern modal ("Make pattern… from selection") ─────────────── */
+.makepattern-modal-content { width: 640px; max-width: 92vw; }
+
+.makepattern-intro {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+
+.makepattern-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.makepattern-toolbar .mp-flag {
+  font-size: 11px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.makepattern-sample-label,
+.makepattern-preview .mp-preview-key {
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.makepattern-sample-label { margin-bottom: 4px; }
+
+.makepattern-sample {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.7;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 120px;
+  overflow-y: auto;
+  color: var(--text-primary);
+  user-select: text;
+}
+
+/* Clickable word/whitespace tokens (chip fallback + drag both live here) */
+.mp-token {
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 1px 0;
+}
+.mp-token.mp-ws { cursor: pointer; white-space: pre-wrap; }
+.mp-token:hover { background-color: var(--bg-hover-subtle); }
+
+/* A token/range currently marked variable */
+.mp-token.mp-var,
+.mp-var {
+  background-color: rgba(55, 148, 255, 0.28);
+  outline: 1px solid rgba(55, 148, 255, 0.6);
+  border-radius: 3px;
+  color: #cfe6ff;
+}
+
+.makepattern-spans {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 0;
+}
+
+.mp-span-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 2px 6px 2px 8px;
+  color: var(--text-primary);
+}
+
+.mp-span-chip .mp-span-remove {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 2px;
+}
+.mp-span-chip .mp-span-remove:hover { color: var(--error-color); }
+
+.makepattern-preview {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.mp-preview-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.mp-preview-row .mp-preview-key { flex: 0 0 56px; }
+
+.mp-regex-source {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--json-string);
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 4px 8px;
+  flex: 1 1 auto;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.mp-match-count { font-size: 13px; color: var(--text-primary); }
+
+.mp-warnings {
+  font-size: 11px;
+  color: var(--warning-color);
+  line-height: 1.5;
+}
+.mp-warnings .mp-warn { display: block; }
+.mp-warnings.mp-error { color: var(--error-color); }
+
+.makepattern-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.makepattern-dest-label { font-size: 12px; color: var(--text-secondary); margin-right: 4px; }
+
 .distance-modal-content { width: 680px; max-width: 92vw; }
 
 .dist-row {

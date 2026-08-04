@@ -423,6 +423,9 @@ export const IPC = {
   // Pattern log ("flight recorder" of pattern applications)
   PATTERN_LOG_GET: 'pattern-log-get',
   PATTERN_LOG_CLEAR: 'pattern-log-clear',
+  PATTERN_LOG_ADD: 'pattern-log-add',
+  // Controlled-pattern compiler ("Make pattern… from selection")
+  COMPILE_PATTERN: 'compile-pattern',
   // Named constants (captured from a selection via "Save as constant…")
   CONSTANTS_SAVE: 'constants-save',
   CONSTANTS_GET: 'constants-get',

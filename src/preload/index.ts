@@ -111,6 +111,9 @@ const IPC = {
   // Pattern log ("flight recorder" of pattern applications)
   PATTERN_LOG_GET: 'pattern-log-get',
   PATTERN_LOG_CLEAR: 'pattern-log-clear',
+  PATTERN_LOG_ADD: 'pattern-log-add',
+  // Controlled-pattern compiler ("Make pattern… from selection")
+  COMPILE_PATTERN: 'compile-pattern',
   // Named constants (captured from a selection via "Save as constant…")
   CONSTANTS_SAVE: 'constants-save',
   CONSTANTS_GET: 'constants-get',
@@ -896,6 +899,23 @@ const api = {
     ipcRenderer.invoke(IPC.PATTERN_LOG_GET),
   clearPatternLog: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke(IPC.PATTERN_LOG_CLEAR),
+  addPatternLog: (entry: any): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.PATTERN_LOG_ADD, entry),
+
+  // Controlled-pattern compiler ("Make pattern… from selection")
+  // regex can't cross IPC — main returns { ok, source, flags, error, warnings }
+  // and the renderer rebuilds `new RegExp(source, flags)` locally for counting.
+  compilePattern: (input: {
+    mode: 'plain' | 'grok' | 'paint' | 'regex';
+    text?: string;
+    sample?: string;
+    spans?: { start: number; end: number; name: string }[];
+    flags?: string;
+    matchCase?: boolean;
+    wholeWord?: boolean;
+    invert?: boolean;
+  }): Promise<{ ok: boolean; source: string; flags: string; error?: string; warnings: string[]; mode: string }> =>
+    ipcRenderer.invoke(IPC.COMPILE_PATTERN, input),
 
   // Named constants (captured from a selection via "Save as constant…")
   saveConstant: (name: string, value: string): Promise<{ success: boolean; error?: string }> =>
