@@ -30,6 +30,7 @@ import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessa
 import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
 import { BaselineStore, buildFingerprint } from './baselineStore';
 import { bumpUsage, getUsage, clearUsage } from './usageStore';
+import { getPatternLog, clearPatternLog } from './patternLog';
 import { parseTimestampFast } from './timestampParse';
 import { carryForwardTimestamps, buildOriginTags, formatWallClock } from './mergeTimeline';
 import { compileColumnPattern, makeColumnExtractor, ColumnPatternSpec } from './columnPattern';
@@ -7295,6 +7296,19 @@ ipcMain.handle(IPC.USAGE_GET, () => {
 
 ipcMain.handle(IPC.USAGE_CLEAR, () => {
   clearUsage();
+  return { success: true };
+});
+
+// ── Pattern log IPC ("flight recorder" of pattern applications) ────────
+// Read-only exposure of the rolling pattern-application log for the renderer.
+// Entries are recorded server-side (search/filter bricks land later); this
+// brick only surfaces get/clear.
+ipcMain.handle(IPC.PATTERN_LOG_GET, () => {
+  return { success: true, entries: getPatternLog() };
+});
+
+ipcMain.handle(IPC.PATTERN_LOG_CLEAR, () => {
+  clearPatternLog();
   return { success: true };
 });
 

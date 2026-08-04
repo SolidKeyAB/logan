@@ -106,6 +106,9 @@ const IPC = {
   USAGE_BUMP: 'usage-bump',
   USAGE_GET: 'usage-get',
   USAGE_CLEAR: 'usage-clear',
+  // Pattern log ("flight recorder" of pattern applications)
+  PATTERN_LOG_GET: 'pattern-log-get',
+  PATTERN_LOG_CLEAR: 'pattern-log-clear',
 } as const;
 
 // API exposed to renderer
@@ -877,6 +880,12 @@ const api = {
     ipcRenderer.invoke(IPC.USAGE_GET),
   clearUsage: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke(IPC.USAGE_CLEAR),
+
+  // Pattern log ("flight recorder" of pattern applications)
+  getPatternLog: (): Promise<{ success: boolean; entries?: any[] }> =>
+    ipcRenderer.invoke(IPC.PATTERN_LOG_GET),
+  clearPatternLog: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.PATTERN_LOG_CLEAR),
 
   // Window controls
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),
