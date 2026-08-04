@@ -313,6 +313,22 @@ const api = {
   formatJsonFile: (filePath: string): Promise<{ success: boolean; formattedPath?: string; error?: string }> =>
     ipcRenderer.invoke('format-json-file', filePath),
 
+  // esotrace (vtrace) manual decode
+  decodeEsotraceFile: (filePath: string): Promise<{ success: boolean; decodedPath?: string; error?: string }> =>
+    ipcRenderer.invoke('decode-esotrace-file', filePath),
+
+  // esotrace (vtrace) batch folder decode
+  decodeEsotraceFolder: (folderPath: string): Promise<{
+    success: boolean;
+    folderPath?: string;
+    scanned?: number;
+    candidates?: number;
+    decoded?: Array<{ original: string; decoded: string }>;
+    errors?: Array<{ file: string; error: string }>;
+    error?: string;
+  }> =>
+    ipcRenderer.invoke('decode-esotrace-folder', folderPath),
+
   // Pattern Columns (paint / grok / regex → named columns)
   columnPatternPreview: (
     spec: { mode: 'grok' | 'regex' | 'paint'; pattern?: string; sample?: string; spans?: Array<{ start: number; end: number; name: string }>; flags?: string },
@@ -413,6 +429,20 @@ const api = {
     const handler = (_: any, data: { percent: number }) => callback(data);
     ipcRenderer.on('json-format-progress', handler);
     return () => ipcRenderer.removeListener('json-format-progress', handler);
+  },
+
+  // esotrace decode progress
+  onEsotraceDecodeProgress: (callback: (data: { percent: number }) => void): (() => void) => {
+    const handler = (_: any, data: { percent: number }) => callback(data);
+    ipcRenderer.on('esotrace-decode-progress', handler);
+    return () => ipcRenderer.removeListener('esotrace-decode-progress', handler);
+  },
+
+  // esotrace batch folder decode progress
+  onEsotraceDecodeFolderProgress: (callback: (data: { current: number; total: number; name: string }) => void): (() => void) => {
+    const handler = (_: any, data: { current: number; total: number; name: string }) => callback(data);
+    ipcRenderer.on('esotrace-decode-folder-progress', handler);
+    return () => ipcRenderer.removeListener('esotrace-decode-folder-progress', handler);
   },
 
   // Local file status & activity history
