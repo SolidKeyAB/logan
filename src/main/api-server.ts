@@ -9,6 +9,7 @@ import { type BaselineStore, buildFingerprint } from './baselineStore';
 import { AnalysisResult } from './analyzers/types';
 import { JournalEntry, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps } from './investigationStore';
 import { bumpUsage } from './usageStore';
+import { synthesizeConclusion, type ConclusionReport, type ConclusionGap, type ConclusionAnnotation } from './conclusion';
 
 export const API_PORT = 19532;
 const PORT_FILE = path.join(os.homedir(), '.logan', 'mcp-port');
@@ -22,6 +23,7 @@ const INVESTIGATIVE_PATHS = new Set<string>([
   '/api/trend-fields', '/api/trend-series', '/api/trend-transitions', '/api/trend-correlate',
   '/api/trend-show', '/api/investigate-crashes', '/api/investigate-component',
   '/api/investigate-timerange', '/api/triage', '/api/navigate', '/api/evidence-pack',
+  '/api/build-conclusion',
 ]);
 const JOURNAL_CAP = 200;
 let agentJournal: JournalEntry[] = [];
@@ -47,6 +49,7 @@ function journalLabel(p: string, body: Record<string, any>): string {
   if (p === '/api/investigate-component') return `investigate component ${body.component ?? ''}`;
   if (p === '/api/triage') return `triage ${body.symptom ?? ''}`.trim();
   if (p === '/api/evidence-pack') return `evidence-pack${body.baselineId ? ' (vs baseline)' : ''}`;
+  if (p === '/api/build-conclusion') return 'build-conclusion';
   return name;
 }
 
@@ -466,6 +469,60 @@ export async function buildEvidencePack(
     },
   };
   return { success: true, pack };
+}
+
+// Options for the native root-cause conclusion (see buildConclusion).
+export interface BuildConclusionOptions {
+  thresholdSeconds?: number;
+  analyzerName?: string;
+}
+
+// Compose the native root-cause "conclusion" — the AI-side counterpart to the
+// human Conclusion panel. Assembles the same ingredients the panel uses:
+//   • analysis (crashes, levels, failing components) — cached or freshly run,
+//   • time gaps (native detector, default 10s threshold — matches the panel),
+//   • pinned findings / annotations (the agent's or the human's),
+// then calls the shared, deterministic synthesizeConclusion() to produce the
+// verdict: first anomaly (the trigger), likely root cause, chronological
+// timeline, and evidence. Returns the full ConclusionReport (no AI involved).
+export async function buildConclusion(
+  ctx: ApiContext,
+  opts: BuildConclusionOptions = {}
+): Promise<{ success: boolean; conclusion?: ConclusionReport; error?: string }> {
+  const filePath = ctx.getCurrentFilePath();
+  const handler = ctx.getFileHandler();
+  if (!filePath || !handler) return { success: false, error: 'No file open' };
+  const totalLines = handler.getTotalLines();
+
+  // 1) Analysis — reuse the cached result if present, else run a full scan.
+  let analysis = ctx.getAnalysisResult();
+  if (!analysis) {
+    const analysisResp = await ctx.analyze(opts.analyzerName);
+    analysis = analysisResp?.success ? analysisResp.result : (analysisResp?.result ?? null);
+  }
+
+  // 2) Time gaps — 10s catches stalls without drowning in noise (panel default).
+  const thresholdSeconds = opts.thresholdSeconds ?? 10;
+  let gaps: ConclusionGap[] = [];
+  try {
+    const gapsResp = await ctx.detectTimeGaps({ thresholdSeconds });
+    if (gapsResp?.success && Array.isArray(gapsResp.gaps)) gaps = gapsResp.gaps as ConclusionGap[];
+  } catch { /* gaps optional */ }
+
+  // 3) Pinned findings / annotations (agent or manual).
+  const annotations: ConclusionAnnotation[] = Array.from(ctx.getAnnotations().values()).map((a) => ({
+    lineNumber: a.lineNumber,
+    severity: a.severity,
+    text: a.text,
+  }));
+
+  // 4) Synthesize deterministically (shared with the human panel's logic).
+  const conclusion = synthesizeConclusion(analysis, gaps, annotations, {
+    sourceFilePath: filePath,
+    totalLinesFallback: totalLines,
+  });
+
+  return { success: true, conclusion };
 }
 
 export function startApiServer(ctx: ApiContext): void {
@@ -1082,6 +1139,16 @@ export function startApiServer(ctx: ApiContext): void {
         // FIRST, instead of dozens of exploratory round-trips. Reuses existing
         // primitives (analyze / time-gaps / trend-fields / baseline) in-process;
         // returns counts + references (viewerLine), not raw log text.
+        if (url === '/api/build-conclusion') {
+          const result = await buildConclusion(ctx, {
+            thresholdSeconds: body.thresholdSeconds,
+            analyzerName: body.analyzerName,
+          });
+          if (!result.success) return sendError(res, result.error || 'No file open');
+          sendJson(res, result);
+          return;
+        }
+
         if (url === '/api/evidence-pack') {
           const result = await buildEvidencePack(ctx, {
             thresholdSeconds: body.thresholdSeconds,
