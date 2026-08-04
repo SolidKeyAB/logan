@@ -418,4 +418,7 @@ export const IPC = {
   USAGE_BUMP: 'usage-bump',
   USAGE_GET: 'usage-get',
   USAGE_CLEAR: 'usage-clear',
+  // Pattern log ("flight recorder" of pattern applications)
+  PATTERN_LOG_GET: 'pattern-log-get',
+  PATTERN_LOG_CLEAR: 'pattern-log-clear',
 } as const;
