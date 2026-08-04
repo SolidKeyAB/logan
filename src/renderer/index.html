@@ -406,6 +406,7 @@
           <button class="bottom-tab-btn" data-bottom-tab="traceback" data-help="Reverse timeline from any error line.&#10;Right-click a line → Traceback from here.&#10;Shows what led to the error: same component, warnings, escalations.">Traceback</button>
           <button class="bottom-tab-btn" data-bottom-tab="chat" data-help="Chat with an AI agent connected via MCP or HTTP API.&#10;The agent can search, navigate, analyze, and bookmark for you.">Agent Chat</button>
           <button class="bottom-tab-btn" data-bottom-tab="notes" data-help="Freeform notes saved per file as .logan/filename.notes.txt.&#10;Use Save Snippet to append selected log lines to notes.">Notes</button>
+          <button class="bottom-tab-btn" data-bottom-tab="usage" data-help="Usage Monitor — how often each feature/panel/tool is used, split by operator (you vs the AI agent).&#10;Sorted by count so workhorses and dead features are obvious. Local-only; counts, never content. Features never used simply don't appear.">Usage</button>
         </div>
         <div class="bottom-panel-zoom" title="Resize bottom panel content">
           <button id="btn-panel-zoom-out" class="bottom-panel-zoom-btn" title="Zoom out panel content" aria-label="Zoom out">&minus;</button>
@@ -876,6 +877,18 @@
           </div>
           <textarea id="notes-textarea" class="notes-textarea"
                     placeholder="Type your notes here... (auto-saved)"></textarea>
+        </div>
+        <!-- Usage Monitor tab (per-feature usage counts, split human vs AI) -->
+        <div class="bottom-tab-view" data-bottom-tab="usage">
+          <div class="bottom-tab-sub-header usage-toolbar">
+            <button id="btn-usage-refresh" class="secondary-btn small" title="Reload usage stats">↻ Refresh</button>
+            <button id="btn-usage-sort" class="secondary-btn small" title="Toggle sort order">Sort: most used</button>
+            <button id="btn-usage-clear" class="secondary-btn small" title="Reset all usage stats">🗑 Clear stats</button>
+            <span id="usage-status" class="conclusion-status"></span>
+          </div>
+          <div id="usage-content" class="usage-content">
+            <p class="placeholder">Loading usage stats…</p>
+          </div>
         </div>
       </div>
     </div>

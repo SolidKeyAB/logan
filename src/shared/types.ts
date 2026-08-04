@@ -414,4 +414,8 @@ export const IPC = {
   TREND_CORRELATE: 'trend-correlate',
   // Guided triage
   TRIAGE_RECIPE: 'triage-recipe',
+  // Usage Monitor (per-feature usage counts, split human vs AI)
+  USAGE_BUMP: 'usage-bump',
+  USAGE_GET: 'usage-get',
+  USAGE_CLEAR: 'usage-clear',
 } as const;
