@@ -4124,6 +4124,11 @@ async function mpRefreshPreview(): Promise<void> {
 
   const setDisabled = (v: boolean) => destBtns.forEach(b => { if (b) b.disabled = v; });
 
+  // Invalidate any in-flight match count up-front so a slower stale response
+  // can't overwrite newer state — including the early-return '—' placeholders
+  // below. The valid path bumps the generation again for its own count.
+  makePatternState.countSeq++;
+
   if (makePatternState.spans.length === 0) {
     if (sourceEl) sourceEl.textContent = '—';
     if (warnEl) { warnEl.className = 'mp-warnings'; warnEl.innerHTML = '<span class="mp-warn">Mark at least one variable span.</span>'; }
@@ -10037,6 +10042,7 @@ function showInputPrompt(message: string, defaultValue = ''): Promise<string | n
       btnCancel.removeEventListener('click', onCancel);
       btnClose?.removeEventListener('click', onCancel);
       input.removeEventListener('keydown', onKeydown);
+      modal.removeEventListener('click', onBackdrop);
     };
     const finish = (value: string | null) => {
       if (done) return;
@@ -10049,6 +10055,12 @@ function showInputPrompt(message: string, defaultValue = ''): Promise<string | n
       finish(trimmed ? trimmed : null);
     };
     const onCancel = () => finish(null);
+    // Backdrop click (target === the overlay itself) must resolve the promise.
+    // Without this, the generic setupModalCloseHandlers only toggles `hidden`,
+    // so the promise would leak (never resolve) and its listeners would stack
+    // across opens — letting an aborted dialog later fire with the next one's
+    // input. Our finish() guard + cleanup() make this idempotent.
+    const onBackdrop = (e: MouseEvent) => { if (e.target === modal) onCancel(); };
     const onKeydown = (e: KeyboardEvent) => {
       if (e.key === 'Enter') { e.preventDefault(); onOk(); }
       if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
@@ -10058,6 +10070,7 @@ function showInputPrompt(message: string, defaultValue = ''): Promise<string | n
     btnCancel.addEventListener('click', onCancel);
     btnClose?.addEventListener('click', onCancel);
     input.addEventListener('keydown', onKeydown);
+    modal.addEventListener('click', onBackdrop);
   });
 }
 
@@ -18644,7 +18657,8 @@ function renderBrief(pack: EvidencePack): void {
           // comp.sampleLine is 0-based (api-server does NOT +1 components, unlike
           // crashes/gaps). The click handler treats data-viewer-line as 1-based
           // (navigateTo(vLine - 1)), so convert here. Line 0 is a valid first line;
-          // the analyzer uses a negative sentinel for "no sample line".
+          // included components always have errors>0 and a real error line, so
+          // there's no sentinel to filter — the >= 0 guard is just defensive.
           const vLine = typeof comp.sampleLine === 'number' && comp.sampleLine >= 0 ? comp.sampleLine + 1 : null;
           return `
           <div class="component-item brief-row" data-viewer-line="${vLine ?? ''}" title="${(comp.errorCount || 0)} errors, ${(comp.warningCount || 0)} warnings">
