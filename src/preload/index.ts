@@ -111,6 +111,10 @@ const IPC = {
   // Pattern log ("flight recorder" of pattern applications)
   PATTERN_LOG_GET: 'pattern-log-get',
   PATTERN_LOG_CLEAR: 'pattern-log-clear',
+  // Named constants (captured from a selection via "Save as constant…")
+  CONSTANTS_SAVE: 'constants-save',
+  CONSTANTS_GET: 'constants-get',
+  CONSTANTS_DELETE: 'constants-delete',
 } as const;
 
 // API exposed to renderer
@@ -892,6 +896,14 @@ const api = {
     ipcRenderer.invoke(IPC.PATTERN_LOG_GET),
   clearPatternLog: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke(IPC.PATTERN_LOG_CLEAR),
+
+  // Named constants (captured from a selection via "Save as constant…")
+  saveConstant: (name: string, value: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.CONSTANTS_SAVE, name, value),
+  getConstants: (): Promise<{ success: boolean; entries?: any[] }> =>
+    ipcRenderer.invoke(IPC.CONSTANTS_GET),
+  deleteConstant: (name: string): Promise<{ success: boolean; removed?: boolean }> =>
+    ipcRenderer.invoke(IPC.CONSTANTS_DELETE, name),
 
   // Window controls
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),
