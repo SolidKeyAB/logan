@@ -64,6 +64,7 @@ export interface ConclusionAnnotation {
 
 export interface ConclusionEvent {
   lineNumber: number;                                   // 0-based internal (viewer shows +1)
+  viewerLine?: number;                                  // 1-based (= lineNumber + 1); set on the API payload so agents pin correctly
   kind: 'crash' | 'error' | 'gap' | 'warning' | 'finding';
   label: string;
   detail?: string;

@@ -8,8 +8,8 @@ import { FileHandler } from './fileHandler';
 import { type BaselineStore, buildFingerprint } from './baselineStore';
 import { AnalysisResult } from './analyzers/types';
 import { JournalEntry, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps } from './investigationStore';
-import { bumpUsage } from './usageStore';
-import { synthesizeConclusion, type ConclusionReport, type ConclusionGap, type ConclusionAnnotation } from './conclusion';
+import { bumpUsage, enterAiContext, exitAiContext } from './usageStore';
+import { synthesizeConclusion, type ConclusionReport, type ConclusionGap, type ConclusionAnnotation, type ConclusionEvent } from './conclusion';
 
 export const API_PORT = 19532;
 const PORT_FILE = path.join(os.homedir(), '.logan', 'mcp-port');
@@ -522,6 +522,15 @@ export async function buildConclusion(
     totalLinesFallback: totalLines,
   });
 
+  // Add 1-based viewerLine to every event so the AI pins findings on the same
+  // line convention as every other tool (CLAUDE.md: pin using viewerLine). The
+  // 0-based lineNumber is kept for the human panel's existing consumers.
+  const withViewerLine = (e: ConclusionEvent | null): ConclusionEvent | null =>
+    e ? { ...e, viewerLine: e.lineNumber + 1 } : e;
+  conclusion.firstAnomaly = withViewerLine(conclusion.firstAnomaly);
+  conclusion.rootCause = withViewerLine(conclusion.rootCause);
+  conclusion.timeline = conclusion.timeline.map((e) => ({ ...e, viewerLine: e.lineNumber + 1 }));
+
   return { success: true, conclusion };
 }
 
@@ -687,6 +696,15 @@ export function startApiServer(ctx: ApiContext): void {
             bumpUsage(url.replace('/api/', ''), 'ai');
           }
         }
+
+        // Mark that an AI api-call is in flight for the whole dispatch body.
+        // The ctx handlers below share the app's code paths (which call
+        // logActivity → would otherwise record human::verb too). logActivity
+        // consults isAiContext() and skips the human bump while set. The AI verb
+        // is already counted by the tap above. Ref-counted; try/finally so every
+        // return path (including sendError) restores the count.
+        enterAiContext();
+        try {
 
         // --- Investigation templates (capture → save → replay) ---
         if (url === '/api/investigation-log') {
@@ -1166,6 +1184,10 @@ export function startApiServer(ctx: ApiContext): void {
 
         sendError(res, 'Not found', 404);
         return;
+
+        } finally {
+          exitAiContext();
+        }
       }
 
       sendError(res, 'Method not allowed', 405);

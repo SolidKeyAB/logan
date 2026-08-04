@@ -29,9 +29,9 @@ import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogL
 import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession, broadcastInterrupt, API_PORT, buildEvidencePack } from './api-server';
 import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
 import { BaselineStore, buildFingerprint } from './baselineStore';
-import { bumpUsage, getUsage, clearUsage } from './usageStore';
-import { saveConstant, getConstants, deleteConstant } from './constantsStore';
-import { getPatternLog, clearPatternLog, logPattern, PatternLogEntry } from './patternLog';
+import { bumpUsage, getUsage, clearUsage, flushUsage, isAiContext } from './usageStore';
+import { saveConstant, getConstants, deleteConstant, flushConstants } from './constantsStore';
+import { getPatternLog, clearPatternLog, logPattern, PatternLogEntry, flushPatternLog } from './patternLog';
 import { compilePattern, CompileInput } from './compilePattern';
 import { parseTimestampFast } from './timestampParse';
 import { carryForwardTimestamps, buildOriginTags, formatWallClock } from './mergeTimeline';
@@ -380,7 +380,11 @@ function logActivity(filePath: string, action: ActivityEntry['action'], details:
   // Count every recorded human action for the Usage Monitor (before the
   // canWriteLocal gate, so read-only-dir sessions still get counted; usage
   // stats live in the global ~/.logan/usage.json, not the per-file sidecar).
-  bumpUsage(action, 'human');
+  // Suppress the human bump while an AI api-call is in flight — the same ctx
+  // code paths serve the agent, and the AI verb is already counted by the
+  // api-server 'ai' tap. Without this, an AI /api/search would double-count as
+  // human::search, corrupting the human/AI split.
+  if (!isAiContext()) bumpUsage(action, 'human');
   if (!canWriteLocal(filePath)) return;
   try {
     const data = loadLocalFileData(filePath);
@@ -1643,6 +1647,11 @@ app.on('will-quit', () => {
     agentProcess.kill();
     agentProcess = null;
   }
+  // Flush debounced store writes so an action taken immediately before quit
+  // (e.g. "Save as constant") isn't lost with a pending timer.
+  try { flushUsage(); } catch { /* non-critical */ }
+  try { flushPatternLog(); } catch { /* non-critical */ }
+  try { flushConstants(); } catch { /* non-critical */ }
   stopApiServer();
 });
 
@@ -2698,18 +2707,23 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
   const handler = getFileHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
-  searchSignal = { cancelled: false };
+  // Silent searches (e.g. the Make-pattern live match-count preview) must not
+  // pollute real state/telemetry: use a SEPARATE cancel signal so they don't
+  // cancel the user's in-flight search, skip the progress UI, and skip
+  // logActivity (which would fabricate history + human::search on every keystroke).
+  const silent = !!options.silent;
+  const signal = silent ? { cancelled: false } : (searchSignal = { cancelled: false });
 
   try {
     const matches = await handler.search(
       options,
       (percent, matchCount) => {
-        mainWindow?.webContents.send(IPC.SEARCH_PROGRESS, { percent, matchCount });
+        if (!silent) mainWindow?.webContents.send(IPC.SEARCH_PROGRESS, { percent, matchCount });
       },
-      searchSignal
+      signal
     );
 
-    if (currentFilePath) logActivity(currentFilePath, 'search', { pattern: options.pattern, isRegex: options.isRegex, matchCount: matches.length });
+    if (!silent && currentFilePath) logActivity(currentFilePath, 'search', { pattern: options.pattern, isRegex: options.isRegex, matchCount: matches.length });
 
     // Check if filter is active for current file
     const filteredIndices = getFilteredLines();
@@ -2750,7 +2764,7 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
       if (hiddenCols.length > 0) {
         // Do a full-text search (without column config) to find matches in hidden columns
         const fullOptions = { ...options, columnConfig: undefined };
-        const fullMatches = await handler.search(fullOptions, () => {}, searchSignal);
+        const fullMatches = await handler.search(fullOptions, () => {}, signal);
         // Find matches that are NOT in the visible column results
         const visibleMatchSet = new Set(matches.map(m => `${m.lineNumber}:${m.column}`));
         const hiddenColumnMatches = fullMatches

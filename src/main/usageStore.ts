@@ -76,8 +76,30 @@ export class UsageStoreImpl {
     try {
       if (fs.existsSync(this.filePath)) {
         const raw = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
-        if (raw && typeof raw === 'object' && raw.entries) {
-          this.cache = raw as UsageStore;
+        if (raw && typeof raw === 'object' && raw.entries && typeof raw.entries === 'object') {
+          // Sanitize: drop any hand-edited/corrupt entries missing required
+          // fields so the renderer's Usage panel never chokes on a bad row.
+          const clean: Record<string, UsageEntry> = {};
+          for (const [key, e] of Object.entries(raw.entries as Record<string, unknown>)) {
+            const entry = e as Partial<UsageEntry>;
+            if (
+              entry && typeof entry === 'object' &&
+              typeof entry.verb === 'string' &&
+              (entry.operator === 'human' || entry.operator === 'ai') &&
+              typeof entry.count === 'number' &&
+              typeof entry.lastUsed === 'string'
+            ) {
+              clean[key] = {
+                verb: entry.verb,
+                operator: entry.operator,
+                count: entry.count,
+                firstUsed: typeof entry.firstUsed === 'string' ? entry.firstUsed : entry.lastUsed,
+                lastUsed: entry.lastUsed,
+                daily: (entry.daily && typeof entry.daily === 'object') ? entry.daily : {},
+              };
+            }
+          }
+          this.cache = { version: 1, updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : new Date().toISOString(), entries: clean };
           return this.cache;
         }
       }
@@ -183,4 +205,25 @@ export function clearUsage(): void {
 
 export function flushUsage(): void {
   store().flush();
+}
+
+// --- AI-context flag ---------------------------------------------------------
+// Ref-counted marker set while the api-server is dispatching an AI tool call.
+// The AI verb is already counted by the api-server 'ai' tap; without this flag
+// the same request would ALSO be counted as 'human' via logActivity(), because
+// the ctx handlers share the app's code paths. logActivity() consults
+// isAiContext() and skips the human bump while an AI call is in flight. The
+// depth counter tolerates nested/re-entrant dispatch.
+let aiContextDepth = 0;
+
+export function enterAiContext(): void {
+  aiContextDepth += 1;
+}
+
+export function exitAiContext(): void {
+  if (aiContextDepth > 0) aiContextDepth -= 1;
+}
+
+export function isAiContext(): boolean {
+  return aiContextDepth > 0;
 }

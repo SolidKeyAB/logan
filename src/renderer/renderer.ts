@@ -3997,7 +3997,8 @@ const makePatternState: {
   lastSource: string;
   lastFlags: string;
   countTimer: ReturnType<typeof setTimeout> | null;
-} = { sample: '', spans: [], autoSeq: 0, lastSource: '', lastFlags: '', countTimer: null };
+  countSeq: number; // generation guard so only the latest count updates the UI
+} = { sample: '', spans: [], autoSeq: 0, lastSource: '', lastFlags: '', countTimer: null, countSeq: 0 };
 
 function mpEl<T extends HTMLElement>(id: string): T | null {
   return document.getElementById(id) as T | null;
@@ -4160,8 +4161,12 @@ async function mpRefreshPreview(): Promise<void> {
   setDisabled(false);
 
   // Debounced match count — reuse the real full-file regex search primitive so the
-  // count matches what the "→ Search" destination will actually find.
+  // count matches what the "→ Search" destination will actually find. Runs with
+  // silent:true so it does NOT touch history/telemetry, the progress UI, or the
+  // user's in-flight search. A generation guard ensures only the latest count
+  // (not a slower stale response) updates the label.
   if (makePatternState.countTimer) clearTimeout(makePatternState.countTimer);
+  const seq = ++makePatternState.countSeq;
   if (countEl) countEl.textContent = 'counting…';
   makePatternState.countTimer = setTimeout(async () => {
     makePatternState.countTimer = null;
@@ -4172,16 +4177,19 @@ async function mpRefreshPreview(): Promise<void> {
         isWildcard: false,
         matchCase: !res.flags.includes('i'),
         wholeWord: false,
+        silent: true,
       });
+      if (seq !== makePatternState.countSeq) return; // a newer count superseded this one
       const el = mpEl<HTMLElement>('mp-match-count');
       if (!el) return;
       if (searchRes.success && searchRes.matches) {
-        const capped = (searchRes as any).capped ? '+' : '';
-        el.textContent = `${searchRes.matches.length}${capped} line${searchRes.matches.length === 1 ? '' : 's'} in file`;
+        const n = searchRes.matches.length;
+        el.textContent = `${n} match${n === 1 ? '' : 'es'}`;
       } else {
         el.textContent = '—';
       }
     } catch {
+      if (seq !== makePatternState.countSeq) return;
       const el = mpEl<HTMLElement>('mp-match-count');
       if (el) el.textContent = '—';
     }
@@ -4226,12 +4234,15 @@ async function mpApplyToSearch(): Promise<void> {
   await performSearch();
 }
 
-// Reuse addToFilterPattern (the same path the menu's Include item uses). The
-// filter engine treats include entries as regex-capable; a controlled regex works.
+// Add the compiled regex as an include row in the filter modal. The filter
+// engine treats include entries as regex-capable; a controlled regex works.
+// The modal uses per-row inputs (#include-patterns-container), so we add a row
+// via addIncludePatternRow — the legacy #include-patterns textarea no longer
+// exists, so the old textarea path silently discarded the pattern.
 function mpApplyToFilter(): void {
   if (!makePatternState.lastSource) return;
   mpLogApplication('filter', 0);
-  addToFilterPattern(makePatternState.lastSource, 'include');
+  addToFilterPattern(makePatternState.lastSource, 'include', !makePatternState.lastFlags.includes('i'));
   mpClose();
 }
 
@@ -4269,10 +4280,11 @@ function mpWireOnce(): void {
   });
 
   // "Mark variable" — mark the current drag-selection inside the sample.
-  mpEl<HTMLButtonElement>('btn-mp-mark')?.addEventListener('click', () => {
+  mpEl<HTMLButtonElement>('btn-mp-mark')?.addEventListener('click', async () => {
     const range = mpCurrentSelectionRange();
     if (!range) { showToast('Select part of the sample first'); return; }
-    const name = (window.prompt('Variable name:', mpPeekNextName()) || '').trim() || mpNextName();
+    const entered = await showInputPrompt('Variable name:', mpPeekNextName());
+    const name = (entered || '').trim() || mpNextName();
     mpToggleRange(range.start, range.end, name);
     window.getSelection()?.removeAllRanges();
     mpUpdateMarkBtn();
@@ -4319,6 +4331,28 @@ function mpCurrentSelectionRange(): { start: number; end: number } | null {
 // absolute char offset in the sample string. The rendered text equals the sample
 // verbatim (tokens are just spans over the same characters), so offsets align.
 function mpOffsetOf(host: HTMLElement, node: Node, offset: number): number | null {
+  // Element-node boundary (e.g. triple-click / select-all where the container is
+  // the host and offset is a child index): the absolute offset is the summed
+  // text length of the first `offset` child nodes. Returning the element's start
+  // (ignoring offset) collapses the selection wrongly — so resolve it precisely.
+  if (node.nodeType === Node.ELEMENT_NODE) {
+    const children = node.childNodes;
+    let acc = 0;
+    // Text preceding this element in the host.
+    const before = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+    let t: Node | null = before.nextNode();
+    while (t) {
+      if (node.contains(t)) break;
+      acc += (t.textContent || '').length;
+      t = before.nextNode();
+    }
+    // Plus the text of the first `offset` children of this element.
+    for (let i = 0; i < offset && i < children.length; i++) {
+      acc += (children[i].textContent || '').length;
+    }
+    return acc;
+  }
+
   let acc = 0;
   const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
   let n: Node | null = walker.nextNode();
@@ -4326,18 +4360,6 @@ function mpOffsetOf(host: HTMLElement, node: Node, offset: number): number | nul
     if (n === node) return acc + offset;
     acc += (n.textContent || '').length;
     n = walker.nextNode();
-  }
-  // If the boundary node is an element (e.g. selection ends at a span boundary),
-  // fall back to counting text up to that element.
-  if (node.nodeType === Node.ELEMENT_NODE) {
-    acc = 0;
-    const w2 = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
-    let t: Node | null = w2.nextNode();
-    while (t) {
-      if (node.contains(t)) return acc;
-      acc += (t.textContent || '').length;
-      t = w2.nextNode();
-    }
   }
   return null;
 }
@@ -4615,7 +4637,7 @@ function handleContextMenu(event: MouseEvent): void {
     saveConstItem.addEventListener('click', async () => {
       menu.remove();
       const value = selectedText.trim();
-      const name = (window.prompt('Constant name:', '') || '').trim();
+      const name = await showInputPrompt('Constant name:', '');
       if (!name) return;
       const res = await window.api.saveConstant(name, value);
       if (res && res.success) {
@@ -4634,7 +4656,7 @@ function handleContextMenu(event: MouseEvent): void {
   const commentItem = menuItem('\u{1F4AC}', `Comment on Ln ${lineNumber + 1}…`);
   commentItem.addEventListener('click', async () => {
     menu.remove();
-    const text = (window.prompt(`Comment on line ${lineNumber + 1}:`, '') || '').trim();
+    const text = await showInputPrompt(`Comment on line ${lineNumber + 1}:`, '');
     if (!text) return;
     const ann = {
       id: `comment-${lineNumber}-${Date.now()}`,
@@ -6098,22 +6120,27 @@ async function renderUsagePanel(): Promise<void> {
 
   // getUsage() already sorts by count desc; reverse for ascending view.
   const rows = usageSortAsc ? [...entries].reverse() : entries;
-  const total = entries.reduce((sum, e) => sum + e.count, 0);
-  const maxCount = Math.max(...entries.map(e => e.count), 1);
+  const total = entries.reduce((sum, e) => sum + (typeof e.count === 'number' ? e.count : 0), 0);
+  const maxCount = Math.max(...entries.map(e => typeof e.count === 'number' ? e.count : 0), 1);
 
   const rowsHtml = rows.map(e => {
-    const pct = Math.round((e.count / maxCount) * 100);
+    // Defensive defaults: a hand-edited ~/.logan/usage.json entry missing a field
+    // must not throw (main also sanitizes, but this keeps the panel alive too).
+    const count = typeof e.count === 'number' ? e.count : 0;
+    const verb = typeof e.verb === 'string' ? e.verb : '(unknown)';
+    const lastUsed = typeof e.lastUsed === 'string' ? e.lastUsed : '';
+    const pct = Math.round((count / maxCount) * 100);
     const badgeClass = e.operator === 'ai' ? 'usage-badge-ai' : 'usage-badge-human';
     const badgeLabel = e.operator === 'ai' ? 'AI' : 'HUMAN';
     return `
       <div class="usage-row">
         <div class="usage-row-main">
           <span class="usage-badge ${badgeClass}">${badgeLabel}</span>
-          <span class="usage-verb" title="${escapeHtml(e.verb)}">${escapeHtml(e.verb)}</span>
-          <span class="usage-count">${e.count.toLocaleString()}</span>
+          <span class="usage-verb" title="${escapeHtml(verb)}">${escapeHtml(verb)}</span>
+          <span class="usage-count">${count.toLocaleString()}</span>
         </div>
         <div class="usage-bar"><div class="usage-bar-fill" style="width:${pct}%"></div></div>
-        <div class="usage-meta">last used ${escapeHtml(getRelativeTime(e.lastUsed))}</div>
+        <div class="usage-meta">last used ${escapeHtml(lastUsed ? getRelativeTime(lastUsed) : 'unknown')}</div>
       </div>`;
   }).join('');
 
@@ -9981,6 +10008,57 @@ function showSshPassphrasePrompt(): void {
   btnOk.addEventListener('click', onOk);
   btnCancel.addEventListener('click', onCancel);
   input.addEventListener('keydown', onKeydown);
+}
+
+// Promise-based text-input dialog. Electron does NOT implement window.prompt()
+// (it THROWS), so any prompt()-based flow is broken. This reuses the shared
+// .modal overlay/escape-key/backdrop conventions (see showSshPassphrasePrompt).
+// Resolves to the trimmed string, or null on cancel/close/empty-Escape.
+function showInputPrompt(message: string, defaultValue = ''): Promise<string | null> {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('input-prompt-modal');
+    const input = document.getElementById('input-prompt-input') as HTMLInputElement | null;
+    const label = document.getElementById('input-prompt-label');
+    const btnOk = document.getElementById('btn-input-prompt-ok') as HTMLButtonElement | null;
+    const btnCancel = document.getElementById('btn-input-prompt-cancel') as HTMLButtonElement | null;
+    const btnClose = modal?.querySelector('.modal-close') as HTMLButtonElement | null;
+    if (!modal || !input || !btnOk || !btnCancel) { resolve(null); return; }
+
+    if (label) label.textContent = message;
+    input.value = defaultValue;
+    modal.classList.remove('hidden');
+    input.focus();
+    input.select();
+
+    let done = false;
+    const cleanup = () => {
+      modal.classList.add('hidden');
+      btnOk.removeEventListener('click', onOk);
+      btnCancel.removeEventListener('click', onCancel);
+      btnClose?.removeEventListener('click', onCancel);
+      input.removeEventListener('keydown', onKeydown);
+    };
+    const finish = (value: string | null) => {
+      if (done) return;
+      done = true;
+      cleanup();
+      resolve(value);
+    };
+    const onOk = () => {
+      const trimmed = input.value.trim();
+      finish(trimmed ? trimmed : null);
+    };
+    const onCancel = () => finish(null);
+    const onKeydown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') { e.preventDefault(); onOk(); }
+      if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+    };
+
+    btnOk.addEventListener('click', onOk);
+    btnCancel.addEventListener('click', onCancel);
+    btnClose?.addEventListener('click', onCancel);
+    input.addEventListener('keydown', onKeydown);
+  });
 }
 
 function showSshProfileManager(): void {
@@ -17821,14 +17899,17 @@ async function addBookmarkAtLineWithLabel(lineNumber: number, label: string): Pr
   await addBookmarkAtLine(lineNumber, label);
 }
 
-function addToFilterPattern(pattern: string, type: 'include' | 'exclude'): void {
-  const textarea = type === 'include'
-    ? document.getElementById('include-patterns') as HTMLTextAreaElement
-    : document.getElementById('exclude-patterns') as HTMLTextAreaElement;
-
-  if (textarea) {
-    const current = textarea.value.trim();
-    textarea.value = current ? `${current}\n${pattern}` : pattern;
+function addToFilterPattern(pattern: string, type: 'include' | 'exclude', caseSensitive = true): void {
+  if (type === 'include') {
+    // Include uses per-row inputs under #include-patterns-container (there is no
+    // #include-patterns textarea anymore). Add a row so the pattern actually lands.
+    addIncludePatternRow(pattern, caseSensitive);
+  } else {
+    const textarea = document.getElementById('exclude-patterns') as HTMLTextAreaElement | null;
+    if (textarea) {
+      const current = textarea.value.trim();
+      textarea.value = current ? `${current}\n${pattern}` : pattern;
+    }
   }
 
   // Open filter modal so user can see and apply
@@ -18473,6 +18554,8 @@ async function showBrief(): Promise<void> {
     return;
   }
   el.innerHTML = '<p class="placeholder">Building brief…</p>';
+  // Record the flagship parity action so Brief shows up in its own Usage Monitor.
+  trackUsage('brief');
   if (elements.btnBrief) elements.btnBrief.disabled = true;
   try {
     const res = await window.api.getEvidencePack();
@@ -18558,7 +18641,11 @@ function renderBrief(pack: EvidencePack): void {
       <div class="insight-section components-section">
         <div class="insight-header">Top Failing Components</div>
         ${comps.map(comp => {
-          const vLine = typeof comp.sampleLine === 'number' && comp.sampleLine > 0 ? comp.sampleLine : null;
+          // comp.sampleLine is 0-based (api-server does NOT +1 components, unlike
+          // crashes/gaps). The click handler treats data-viewer-line as 1-based
+          // (navigateTo(vLine - 1)), so convert here. Line 0 is a valid first line;
+          // the analyzer uses a negative sentinel for "no sample line".
+          const vLine = typeof comp.sampleLine === 'number' && comp.sampleLine >= 0 ? comp.sampleLine + 1 : null;
           return `
           <div class="component-item brief-row" data-viewer-line="${vLine ?? ''}" title="${(comp.errorCount || 0)} errors, ${(comp.warningCount || 0)} warnings">
             <div class="component-header">

@@ -1610,6 +1610,26 @@
       </div>
     </div>
 
+    <!-- Generic text-input prompt (Electron has no window.prompt) -->
+    <div id="input-prompt-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-content" style="width: 380px;">
+        <div class="modal-header">
+          <h3 id="input-prompt-title">Enter value</h3>
+          <button class="modal-close" data-modal="input-prompt-modal" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="filter-group">
+            <label id="input-prompt-label" for="input-prompt-input"></label>
+            <input type="text" id="input-prompt-input" class="modal-input" placeholder="">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-input-prompt-cancel" class="secondary-btn">Cancel</button>
+          <button id="btn-input-prompt-ok" class="primary-btn">OK</button>
+        </div>
+      </div>
+    </div>
+
     <!-- SSH Connect & Browse Modal -->
     <div id="ssh-connect-modal" class="modal hidden" role="dialog" aria-modal="true">
       <div class="modal-content ssh-modal-content">
