@@ -785,6 +785,19 @@ const elements = {
   btnBuildConclusion: document.getElementById('btn-build-conclusion') as HTMLButtonElement,
   btnExportConclusionMd: document.getElementById('btn-export-conclusion-md') as HTMLButtonElement,
   btnExportConclusionPdf: document.getElementById('btn-export-conclusion-pdf') as HTMLButtonElement,
+  // Cadence / Missing-Sequence
+  cadencePattern: document.getElementById('cadence-pattern') as HTMLInputElement,
+  cadenceRegex: document.getElementById('cadence-regex') as HTMLInputElement,
+  cadenceCase: document.getElementById('cadence-case') as HTMLInputElement,
+  cadenceTolerance: document.getElementById('cadence-tolerance') as HTMLInputElement,
+  btnDetectCadence: document.getElementById('btn-detect-cadence') as HTMLButtonElement,
+  btnCancelCadence: document.getElementById('btn-cancel-cadence') as HTMLButtonElement,
+  btnSuggestCadence: document.getElementById('btn-suggest-cadence') as HTMLButtonElement,
+  btnPinCadence: document.getElementById('btn-pin-cadence') as HTMLButtonElement,
+  cadenceStatus: document.getElementById('cadence-status') as HTMLSpanElement,
+  cadenceSummary: document.getElementById('cadence-summary') as HTMLDivElement,
+  cadenceStrip: document.getElementById('cadence-strip') as HTMLCanvasElement,
+  cadenceContent: document.getElementById('cadence-content') as HTMLDivElement,
   baselineSection: document.getElementById('baseline-section') as HTMLDivElement,
   baselineControls: document.getElementById('baseline-controls') as HTMLDivElement,
   baselineComparisonResults: document.getElementById('baseline-comparison-results') as HTMLDivElement,
@@ -5673,6 +5686,9 @@ function openBottomTab(tabId: string): void {
   }
   if (tabId === 'conclusion') {
     initConclusionPanel();
+  }
+  if (tabId === 'cadence') {
+    initCadencePanel();
   }
   if (tabId === 'pattern-columns') {
     initPatternColumnsPanel();
@@ -15735,6 +15751,269 @@ let currentGapIndex = -1;
 const highlightMatches: Map<string, number[]> = new Map(); // highlightId -> line numbers
 const highlightCurrentIndex: Map<string, number> = new Map(); // highlightId -> current index
 
+// ─── Cadence / Missing-Sequence (the negative-space instrument) ──────────────
+// Pick a repeating event → LOGAN auto-detects its period from timestamps → flags
+// every SKIPPED occurrence + drift. It surfaces the events that DIDN'T happen.
+
+let currentCadence: any = null;
+let cadenceProgressUnsubscribe: (() => void) | null = null;
+
+// Human-friendly duration that keeps sub-second precision (heartbeats are fast).
+function formatCadenceMs(ms: number): string {
+  if (!isFinite(ms) || ms <= 0) return '0';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 10000) return `${(ms / 1000).toFixed(1)}s`;
+  const secs = Math.round(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ${secs % 60}s`;
+  const hrs = Math.floor(mins / 60);
+  return `${hrs}h ${mins % 60}m`;
+}
+
+function initCadencePanel(): void {
+  // Re-show the last result if it belongs to the open file; otherwise reset.
+  if (currentCadence && currentCadence._filePath === state.filePath) {
+    renderCadence(currentCadence);
+  } else if (currentCadence) {
+    currentCadence = null;
+    elements.cadenceSummary.innerHTML = '';
+    elements.cadenceStrip.classList.add('hidden');
+    elements.btnPinCadence.classList.add('hidden');
+    elements.cadenceContent.innerHTML = '<p class="placeholder">Pick a <strong>repeating event</strong> and click <strong>🫀 Detect cadence</strong> — LOGAN auto-detects the period and flags every skipped occurrence. <em>No AI needed.</em></p>';
+  }
+}
+
+async function detectCadence(): Promise<void> {
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  const pattern = elements.cadencePattern.value.trim();
+  if (!pattern) { showToast('Enter a repeating-event pattern'); elements.cadencePattern.focus(); return; }
+
+  const options = {
+    pattern,
+    isRegex: elements.cadenceRegex.checked,
+    matchCase: elements.cadenceCase.checked,
+    toleranceFactor: parseFloat(elements.cadenceTolerance.value) || 1.5,
+  };
+
+  elements.btnDetectCadence.classList.add('hidden');
+  elements.btnCancelCadence.classList.remove('hidden');
+  elements.btnPinCadence.classList.add('hidden');
+  elements.cadenceStatus.textContent = 'Scanning…';
+  elements.cadenceContent.innerHTML = '<p class="placeholder">Reading timestamps…</p>';
+  showProgress('Detecting cadence…');
+
+  cadenceProgressUnsubscribe = window.api.onCadenceProgress((data) => {
+    updateProgress(data.percent);
+    updateProgressText(`Detecting cadence… ${data.percent}%`);
+  });
+
+  try {
+    const result = await window.api.detectCadence(options);
+    if (result && result.success) {
+      result._filePath = state.filePath;
+      result._options = options;
+      currentCadence = result;
+      renderCadence(result);
+    } else if (result && result.error === 'Cancelled') {
+      elements.cadenceContent.innerHTML = '<p class="placeholder">Detection cancelled</p>';
+      elements.cadenceStatus.textContent = '';
+    } else {
+      elements.cadenceContent.innerHTML = `<p class="placeholder">${escapeHtml((result && result.error) || 'Failed to detect cadence')}</p>`;
+      elements.cadenceStatus.textContent = '';
+    }
+  } catch (e) {
+    elements.cadenceContent.innerHTML = `<p class="placeholder">Error: ${escapeHtml(String(e))}</p>`;
+    elements.cadenceStatus.textContent = '';
+  } finally {
+    if (cadenceProgressUnsubscribe) { cadenceProgressUnsubscribe(); cadenceProgressUnsubscribe = null; }
+    elements.btnDetectCadence.classList.remove('hidden');
+    elements.btnCancelCadence.classList.add('hidden');
+    hideProgress();
+  }
+}
+
+async function cancelCadence(): Promise<void> {
+  await window.api.cancelCadence();
+}
+
+function renderCadence(r: any): void {
+  // Not enough data to establish a rhythm.
+  if (!r.periodMs) {
+    elements.cadenceSummary.innerHTML = '';
+    elements.cadenceStrip.classList.add('hidden');
+    elements.btnPinCadence.classList.add('hidden');
+    const note = r.note || 'Not enough timestamped matches to establish a cadence.';
+    elements.cadenceContent.innerHTML = `<p class="placeholder">${escapeHtml(note)}${r.untimedMatches ? `<br><small>${r.untimedMatches} match(es) had no parseable timestamp.</small>` : ''}</p>`;
+    elements.cadenceStatus.textContent = r.totalMatches ? `${r.totalMatches} match${r.totalMatches === 1 ? '' : 'es'}` : 'No matches';
+    return;
+  }
+
+  const period = formatCadenceMs(r.periodMs);
+  const missing = r.missingTotal || 0;
+  const compliance = r.expectedCount > 0 ? Math.max(0, Math.min(100, Math.round((r.timedMatches / r.expectedCount) * 100))) : 100;
+  const tol = r._options?.toleranceFactor || r.toleranceFactor || 1.5;
+
+  const driftHtml = r.drift
+    ? `<div class="cad-card"><div class="cad-card-val ${Math.abs(r.drift.driftPct) >= 10 ? 'warn' : ''}">${r.drift.driftPct >= 0 ? '+' : ''}${r.drift.driftPct.toFixed(1)}%</div><div class="cad-card-label">drift · ${escapeHtml(formatCadenceMs(r.drift.earlyPeriodMs))} → ${escapeHtml(formatCadenceMs(r.drift.latePeriodMs))}</div></div>`
+    : '';
+  elements.cadenceSummary.innerHTML = `
+    <div class="cad-card"><div class="cad-card-val">${escapeHtml(period)}</div><div class="cad-card-label">detected period</div></div>
+    <div class="cad-card"><div class="cad-card-val">${r.timedMatches.toLocaleString()}</div><div class="cad-card-label">occurrences${r.untimedMatches ? ` (+${r.untimedMatches} untimed)` : ''}</div></div>
+    <div class="cad-card"><div class="cad-card-val ${missing > 0 ? 'err' : 'ok'}">${missing.toLocaleString()}</div><div class="cad-card-label">skipped occurrence${missing === 1 ? '' : 's'}</div></div>
+    <div class="cad-card"><div class="cad-card-val ${r.misses.length > 0 ? 'err' : 'ok'}">${r.misses.length.toLocaleString()}${r.missTruncated ? '+' : ''}</div><div class="cad-card-label">gap${r.misses.length === 1 ? '' : 's'} in sequence</div></div>
+    <div class="cad-card"><div class="cad-card-val">${compliance}%</div><div class="cad-card-label">of expected ~${r.expectedCount.toLocaleString()}</div></div>
+    ${driftHtml}
+  `;
+
+  drawCadenceStrip(r);
+
+  if (r.misses.length === 0) {
+    const driftNote = r.drift && Math.abs(r.drift.driftPct) >= 10
+      ? ` <br>Note: the rhythm drifted ${r.drift.driftPct >= 0 ? 'slower' : 'faster'} by ${Math.abs(r.drift.driftPct).toFixed(0)}% across the span.`
+      : '';
+    elements.cadenceContent.innerHTML = `<p class="placeholder">✅ Steady cadence — no skipped occurrences at ≥ ${tol}× the ${escapeHtml(period)} period.${driftNote}</p>`;
+    elements.btnPinCadence.classList.add('hidden');
+  } else {
+    const items = r.misses.map((m: any, i: number) => `
+      <div class="cadence-item" data-line="${m.afterLineNumber}" data-index="${i}">
+        <div class="cad-item-head">
+          <span class="cad-item-missing">${m.missingCount} skipped</span>
+          <span class="cad-item-gap">${escapeHtml(formatCadenceMs(m.gapMs))} gap</span>
+          <span class="cad-item-line">line ${m.afterLineNumber + 1} → ${m.beforeLineNumber + 1}</span>
+        </div>
+        <div class="cad-item-times">${escapeHtml(m.afterTs)} → ${escapeHtml(m.beforeTs)}</div>
+        <div class="cad-item-note">expected ~${m.missingCount} more at ${escapeHtml(period)} intervals</div>
+      </div>
+    `).join('');
+    elements.cadenceContent.innerHTML = `<div class="cad-list-head">${r.misses.length}${r.missTruncated ? '+' : ''} gap${r.misses.length === 1 ? '' : 's'} where the sequence skipped — click to jump to where it broke</div>${items}`;
+    elements.cadenceContent.querySelectorAll('.cadence-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const line = parseInt((item as HTMLElement).dataset.line || '-1');
+        elements.cadenceContent.querySelectorAll('.cadence-item').forEach(el => el.classList.remove('active'));
+        item.classList.add('active');
+        if (line >= 0) navigateTo(line);
+      });
+    });
+    elements.btnPinCadence.classList.remove('hidden');
+  }
+
+  elements.cadenceStatus.textContent = missing > 0
+    ? `${missing} skipped · period ${period}`
+    : `steady · period ${period}`;
+}
+
+// The negative-space strip: green ticks = occurrences, red bands = the holes.
+function drawCadenceStrip(r: any): void {
+  const canvas = elements.cadenceStrip;
+  canvas.classList.remove('hidden');
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || canvas.parentElement?.clientWidth || 600;
+  const cssH = 46;
+  canvas.width = Math.max(1, Math.floor(cssW * dpr));
+  canvas.height = Math.floor(cssH * dpr);
+  canvas.style.height = cssH + 'px';
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const t0 = r.firstEpochMs;
+  const t1 = r.lastEpochMs;
+  const span = Math.max(1, t1 - t0);
+  const pad = 4;
+  const w = cssW - pad * 2;
+  const yMid = cssH / 2;
+  const x = (epoch: number) => pad + ((epoch - t0) / span) * w;
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(pad, yMid); ctx.lineTo(pad + w, yMid); ctx.stroke();
+
+  // Miss bands first (behind the ticks).
+  for (const m of (r.misses || [])) {
+    const xa = x(m.afterEpochMs);
+    const xb = x(m.beforeEpochMs);
+    ctx.fillStyle = 'rgba(244,135,113,0.30)';
+    ctx.fillRect(xa, 6, Math.max(1.5, xb - xa), cssH - 12);
+  }
+
+  // Occurrence ticks.
+  ctx.strokeStyle = 'rgba(115,201,145,0.85)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (const o of (r.occurrences || [])) {
+    const px = x(o.epochMs);
+    ctx.moveTo(px, 8); ctx.lineTo(px, cssH - 8);
+  }
+  ctx.stroke();
+}
+
+async function pinCadenceMisses(): Promise<void> {
+  if (!currentCadence || !Array.isArray(currentCadence.misses) || currentCadence.misses.length === 0) return;
+  const period = formatCadenceMs(currentCadence.periodMs);
+  const misses = currentCadence.misses;
+  const MAX_PIN = 100;
+  const toPin = misses.slice(0, MAX_PIN);
+  let pinned = 0;
+  for (let i = 0; i < toPin.length; i++) {
+    const m = toPin[i];
+    const ann = {
+      id: `cadence-${m.afterLineNumber}-${m.beforeLineNumber}-${Date.now()}-${i}`,
+      lineNumber: m.beforeLineNumber, // pin the line where the sequence resumed
+      text: `Missing sequence: ${m.missingCount} skipped “${currentCadence.pattern}” (period ${period}), ${formatCadenceMs(m.gapMs)} gap`,
+      agentName: 'Cadence',
+      timestamp: Date.now(),
+      severity: 'warning' as const,
+    };
+    const res = await window.api.addAnnotation(ann);
+    if (res && res.success) pinned++;
+  }
+  showToast(`Pinned ${pinned} missing-sequence finding${pinned === 1 ? '' : 's'}${misses.length > MAX_PIN ? ` (first ${MAX_PIN})` : ''}`);
+}
+
+async function runCadenceSuggest(): Promise<void> {
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  elements.btnSuggestCadence.disabled = true;
+  elements.cadenceStatus.textContent = 'Scanning for recurring events…';
+  showProgress('Finding recurring events…');
+  try {
+    const res = await window.api.suggestCadenceEvents();
+    if (res && res.success && Array.isArray(res.suggestions) && res.suggestions.length) {
+      const items = res.suggestions.map((s: any, i: number) => `
+        <div class="cadence-suggest" data-index="${i}">
+          <div class="cad-sug-head"><span class="cad-sug-count">${s.count.toLocaleString()}×</span> <code>${escapeHtml(s.pattern)}</code></div>
+          <div class="cad-sug-sample" title="${escapeHtml(s.sample)}">${escapeHtml(s.sample)}</div>
+        </div>
+      `).join('');
+      elements.cadenceSummary.innerHTML = '';
+      elements.cadenceStrip.classList.add('hidden');
+      elements.btnPinCadence.classList.add('hidden');
+      elements.cadenceContent.innerHTML = `<div class="cad-list-head">Recurring events LOGAN found — click one to detect its cadence</div>${items}`;
+      elements.cadenceContent.querySelectorAll('.cadence-suggest').forEach(el => {
+        el.addEventListener('click', () => {
+          const idx = parseInt((el as HTMLElement).dataset.index || '-1');
+          const s = res.suggestions[idx];
+          if (!s) return;
+          elements.cadencePattern.value = s.pattern;
+          elements.cadenceRegex.checked = false;
+          detectCadence();
+        });
+      });
+      elements.cadenceStatus.textContent = `${res.suggestions.length} candidate${res.suggestions.length === 1 ? '' : 's'}`;
+    } else {
+      elements.cadenceContent.innerHTML = '<p class="placeholder">No clearly-recurring events found. Type a pattern manually above.</p>';
+      elements.cadenceStatus.textContent = '';
+    }
+  } catch (e) {
+    elements.cadenceContent.innerHTML = `<p class="placeholder">Error: ${escapeHtml(String(e))}</p>`;
+    elements.cadenceStatus.textContent = '';
+  } finally {
+    elements.btnSuggestCadence.disabled = false;
+    hideProgress();
+  }
+}
+
 async function detectTimeGaps(): Promise<void> {
   if (!state.filePath) {
     alert('Please open a log file first.');
@@ -19815,6 +20094,12 @@ function init(): void {
   elements.btnDetectGaps.addEventListener('click', detectTimeGaps);
   elements.btnCancelGaps.addEventListener('click', cancelTimeGaps);
   elements.btnClearGaps.addEventListener('click', clearTimeGaps);
+  // Cadence / Missing-Sequence
+  elements.btnDetectCadence.addEventListener('click', () => detectCadence());
+  elements.btnCancelCadence.addEventListener('click', () => cancelCadence());
+  elements.btnSuggestCadence.addEventListener('click', () => runCadenceSuggest());
+  elements.btnPinCadence.addEventListener('click', () => pinCadenceMisses());
+  elements.cadencePattern.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') detectCadence(); });
   elements.btnPrevGap.addEventListener('click', () => navigateGap('prev'));
   elements.btnNextGap.addEventListener('click', () => navigateGap('next'));
 
