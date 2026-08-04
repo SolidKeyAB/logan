@@ -19,7 +19,7 @@ if (process.platform !== 'linux') {
 } else {
   console.warn('node-pty not available on Linux — using child_process fallback for terminal');
 }
-import { FileHandler, filterLineToVisibleColumns, ColumnConfig } from './fileHandler';
+import { FileHandler, filterLineToVisibleColumns, splitLineIntoColumns, ColumnConfig } from './fileHandler';
 import { getRipgrepPath } from './ripgrepPath';
 import { openWithAdapter, NormalizedSource } from './sourceAdapter';
 import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation, PatternProperty } from '../shared/types';
@@ -2372,36 +2372,6 @@ interface ColumnAnalysis {
 }
 
 // Split a line respecting quoted fields (basic CSV support)
-function splitWithQuotes(line: string, delimiter: string): string[] {
-  if (delimiter === ' ' || delimiter === '\t') {
-    // For whitespace delimiters, no quoting support needed
-    return delimiter === ' ' ? line.split(/\s+/) : line.split(delimiter);
-  }
-
-  const result: string[] = [];
-  let current = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (ch === '"') {
-      if (inQuotes && i + 1 < line.length && line[i + 1] === '"') {
-        current += '"';
-        i++; // Skip escaped quote
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (ch === delimiter && !inQuotes) {
-      result.push(current);
-      current = '';
-    } else {
-      current += ch;
-    }
-  }
-  result.push(current);
-  return result;
-}
-
 // Detect delimiter by analyzing character frequencies
 function detectDelimiter(lines: string[]): { delimiter: string; name: string } {
   const candidates = [
@@ -2491,8 +2461,8 @@ ipcMain.handle('analyze-columns', async () => {
     // Detect delimiter
     const { delimiter, name: delimiterName } = detectDelimiter(nonEmptyLines);
 
-    // Split lines into columns (with quoted field support)
-    const splitLines = nonEmptyLines.map(line => splitWithQuotes(line, delimiter));
+    // Split lines into columns (shared canonical splitter — must match the filter paths)
+    const splitLines = nonEmptyLines.map(line => splitLineIntoColumns(line, delimiter));
 
     // Find max column count
     const maxColumns = Math.max(...splitLines.map(cols => cols.length));
