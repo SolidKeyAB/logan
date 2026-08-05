@@ -377,6 +377,44 @@ export class FileHandler {
     return lines;
   }
 
+  // Async sibling of getLines(), used by the render-path IPC handlers. Reads each
+  // line with an asynchronous positioned read so the Electron main thread YIELDS
+  // between reads instead of blocking on fs.readSync. That matters while a search
+  // is running: ripgrep's output is parsed on the main thread, so a burst of
+  // synchronous getLines() calls (e.g. rendering a freshly-opened file) would
+  // starve it — the pipe fills, rg blocks, and progress freezes. Yielding here
+  // lets the search + its progress ticks keep flowing. Line-for-line identical to
+  // getLines() otherwise (same MAX_LINE_READ cap, same truncation, same levels).
+  async getLinesAsync(startLine: number, count: number): Promise<LineData[]> {
+    if (!this.fd || !this.filePath) return [];
+    const fd = this.fd;
+
+    const lines: LineData[] = [];
+    const actualStart = startLine + this.headerLineCount;
+    const actualEnd = Math.min(actualStart + count, this.lineCount);
+
+    for (let i = actualStart; i < actualEnd; i++) {
+      const length = this.lengths[i];
+      const readLength = Math.min(length, FileHandler.MAX_LINE_READ);
+      const buffer = Buffer.alloc(readLength);
+      const offset = this.offsets[i];
+      await new Promise<void>((resolve, reject) => {
+        fs.read(fd, buffer, 0, readLength, offset, (err) => (err ? reject(err) : resolve()));
+      });
+      let text = buffer.toString('utf-8');
+      if (length > FileHandler.MAX_LINE_READ) {
+        text += ' … (truncated)';
+      }
+      lines.push({
+        lineNumber: i - this.headerLineCount,
+        text,
+        level: this.detectLevel(text),
+      });
+    }
+
+    return lines;
+  }
+
   private detectLevel(text: string): LineData['level'] {
     // Only check the first 200 chars — log levels appear near the start of a line.
     // This prevents OOM on files with extremely long lines (e.g. minified JSON).
