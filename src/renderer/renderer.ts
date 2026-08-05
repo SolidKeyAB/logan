@@ -5442,7 +5442,10 @@ function renderFolderTree(): void {
     });
   });
 
-  // File double-click to open (dispatched by type)
+  // File double-click to open. Dispatched through the file-handler registry
+  // (src/main/fileHandlers.ts): resolve the matching handlers and run the default
+  // one. Reproduces the old open-as-log / video / image behaviour (media match on
+  // the already-sniffed fileType) while making the set extendible.
   elements.foldersList.querySelectorAll('.folder-file').forEach((fileEl) => {
     fileEl.addEventListener('dblclick', async () => {
       const filePath = (fileEl as HTMLElement).dataset.path;
@@ -5457,23 +5460,35 @@ function renderFolderTree(): void {
         } else {
           alert(`Failed to download: ${result.error}`);
         }
-      } else if (fileType === 'video') {
-        loadVideoFromPath(filePath);
-        openBottomTab('video');
-      } else if (fileType === 'image') {
-        openImageInPanel(filePath);
       } else {
-        await loadFile(filePath);
+        const ft: 'text' | 'image' | 'video' = fileType === 'image' ? 'image' : fileType === 'video' ? 'video' : 'text';
+        const query = { path: filePath, isDirectory: false, fileType: ft };
+        const handlers = await window.api.resolveFileHandlers(query);
+        const def = handlers.find(h => h.isDefault) || handlers[0];
+        if (def) {
+          await dispatchFileHandlerResult(await window.api.runFileHandler(def.id, query));
+        } else {
+          await loadFile(filePath); // safety net: no handler matched
+        }
       }
       renderFolderTree();
     });
 
-    // Right-click context menu
-    fileEl.addEventListener('contextmenu', (e) => {
+    // Right-click context menu — pre-resolve the file's handlers so the menu can
+    // offer them ("Open with…"). Local files only; remote entries keep the base menu.
+    fileEl.addEventListener('contextmenu', async (e) => {
       e.preventDefault();
       e.stopPropagation();
       const filePath = (fileEl as HTMLElement).dataset.path;
-      if (filePath) showFileContextMenu(e as MouseEvent, filePath);
+      if (!filePath) return;
+      const isRemote = (fileEl as HTMLElement).dataset.remote === 'true';
+      const fileType = (fileEl as HTMLElement).dataset.filetype;
+      let fileHandlers: FileHandlerInfo[] | undefined;
+      if (!isRemote) {
+        const ft: 'text' | 'image' | 'video' = fileType === 'image' ? 'image' : fileType === 'video' ? 'video' : 'text';
+        try { fileHandlers = await window.api.resolveFileHandlers({ path: filePath, isDirectory: false, fileType: ft }); } catch { /* base menu only */ }
+      }
+      showFileContextMenu(e as MouseEvent, filePath, undefined, fileHandlers);
     });
   });
 }
@@ -22022,7 +22037,29 @@ function showFolderContextMenu(e: MouseEvent, folderPath: string): void {
   setTimeout(() => document.addEventListener('mousedown', close), 0);
 }
 
-function showFileContextMenu(e: MouseEvent, filePath: string, tabId?: string): void {
+// Act on the descriptor returned by a file-handler run (src/main/fileHandlers.ts).
+// Viewer/open actions run here in the renderer; transform/folder handlers (Phase 2)
+// do their work in main and return one of these descriptors.
+async function dispatchFileHandlerResult(res: FileHandlerResult): Promise<void> {
+  switch (res.action) {
+    case 'open-log':
+      if (res.path) await loadFile(res.path);
+      break;
+    case 'open-panel':
+      if (res.panel === 'video' && res.path) { loadVideoFromPath(res.path); openBottomTab('video'); }
+      else if (res.panel === 'image' && res.path) { openImageInPanel(res.path); }
+      else showToast(`No viewer available for ${res.panel || 'this file'}`);
+      break;
+    case 'open-folder':
+      showToast('Folder handlers are coming soon');
+      break;
+    case 'toast':
+      showToast(res.message || '');
+      break;
+  }
+}
+
+function showFileContextMenu(e: MouseEvent, filePath: string, tabId?: string, fileHandlers?: FileHandlerInfo[]): void {
   // Remove existing context menu
   const existing = document.querySelector('.tab-context-menu');
   if (existing) existing.remove();
@@ -22032,6 +22069,15 @@ function showFileContextMenu(e: MouseEvent, filePath: string, tabId?: string): v
 
   const fileName = getFileName(filePath);
   const items: string[] = [];
+
+  // "Open with…" — the file-handler registry's actions for this entry, default first.
+  if (fileHandlers && fileHandlers.length > 0) {
+    for (const h of fileHandlers) {
+      const label = `${h.icon ? h.icon + ' ' : ''}${escapeHtml(h.label)}${h.isDefault ? ' <span class="tab-context-hint">default</span>' : ''}`;
+      items.push(`<div class="tab-context-item" data-action="fh:${escapeHtml(h.id)}">${label}</div>`);
+    }
+    items.push(`<div class="tab-context-separator"></div>`);
+  }
 
   items.push(`<div class="tab-context-item" data-action="copy-name">Copy Name</div>`);
   items.push(`<div class="tab-context-item" data-action="copy-path">Copy Path</div>`);
@@ -22063,6 +22109,11 @@ function showFileContextMenu(e: MouseEvent, filePath: string, tabId?: string): v
     if (!target) return;
     const action = target.dataset.action;
     menu.remove();
+    if (action && action.startsWith('fh:')) {
+      const id = action.slice(3);
+      await dispatchFileHandlerResult(await window.api.runFileHandler(id, { path: filePath }));
+      return;
+    }
     switch (action) {
       case 'copy-name':
         navigator.clipboard.writeText(fileName);

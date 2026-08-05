@@ -80,6 +80,9 @@ const IPC = {
   // Time Align
   GET_LINE_TIMESTAMPS: 'get-line-timestamps',
   READ_FILE_TEXT: 'read-file-text',
+  // File-handler registry
+  FILE_HANDLERS_RESOLVE: 'file-handlers-resolve',
+  FILE_HANDLER_RUN: 'file-handler-run',
   // Tabbed terminal
   TERMINAL_CREATE_LOCAL: 'terminal-create-local',
   TERMINAL_CREATE_SSH: 'terminal-create-ssh',
@@ -601,6 +604,13 @@ const api = {
 
   getLineTimestamps: (lineNumbers: number[]): Promise<Array<{ lineNumber: number; epochMs: number }>> =>
     ipcRenderer.invoke(IPC.GET_LINE_TIMESTAMPS, lineNumbers),
+
+  // File-handler registry: which plugin actions apply to a clicked file/folder,
+  // and run one. Kept structural (path/isDirectory/fileType) so it also serves MCP.
+  resolveFileHandlers: (query: { path: string; isDirectory?: boolean; fileType?: 'text' | 'image' | 'video' | 'binary' }): Promise<Array<{ id: string; label: string; icon?: string; kind: string; isDefault: boolean }>> =>
+    ipcRenderer.invoke(IPC.FILE_HANDLERS_RESOLVE, query),
+  runFileHandler: (id: string, query: { path: string; isDirectory?: boolean; fileType?: 'text' | 'image' | 'video' | 'binary' }): Promise<{ action: string; path?: string; panel?: string; forceAdapterId?: string; message?: string; level?: string }> =>
+    ipcRenderer.invoke(IPC.FILE_HANDLER_RUN, id, query),
 
   transcodeVideo: (srcPath: string): Promise<{ success: boolean; outputPath?: string; cached?: boolean; error?: string; cancelled?: boolean }> =>
     ipcRenderer.invoke(IPC.VIDEO_TRANSCODE, srcPath),
