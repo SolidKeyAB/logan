@@ -2836,6 +2836,13 @@ function createLineElementPooled(line: LogLine): HTMLDivElement {
     } else {
       formattedContent = formatJsonContent(displayText);
     }
+  } else if (state.columnConfig) {
+    // Column-aware render: every column as its own span (all present); filtered
+    // columns are hidden via CSS so toggling never re-renders. Uses the FULL line
+    // text (not applyColumnFilter'd) and truncates it here.
+    let colText = line.text;
+    if (colText.length > MAX_RENDER_LENGTH) { colText = colText.slice(0, MAX_RENDER_LENGTH); truncated = true; }
+    formattedContent = renderColumnAwareContent(colText, line.lineNumber);
   } else {
     const searchResult = applySearchHighlightsRaw(displayText, line.lineNumber);
     formattedContent = applyHighlightsWithSearch(displayText, searchResult.searchRanges);
@@ -2901,6 +2908,9 @@ function createLineElement(line: LogLine): HTMLDivElement {
       // Full JSON formatting with syntax highlighting
       finalHtml = formatJsonContent(displayText);
     }
+  } else if (state.columnConfig) {
+    // Column-aware render (all columns as spans; filtered ones hidden via CSS).
+    finalHtml = renderColumnAwareContent(line.text, line.lineNumber);
   } else {
     const searchResult = applySearchHighlightsRaw(displayText, line.lineNumber);
     finalHtml = applyHighlightsWithSearch(displayText, searchResult.searchRanges);
@@ -14858,6 +14868,7 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       elements.btnSplit.disabled = false;
       elements.btnColumns.disabled = false;
       state.columnConfig = null; // Reset column config for new file
+      updateColumnHideStyle();    // drop any stale column-hide rule from the prior file
 
       // Show warning for files with long lines (only for JSON-like files where reformatting helps)
       const lowerPath = filePath.toLowerCase();
@@ -15408,6 +15419,7 @@ function applyColumnsConfig(): void {
     }
   });
 
+  const prevDelimiter = state.columnConfig?.delimiter ?? null;
   state.columnConfig = {
     delimiter: tempConfig.delimiter,
     delimiterName: tempConfig.delimiterName,
@@ -15420,12 +15432,17 @@ function applyColumnsConfig(): void {
 
   hideColumnsModal();
 
-  // Re-render visible lines with new column filter
-  if (logContentElement) {
-    logContentElement.innerHTML = '';
-    lineElementPool.releaseAll();
+  // Instant toggle: the column spans already carry data-col, so hiding/showing a
+  // column is just one CSS rule — no re-render. Only rebuild rows when the
+  // DELIMITER changed (or this is the first config), since that changes the spans.
+  updateColumnHideStyle();
+  if (prevDelimiter !== state.columnConfig.delimiter) {
+    if (logContentElement) {
+      logContentElement.innerHTML = '';
+      lineElementPool.releaseAll();
+    }
+    loadVisibleLines();
   }
-  loadVisibleLines();
 }
 
 function setAllColumnsVisibility(visible: boolean): void {
@@ -15492,6 +15509,100 @@ function applyColumnFilter(text: string): string {
   return visibleParts
     .map(p => (p.includes(delimiter) || p.includes('"')) ? `"${p.replace(/"/g, '""')}"` : p)
     .join(delimiter);
+}
+
+// ── CSS-based column hiding ───────────────────────────────────────────────────
+// When a column config is active, each line renders EVERY column as its own
+// <span class="log-col" data-col="N"> (see renderColumnAwareContent). Filtered
+// columns are then hidden by a single CSS rule (updateColumnHideStyle) — so
+// toggling a column's visibility is instant (just rewrite the rule; already- and
+// newly-rendered rows both obey it) instead of re-rendering the file. applyColumnFilter
+// above is still used for COPY/EXPORT/SEARCH (data removal); this is display only.
+
+// MIRROR of the tested spec computeColumnSegments() in src/shared/columnRender.ts —
+// keep in sync (renderer.ts is a script and can't import it; see the header note).
+interface ColumnSegment { col: number; start: number; end: number; }
+function computeColumnSegments(text: string, delimiter: string): ColumnSegment[] {
+  if (text.length === 0) {
+    return delimiter === ' ' ? [] : [{ col: 0, start: 0, end: 0 }];
+  }
+  if (delimiter === ' ') {
+    const tokenStarts: number[] = [];
+    let i = 0;
+    while (i < text.length) {
+      while (i < text.length && /\s/.test(text[i])) i++;
+      if (i >= text.length) break;
+      tokenStarts.push(i);
+      while (i < text.length && !/\s/.test(text[i])) i++;
+    }
+    if (tokenStarts.length === 0) return [];
+    const segs: ColumnSegment[] = [];
+    for (let c = 0; c < tokenStarts.length; c++) {
+      const start = c === 0 ? 0 : tokenStarts[c];
+      const end = c === tokenStarts.length - 1 ? text.length : tokenStarts[c + 1];
+      segs.push({ col: c, start, end });
+    }
+    return segs;
+  }
+  if (delimiter === '\t') {
+    const segs: ColumnSegment[] = [];
+    let col = 0, start = 0;
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === '\t') { segs.push({ col, start, end: i + 1 }); col++; start = i + 1; }
+    }
+    segs.push({ col, start, end: text.length });
+    return segs;
+  }
+  const segs: ColumnSegment[] = [];
+  let col = 0, start = 0, inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') {
+      if (inQuotes && i + 1 < text.length && text[i + 1] === '"') i++;
+      else inQuotes = !inQuotes;
+    } else if (ch === delimiter && !inQuotes) {
+      segs.push({ col, start, end: i + 1 }); col++; start = i + 1;
+    }
+  }
+  segs.push({ col, start, end: text.length });
+  return segs;
+}
+
+// Build a line's content as per-column spans, each column highlighted independently
+// (the highlight fns re-exec their regexes on the text they're given, so running
+// them per-column keeps search/manual/config highlights correct within a column).
+function renderColumnAwareContent(text: string, lineNumber: number): string {
+  const cfg = state.columnConfig;
+  if (!cfg) {
+    return applyHighlightsWithSearch(text, applySearchHighlightsRaw(text, lineNumber).searchRanges);
+  }
+  const segments = computeColumnSegments(text, cfg.delimiter);
+  if (segments.length === 0) {
+    return applyHighlightsWithSearch(text, applySearchHighlightsRaw(text, lineNumber).searchRanges);
+  }
+  let html = '';
+  for (const seg of segments) {
+    const segText = text.slice(seg.start, seg.end);
+    const inner = applyHighlightsWithSearch(segText, applySearchHighlightsRaw(segText, lineNumber).searchRanges);
+    html += `<span class="log-col" data-col="${seg.col}">${inner}</span>`;
+  }
+  return html;
+}
+
+// The single CSS rule that hides filtered columns. Rewriting it is the whole
+// "instant toggle" — no re-render, and it applies to rows rendered later too.
+let columnHideStyleEl: HTMLStyleElement | null = null;
+function updateColumnHideStyle(): void {
+  if (!columnHideStyleEl) {
+    columnHideStyleEl = document.createElement('style');
+    columnHideStyleEl.id = 'logan-col-hide';
+    document.head.appendChild(columnHideStyleEl);
+  }
+  const cfg = state.columnConfig;
+  const hidden = cfg ? cfg.columns.filter(c => !c.visible).map(c => c.index) : [];
+  columnHideStyleEl.textContent = hidden.length
+    ? hidden.map(i => `.log-col[data-col="${i}"]`).join(',') + '{display:none}'
+    : '';
 }
 
 // Search
@@ -21846,6 +21957,7 @@ function restoreTabState(tab: TabState): void {
   state.splitFiles = tab.splitFiles;
   state.currentSplitIndex = tab.currentSplitIndex;
   state.columnConfig = tab.columnConfig;
+  updateColumnHideStyle(); // apply this tab's column-hide rule (rows re-render on tab switch)
 
   // Restore analysis & filter state
   state.analysisResult = tab.analysisResult;
