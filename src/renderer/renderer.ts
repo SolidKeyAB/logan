@@ -327,6 +327,9 @@ interface AppState {
   // Level visibility quick-toggle (persisted globally)
   hiddenLevels: Set<string>;
   levelBarFilterActive: boolean;
+  // "Mute" patterns: rows whose text contains any of these are dimmed IN PLACE
+  // (kept for context, not removed) via a render-time class. Persisted globally.
+  mutePatterns: string[];
   // Traceback
   tracebackResult: any | null;
   tracebackSort: 'time' | 'score';
@@ -399,6 +402,7 @@ const state: AppState = {
   editingContextId: null,
   hiddenLevels: new Set<string>(JSON.parse(localStorage.getItem('logan-hidden-levels') || '[]')),
   levelBarFilterActive: false,
+  mutePatterns: JSON.parse(localStorage.getItem('logan-mute-patterns') || '[]'),
   tracebackResult: null,
   tracebackSort: 'time' as 'time' | 'score',
   tracebackFilterCat: 'all',
@@ -2729,6 +2733,42 @@ function renderVisibleLines(): void {
 }
 
 // Pooled line element creation - reuses DOM elements
+// ── "Mute pattern" — dim matching rows in place (keep context, don't remove) ──
+// A row is muted when its text contains any active mute pattern (case-insensitive
+// substring). Applied as a render-time class, so toggling costs one re-render of
+// the ~100 visible rows — no re-index, no scroll-height change. Complements the
+// FILTER (which removes rows) and EXTRACT-to-file (which materializes a subset).
+// MIRROR of the tested spec lineMatchesMute() in src/shared/muteMatch.ts — keep
+// in sync (renderer.ts is a script and can't import it; see the header note).
+function isLineMuted(text: string): boolean {
+  const pats = state.mutePatterns;
+  if (pats.length === 0) return false;
+  const lower = text.toLowerCase();
+  for (const p of pats) {
+    if (p && lower.includes(p.toLowerCase())) return true;
+  }
+  return false;
+}
+
+function saveMutePatterns(): void {
+  localStorage.setItem('logan-mute-patterns', JSON.stringify(state.mutePatterns));
+}
+
+function addMutePattern(pattern: string): void {
+  const p = pattern.trim();
+  if (!p || state.mutePatterns.includes(p)) return;
+  state.mutePatterns.push(p);
+  saveMutePatterns();
+  renderVisibleLines();
+}
+
+function clearMutePatterns(): void {
+  if (state.mutePatterns.length === 0) return;
+  state.mutePatterns = [];
+  saveMutePatterns();
+  renderVisibleLines();
+}
+
 function createLineElementPooled(line: LogLine): HTMLDivElement {
   const div = lineElementPool.acquire();
   div.dataset.lineNumber = String(line.lineNumber);
@@ -2757,6 +2797,8 @@ function createLineElementPooled(line: LogLine): HTMLDivElement {
     delete div.dataset.bookmarkColor;
   }
   div.className = className;
+  // Dim rows matching a mute pattern (className was just reset, so non-matches clear).
+  if (isLineMuted(line.text)) div.classList.add('muted');
 
   // Create content using innerHTML for speed (single parse)
   const lineNumHtml = `<span class="line-number">${line.lineNumber + 1}</span>`;
@@ -2830,6 +2872,8 @@ function createLineElement(line: LogLine): HTMLDivElement {
   if (bookmark) {
     div.classList.add('bookmarked');
   }
+
+  if (isLineMuted(line.text)) div.classList.add('muted');
 
   const lineNumSpan = document.createElement('span');
   lineNumSpan.className = 'line-number';
@@ -4445,6 +4489,14 @@ function handleContextMenu(event: MouseEvent): void {
     });
     menu.appendChild(highlightAll);
 
+    // Mute (dim in place) every row containing the selected text.
+    const muteText = menuItem('\u{1F507}', `Mute lines containing "${displayText.substring(0, 20)}${displayText.length > 20 ? '...' : ''}"`);
+    muteText.addEventListener('click', () => {
+      addMutePattern(selectedText);
+      menu.remove();
+    });
+    menu.appendChild(muteText);
+
     menu.appendChild(menuSeparator());
 
     const copySelection = menuItem('\u{1F4CB}', 'Copy Selection');
@@ -4454,6 +4506,17 @@ function handleContextMenu(event: MouseEvent): void {
     });
     menu.appendChild(copySelection);
 
+    menu.appendChild(menuSeparator());
+  }
+
+  // Clear all mute patterns (shown whenever any row-mute is active, selection or not).
+  if (state.mutePatterns.length > 0) {
+    const clearMutes = menuItem('\u{1F509}', `Clear mutes (${state.mutePatterns.length})`);
+    clearMutes.addEventListener('click', () => {
+      clearMutePatterns();
+      menu.remove();
+    });
+    menu.appendChild(clearMutes);
     menu.appendChild(menuSeparator());
   }
 

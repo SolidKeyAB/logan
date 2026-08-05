@@ -2541,6 +2541,16 @@ body.platform-darwin .titlebar {
   padding-left: 7px;
 }
 
+/* "Mute pattern" — dim matching rows in place (keep context). Hover a muted row
+   to bring it back to full opacity so it's still readable on demand. */
+.log-line.muted {
+  opacity: 0.28;
+  transition: opacity 0.12s ease;
+}
+.log-line.muted:hover {
+  opacity: 1;
+}
+
 .line-number {
   min-width: 60px;
   color: var(--text-muted);
