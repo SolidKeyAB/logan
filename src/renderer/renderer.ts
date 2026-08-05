@@ -1,4 +1,8 @@
 // Types defined inline for browser context (no imports)
+// NOTE: renderer.ts must stay a SCRIPT (no top-level import/export). Its inline
+// interfaces rely on global declaration-merging with types.d.ts; an `import`
+// turns this file into a module and breaks that merge. Shared pure helpers are
+// therefore mirrored here as script-scope functions (see computeSubTimestampSpread).
 interface FileStats {
   path: string;
   size: number;
@@ -780,6 +784,8 @@ const elements = {
   folderSearchResults: document.getElementById('folder-search-results') as HTMLDivElement,
   fileStats: document.getElementById('file-stats') as HTMLDivElement,
   analysisResults: document.getElementById('analysis-results') as HTMLDivElement,
+  briefResults: document.getElementById('brief-results') as HTMLDivElement,
+  btnBrief: document.getElementById('btn-brief') as HTMLButtonElement,
   conclusionContent: document.getElementById('conclusion-content') as HTMLDivElement,
   conclusionStatus: document.getElementById('conclusion-status') as HTMLSpanElement,
   btnBuildConclusion: document.getElementById('btn-build-conclusion') as HTMLButtonElement,
@@ -3979,6 +3985,413 @@ function handleLogClick(event: MouseEvent): void {
   }
 }
 
+// ─── Make Pattern from selection ─────────────────────────────────────────────
+// Turns a selected example line into a CONTROLLED regex by marking which spans
+// VARY. The user marks variable char-ranges (drag-select + "Mark variable", or
+// click word/whitespace tokens to toggle); everything unmarked stays a literal
+// constant. Spans -> compilePattern paint mode (over IPC) -> live regex preview +
+// match count. Destinations reuse the existing Search / Filter / Highlight paths.
+
+interface MakePatternSpan { start: number; end: number; name: string }
+
+const makePatternState: {
+  sample: string;
+  spans: MakePatternSpan[];
+  autoSeq: number;
+  lastSource: string;
+  lastFlags: string;
+  countTimer: ReturnType<typeof setTimeout> | null;
+  countSeq: number; // generation guard so only the latest count updates the UI
+} = { sample: '', spans: [], autoSeq: 0, lastSource: '', lastFlags: '', countTimer: null, countSeq: 0 };
+
+function mpEl<T extends HTMLElement>(id: string): T | null {
+  return document.getElementById(id) as T | null;
+}
+
+// Split the sample into word / whitespace tokens with their char offsets so each
+// can be clicked to toggle variable. This is the reliable chip fallback; free
+// drag-select over the same element also works (see the mouseup handler).
+function mpTokenize(sample: string): { start: number; end: number; text: string; ws: boolean }[] {
+  const out: { start: number; end: number; text: string; ws: boolean }[] = [];
+  const re = /\s+|\S+/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(sample)) !== null) {
+    out.push({ start: m.index, end: m.index + m[0].length, text: m[0], ws: /^\s+$/.test(m[0]) });
+  }
+  return out;
+}
+
+function mpNextName(): string {
+  makePatternState.autoSeq += 1;
+  return `v${makePatternState.autoSeq}`;
+}
+
+// A char offset [start,end) is variable iff it lies inside any marked span.
+function mpOffsetIsVar(offset: number): boolean {
+  return makePatternState.spans.some(s => offset >= s.start && offset < s.end);
+}
+
+// Merge/dedupe overlapping spans after an add, keeping the earliest name.
+function mpNormalizeSpans(): void {
+  const spans = makePatternState.spans
+    .filter(s => s.end > s.start && s.start >= 0 && s.end <= makePatternState.sample.length)
+    .sort((a, b) => a.start - b.start);
+  const merged: MakePatternSpan[] = [];
+  for (const s of spans) {
+    const prev = merged[merged.length - 1];
+    if (prev && s.start <= prev.end) {
+      prev.end = Math.max(prev.end, s.end); // extend, keep prev.name
+    } else {
+      merged.push({ ...s });
+    }
+  }
+  makePatternState.spans = merged;
+}
+
+// Render the sample as clickable tokens; variable tokens get the .mp-var style.
+function mpRenderSample(): void {
+  const host = mpEl<HTMLDivElement>('mp-sample');
+  if (!host) return;
+  const sample = makePatternState.sample;
+  const tokens = mpTokenize(sample);
+  host.innerHTML = tokens.map(t => {
+    const isVar = mpOffsetIsVar(t.start);
+    const cls = 'mp-token' + (t.ws ? ' mp-ws' : '') + (isVar ? ' mp-var' : '');
+    return `<span class="${cls}" data-start="${t.start}" data-end="${t.end}">${escapeHtml(t.text)}</span>`;
+  }).join('');
+  // Token click toggles that token variable (auto-named). Range spanning multiple
+  // tokens is handled by drag-select + the Mark-variable button.
+  host.querySelectorAll<HTMLElement>('.mp-token').forEach(el => {
+    el.addEventListener('click', (ev) => {
+      // Ignore click if the user actually drag-selected text (handled on mouseup).
+      const sel = window.getSelection();
+      if (sel && sel.toString().length > 0) return;
+      ev.stopPropagation();
+      const start = parseInt(el.dataset.start || '0', 10);
+      const end = parseInt(el.dataset.end || '0', 10);
+      mpToggleRange(start, end);
+    });
+  });
+}
+
+// Toggle a char range variable: if it exactly matches (or is fully covered by) an
+// existing span, remove; otherwise add a new named span.
+function mpToggleRange(start: number, end: number, name?: string): void {
+  if (end <= start) return;
+  const covering = makePatternState.spans.find(s => s.start <= start && s.end >= end);
+  if (covering && covering.start === start && covering.end === end) {
+    makePatternState.spans = makePatternState.spans.filter(s => s !== covering);
+  } else {
+    makePatternState.spans.push({ start, end, name: name || mpNextName() });
+    mpNormalizeSpans();
+  }
+  mpRenderSample();
+  mpRenderSpanChips();
+  mpRefreshPreview();
+}
+
+function mpRenderSpanChips(): void {
+  const host = mpEl<HTMLDivElement>('mp-spans-list');
+  if (!host) return;
+  if (makePatternState.spans.length === 0) {
+    host.innerHTML = '<span class="makepattern-dest-label">No variable spans yet — everything is a constant.</span>';
+    return;
+  }
+  host.innerHTML = makePatternState.spans
+    .map((s, i) => {
+      const frag = makePatternState.sample.slice(s.start, s.end);
+      const short = frag.length > 18 ? frag.slice(0, 18) + '…' : frag;
+      return `<span class="mp-span-chip" data-idx="${i}"><b>${escapeHtml(s.name)}</b>=<span>${escapeHtml(short)}</span><button class="mp-span-remove" data-idx="${i}" title="Remove span">&times;</button></span>`;
+    })
+    .join('');
+  host.querySelectorAll<HTMLButtonElement>('.mp-span-remove').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx || '-1', 10);
+      if (idx >= 0) {
+        makePatternState.spans.splice(idx, 1);
+        mpRenderSample();
+        mpRenderSpanChips();
+        mpRefreshPreview();
+      }
+    });
+  });
+}
+
+// Compile via IPC (paint mode) → update regex source, warnings, enable/disable
+// destinations, and kick off a debounced match count.
+async function mpRefreshPreview(): Promise<void> {
+  const sourceEl = mpEl<HTMLElement>('mp-regex-source');
+  const warnEl = mpEl<HTMLDivElement>('mp-warnings');
+  const countEl = mpEl<HTMLElement>('mp-match-count');
+  const ignoreCase = mpEl<HTMLInputElement>('mp-ignorecase')?.checked ?? false;
+  const destBtns = ['btn-mp-search', 'btn-mp-filter', 'btn-mp-highlight'].map(id => mpEl<HTMLButtonElement>(id));
+
+  const setDisabled = (v: boolean) => destBtns.forEach(b => { if (b) b.disabled = v; });
+
+  // Invalidate any in-flight match count up-front so a slower stale response
+  // can't overwrite newer state — including the early-return '—' placeholders
+  // below. The valid path bumps the generation again for its own count.
+  makePatternState.countSeq++;
+
+  if (makePatternState.spans.length === 0) {
+    if (sourceEl) sourceEl.textContent = '—';
+    if (warnEl) { warnEl.className = 'mp-warnings'; warnEl.innerHTML = '<span class="mp-warn">Mark at least one variable span.</span>'; }
+    if (countEl) countEl.textContent = '—';
+    makePatternState.lastSource = '';
+    setDisabled(true);
+    return;
+  }
+
+  const res = await window.api.compilePattern({
+    mode: 'paint',
+    sample: makePatternState.sample,
+    spans: makePatternState.spans,
+    matchCase: ignoreCase ? false : true,
+  });
+
+  if (!res.ok) {
+    if (sourceEl) sourceEl.textContent = res.source || '—';
+    if (warnEl) { warnEl.className = 'mp-warnings mp-error'; warnEl.innerHTML = `<span class="mp-warn">${escapeHtml(res.error || 'Could not compile pattern')}</span>`; }
+    if (countEl) countEl.textContent = '—';
+    makePatternState.lastSource = '';
+    setDisabled(true);
+    return;
+  }
+
+  makePatternState.lastSource = res.source;
+  makePatternState.lastFlags = res.flags;
+  if (sourceEl) sourceEl.textContent = res.source;
+  if (warnEl) {
+    warnEl.className = 'mp-warnings';
+    warnEl.innerHTML = res.warnings.length
+      ? res.warnings.map(w => `<span class="mp-warn">⚠ ${escapeHtml(w)}</span>`).join('')
+      : '';
+  }
+  setDisabled(false);
+
+  // Debounced match count — reuse the real full-file regex search primitive so the
+  // count matches what the "→ Search" destination will actually find. Runs with
+  // silent:true so it does NOT touch history/telemetry, the progress UI, or the
+  // user's in-flight search. A generation guard ensures only the latest count
+  // (not a slower stale response) updates the label.
+  if (makePatternState.countTimer) clearTimeout(makePatternState.countTimer);
+  const seq = ++makePatternState.countSeq;
+  if (countEl) countEl.textContent = 'counting…';
+  makePatternState.countTimer = setTimeout(async () => {
+    makePatternState.countTimer = null;
+    try {
+      const searchRes = await window.api.search({
+        pattern: res.source,
+        isRegex: true,
+        isWildcard: false,
+        matchCase: !res.flags.includes('i'),
+        wholeWord: false,
+        silent: true,
+      });
+      if (seq !== makePatternState.countSeq) return; // a newer count superseded this one
+      const el = mpEl<HTMLElement>('mp-match-count');
+      if (!el) return;
+      if (searchRes.success && searchRes.matches) {
+        const n = searchRes.matches.length;
+        el.textContent = `${n} match${n === 1 ? '' : 'es'}`;
+      } else {
+        el.textContent = '—';
+      }
+    } catch {
+      if (seq !== makePatternState.countSeq) return;
+      const el = mpEl<HTMLElement>('mp-match-count');
+      if (el) el.textContent = '—';
+    }
+  }, 250);
+}
+
+// Log a human pattern application to the flight recorder (fire-and-forget).
+function mpLogApplication(scope: string, matched: number): void {
+  try {
+    void window.api.addPatternLog({
+      mode: 'paint',
+      source: makePatternState.lastSource,
+      scope,
+      scanned: 0,
+      matched,
+      hid: 0,
+      sampleHits: [],
+      ms: 0,
+      capped: false,
+      valid: true,
+    });
+  } catch { /* non-critical telemetry */ }
+}
+
+function mpClose(): void {
+  const modal = mpEl<HTMLDivElement>('makepattern-modal');
+  if (modal) modal.classList.add('hidden');
+  if (makePatternState.countTimer) { clearTimeout(makePatternState.countTimer); makePatternState.countTimer = null; }
+}
+
+// Drive the EXISTING regex-mode search with the compiled source, then close.
+async function mpApplyToSearch(): Promise<void> {
+  if (!makePatternState.lastSource) return;
+  if (elements.searchPanel) elements.searchPanel.classList.remove('hidden');
+  elements.searchInput.value = makePatternState.lastSource;
+  if (elements.searchRegex) elements.searchRegex.checked = true;
+  if (elements.searchWildcard) elements.searchWildcard.checked = false;
+  if (elements.searchCase) elements.searchCase.checked = !makePatternState.lastFlags.includes('i');
+  if (elements.searchWholeWord) elements.searchWholeWord.checked = false;
+  mpLogApplication('search', state.searchResults.length);
+  mpClose();
+  await performSearch();
+}
+
+// Add the compiled regex as an include row in the filter modal. The filter
+// engine treats include entries as regex-capable; a controlled regex works.
+// The modal uses per-row inputs (#include-patterns-container), so we add a row
+// via addIncludePatternRow — the legacy #include-patterns textarea no longer
+// exists, so the old textarea path silently discarded the pattern.
+function mpApplyToFilter(): void {
+  if (!makePatternState.lastSource) return;
+  mpLogApplication('filter', 0);
+  addToFilterPattern(makePatternState.lastSource, 'include', !makePatternState.lastFlags.includes('i'));
+  mpClose();
+}
+
+// Reuse the highlight-create path (commitHighlight) with a regex highlight.
+async function mpApplyToHighlight(): Promise<void> {
+  if (!makePatternState.lastSource) return;
+  const colorResult = await window.api.getNextHighlightColor();
+  const backgroundColor = colorResult.success && colorResult.color ? colorResult.color : '#ffff00';
+  const ok = await commitHighlight({
+    id: `highlight-${Date.now()}`,
+    pattern: makePatternState.lastSource,
+    isRegex: true,
+    matchCase: !makePatternState.lastFlags.includes('i'),
+    wholeWord: false,
+    backgroundColor,
+    textColor: '#000000',
+    includeWhitespace: false,
+    highlightAll: true,
+  });
+  if (ok) { mpLogApplication('highlight', 0); showToast('Highlight added from pattern'); }
+  mpClose();
+}
+
+let makePatternWired = false;
+function mpWireOnce(): void {
+  if (makePatternWired) return;
+  makePatternWired = true;
+
+  mpEl<HTMLButtonElement>('btn-mp-clear')?.addEventListener('click', () => {
+    makePatternState.spans = [];
+    makePatternState.autoSeq = 0;
+    mpRenderSample();
+    mpRenderSpanChips();
+    mpRefreshPreview();
+  });
+
+  // "Mark variable" — mark the current drag-selection inside the sample.
+  mpEl<HTMLButtonElement>('btn-mp-mark')?.addEventListener('click', async () => {
+    const range = mpCurrentSelectionRange();
+    if (!range) { showToast('Select part of the sample first'); return; }
+    const entered = await showInputPrompt('Variable name:', mpPeekNextName());
+    const name = (entered || '').trim() || mpNextName();
+    mpToggleRange(range.start, range.end, name);
+    window.getSelection()?.removeAllRanges();
+    mpUpdateMarkBtn();
+  });
+
+  mpEl<HTMLInputElement>('mp-ignorecase')?.addEventListener('change', () => { void mpRefreshPreview(); });
+
+  // Enable "Mark variable" only when there's a selection inside the sample.
+  const host = mpEl<HTMLDivElement>('mp-sample');
+  host?.addEventListener('mouseup', () => setTimeout(mpUpdateMarkBtn, 0));
+  document.addEventListener('selectionchange', () => {
+    if (!mpEl<HTMLDivElement>('makepattern-modal')?.classList.contains('hidden')) mpUpdateMarkBtn();
+  });
+
+  mpEl<HTMLButtonElement>('btn-mp-search')?.addEventListener('click', () => { void mpApplyToSearch(); });
+  mpEl<HTMLButtonElement>('btn-mp-filter')?.addEventListener('click', () => { mpApplyToFilter(); });
+  mpEl<HTMLButtonElement>('btn-mp-highlight')?.addEventListener('click', () => { void mpApplyToHighlight(); });
+  mpEl<HTMLDivElement>('makepattern-modal')?.querySelector('.modal-close')?.addEventListener('click', mpClose);
+}
+
+// Peek the name the next auto-span would get (without consuming the counter).
+function mpPeekNextName(): string { return `v${makePatternState.autoSeq + 1}`; }
+
+function mpUpdateMarkBtn(): void {
+  const btn = mpEl<HTMLButtonElement>('btn-mp-mark');
+  if (btn) btn.disabled = mpCurrentSelectionRange() === null;
+}
+
+// Resolve the current window selection to char offsets INTO the sample string,
+// but only if the whole selection is inside the #mp-sample element.
+function mpCurrentSelectionRange(): { start: number; end: number } | null {
+  const host = mpEl<HTMLDivElement>('mp-sample');
+  const sel = window.getSelection();
+  if (!host || !sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+  const range = sel.getRangeAt(0);
+  if (!host.contains(range.startContainer) || !host.contains(range.endContainer)) return null;
+  const start = mpOffsetOf(host, range.startContainer, range.startOffset);
+  const end = mpOffsetOf(host, range.endContainer, range.endOffset);
+  if (start === null || end === null || end <= start) return null;
+  return { start, end };
+}
+
+// Walk the text nodes of the sample host to convert a (node, offset) into an
+// absolute char offset in the sample string. The rendered text equals the sample
+// verbatim (tokens are just spans over the same characters), so offsets align.
+function mpOffsetOf(host: HTMLElement, node: Node, offset: number): number | null {
+  // Element-node boundary (e.g. triple-click / select-all where the container is
+  // the host and offset is a child index): the absolute offset is the summed
+  // text length of the first `offset` child nodes. Returning the element's start
+  // (ignoring offset) collapses the selection wrongly — so resolve it precisely.
+  if (node.nodeType === Node.ELEMENT_NODE) {
+    const children = node.childNodes;
+    let acc = 0;
+    // Text preceding this element in the host.
+    const before = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+    let t: Node | null = before.nextNode();
+    while (t) {
+      if (node.contains(t)) break;
+      acc += (t.textContent || '').length;
+      t = before.nextNode();
+    }
+    // Plus the text of the first `offset` children of this element.
+    for (let i = 0; i < offset && i < children.length; i++) {
+      acc += (children[i].textContent || '').length;
+    }
+    return acc;
+  }
+
+  let acc = 0;
+  const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+  let n: Node | null = walker.nextNode();
+  while (n) {
+    if (n === node) return acc + offset;
+    acc += (n.textContent || '').length;
+    n = walker.nextNode();
+  }
+  return null;
+}
+
+function openMakePatternModal(sample: string): void {
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  const clean = (sample || '').replace(/\r?\n/g, ' ').trim();
+  if (!clean) { showToast('Select some text first'); return; }
+  mpWireOnce();
+  makePatternState.sample = clean;
+  makePatternState.spans = [];
+  makePatternState.autoSeq = 0;
+  makePatternState.lastSource = '';
+  makePatternState.lastFlags = '';
+  const ignore = mpEl<HTMLInputElement>('mp-ignorecase');
+  if (ignore) ignore.checked = false;
+  mpRenderSample();
+  mpRenderSpanChips();
+  void mpRefreshPreview();
+  mpUpdateMarkBtn();
+  mpEl<HTMLDivElement>('makepattern-modal')?.classList.remove('hidden');
+}
+
 function handleContextMenu(event: MouseEvent): void {
   event.preventDefault();
 
@@ -4207,7 +4620,69 @@ function handleContextMenu(event: MouseEvent): void {
       menu.remove();
     });
     menu.appendChild(distanceItem);
+
+    // ── Selection → verb parity: send the selection to another tool ──────
+    menu.appendChild(menuSeparator());
+
+    // 🔍 Search "<sel>" — literal search via the existing search entry point.
+    const searchSel = menuItem('\u{1F50D}', `Search "${filterText}${selectedText.trim().length > 30 ? '...' : ''}"`);
+    searchSel.addEventListener('click', () => {
+      menu.remove();
+      searchRecurrences(selectedText.trim());
+    });
+    menu.appendChild(searchSel);
+
+    // ✨ Make pattern… — turn the selection into a controlled regex by marking
+    // which spans vary, then send it to Search / Filter / Highlight.
+    const makePatternItem = menuItem('\u{2728}', 'Make pattern…');
+    makePatternItem.addEventListener('click', () => {
+      menu.remove();
+      openMakePatternModal(selectedText.trim());
+    });
+    menu.appendChild(makePatternItem);
+
+    // 🔤 Save as constant… — name + persist {name, value} to the constants store.
+    const saveConstItem = menuItem('\u{1F524}', `Save as constant "${filterText}${selectedText.trim().length > 30 ? '...' : ''}"…`);
+    saveConstItem.addEventListener('click', async () => {
+      menu.remove();
+      const value = selectedText.trim();
+      const name = await showInputPrompt('Constant name:', '');
+      if (!name) return;
+      const res = await window.api.saveConstant(name, value);
+      if (res && res.success) {
+        showToast(`Saved constant "${name}"`);
+      } else {
+        showToast('Failed to save constant');
+      }
+    });
+    menu.appendChild(saveConstItem);
   }
+
+  // 💬 Comment… — prompt for a note and add an annotation at the selected line.
+  // Uses the same annotation-add path (window.api.addAnnotation) the agent uses;
+  // main records logActivity 'annotation_added' and pushes the change back.
+  menu.appendChild(menuSeparator());
+  const commentItem = menuItem('\u{1F4AC}', `Comment on Ln ${lineNumber + 1}…`);
+  commentItem.addEventListener('click', async () => {
+    menu.remove();
+    const text = await showInputPrompt(`Comment on line ${lineNumber + 1}:`, '');
+    if (!text) return;
+    const ann = {
+      id: `comment-${lineNumber}-${Date.now()}`,
+      lineNumber,
+      text,
+      agentName: 'You',
+      timestamp: Date.now(),
+      severity: 'info' as const,
+    };
+    const res = await window.api.addAnnotation(ann);
+    if (res && res.success) {
+      showToast(`Comment added on Ln ${lineNumber + 1}`);
+    } else {
+      showToast('Failed to add comment');
+    }
+  });
+  menu.appendChild(commentItem);
 
   menu.appendChild(menuSeparator());
 
@@ -5623,10 +6098,70 @@ async function terminalCdToFile(filePath: string): Promise<void> {
 
 let notesSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Usage Monitor: record a human panel/feature open (fire-and-forget, count-only).
+function trackUsage(verb: string): void {
+  try {
+    void window.api.bumpUsage(verb);
+  } catch { /* usage stats are non-critical */ }
+}
+
+// ─── Usage Monitor panel ─────────────────────────────────────────────
+// Sort order for the Usage panel: 'desc' = most-used first (default),
+// 'asc' = least-used first (surfaces near-dead features).
+let usageSortAsc = false;
+
+async function renderUsagePanel(): Promise<void> {
+  const content = document.getElementById('usage-content');
+  const status = document.getElementById('usage-status');
+  if (!content) return;
+  content.innerHTML = '<p class="placeholder">Loading usage stats…</p>';
+  let entries: Array<{ verb: string; operator: 'human' | 'ai'; count: number; firstUsed: string; lastUsed: string; daily: Record<string, number> }> = [];
+  try {
+    const res = await window.api.getUsage();
+    if (res.success && res.entries) entries = res.entries;
+  } catch { /* non-critical */ }
+
+  if (entries.length === 0) {
+    content.innerHTML = '<p class="placeholder">No usage recorded yet. As you (and the AI agent) use panels, searches, filters and other features, counts appear here — sorted so your workhorses and dead features stand out. <em>Features never used simply won\'t appear.</em> Local-only; counts, never content.</p>';
+    if (status) status.textContent = '';
+    return;
+  }
+
+  // getUsage() already sorts by count desc; reverse for ascending view.
+  const rows = usageSortAsc ? [...entries].reverse() : entries;
+  const total = entries.reduce((sum, e) => sum + (typeof e.count === 'number' ? e.count : 0), 0);
+  const maxCount = Math.max(...entries.map(e => typeof e.count === 'number' ? e.count : 0), 1);
+
+  const rowsHtml = rows.map(e => {
+    // Defensive defaults: a hand-edited ~/.logan/usage.json entry missing a field
+    // must not throw (main also sanitizes, but this keeps the panel alive too).
+    const count = typeof e.count === 'number' ? e.count : 0;
+    const verb = typeof e.verb === 'string' ? e.verb : '(unknown)';
+    const lastUsed = typeof e.lastUsed === 'string' ? e.lastUsed : '';
+    const pct = Math.round((count / maxCount) * 100);
+    const badgeClass = e.operator === 'ai' ? 'usage-badge-ai' : 'usage-badge-human';
+    const badgeLabel = e.operator === 'ai' ? 'AI' : 'HUMAN';
+    return `
+      <div class="usage-row">
+        <div class="usage-row-main">
+          <span class="usage-badge ${badgeClass}">${badgeLabel}</span>
+          <span class="usage-verb" title="${escapeHtml(verb)}">${escapeHtml(verb)}</span>
+          <span class="usage-count">${count.toLocaleString()}</span>
+        </div>
+        <div class="usage-bar"><div class="usage-bar-fill" style="width:${pct}%"></div></div>
+        <div class="usage-meta">last used ${escapeHtml(lastUsed ? getRelativeTime(lastUsed) : 'unknown')}</div>
+      </div>`;
+  }).join('');
+
+  content.innerHTML = `<div class="usage-list">${rowsHtml}</div>`;
+  if (status) status.textContent = `${entries.length} features · ${total.toLocaleString()} total uses`;
+}
+
 function openBottomTab(tabId: string): void {
   state.bottomPanelVisible = true;
   state.activeBottomTab = tabId;
   state.lastActiveBottomTab = tabId;
+  trackUsage(`panel:${tabId}`);
 
   // Show the panel
   elements.bottomPanel.classList.remove('hidden');
@@ -5695,6 +6230,9 @@ function openBottomTab(tabId: string): void {
   }
   if (tabId === 'pattern-columns') {
     initPatternColumnsPanel();
+  }
+  if (tabId === 'usage') {
+    renderUsagePanel();
   }
   if (tabId === 'time-align') {
     if (state.timeAlignTimestamps.size === 0 && state.searchConfigResults.size > 0) {
@@ -9481,6 +10019,65 @@ function showSshPassphrasePrompt(): void {
   input.addEventListener('keydown', onKeydown);
 }
 
+// Promise-based text-input dialog. Electron does NOT implement window.prompt()
+// (it THROWS), so any prompt()-based flow is broken. This reuses the shared
+// .modal overlay/escape-key/backdrop conventions (see showSshPassphrasePrompt).
+// Resolves to the trimmed string, or null on cancel/close/empty-Escape.
+function showInputPrompt(message: string, defaultValue = ''): Promise<string | null> {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('input-prompt-modal');
+    const input = document.getElementById('input-prompt-input') as HTMLInputElement | null;
+    const label = document.getElementById('input-prompt-label');
+    const btnOk = document.getElementById('btn-input-prompt-ok') as HTMLButtonElement | null;
+    const btnCancel = document.getElementById('btn-input-prompt-cancel') as HTMLButtonElement | null;
+    const btnClose = modal?.querySelector('.modal-close') as HTMLButtonElement | null;
+    if (!modal || !input || !btnOk || !btnCancel) { resolve(null); return; }
+
+    if (label) label.textContent = message;
+    input.value = defaultValue;
+    modal.classList.remove('hidden');
+    input.focus();
+    input.select();
+
+    let done = false;
+    const cleanup = () => {
+      modal.classList.add('hidden');
+      btnOk.removeEventListener('click', onOk);
+      btnCancel.removeEventListener('click', onCancel);
+      btnClose?.removeEventListener('click', onCancel);
+      input.removeEventListener('keydown', onKeydown);
+      modal.removeEventListener('click', onBackdrop);
+    };
+    const finish = (value: string | null) => {
+      if (done) return;
+      done = true;
+      cleanup();
+      resolve(value);
+    };
+    const onOk = () => {
+      const trimmed = input.value.trim();
+      finish(trimmed ? trimmed : null);
+    };
+    const onCancel = () => finish(null);
+    // Backdrop click (target === the overlay itself) must resolve the promise.
+    // Without this, the generic setupModalCloseHandlers only toggles `hidden`,
+    // so the promise would leak (never resolve) and its listeners would stack
+    // across opens — letting an aborted dialog later fire with the next one's
+    // input. Our finish() guard + cleanup() make this idempotent.
+    const onBackdrop = (e: MouseEvent) => { if (e.target === modal) onCancel(); };
+    const onKeydown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') { e.preventDefault(); onOk(); }
+      if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+    };
+
+    btnOk.addEventListener('click', onOk);
+    btnCancel.addEventListener('click', onCancel);
+    btnClose?.addEventListener('click', onCancel);
+    input.addEventListener('keydown', onKeydown);
+    modal.addEventListener('click', onBackdrop);
+  });
+}
+
 function showSshProfileManager(): void {
   const modal = document.getElementById('ssh-profile-modal')!;
   const listEl = document.getElementById('ssh-profile-list') as HTMLDivElement;
@@ -11201,6 +11798,35 @@ function reorderScOverviewLane(draggedId: string, targetId: string, placeAfter: 
   localStorage.setItem('logan-sc-overview-order', JSON.stringify(scOverviewOrder));
 }
 
+// Sub-timestamp spread for the "⏱ By time" overview: matches sharing one coarse
+// timestamp are separated along a tiny sub-timestamp offset ordered by LINE
+// number, so co-timestamped events don't collapse onto one column. The offset is
+// bounded by the gap to the next distinct epoch (× SPREAD < 1) so a point never
+// crosses into the next timestamp; the earliest line in a group and the final
+// epoch group keep offset 0, so every key stays within [minEpoch, maxEpoch].
+// MIRROR of the tested spec in src/shared/overviewSpread.ts — keep in sync.
+// (renderer.ts is a script and cannot import it; see the header note.)
+function computeSubTimestampSpread(timed: Array<{ ln: number; ep: number }>): Map<number, number> {
+  const SPREAD = 0.85;
+  const keyByLine = new Map<number, number>();
+  if (timed.length === 0) return keyByLine;
+  const sorted = timed.slice().sort((a, b) => a.ep - b.ep || a.ln - b.ln);
+  let i = 0;
+  while (i < sorted.length) {
+    const ep = sorted[i].ep;
+    let j = i;
+    while (j < sorted.length && sorted[j].ep === ep) j++;
+    const n = j - i;
+    const gap = j < sorted.length ? sorted[j].ep - ep : 0; // 0 for the final group
+    for (let k = i; k < j; k++) {
+      const frac = n > 1 ? (k - i) / (n - 1) : 0;
+      keyByLine.set(sorted[k].ln, ep + frac * gap * SPREAD);
+    }
+    i = j;
+  }
+  return keyByLine;
+}
+
 async function renderSearchConfigsOverview(): Promise<void> {
   const host = elements.scOverview;
   if (!host) return;
@@ -11309,6 +11935,25 @@ async function renderSearchConfigsOverview(): Promise<void> {
   const domainMin = useTime ? timeMin : 0;
   const domainSpan = useTime ? Math.max(1, timeMax - timeMin) : totalLines;
 
+  // Sub-timestamp spread: matches sharing one (coarse) timestamp separate by
+  // line order so co-timestamped events don't collapse onto one column. Built
+  // GLOBALLY over every lane's matches so a given line maps to the same x-key in
+  // every lane (identical events stay aligned); see shared/overviewSpread.ts.
+  let timeKeyByLine = new Map<number, number>();
+  if (useTime) {
+    const timed: Array<{ ln: number; ep: number }> = [];
+    const seen = new Set<number>();
+    for (const config of configs) {
+      for (const r of (state.searchConfigResults.get(config.id) || [])) {
+        if (seen.has(r.lineNumber)) continue;
+        seen.add(r.lineNumber);
+        const ep = scOverviewTsCache.get(r.lineNumber);
+        if (ep !== undefined && !Number.isNaN(ep)) timed.push({ ln: r.lineNumber, ep });
+      }
+    }
+    timeKeyByLine = computeSubTimestampSpread(timed);
+  }
+
   for (const config of configs) {
     const results = state.searchConfigResults.get(config.id) || [];
 
@@ -11317,16 +11962,20 @@ async function renderSearchConfigsOverview(): Promise<void> {
 
     // Build points in the active domain. key = domain coordinate (line-display
     // index or epochMs); pos = display index used for navigation; raw = line.
-    const pts: Array<{ key: number; pos: number; raw: number }> = [];
+    // key = x-position domain coord (spread sub-timestamp key in time mode, else
+    // display index); epoch = the RAW timestamp for the tooltip (never the spread
+    // key — that's a fake sub-second proxy); pos = display index for navigation.
+    const pts: Array<{ key: number; epoch: number; pos: number; raw: number }> = [];
     for (const r of results) {
       const di = getFilteredDisplayIndex(r.lineNumber);
       const pos = di >= 0 ? di : r.lineNumber;
       if (useTime) {
         const ep = scOverviewTsCache.get(r.lineNumber);
         if (ep === undefined || Number.isNaN(ep)) continue; // no timestamp → omit from time view
-        pts.push({ key: ep, pos, raw: r.lineNumber });
+        const k = timeKeyByLine.get(r.lineNumber);
+        pts.push({ key: k !== undefined ? k : ep, epoch: ep, pos, raw: r.lineNumber });
       } else {
-        pts.push({ key: pos, pos, raw: r.lineNumber });
+        pts.push({ key: pos, epoch: pos, pos, raw: r.lineNumber });
       }
     }
     pts.sort((a, b) => a.key - b.key);
@@ -11440,7 +12089,7 @@ async function renderSearchConfigsOverview(): Promise<void> {
 
     // Nearest match (binary search over sorted domain keys) for a given
     // fractional x across the strip.
-    const nearestAt = (frac: number): { key: number; pos: number; raw: number } | null => {
+    const nearestAt = (frac: number): { key: number; epoch: number; pos: number; raw: number } | null => {
       if (pts.length === 0) return null;
       const target = domainMin + frac * domainSpan;
       let lo = 0, hi = pts.length - 1;
@@ -11470,7 +12119,7 @@ async function renderSearchConfigsOverview(): Promise<void> {
       const hit = nearestAt(frac);
       if (!hit) { tip.style.display = 'none'; return; }
       tip.textContent = useTime
-        ? `${config.pattern} · ${formatTimestamp(hit.key)} · line ${hit.raw + 1}`
+        ? `${config.pattern} · ${formatTimestamp(hit.epoch)} · line ${hit.raw + 1}`
         : `${config.pattern} · line ${hit.raw + 1}`;
       tip.style.display = 'block';
       // Viewport-fixed coords, clamped on-screen. Prefer above-right of the
@@ -11514,6 +12163,22 @@ async function exportSearchConfigsOverviewImage(): Promise<void> {
   }
   const domainMin = useTime ? timeMin : 0;
   const domainSpan = useTime ? Math.max(1, timeMax - timeMin) : totalLines;
+
+  // Same global sub-timestamp spread as the live strip so the PNG matches it.
+  let timeKeyByLine = new Map<number, number>();
+  if (useTime) {
+    const timed: Array<{ ln: number; ep: number }> = [];
+    const seen = new Set<number>();
+    for (const c of configs) {
+      for (const r of (state.searchConfigResults.get(c.id) || [])) {
+        if (seen.has(r.lineNumber)) continue;
+        seen.add(r.lineNumber);
+        const ep = scOverviewTsCache.get(r.lineNumber);
+        if (ep !== undefined && !Number.isNaN(ep)) timed.push({ ln: r.lineNumber, ep });
+      }
+    }
+    timeKeyByLine = computeSubTimestampSpread(timed);
+  }
 
   // ── Geometry (logical px; scaled up for a crisp raster) ──
   const SCALE = 2;
@@ -11606,7 +12271,8 @@ async function exportSearchConfigsOverviewImage(): Promise<void> {
       if (useTime) {
         const ep = scOverviewTsCache.get(r.lineNumber);
         if (ep === undefined || Number.isNaN(ep)) continue;
-        key = ep;
+        const k = timeKeyByLine.get(r.lineNumber);
+        key = k !== undefined ? k : ep;
       } else {
         const di = getFilteredDisplayIndex(r.lineNumber);
         key = di >= 0 ? di : r.lineNumber;
@@ -17319,14 +17985,17 @@ async function addBookmarkAtLineWithLabel(lineNumber: number, label: string): Pr
   await addBookmarkAtLine(lineNumber, label);
 }
 
-function addToFilterPattern(pattern: string, type: 'include' | 'exclude'): void {
-  const textarea = type === 'include'
-    ? document.getElementById('include-patterns') as HTMLTextAreaElement
-    : document.getElementById('exclude-patterns') as HTMLTextAreaElement;
-
-  if (textarea) {
-    const current = textarea.value.trim();
-    textarea.value = current ? `${current}\n${pattern}` : pattern;
+function addToFilterPattern(pattern: string, type: 'include' | 'exclude', caseSensitive = true): void {
+  if (type === 'include') {
+    // Include uses per-row inputs under #include-patterns-container (there is no
+    // #include-patterns textarea anymore). Add a row so the pattern actually lands.
+    addIncludePatternRow(pattern, caseSensitive);
+  } else {
+    const textarea = document.getElementById('exclude-patterns') as HTMLTextAreaElement | null;
+    if (textarea) {
+      const current = textarea.value.trim();
+      textarea.value = current ? `${current}\n${pattern}` : pattern;
+    }
   }
 
   // Open filter modal so user can see and apply
@@ -17958,6 +18627,178 @@ function updateAnalysisUI(): void {
 
   // Show baseline section when analysis is available
   updateBaselineUI();
+}
+
+// ── 📋 Brief (native counterpart to the AI's logan_evidence_pack) ──
+// Fetches the SAME compact briefing the agent gets and renders it below the
+// analysis output, with clickable rows that jump to the referenced viewerLine.
+async function showBrief(): Promise<void> {
+  const el = elements.briefResults;
+  if (!el) return;
+  if (!state.filePath) {
+    el.innerHTML = '<p class="placeholder">Open a log file first to build a Brief.</p>';
+    return;
+  }
+  el.innerHTML = '<p class="placeholder">Building brief…</p>';
+  // Record the flagship parity action so Brief shows up in its own Usage Monitor.
+  trackUsage('brief');
+  if (elements.btnBrief) elements.btnBrief.disabled = true;
+  try {
+    const res = await window.api.getEvidencePack();
+    if (!res?.success || !res.pack) {
+      el.innerHTML = `<p class="placeholder" style="color: var(--error-color);">Brief failed: ${escapeHtml(res?.error || 'unknown error')}</p>`;
+      return;
+    }
+    renderBrief(res.pack);
+  } catch (error) {
+    el.innerHTML = `<p class="placeholder" style="color: var(--error-color);">Brief error: ${escapeHtml(String(error))}</p>`;
+  } finally {
+    if (elements.btnBrief) elements.btnBrief.disabled = false;
+  }
+}
+
+// Render an EvidencePack defensively (guard every field) into #brief-results.
+// Rows carrying a 1-based viewerLine become clickable → navigateTo(viewerLine-1).
+function renderBrief(pack: EvidencePack): void {
+  const el = elements.briefResults;
+  if (!el) return;
+
+  const sev = pack.severity || 'healthy';
+  const sevColor = sev === 'critical' ? 'var(--error-color, #e05252)'
+    : sev === 'warning' ? 'var(--warning-color, #d79a3a)'
+    : 'var(--success-color, #4a9d5b)';
+
+  const sections: string[] = [];
+
+  // Header: severity + one-line summary
+  sections.push(`
+    <div class="insight-section">
+      <div class="insight-header">
+        <span style="color: ${sevColor}; text-transform: uppercase; letter-spacing: 0.5px;">${escapeHtml(sev)}</span>
+      </div>
+      <div style="font-size: 12px; color: var(--text-secondary);">${escapeHtml(pack.summary || '')}</div>
+      ${pack.file?.timeRange?.start ? `<div style="font-size: 11px; color: var(--text-secondary); margin-top: 4px;">${escapeHtml(pack.file.timeRange.start)} – ${escapeHtml(pack.file.timeRange.end || '')}</div>` : ''}
+    </div>
+  `);
+
+  // Level counts (non-clickable badges — errorPercent/warningPercent excluded)
+  const levels = pack.levels || {};
+  const levelEntries = Object.entries(levels).filter(
+    ([k, v]) => k !== 'errorPercent' && k !== 'warningPercent' && typeof v === 'number' && v > 0
+  );
+  if (levelEntries.length > 0) {
+    let levelHtml = '<div class="level-counts">';
+    for (const [level, count] of levelEntries) {
+      levelHtml += `<span class="level-badge ${escapeHtml(level)}">${escapeHtml(level)}: ${(count as number).toLocaleString()}</span>`;
+    }
+    levelHtml += '</div>';
+    sections.push(`
+      <div class="insight-section">
+        <div class="insight-header">Levels${typeof levels.errorPercent === 'number' ? ` — ${levels.errorPercent}% errors` : ''}</div>
+        ${levelHtml}
+      </div>
+    `);
+  }
+
+  // Grouped crashes (clickable → viewerLine)
+  const crashes = pack.crashes || [];
+  if (crashes.length > 0) {
+    sections.push(`
+      <div class="insight-section crash-section">
+        <div class="insight-header">Crashes & Failures (${crashes.length})</div>
+        ${crashes.map(c => `
+          <div class="crash-item brief-row" data-viewer-line="${c.viewerLine ?? ''}" title="${c.viewerLine ? `Line ${c.viewerLine}` : ''}">
+            <div class="crash-line">
+              <span class="crash-keyword">${escapeHtml(c.keyword || '')}</span>
+              <span class="crash-line-num">${c.count ? `×${c.count}` : ''}${c.viewerLine ? ` · line ${c.viewerLine}` : ''}</span>
+            </div>
+            ${c.sample ? `<div class="crash-text">${escapeHtml(c.sample.length > 100 ? c.sample.substring(0, 100) + '…' : c.sample)}</div>` : ''}
+          </div>
+        `).join('')}
+      </div>
+    `);
+  }
+
+  // Top failing components (clickable → sampleLine)
+  const comps = pack.topComponents || [];
+  if (comps.length > 0) {
+    const maxErrors = Math.max(1, ...comps.map(c => c.errorCount || 0));
+    sections.push(`
+      <div class="insight-section components-section">
+        <div class="insight-header">Top Failing Components</div>
+        ${comps.map(comp => {
+          // comp.sampleLine is 0-based (api-server does NOT +1 components, unlike
+          // crashes/gaps). The click handler treats data-viewer-line as 1-based
+          // (navigateTo(vLine - 1)), so convert here. Line 0 is a valid first line;
+          // included components always have errors>0 and a real error line, so
+          // there's no sentinel to filter — the >= 0 guard is just defensive.
+          const vLine = typeof comp.sampleLine === 'number' && comp.sampleLine >= 0 ? comp.sampleLine + 1 : null;
+          return `
+          <div class="component-item brief-row" data-viewer-line="${vLine ?? ''}" title="${(comp.errorCount || 0)} errors, ${(comp.warningCount || 0)} warnings">
+            <div class="component-header">
+              <span class="component-name">${escapeHtml(comp.name || '')}</span>
+              <span class="component-errors">${comp.errorCount || 0} err${(comp.warningCount || 0) > 0 ? ` / ${comp.warningCount} warn` : ''}</span>
+            </div>
+            <div class="component-bar" style="width: ${Math.max(Math.round((comp.errorCount || 0) / maxErrors * 100), 4)}%"></div>
+          </div>`;
+        }).join('')}
+      </div>
+    `);
+  }
+
+  // Top time gaps (clickable → viewerLine)
+  const gaps = pack.timeGaps || [];
+  if (gaps.length > 0) {
+    const cap = pack.caps?.timeGaps;
+    const capNote = cap?.truncated ? ` (top ${cap.shown} of ${cap.total})` : '';
+    sections.push(`
+      <div class="insight-section">
+        <div class="insight-header">Time Gaps${capNote}</div>
+        ${gaps.map(g => `
+          <div class="crash-item brief-row" data-viewer-line="${g.viewerLine ?? ''}" title="${g.viewerLine ? `Line ${g.viewerLine}` : ''}">
+            <div class="crash-line">
+              <span class="crash-keyword">${escapeHtml(formatGapSeconds(g.gapSeconds || 0))}</span>
+              <span class="crash-line-num">${g.viewerLine ? `line ${g.viewerLine}` : ''}</span>
+            </div>
+            ${g.preview ? `<div class="crash-text">${escapeHtml(g.preview.length > 100 ? g.preview.substring(0, 100) + '…' : g.preview)}</div>` : ''}
+          </div>
+        `).join('')}
+      </div>
+    `);
+  }
+
+  // Discovered fields (not line-clickable; informational vocabulary)
+  const fields = pack.fields || [];
+  if (fields.length > 0) {
+    const cap = pack.caps?.fields;
+    const capNote = cap?.truncated ? ` (top ${cap.shown} of ${cap.total})` : '';
+    sections.push(`
+      <div class="insight-section">
+        <div class="insight-header">Discovered Fields${capNote}</div>
+        <div class="level-counts">
+          ${fields.map(f => `<span class="level-badge" title="${escapeHtml(f.type || '')}${typeof f.distinct === 'number' ? ` · ${f.distinct} distinct` : ''}">${escapeHtml(f.name || '')}${typeof f.occurrences === 'number' ? `: ${f.occurrences.toLocaleString()}` : ''}</span>`).join('')}
+        </div>
+      </div>
+    `);
+  }
+
+  el.innerHTML = sections.join('');
+
+  // Wire clickable rows → navigate to (viewerLine - 1) 0-based absolute line
+  el.querySelectorAll('.brief-row[data-viewer-line]').forEach((row) => {
+    const raw = (row as HTMLElement).dataset.viewerLine;
+    const vLine = raw ? parseInt(raw, 10) : NaN;
+    if (Number.isNaN(vLine) || vLine <= 0) return;
+    (row as HTMLElement).style.cursor = 'pointer';
+    row.addEventListener('click', () => navigateTo(vLine - 1));
+  });
+}
+
+// Compact human-readable gap duration.
+function formatGapSeconds(seconds: number): string {
+  if (seconds < 60) return `${seconds}s gap`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m gap`;
+  return `${(seconds / 3600).toFixed(1)}h gap`;
 }
 
 async function loadBaselineList(): Promise<void> {
@@ -18698,6 +19539,7 @@ function togglePanel(panelId: string): void {
 function openPanel(panelId: string): void {
   activePanel = panelId;
   lastActivePanel = panelId;
+  trackUsage(`panel:${panelId}`);
 
   // Show panel container
   elements.panelContainer.classList.remove('hidden');
@@ -20004,6 +20846,20 @@ function init(): void {
   setupBottomPanelResize();
   restoreBottomPanelState();
 
+  // Usage Monitor panel controls
+  document.getElementById('btn-usage-refresh')?.addEventListener('click', () => renderUsagePanel());
+  document.getElementById('btn-usage-sort')?.addEventListener('click', () => {
+    usageSortAsc = !usageSortAsc;
+    const btn = document.getElementById('btn-usage-sort');
+    if (btn) btn.textContent = usageSortAsc ? 'Sort: least used' : 'Sort: most used';
+    renderUsagePanel();
+  });
+  document.getElementById('btn-usage-clear')?.addEventListener('click', async () => {
+    if (!confirm('Clear all usage stats? This cannot be undone.')) return;
+    try { await window.api.clearUsage(); } catch { /* non-critical */ }
+    renderUsagePanel();
+  });
+
   // Traceback sort/filter
   elements.tracebackSort.addEventListener('change', () => {
     state.tracebackSort = elements.tracebackSort.value as 'time' | 'score';
@@ -20288,6 +21144,7 @@ function init(): void {
   // Analysis
   elements.btnAnalyze.addEventListener('click', analyzeFile);
   document.getElementById('btn-run-analysis')?.addEventListener('click', analyzeFile);
+  elements.btnBrief?.addEventListener('click', showBrief);
 
   // Conclusion (native root-cause synthesis)
   elements.btnBuildConclusion.addEventListener('click', () => buildConclusion());

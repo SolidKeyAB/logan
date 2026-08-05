@@ -39,6 +39,7 @@ interface SearchOptions {
   isWildcard: boolean;
   matchCase: boolean;
   wholeWord: boolean;
+  silent?: boolean; // background count only: skip history/telemetry/progress + separate cancel signal
   columnConfig?: SearchColumnConfig;
 }
 
@@ -411,6 +412,26 @@ interface TrendCorrelateResult {
   };
 }
 
+// Compact "evidence pack" briefing — shape returned by getEvidencePack()
+// (mirrors the AI's logan_evidence_pack). All viewerLine refs are 1-based.
+interface EvidencePack {
+  file?: { path?: string; totalLines?: number; timeRange?: { start?: string; end?: string } | null };
+  severity?: 'healthy' | 'warning' | 'critical';
+  summary?: string;
+  levels?: Record<string, number> & { errorPercent?: number; warningPercent?: number };
+  crashes?: Array<{ keyword?: string; count?: number; viewerLine?: number; sample?: string }>;
+  topComponents?: Array<{ name?: string; errorCount?: number; warningCount?: number; sampleLine?: number }>;
+  timeGaps?: Array<{ viewerLine?: number; gapSeconds?: number; from?: string; to?: string; preview?: string }>;
+  fields?: Array<{ name?: string; type?: string; occurrences?: number; distinct?: number; examples?: any[] }>;
+  filterSuggestions?: Array<{ id?: string; title?: string; description?: string }>;
+  baselineDelta?: any;
+  caps?: {
+    fields?: { shown?: number; total?: number; truncated?: boolean };
+    timeGaps?: { shown?: number; total?: number; truncated?: boolean };
+    note?: string;
+  };
+}
+
 interface Api {
   // File operations
   openFileDialog: () => Promise<string | null>;
@@ -702,6 +723,27 @@ interface Api {
 
   // Guided triage
   triageRecipe: (options: { symptom: string; domain?: string; component?: string; sinceLine?: number; field?: string; expect?: string; baselineId?: string; maxFindings?: number; pin?: boolean }) => Promise<{ success: boolean; error?: string; [key: string]: any }>;
+
+  // Evidence pack (native "📋 Brief") — same briefing the AI's logan_evidence_pack builds
+  getEvidencePack: (options?: { thresholdSeconds?: number; topFields?: number; topGaps?: number; topComponents?: number; fieldSampleSize?: number; analyzerName?: string; baselineId?: string }) => Promise<{ success: boolean; pack?: EvidencePack; error?: string }>;
+
+  // Usage Monitor (per-feature usage counts, split human vs AI)
+  bumpUsage: (verb: string) => Promise<void>;
+  getUsage: () => Promise<{ success: boolean; entries?: Array<{ verb: string; operator: 'human' | 'ai'; count: number; firstUsed: string; lastUsed: string; daily: Record<string, number> }> }>;
+  clearUsage: () => Promise<{ success: boolean }>;
+
+  // Pattern log ("flight recorder" of pattern applications)
+  getPatternLog: () => Promise<{ success: boolean; entries?: Array<{ id: string; ts: string; operator: 'human' | 'ai'; mode: string; source: string; scope: string; scanned: number; matched: number; hid: number; sampleHits: number[]; ms: number; capped: boolean; valid: boolean; error?: string }> }>;
+  clearPatternLog: () => Promise<{ success: boolean }>;
+  addPatternLog: (entry: { mode?: string; source?: string; scope?: string; scanned?: number; matched?: number; hid?: number; sampleHits?: number[]; ms?: number; capped?: boolean; valid?: boolean; error?: string; at?: number }) => Promise<{ success: boolean }>;
+
+  // Controlled-pattern compiler ("Make pattern… from selection")
+  compilePattern: (input: { mode: 'plain' | 'grok' | 'paint' | 'regex'; text?: string; sample?: string; spans?: Array<{ start: number; end: number; name: string }>; flags?: string; matchCase?: boolean; wholeWord?: boolean; invert?: boolean }) => Promise<{ ok: boolean; source: string; flags: string; error?: string; warnings: string[]; mode: string }>;
+
+  // Named constants (captured from a selection via "Save as constant…")
+  saveConstant: (name: string, value: string) => Promise<{ success: boolean; error?: string }>;
+  getConstants: () => Promise<{ success: boolean; entries?: Array<{ name: string; value: string; createdAt: string; updatedAt: string }> }>;
+  deleteConstant: (name: string) => Promise<{ success: boolean; removed?: boolean }>;
 
   // Window controls
   windowMinimize: () => Promise<void>;

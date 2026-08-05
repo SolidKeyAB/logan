@@ -894,6 +894,28 @@ server.tool(
   }
 );
 
+// === Tool: logan_build_conclusion ===
+server.tool(
+  'logan_build_conclusion',
+  'Produce the native root-cause VERDICT for the open log — the AI counterpart to LOGAN\'s human "Conclusion" panel. Deterministically (no AI) assembles what LOGAN already computes — analysis (crashes, levels, failing components), time gaps, and pinned findings/annotations — into: a plain verdict, the FIRST anomaly (the likely trigger), the likely root cause, a chronological timeline of the key events (each with a viewer line = lineNumber+1), and the supporting evidence (level counts + top failing components). Returns compact JSON, not raw log text. Call this to state a conclusion; use logan_report_finding to pin the specific lines it surfaces.',
+  {
+    thresholdSeconds: z.number().min(1).default(10).describe('Minimum time gap (seconds) to count as a stall (default 10, matching the human panel)'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+  },
+  async ({ thresholdSeconds, redact }) => {
+    try {
+      const result = await apiCall('POST', '/api/build-conclusion', { thresholdSeconds });
+      if (!result.success) {
+        return { content: [{ type: 'text', text: `Error: ${result.error || 'build conclusion failed'}` }], isError: true };
+      }
+      const output = redact ? maybeRedact(result.conclusion, true) : result.conclusion;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_investigate_crashes ===
 server.tool(
   'logan_investigate_crashes',
