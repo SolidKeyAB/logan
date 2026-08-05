@@ -22,6 +22,7 @@ if (process.platform !== 'linux') {
 import { FileHandler, filterLineToVisibleColumns, splitLineIntoColumns, ColumnConfig } from './fileHandler';
 import { getRipgrepPath } from './ripgrepPath';
 import { openWithAdapter, NormalizedSource } from './sourceAdapter';
+import { resolveFileHandlers, runFileHandler, FileHandlerQuery } from './fileHandlers';
 import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation, PatternProperty } from '../shared/types';
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
@@ -5277,6 +5278,15 @@ ipcMain.handle(IPC.GET_LINE_TIMESTAMPS, async (_, lineNumbers: number[]) => {
     }
   } catch { /* ignore */ }
   return results;
+});
+
+// File-handler registry: resolve the plugin actions that apply to a clicked
+// file/folder, and run one. Same entry points a future MCP tool would call.
+ipcMain.handle(IPC.FILE_HANDLERS_RESOLVE, async (_, query: FileHandlerQuery) => {
+  return resolveFileHandlers(query);
+});
+ipcMain.handle(IPC.FILE_HANDLER_RUN, async (_, id: string, query: FileHandlerQuery) => {
+  return runFileHandler(id, query);
 });
 
 ipcMain.handle('detect-time-gaps', async (_, options: TimeGapOptions) => {
