@@ -23,6 +23,7 @@ import { FileHandler, filterLineToVisibleColumns, splitLineIntoColumns, ColumnCo
 import { getRipgrepPath } from './ripgrepPath';
 import { openWithAdapter, NormalizedSource } from './sourceAdapter';
 import { resolveFileHandlers, runFileHandler, FileHandlerQuery } from './fileHandlers';
+import { extractBodyLine, extractHeaderLine } from '../shared/extractFormat';
 import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation, PatternProperty } from '../shared/types';
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
@@ -4231,6 +4232,72 @@ ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: numb
 
     if (currentFilePath) logActivity(currentFilePath, 'lines_saved', { startLine, endLine });
 
+    return { success: true, filePath, lineCount };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// Stream the FULL active-filter subset to an fd, one line per matched source line,
+// each optionally prefixed with its 1-based ORIGINAL line number (tab-separated)
+// so an extracted line maps back to the source. Bounded batches (like the
+// save-range writer) so a huge subset can't overflow V8's ~512MB string cap.
+function streamFilteredExtractToFd(
+  fd: number,
+  handler: NonNullable<ReturnType<typeof getFileHandler>>,
+  filteredLineNumbers: number[],
+  columnConfig: ColumnConfig | undefined,
+  includeLineNumbers: boolean,
+): number {
+  let count = 0;
+  let buf = '';
+  const flush = () => { if (buf) { fs.writeSync(fd, buf); buf = ''; } };
+  for (let i = 0; i < filteredLineNumbers.length; i++) {
+    const ln = filteredLineNumbers[i];
+    const [line] = handler.getLines(ln, 1);
+    if (line) {
+      const body = filterLineToVisibleColumns(line.text, columnConfig);
+      buf += extractBodyLine(ln, body, includeLineNumbers) + '\n';
+      count++;
+      if (buf.length >= SAVE_RANGE_FLUSH_CHARS) flush();
+    }
+    if ((i & 1023) === 1023) flush();
+  }
+  flush();
+  return count;
+}
+
+// "Extract filter → file": materialize the current filter's matching lines into a
+// NEW small file and hand back its path (the renderer opens it). This sidesteps
+// virtualizing a filtered view over a huge file — the extract opens on the normal
+// fast path with a small line count (no scroll-height limits, no heavy re-render).
+ipcMain.handle(IPC.EXTRACT_FILTERED_TO_FILE, async (_, opts?: { includeLineNumbers?: boolean; columnConfig?: ColumnConfig }) => {
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+  const filtered = getFilteredLines();
+  if (!filtered || filtered.length === 0) {
+    return { success: false, error: 'No active filter — apply a filter first, then Extract.' };
+  }
+  try {
+    const fileInfo = handler.getFileInfo();
+    if (!fileInfo) return { success: false, error: 'No file info' };
+    const dir = path.dirname(fileInfo.path);
+    const base = path.basename(fileInfo.path).replace(/\.[^.]+$/, '');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filePath = path.join(dir, `${base}.filtered_${stamp}.log`);
+    const includeLineNumbers = opts?.includeLineNumbers !== false; // default true
+    const total = handler.getTotalLines();
+
+    const fd = fs.openSync(filePath, 'w');
+    let lineCount: number;
+    try {
+      // Self-describing header (a plain comment line; not a #SPLIT header).
+      fs.writeSync(fd, extractHeaderLine(filtered.length, total, path.basename(fileInfo.path), includeLineNumbers) + '\n');
+      lineCount = streamFilteredExtractToFd(fd, handler, filtered, opts?.columnConfig, includeLineNumbers);
+    } finally {
+      fs.closeSync(fd);
+    }
+    if (currentFilePath) logActivity(currentFilePath, 'filter_extracted', { lines: lineCount });
     return { success: true, filePath, lineCount };
   } catch (error) {
     return { success: false, error: String(error) };
