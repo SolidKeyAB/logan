@@ -19128,9 +19128,6 @@ function getTab(tabId?: string): TabState | undefined {
 let globalLoading = { isLoading: false, text: '', percent: 0 };
 
 // Sync loading UI with current state (Single Responsibility)
-// Show video overlay only for large files where operations take noticeable time
-const OVERLAY_LINE_THRESHOLD = 100_000;
-
 function syncLoadingOverlay(): void {
   const tab = getTab();
 
@@ -19145,9 +19142,14 @@ function syncLoadingOverlay(): void {
     elements.progressBar.style.setProperty('--progress', `${percent}%`);
     elements.progressText.textContent = text || `${percent}%`;
 
-    // Video overlay for large files (>100K lines) or when size is unknown (file opening)
+    // Blocking video overlay ONLY while there's nothing to display yet (initial
+    // indexing of a fresh file). Once the file is on screen, every operation
+    // (search / filter / analyze / …) uses the non-blocking status-bar progress
+    // instead, so the user can keep reading and scrolling the SAME file while it
+    // runs. (Indexing happens on a worker thread, so the overlay's "you can
+    // switch tabs / open other files" hint stays true.)
     const lineCount = state.totalLines || 0;
-    if (lineCount === 0 || lineCount >= OVERLAY_LINE_THRESHOLD) {
+    if (lineCount === 0) {
       elements.loadingOverlay.classList.remove('hidden');
       elements.loadingText.textContent = text;
       elements.loadingProgressFill.style.width = `${percent}%`;

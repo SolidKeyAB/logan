@@ -170,3 +170,51 @@ describe('FileHandler — open/getLines round-trip (inline index fallback)', () 
     }
   });
 });
+
+// getLinesAsync() is the non-blocking read path used by the render IPC handlers;
+// it must return byte-for-byte the same result as the synchronous getLines().
+describe('FileHandler — getLinesAsync parity with getLines', () => {
+  it('returns identical text, line numbers and levels as getLines()', async () => {
+    const p = tmpFile('one\n[ERROR] boom\nthree\nfour\nfive\n');
+    const fh = new FileHandler();
+    try {
+      await fh.open(p);
+      for (const [start, count] of [[0, 5], [1, 2], [3, 10], [4, 1]] as const) {
+        expect(await fh.getLinesAsync(start, count)).toEqual(fh.getLines(start, count));
+      }
+      // the ERROR line's level survives the async path
+      expect((await fh.getLinesAsync(1, 1))[0].level).toBe('error');
+    } finally {
+      fh.close();
+      fs.unlinkSync(p);
+    }
+  });
+
+  it('applies the same MAX_LINE_READ truncation as getLines()', async () => {
+    const huge = 'z'.repeat(20000); // > MAX_LINE_READ (10000)
+    const p = tmpFile(`short\n${huge}\ntail\n`);
+    const fh = new FileHandler();
+    try {
+      await fh.open(p);
+      const [asyncLine] = await fh.getLinesAsync(1, 1);
+      const [syncLine] = fh.getLines(1, 1);
+      expect(asyncLine.text).toEqual(syncLine.text);
+      expect(asyncLine.text.endsWith('(truncated)')).toBe(true);
+    } finally {
+      fh.close();
+      fs.unlinkSync(p);
+    }
+  });
+
+  it('hides the #SPLIT: header the same way', async () => {
+    const p = tmpFile('#SPLIT:part=1,total=2,prev=,next=b.log\nalpha\nbeta\n');
+    const fh = new FileHandler();
+    try {
+      await fh.open(p);
+      expect((await fh.getLinesAsync(0, 2)).map(l => l.text)).toEqual(['alpha', 'beta']);
+    } finally {
+      fh.close();
+      fs.unlinkSync(p);
+    }
+  });
+});
