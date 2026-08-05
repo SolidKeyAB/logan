@@ -432,6 +432,28 @@ interface EvidencePack {
   };
 }
 
+// File-handler registry wire types (mirror src/main/fileHandlers.ts).
+interface FileHandlerQuery {
+  path: string;
+  isDirectory?: boolean;
+  fileType?: 'text' | 'image' | 'video' | 'binary';
+}
+interface FileHandlerInfo {
+  id: string;
+  label: string;
+  icon?: string;
+  kind: string;
+  isDefault: boolean;
+}
+interface FileHandlerResult {
+  action: 'open-log' | 'open-panel' | 'open-folder' | 'toast';
+  path?: string;
+  panel?: 'video' | 'image' | 'markdown';
+  forceAdapterId?: string;
+  message?: string;
+  level?: 'info' | 'error';
+}
+
 interface Api {
   // File operations
   openFileDialog: () => Promise<string | null>;
@@ -596,6 +618,10 @@ interface Api {
 
   // Time Align (batch)
   getLineTimestamps: (lineNumbers: number[]) => Promise<Array<{ lineNumber: number; epochMs: number }>>;
+
+  // File-handler registry (plugin actions on a clicked file/folder)
+  resolveFileHandlers: (query: FileHandlerQuery) => Promise<FileHandlerInfo[]>;
+  runFileHandler: (id: string, query: FileHandlerQuery) => Promise<FileHandlerResult>;
 
   // MCP navigation
   onNavigateToLine: (callback: (lineNumber: number) => void) => () => void;
