@@ -833,6 +833,7 @@ const elements = {
   highlightModal: document.getElementById('highlight-modal') as HTMLDivElement,
   btnApplyFilter: document.getElementById('btn-apply-filter') as HTMLButtonElement,
   btnClearFilter: document.getElementById('btn-clear-filter') as HTMLButtonElement,
+  btnExtractFilter: document.getElementById('btn-extract-filter') as HTMLButtonElement,
   btnSplit: document.getElementById('btn-split') as HTMLButtonElement,
   splitModal: document.getElementById('split-modal') as HTMLDivElement,
   splitValue: document.getElementById('split-value') as HTMLInputElement,
@@ -16082,6 +16083,29 @@ function hideFilterModal(): void {
   elements.filterModal.classList.add('hidden');
 }
 
+// "Extract filter → file": materialize the active filter's matching lines into a
+// new small file (main streams them, prefixed with original line numbers) and open
+// it. Sidesteps re-rendering / max-scroll limits on the big file — the extract
+// opens on the normal fast path with a small line count.
+async function extractFilterToFile(): Promise<void> {
+  if (!state.isFiltered) {
+    showToast('Apply a filter first, then Extract to file.');
+    return;
+  }
+  const colConfig = state.columnConfig && state.columnConfig.columns.some(c => !c.visible)
+    ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible })) }
+    : undefined;
+  hideFilterModal();
+  showToast('Extracting filtered lines…');
+  const result = await window.api.extractFilteredToFile({ includeLineNumbers: true, columnConfig: colConfig });
+  if (result.success && result.filePath) {
+    showToast(`Extracted ${(result.lineCount ?? 0).toLocaleString()} lines → ${result.filePath.split(/[\\/]/).pop()}`);
+    await loadFile(result.filePath);
+  } else {
+    showToast(`Extract failed: ${result.error || 'unknown error'}`);
+  }
+}
+
 // Returns the position of lineNumber in the current filtered view via binary search.
 // Returns lineNumber unchanged when no filter is active.
 // Returns -1 if the line is not present in the current filter (filtered out).
@@ -21150,6 +21174,7 @@ function init(): void {
   elements.btnFilter.addEventListener('click', showFilterModal);
   elements.btnApplyFilter.addEventListener('click', () => applyFilter());
   elements.btnClearFilter.addEventListener('click', clearFilter);
+  elements.btnExtractFilter?.addEventListener('click', () => extractFilterToFile());
   // Badge body click = toggle suspend/resume; × button = permanent clear
   elements.statusFiltered.addEventListener('click', async (e) => {
     if ((e.target as HTMLElement).id === 'btn-status-clear-filter') return;
