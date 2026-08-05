@@ -1,4 +1,8 @@
 // Types defined inline for browser context (no imports)
+// NOTE: renderer.ts must stay a SCRIPT (no top-level import/export). Its inline
+// interfaces rely on global declaration-merging with types.d.ts; an `import`
+// turns this file into a module and breaks that merge. Shared pure helpers are
+// therefore mirrored here as script-scope functions (see computeSubTimestampSpread).
 interface FileStats {
   path: string;
   size: number;
@@ -11794,6 +11798,35 @@ function reorderScOverviewLane(draggedId: string, targetId: string, placeAfter: 
   localStorage.setItem('logan-sc-overview-order', JSON.stringify(scOverviewOrder));
 }
 
+// Sub-timestamp spread for the "⏱ By time" overview: matches sharing one coarse
+// timestamp are separated along a tiny sub-timestamp offset ordered by LINE
+// number, so co-timestamped events don't collapse onto one column. The offset is
+// bounded by the gap to the next distinct epoch (× SPREAD < 1) so a point never
+// crosses into the next timestamp; the earliest line in a group and the final
+// epoch group keep offset 0, so every key stays within [minEpoch, maxEpoch].
+// MIRROR of the tested spec in src/shared/overviewSpread.ts — keep in sync.
+// (renderer.ts is a script and cannot import it; see the header note.)
+function computeSubTimestampSpread(timed: Array<{ ln: number; ep: number }>): Map<number, number> {
+  const SPREAD = 0.85;
+  const keyByLine = new Map<number, number>();
+  if (timed.length === 0) return keyByLine;
+  const sorted = timed.slice().sort((a, b) => a.ep - b.ep || a.ln - b.ln);
+  let i = 0;
+  while (i < sorted.length) {
+    const ep = sorted[i].ep;
+    let j = i;
+    while (j < sorted.length && sorted[j].ep === ep) j++;
+    const n = j - i;
+    const gap = j < sorted.length ? sorted[j].ep - ep : 0; // 0 for the final group
+    for (let k = i; k < j; k++) {
+      const frac = n > 1 ? (k - i) / (n - 1) : 0;
+      keyByLine.set(sorted[k].ln, ep + frac * gap * SPREAD);
+    }
+    i = j;
+  }
+  return keyByLine;
+}
+
 async function renderSearchConfigsOverview(): Promise<void> {
   const host = elements.scOverview;
   if (!host) return;
@@ -11902,6 +11935,25 @@ async function renderSearchConfigsOverview(): Promise<void> {
   const domainMin = useTime ? timeMin : 0;
   const domainSpan = useTime ? Math.max(1, timeMax - timeMin) : totalLines;
 
+  // Sub-timestamp spread: matches sharing one (coarse) timestamp separate by
+  // line order so co-timestamped events don't collapse onto one column. Built
+  // GLOBALLY over every lane's matches so a given line maps to the same x-key in
+  // every lane (identical events stay aligned); see shared/overviewSpread.ts.
+  let timeKeyByLine = new Map<number, number>();
+  if (useTime) {
+    const timed: Array<{ ln: number; ep: number }> = [];
+    const seen = new Set<number>();
+    for (const config of configs) {
+      for (const r of (state.searchConfigResults.get(config.id) || [])) {
+        if (seen.has(r.lineNumber)) continue;
+        seen.add(r.lineNumber);
+        const ep = scOverviewTsCache.get(r.lineNumber);
+        if (ep !== undefined && !Number.isNaN(ep)) timed.push({ ln: r.lineNumber, ep });
+      }
+    }
+    timeKeyByLine = computeSubTimestampSpread(timed);
+  }
+
   for (const config of configs) {
     const results = state.searchConfigResults.get(config.id) || [];
 
@@ -11910,16 +11962,20 @@ async function renderSearchConfigsOverview(): Promise<void> {
 
     // Build points in the active domain. key = domain coordinate (line-display
     // index or epochMs); pos = display index used for navigation; raw = line.
-    const pts: Array<{ key: number; pos: number; raw: number }> = [];
+    // key = x-position domain coord (spread sub-timestamp key in time mode, else
+    // display index); epoch = the RAW timestamp for the tooltip (never the spread
+    // key — that's a fake sub-second proxy); pos = display index for navigation.
+    const pts: Array<{ key: number; epoch: number; pos: number; raw: number }> = [];
     for (const r of results) {
       const di = getFilteredDisplayIndex(r.lineNumber);
       const pos = di >= 0 ? di : r.lineNumber;
       if (useTime) {
         const ep = scOverviewTsCache.get(r.lineNumber);
         if (ep === undefined || Number.isNaN(ep)) continue; // no timestamp → omit from time view
-        pts.push({ key: ep, pos, raw: r.lineNumber });
+        const k = timeKeyByLine.get(r.lineNumber);
+        pts.push({ key: k !== undefined ? k : ep, epoch: ep, pos, raw: r.lineNumber });
       } else {
-        pts.push({ key: pos, pos, raw: r.lineNumber });
+        pts.push({ key: pos, epoch: pos, pos, raw: r.lineNumber });
       }
     }
     pts.sort((a, b) => a.key - b.key);
@@ -12033,7 +12089,7 @@ async function renderSearchConfigsOverview(): Promise<void> {
 
     // Nearest match (binary search over sorted domain keys) for a given
     // fractional x across the strip.
-    const nearestAt = (frac: number): { key: number; pos: number; raw: number } | null => {
+    const nearestAt = (frac: number): { key: number; epoch: number; pos: number; raw: number } | null => {
       if (pts.length === 0) return null;
       const target = domainMin + frac * domainSpan;
       let lo = 0, hi = pts.length - 1;
@@ -12063,7 +12119,7 @@ async function renderSearchConfigsOverview(): Promise<void> {
       const hit = nearestAt(frac);
       if (!hit) { tip.style.display = 'none'; return; }
       tip.textContent = useTime
-        ? `${config.pattern} · ${formatTimestamp(hit.key)} · line ${hit.raw + 1}`
+        ? `${config.pattern} · ${formatTimestamp(hit.epoch)} · line ${hit.raw + 1}`
         : `${config.pattern} · line ${hit.raw + 1}`;
       tip.style.display = 'block';
       // Viewport-fixed coords, clamped on-screen. Prefer above-right of the
@@ -12107,6 +12163,22 @@ async function exportSearchConfigsOverviewImage(): Promise<void> {
   }
   const domainMin = useTime ? timeMin : 0;
   const domainSpan = useTime ? Math.max(1, timeMax - timeMin) : totalLines;
+
+  // Same global sub-timestamp spread as the live strip so the PNG matches it.
+  let timeKeyByLine = new Map<number, number>();
+  if (useTime) {
+    const timed: Array<{ ln: number; ep: number }> = [];
+    const seen = new Set<number>();
+    for (const c of configs) {
+      for (const r of (state.searchConfigResults.get(c.id) || [])) {
+        if (seen.has(r.lineNumber)) continue;
+        seen.add(r.lineNumber);
+        const ep = scOverviewTsCache.get(r.lineNumber);
+        if (ep !== undefined && !Number.isNaN(ep)) timed.push({ ln: r.lineNumber, ep });
+      }
+    }
+    timeKeyByLine = computeSubTimestampSpread(timed);
+  }
 
   // ── Geometry (logical px; scaled up for a crisp raster) ──
   const SCALE = 2;
@@ -12199,7 +12271,8 @@ async function exportSearchConfigsOverviewImage(): Promise<void> {
       if (useTime) {
         const ep = scOverviewTsCache.get(r.lineNumber);
         if (ep === undefined || Number.isNaN(ep)) continue;
-        key = ep;
+        const k = timeKeyByLine.get(r.lineNumber);
+        key = k !== undefined ? k : ep;
       } else {
         const di = getFilteredDisplayIndex(r.lineNumber);
         key = di >= 0 ? di : r.lineNumber;
