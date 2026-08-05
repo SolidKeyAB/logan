@@ -15667,6 +15667,7 @@ async function performSearch(): Promise<void> {
 
   const unsubscribe = window.api.onSearchProgress((data) => {
     updateProgress(data.percent);
+    setButtonProgress(elements.btnSearch, data.percent); // ring fills on the Search button
     elements.progressText.textContent = `Searching... ${data.matchCount} matches`;
   });
 
@@ -15736,6 +15737,7 @@ async function performSearch(): Promise<void> {
     }
   } finally {
     unsubscribe();
+    setButtonProgress(elements.btnSearch, null); // clear the Search button ring
     hideProgress();
   }
 }
@@ -16095,15 +16097,19 @@ async function extractFilterToFile(): Promise<void> {
   const colConfig = state.columnConfig && state.columnConfig.columns.some(c => !c.visible)
     ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible })) }
     : undefined;
-  hideFilterModal();
+  // Keep the modal open with the button's busy ring spinning while it writes,
+  // then close + open the new file on success.
   showToast('Extracting filtered lines…');
-  const result = await window.api.extractFilteredToFile({ includeLineNumbers: true, columnConfig: colConfig });
-  if (result.success && result.filePath) {
-    showToast(`Extracted ${(result.lineCount ?? 0).toLocaleString()} lines → ${result.filePath.split(/[\\/]/).pop()}`);
-    await loadFile(result.filePath);
-  } else {
-    showToast(`Extract failed: ${result.error || 'unknown error'}`);
-  }
+  await withButtonBusy(elements.btnExtractFilter, async () => {
+    const result = await window.api.extractFilteredToFile({ includeLineNumbers: true, columnConfig: colConfig });
+    if (result.success && result.filePath) {
+      hideFilterModal();
+      showToast(`Extracted ${(result.lineCount ?? 0).toLocaleString()} lines → ${result.filePath.split(/[\\/]/).pop()}`);
+      await loadFile(result.filePath);
+    } else {
+      showToast(`Extract failed: ${result.error || 'unknown error'}`);
+    }
+  });
 }
 
 // Returns the position of lineNumber in the current filtered view via binary search.
@@ -19066,6 +19072,33 @@ function renderComparisonReport(report: ComparisonReport): void {
   elements.baselineComparisonResults.innerHTML = html;
 }
 
+// ── Per-button progress ring (styles: .btn-busy / .btn-progress) ──────────────
+// Lightweight, on-the-button feedback for a running action — no blocking overlay.
+// setButtonBusy = indeterminate spinning arc; setButtonProgress = determinate fill
+// by percent; withButtonBusy wraps a promise and clears the ring when it settles.
+function setButtonBusy(btn: HTMLElement | null | undefined, on: boolean): void {
+  if (!btn) return;
+  btn.classList.remove('btn-progress');
+  btn.style.removeProperty('--btn-p');
+  btn.classList.toggle('btn-busy', on);
+}
+function setButtonProgress(btn: HTMLElement | null | undefined, percent: number | null): void {
+  if (!btn) return;
+  if (percent === null) {
+    btn.classList.remove('btn-progress', 'btn-busy');
+    btn.style.removeProperty('--btn-p');
+    return;
+  }
+  btn.classList.remove('btn-busy');
+  btn.classList.add('btn-progress');
+  btn.style.setProperty('--btn-p', String(Math.max(0, Math.min(100, Math.round(percent)))));
+}
+async function withButtonBusy<T>(btn: HTMLElement | null | undefined, fn: () => Promise<T>): Promise<T> {
+  setButtonBusy(btn, true);
+  try { return await fn(); }
+  finally { setButtonBusy(btn, false); }
+}
+
 function showToast(message: string): void {
   // Simple toast via status bar — reuse existing status mechanism
   const statusFile = document.getElementById('status-file');
@@ -21172,7 +21205,7 @@ function init(): void {
 
   // Filter
   elements.btnFilter.addEventListener('click', showFilterModal);
-  elements.btnApplyFilter.addEventListener('click', () => applyFilter());
+  elements.btnApplyFilter.addEventListener('click', () => withButtonBusy(elements.btnApplyFilter, () => applyFilter()));
   elements.btnClearFilter.addEventListener('click', clearFilter);
   elements.btnExtractFilter?.addEventListener('click', () => extractFilterToFile());
   // Badge body click = toggle suspend/resume; × button = permanent clear
