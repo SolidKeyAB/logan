@@ -102,6 +102,22 @@ const IPC = {
   TREND_CORRELATE: 'trend-correlate',
   // Guided triage
   TRIAGE_RECIPE: 'triage-recipe',
+  // Evidence pack (native "📋 Brief")
+  EVIDENCE_PACK: 'evidence-pack',
+  // Usage Monitor (per-feature usage counts, split human vs AI)
+  USAGE_BUMP: 'usage-bump',
+  USAGE_GET: 'usage-get',
+  USAGE_CLEAR: 'usage-clear',
+  // Pattern log ("flight recorder" of pattern applications)
+  PATTERN_LOG_GET: 'pattern-log-get',
+  PATTERN_LOG_CLEAR: 'pattern-log-clear',
+  PATTERN_LOG_ADD: 'pattern-log-add',
+  // Controlled-pattern compiler ("Make pattern… from selection")
+  COMPILE_PATTERN: 'compile-pattern',
+  // Named constants (captured from a selection via "Save as constant…")
+  CONSTANTS_SAVE: 'constants-save',
+  CONSTANTS_GET: 'constants-get',
+  CONSTANTS_DELETE: 'constants-delete',
 } as const;
 
 // API exposed to renderer
@@ -144,7 +160,7 @@ const api = {
     ipcRenderer.invoke('check-search-engine'),
 
   // Search
-  search: (options: { pattern: string; isRegex: boolean; isWildcard: boolean; matchCase: boolean; wholeWord: boolean; columnConfig?: { delimiter: string; columns: Array<{ index: number; visible: boolean }> } }): Promise<{ success: boolean; matches?: any[]; error?: string }> =>
+  search: (options: { pattern: string; isRegex: boolean; isWildcard: boolean; matchCase: boolean; wholeWord: boolean; silent?: boolean; columnConfig?: { delimiter: string; columns: Array<{ index: number; visible: boolean }> } }): Promise<{ success: boolean; matches?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.SEARCH, options),
 
   cancelSearch: (): Promise<{ success: boolean }> =>
@@ -865,6 +881,49 @@ const api = {
   // Guided triage — run a symptom recipe and pin findings
   triageRecipe: (options: { symptom: string; domain?: string; component?: string; sinceLine?: number; field?: string; expect?: string; baselineId?: string; maxFindings?: number; pin?: boolean }): Promise<{ success: boolean; [key: string]: any }> =>
     ipcRenderer.invoke(IPC.TRIAGE_RECIPE, options),
+
+  // Evidence pack — native "📋 Brief" (same briefing the AI's logan_evidence_pack builds)
+  getEvidencePack: (options?: { thresholdSeconds?: number; topFields?: number; topGaps?: number; topComponents?: number; fieldSampleSize?: number; analyzerName?: string; baselineId?: string }): Promise<{ success: boolean; pack?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.EVIDENCE_PACK, options),
+
+  // Usage Monitor (per-feature usage counts, split human vs AI)
+  bumpUsage: (verb: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.USAGE_BUMP, verb),
+  getUsage: (): Promise<{ success: boolean; entries?: any[] }> =>
+    ipcRenderer.invoke(IPC.USAGE_GET),
+  clearUsage: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.USAGE_CLEAR),
+
+  // Pattern log ("flight recorder" of pattern applications)
+  getPatternLog: (): Promise<{ success: boolean; entries?: any[] }> =>
+    ipcRenderer.invoke(IPC.PATTERN_LOG_GET),
+  clearPatternLog: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.PATTERN_LOG_CLEAR),
+  addPatternLog: (entry: any): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.PATTERN_LOG_ADD, entry),
+
+  // Controlled-pattern compiler ("Make pattern… from selection")
+  // regex can't cross IPC — main returns { ok, source, flags, error, warnings }
+  // and the renderer rebuilds `new RegExp(source, flags)` locally for counting.
+  compilePattern: (input: {
+    mode: 'plain' | 'grok' | 'paint' | 'regex';
+    text?: string;
+    sample?: string;
+    spans?: { start: number; end: number; name: string }[];
+    flags?: string;
+    matchCase?: boolean;
+    wholeWord?: boolean;
+    invert?: boolean;
+  }): Promise<{ ok: boolean; source: string; flags: string; error?: string; warnings: string[]; mode: string }> =>
+    ipcRenderer.invoke(IPC.COMPILE_PATTERN, input),
+
+  // Named constants (captured from a selection via "Save as constant…")
+  saveConstant: (name: string, value: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.CONSTANTS_SAVE, name, value),
+  getConstants: (): Promise<{ success: boolean; entries?: any[] }> =>
+    ipcRenderer.invoke(IPC.CONSTANTS_GET),
+  deleteConstant: (name: string): Promise<{ success: boolean; removed?: boolean }> =>
+    ipcRenderer.invoke(IPC.CONSTANTS_DELETE, name),
 
   // Window controls
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),
