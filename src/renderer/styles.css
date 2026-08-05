@@ -7426,6 +7426,14 @@ kbd {
   margin: 4px 0;
 }
 
+/* "default" tag on the top file-handler action in the file context menu */
+.tab-context-hint {
+  margin-left: 6px;
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
 /* === History Panel === */
 
 .history-content {
