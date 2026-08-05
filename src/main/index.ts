@@ -2688,17 +2688,18 @@ ipcMain.handle(IPC.GET_LINES, async (_, startLine: number, count: number) => {
     const endIdx = Math.min(startLine + count, filteredIndices.length);
     const lineNumbers = filteredIndices.slice(startLine, endIdx);
 
-    // Fetch actual lines by their real line numbers
+    // Fetch actual lines by their real line numbers. Async reads so the main
+    // thread stays free for an in-flight search (see getLinesAsync).
     const lines = [];
     for (const lineNum of lineNumbers) {
-      const [line] = handler.getLines(lineNum, 1);
+      const [line] = await handler.getLinesAsync(lineNum, 1);
       if (line) lines.push(line);
     }
     return { success: true, lines };
   }
 
-  // No filter - normal operation
-  const lines = handler.getLines(startLine, count);
+  // No filter - normal operation (async so rendering doesn't starve a search)
+  const lines = await handler.getLinesAsync(startLine, count);
   return { success: true, lines };
 });
 
@@ -2806,13 +2807,13 @@ ipcMain.handle(IPC.GET_LINES_FOR_FILE, async (_, filePath: string, startLine: nu
     const lineNumbers = filteredIndices.slice(startLine, endIdx);
     const lines = [];
     for (const lineNum of lineNumbers) {
-      const [line] = handler.getLines(lineNum, 1);
+      const [line] = await handler.getLinesAsync(lineNum, 1);
       if (line) lines.push(line);
     }
     return { success: true, lines };
   }
 
-  const lines = handler.getLines(startLine, count);
+  const lines = await handler.getLinesAsync(startLine, count);
   return { success: true, lines };
 });
 
