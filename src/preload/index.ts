@@ -80,6 +80,7 @@ const IPC = {
   // Time Align
   GET_LINE_TIMESTAMPS: 'get-line-timestamps',
   READ_FILE_TEXT: 'read-file-text',
+  EXTRACT_FILTERED_TO_FILE: 'extract-filtered-to-file',
   // File-handler registry
   FILE_HANDLERS_RESOLVE: 'file-handlers-resolve',
   FILE_HANDLER_RUN: 'file-handler-run',
@@ -233,6 +234,10 @@ const api = {
   // Save selected lines
   saveSelectedLines: (startLine: number, endLine: number, columnConfig?: { delimiter: string; columns: Array<{ index: number; visible: boolean }> }): Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }> =>
     ipcRenderer.invoke('save-selected-lines', startLine, endLine, columnConfig),
+
+  // Extract the active filter's matching lines into a new file
+  extractFilteredToFile: (opts?: { includeLineNumbers?: boolean; columnConfig?: { delimiter: string; columns: Array<{ index: number; visible: boolean }> } }): Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }> =>
+    ipcRenderer.invoke(IPC.EXTRACT_FILTERED_TO_FILE, opts),
 
   // Save to notes file
   findNotesFiles: (): Promise<{ success: boolean; files?: Array<{ name: string; path: string; created: string }>; logFilePath?: string; error?: string }> =>
