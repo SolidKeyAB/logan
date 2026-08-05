@@ -406,6 +406,9 @@ export const IPC = {
   // Time Align (batch timestamp fetch)
   GET_LINE_TIMESTAMPS: 'get-line-timestamps',
   READ_FILE_TEXT: 'read-file-text',
+  // File-handler registry (plugin actions on a clicked file/folder)
+  FILE_HANDLERS_RESOLVE: 'file-handlers-resolve',
+  FILE_HANDLER_RUN: 'file-handler-run',
   // Trends notebook
   TREND_DISCOVER_FIELDS: 'trend-discover-fields',
   TREND_DISCOVER_AXES: 'trend-discover-axes',
