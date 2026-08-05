@@ -124,6 +124,7 @@ export interface ActivityEntry {
     | 'analysis_run'
     | 'notes_saved'
     | 'lines_saved'
+    | 'filter_extracted'
     | 'files_merged'
     | 'annotation_added';
   details: Record<string, unknown>;
@@ -406,6 +407,8 @@ export const IPC = {
   // Time Align (batch timestamp fetch)
   GET_LINE_TIMESTAMPS: 'get-line-timestamps',
   READ_FILE_TEXT: 'read-file-text',
+  // Extract the active filter's subset into a new file
+  EXTRACT_FILTERED_TO_FILE: 'extract-filtered-to-file',
   // File-handler registry (plugin actions on a clicked file/folder)
   FILE_HANDLERS_RESOLVE: 'file-handlers-resolve',
   FILE_HANDLER_RUN: 'file-handler-run',
