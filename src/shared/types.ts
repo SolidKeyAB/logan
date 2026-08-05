@@ -34,6 +34,7 @@ export interface SearchOptions {
   columnConfig?: SearchColumnConfig;
   filteredLineIndices?: number[]; // When filter is active, only search these lines
   maxMatches?: number; // Cap on matches to collect (default DEFAULT_MAX_MATCHES). Raise for batch/config searches on huge files.
+  silent?: boolean; // Background count only: skip logActivity + SEARCH_PROGRESS + don't touch the shared user search cancel signal (used by the Make-pattern live preview count).
 }
 
 export interface Bookmark {
@@ -414,4 +415,20 @@ export const IPC = {
   TREND_CORRELATE: 'trend-correlate',
   // Guided triage
   TRIAGE_RECIPE: 'triage-recipe',
+  // Evidence pack (native "📋 Brief" — same briefing the AI's logan_evidence_pack builds)
+  EVIDENCE_PACK: 'evidence-pack',
+  // Usage Monitor (per-feature usage counts, split human vs AI)
+  USAGE_BUMP: 'usage-bump',
+  USAGE_GET: 'usage-get',
+  USAGE_CLEAR: 'usage-clear',
+  // Pattern log ("flight recorder" of pattern applications)
+  PATTERN_LOG_GET: 'pattern-log-get',
+  PATTERN_LOG_CLEAR: 'pattern-log-clear',
+  PATTERN_LOG_ADD: 'pattern-log-add',
+  // Controlled-pattern compiler ("Make pattern… from selection")
+  COMPILE_PATTERN: 'compile-pattern',
+  // Named constants (captured from a selection via "Save as constant…")
+  CONSTANTS_SAVE: 'constants-save',
+  CONSTANTS_GET: 'constants-get',
+  CONSTANTS_DELETE: 'constants-delete',
 } as const;

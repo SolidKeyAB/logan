@@ -406,6 +406,7 @@
           <button class="bottom-tab-btn" data-bottom-tab="traceback" data-help="Reverse timeline from any error line.&#10;Right-click a line → Traceback from here.&#10;Shows what led to the error: same component, warnings, escalations.">Traceback</button>
           <button class="bottom-tab-btn" data-bottom-tab="chat" data-help="Chat with an AI agent connected via MCP or HTTP API.&#10;The agent can search, navigate, analyze, and bookmark for you.">Agent Chat</button>
           <button class="bottom-tab-btn" data-bottom-tab="notes" data-help="Freeform notes saved per file as .logan/filename.notes.txt.&#10;Use Save Snippet to append selected log lines to notes.">Notes</button>
+          <button class="bottom-tab-btn" data-bottom-tab="usage" data-help="Usage Monitor — how often each feature/panel/tool is used, split by operator (you vs the AI agent).&#10;Sorted by count so workhorses and dead features are obvious. Local-only; counts, never content. Features never used simply don't appear.">Usage</button>
         </div>
         <div class="bottom-panel-zoom" title="Resize bottom panel content">
           <button id="btn-panel-zoom-out" class="bottom-panel-zoom-btn" title="Zoom out panel content" aria-label="Zoom out">&minus;</button>
@@ -423,10 +424,12 @@
         <div class="bottom-tab-view" data-bottom-tab="analysis">
           <div class="bottom-tab-sub-header">
             <button id="btn-run-analysis" class="secondary-btn small">Run Analysis</button>
+            <button id="btn-brief" class="secondary-btn small" title="One-glance briefing: severity, levels, crashes, top failing components, time gaps, discovered fields — click any row to jump there.">📋 Brief</button>
           </div>
           <div id="analysis-results" class="analysis-content">
             <p class="placeholder">Run analysis to see results</p>
           </div>
+          <div id="brief-results" class="analysis-content"></div>
           <div id="baseline-section" class="baseline-section" style="display: none;">
             <div class="section-divider">Baselines</div>
             <div id="baseline-controls"></div>
@@ -877,6 +880,18 @@
           <textarea id="notes-textarea" class="notes-textarea"
                     placeholder="Type your notes here... (auto-saved)"></textarea>
         </div>
+        <!-- Usage Monitor tab (per-feature usage counts, split human vs AI) -->
+        <div class="bottom-tab-view" data-bottom-tab="usage">
+          <div class="bottom-tab-sub-header usage-toolbar">
+            <button id="btn-usage-refresh" class="secondary-btn small" title="Reload usage stats">↻ Refresh</button>
+            <button id="btn-usage-sort" class="secondary-btn small" title="Toggle sort order">Sort: most used</button>
+            <button id="btn-usage-clear" class="secondary-btn small" title="Reset all usage stats">🗑 Clear stats</button>
+            <span id="usage-status" class="conclusion-status"></span>
+          </div>
+          <div id="usage-content" class="usage-content">
+            <p class="placeholder">Loading usage stats…</p>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1100,6 +1115,44 @@
           <canvas id="dist-chart" class="dist-chart"></canvas>
           <div id="dist-chart-legend" class="dist-chart-legend"></div>
           <div id="dist-stats" class="dist-stats"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Make Pattern Modal ("Make pattern… from selection") -->
+    <div id="makepattern-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-content makepattern-modal-content">
+        <div class="modal-header">
+          <h3>&#10024; Make pattern from selection</h3>
+          <button class="modal-close" data-modal="makepattern-modal" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="makepattern-intro">Click a token to toggle it <b>variable</b> (it can match anything), or drag-select any range in the sample and press <b>Mark variable</b>. Unmarked text stays a literal constant.</p>
+          <div class="makepattern-toolbar">
+            <button id="btn-mp-mark" class="secondary-btn" type="button" disabled>Mark variable</button>
+            <button id="btn-mp-clear" class="secondary-btn" type="button">Clear spans</button>
+            <label class="checkbox-label mp-flag"><input type="checkbox" id="mp-ignorecase"> ignore case</label>
+          </div>
+          <div class="makepattern-sample-label">Sample</div>
+          <div id="mp-sample" class="makepattern-sample" tabindex="0"></div>
+          <div id="mp-spans-list" class="makepattern-spans"></div>
+          <div class="makepattern-preview">
+            <div class="mp-preview-row">
+              <span class="mp-preview-key">Regex</span>
+              <code id="mp-regex-source" class="mp-regex-source">&mdash;</code>
+            </div>
+            <div class="mp-preview-row">
+              <span class="mp-preview-key">Matches</span>
+              <span id="mp-match-count" class="mp-match-count">&mdash;</span>
+            </div>
+            <div id="mp-warnings" class="mp-warnings"></div>
+          </div>
+        </div>
+        <div class="modal-footer makepattern-footer">
+          <span class="makepattern-dest-label">Send to&#58;</span>
+          <button id="btn-mp-search" class="secondary-btn" type="button" disabled>&#128269; Search</button>
+          <button id="btn-mp-filter" class="secondary-btn" type="button" disabled>&#43; Filter (include)</button>
+          <button id="btn-mp-highlight" class="primary-btn" type="button" disabled>&#128396; Highlight</button>
         </div>
       </div>
     </div>
@@ -1553,6 +1606,26 @@
         <div class="modal-footer">
           <button id="btn-ssh-passphrase-cancel" class="secondary-btn">Cancel</button>
           <button id="btn-ssh-passphrase-ok" class="primary-btn">Connect</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Generic text-input prompt (Electron has no window.prompt) -->
+    <div id="input-prompt-modal" class="modal hidden" role="dialog" aria-modal="true">
+      <div class="modal-content" style="width: 380px;">
+        <div class="modal-header">
+          <h3 id="input-prompt-title">Enter value</h3>
+          <button class="modal-close" data-modal="input-prompt-modal" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="filter-group">
+            <label id="input-prompt-label" for="input-prompt-input"></label>
+            <input type="text" id="input-prompt-input" class="modal-input" placeholder="">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-input-prompt-cancel" class="secondary-btn">Cancel</button>
+          <button id="btn-input-prompt-ok" class="primary-btn">OK</button>
         </div>
       </div>
     </div>

@@ -26,9 +26,13 @@ import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, 
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
-import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession, broadcastInterrupt, API_PORT } from './api-server';
+import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession, broadcastInterrupt, API_PORT, buildEvidencePack } from './api-server';
 import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
 import { BaselineStore, buildFingerprint } from './baselineStore';
+import { bumpUsage, getUsage, clearUsage, flushUsage, isAiContext } from './usageStore';
+import { saveConstant, getConstants, deleteConstant, flushConstants } from './constantsStore';
+import { getPatternLog, clearPatternLog, logPattern, PatternLogEntry, flushPatternLog } from './patternLog';
+import { compilePattern, CompileInput } from './compilePattern';
 import { parseTimestampFast } from './timestampParse';
 import { carryForwardTimestamps, buildOriginTags, formatWallClock } from './mergeTimeline';
 import { compileColumnPattern, makeColumnExtractor, ColumnPatternSpec } from './columnPattern';
@@ -70,6 +74,9 @@ let mainWindow: BrowserWindow | null = null;
 let searchSignal: { cancelled: boolean } = { cancelled: false };
 let diffSignal: { cancelled: boolean } = { cancelled: false };
 let currentFilePath: string | null = null;
+// Set in app.whenReady(); reused by top-level IPC handlers that need the same
+// in-process bridge the API server uses (e.g. the native "📋 Brief" evidence pack).
+let apiContext: ApiContext | null = null;
 
 // Built-in agent child process
 import type { ChildProcess } from 'child_process';
@@ -370,6 +377,14 @@ const ACTIVITY_HISTORY_CAP = 500;
 const ACTIVITY_HISTORY_TRIM_TO = 400;
 
 function logActivity(filePath: string, action: ActivityEntry['action'], details: Record<string, unknown>): void {
+  // Count every recorded human action for the Usage Monitor (before the
+  // canWriteLocal gate, so read-only-dir sessions still get counted; usage
+  // stats live in the global ~/.logan/usage.json, not the per-file sidecar).
+  // Suppress the human bump while an AI api-call is in flight — the same ctx
+  // code paths serve the agent, and the AI verb is already counted by the
+  // api-server 'ai' tap. Without this, an AI /api/search would double-count as
+  // human::search, corrupting the human/AI split.
+  if (!isAiContext()) bumpUsage(action, 'human');
   if (!canWriteLocal(filePath)) return;
   try {
     const data = loadLocalFileData(filePath);
@@ -831,7 +846,7 @@ app.whenReady().then(() => {
   }
 
   // Start HTTP API server for MCP integration
-  const apiContext: ApiContext = {
+  apiContext = {
     getMainWindow: () => mainWindow,
     getCurrentFilePath: () => currentFilePath,
     getFileHandler: () => getFileHandler(),
@@ -1632,6 +1647,11 @@ app.on('will-quit', () => {
     agentProcess.kill();
     agentProcess = null;
   }
+  // Flush debounced store writes so an action taken immediately before quit
+  // (e.g. "Save as constant") isn't lost with a pending timer.
+  try { flushUsage(); } catch { /* non-critical */ }
+  try { flushPatternLog(); } catch { /* non-critical */ }
+  try { flushConstants(); } catch { /* non-critical */ }
   stopApiServer();
 });
 
@@ -2687,18 +2707,23 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
   const handler = getFileHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
-  searchSignal = { cancelled: false };
+  // Silent searches (e.g. the Make-pattern live match-count preview) must not
+  // pollute real state/telemetry: use a SEPARATE cancel signal so they don't
+  // cancel the user's in-flight search, skip the progress UI, and skip
+  // logActivity (which would fabricate history + human::search on every keystroke).
+  const silent = !!options.silent;
+  const signal = silent ? { cancelled: false } : (searchSignal = { cancelled: false });
 
   try {
     const matches = await handler.search(
       options,
       (percent, matchCount) => {
-        mainWindow?.webContents.send(IPC.SEARCH_PROGRESS, { percent, matchCount });
+        if (!silent) mainWindow?.webContents.send(IPC.SEARCH_PROGRESS, { percent, matchCount });
       },
-      searchSignal
+      signal
     );
 
-    if (currentFilePath) logActivity(currentFilePath, 'search', { pattern: options.pattern, isRegex: options.isRegex, matchCount: matches.length });
+    if (!silent && currentFilePath) logActivity(currentFilePath, 'search', { pattern: options.pattern, isRegex: options.isRegex, matchCount: matches.length });
 
     // Check if filter is active for current file
     const filteredIndices = getFilteredLines();
@@ -2739,7 +2764,7 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
       if (hiddenCols.length > 0) {
         // Do a full-text search (without column config) to find matches in hidden columns
         const fullOptions = { ...options, columnConfig: undefined };
-        const fullMatches = await handler.search(fullOptions, () => {}, searchSignal);
+        const fullMatches = await handler.search(fullOptions, () => {}, signal);
         // Find matches that are NOT in the visible column results
         const visibleMatchSet = new Set(matches.map(m => `${m.lineNumber}:${m.column}`));
         const hiddenColumnMatches = fullMatches
@@ -4695,6 +4720,26 @@ ipcMain.handle(IPC.TRIAGE_RECIPE, async (_, options: RecipeOptions) => {
   try {
     const result = await runRecipe(selfApiCall, options);
     return { success: true, ...result };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// Evidence pack (native "📋 Brief") — reuses the SAME buildEvidencePack the AI's
+// /api/evidence-pack path uses. Sensible defaults match the MCP tool; redaction
+// is off (this is the local human view).
+ipcMain.handle(IPC.EVIDENCE_PACK, async (_, options) => {
+  if (!apiContext) return { success: false, error: 'Not ready' };
+  try {
+    return await buildEvidencePack(apiContext, {
+      thresholdSeconds: options?.thresholdSeconds ?? 60,
+      topFields: options?.topFields ?? 25,
+      topGaps: options?.topGaps ?? 8,
+      topComponents: options?.topComponents,
+      fieldSampleSize: options?.fieldSampleSize,
+      analyzerName: options?.analyzerName,
+      baselineId: options?.baselineId,
+    });
   } catch (error) {
     return { success: false, error: String(error) };
   }
@@ -7275,6 +7320,87 @@ ipcMain.handle('filter-presets-save', (_, preset: FilterPreset) => {
 ipcMain.handle('filter-presets-delete', (_, id: string) => {
   saveFilterPresets(loadFilterPresets().filter(p => p.id !== id));
   return { success: true };
+});
+
+// ── Usage Monitor IPC ─────────────────────────────────────────────────
+// Renderer records human PANEL OPENS here (fire-and-forget). Human ACTIONS are
+// counted inside logActivity(); AI tool calls are counted in api-server.ts.
+ipcMain.handle(IPC.USAGE_BUMP, (_, verb: string) => {
+  bumpUsage(verb, 'human');
+});
+
+ipcMain.handle(IPC.USAGE_GET, () => {
+  return { success: true, entries: getUsage() };
+});
+
+ipcMain.handle(IPC.USAGE_CLEAR, () => {
+  clearUsage();
+  return { success: true };
+});
+
+// ── Pattern log IPC ("flight recorder" of pattern applications) ────────
+// Read-only exposure of the rolling pattern-application log for the renderer.
+// Entries are recorded server-side (search/filter bricks land later); this
+// brick only surfaces get/clear.
+ipcMain.handle(IPC.PATTERN_LOG_GET, () => {
+  return { success: true, entries: getPatternLog() };
+});
+
+ipcMain.handle(IPC.PATTERN_LOG_CLEAR, () => {
+  clearPatternLog();
+  return { success: true };
+});
+
+// Record a human-driven pattern application (from "Make pattern… from selection"
+// applying to Search / Filter / Highlight). operator is forced to 'human' here —
+// AI applications are logged server-side. Never throws (patternLog swallows).
+ipcMain.handle(IPC.PATTERN_LOG_ADD, (_, entry: Partial<PatternLogEntry> & { at?: number }) => {
+  logPattern({
+    operator: 'human',
+    mode: entry.mode ?? '',
+    source: entry.source ?? '',
+    scope: entry.scope ?? '',
+    scanned: entry.scanned ?? 0,
+    matched: entry.matched ?? 0,
+    hid: entry.hid ?? 0,
+    sampleHits: entry.sampleHits ?? [],
+    ms: entry.ms ?? 0,
+    capped: entry.capped ?? false,
+    valid: entry.valid ?? true,
+    error: entry.error,
+    at: entry.at,
+  });
+  return { success: true };
+});
+
+// ── Controlled-pattern compiler IPC ("Make pattern… from selection") ────
+// The renderer is a non-module script and can't import main modules, so it calls
+// compilePattern() over IPC. A live RegExp can't cross the IPC boundary, so we
+// strip it and return only { ok, source, flags, error, warnings, mode }; the
+// renderer rebuilds `new RegExp(source, flags)` locally for match counting.
+ipcMain.handle(IPC.COMPILE_PATTERN, (_, input: CompileInput) => {
+  try {
+    const r = compilePattern(input);
+    return { ok: r.ok, source: r.source, flags: r.flags, error: r.error, warnings: r.warnings, mode: r.mode };
+  } catch (e) {
+    return { ok: false, source: '', flags: '', error: e instanceof Error ? e.message : String(e), warnings: [], mode: input?.mode ?? 'paint' };
+  }
+});
+
+// ── Named constants IPC ────────────────────────────────────────────────
+// Captured from a selection via the log viewer's "Save as constant…" gesture.
+// Persistence-only this brick; a viewer/consumer brick lands later.
+ipcMain.handle(IPC.CONSTANTS_SAVE, (_, name: string, value: string) => {
+  saveConstant(name, value);
+  return { success: true };
+});
+
+ipcMain.handle(IPC.CONSTANTS_GET, () => {
+  return { success: true, entries: getConstants() };
+});
+
+ipcMain.handle(IPC.CONSTANTS_DELETE, (_, name: string) => {
+  return { success: true, removed: deleteConstant(name) };
 });
 
 
