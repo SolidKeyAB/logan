@@ -4261,6 +4261,9 @@ async function mpRefreshPreview(): Promise<void> {
 }
 
 // Log a human pattern application to the flight recorder (fire-and-forget).
+// Search/filter now record natively at their execution choke point; this remains
+// only for HIGHLIGHT, which is applied lazily at render time and so has no
+// scan/match-count choke point of its own.
 function mpLogApplication(scope: string, matched: number): void {
   try {
     void window.api.addPatternLog({
@@ -4293,7 +4296,8 @@ async function mpApplyToSearch(): Promise<void> {
   if (elements.searchWildcard) elements.searchWildcard.checked = false;
   if (elements.searchCase) elements.searchCase.checked = !makePatternState.lastFlags.includes('i');
   if (elements.searchWholeWord) elements.searchWholeWord.checked = false;
-  mpLogApplication('search', state.searchResults.length);
+  // performSearch() → IPC.SEARCH now records the run in the Pattern Log natively
+  // (with the real match count), so no separate mpLogApplication call is needed.
   mpClose();
   await performSearch();
 }
@@ -4305,7 +4309,8 @@ async function mpApplyToSearch(): Promise<void> {
 // exists, so the old textarea path silently discarded the pattern.
 function mpApplyToFilter(): void {
   if (!makePatternState.lastSource) return;
-  mpLogApplication('filter', 0);
+  // Applying the filter runs through the apply-filter handler, which now records
+  // the run in the Pattern Log natively — no separate mpLogApplication call.
   addToFilterPattern(makePatternState.lastSource, 'include', !makePatternState.lastFlags.includes('i'));
   mpClose();
 }
