@@ -1,0 +1,149 @@
+// Scope resolution — turn a caller-supplied ScopeDescriptor into a concrete
+// ResolvedScope (a contiguous range OR an explicit, sanitized line-set) that the
+// engines already consume. This is the one resolver every scopeable endpoint uses.
+//
+// The heavy/stateful cases (search / selection / active state, and time /
+// component which need a scan) are injected via optional context callbacks so
+// this function stays pure and unit-testable. PR1 ships the cheap cases
+// (all / range / indices / filter); PR2/PR3 wire the injected resolvers.
+
+import { ScopeDescriptor, ResolvedScope } from '../shared/types';
+
+export interface ScopeResolverContext {
+  getTotalLines(): number;                                   // visible line count (0-based indices 0..N-1)
+  getFilteredLines(): number[] | null;                       // active filter's 0-based line-set (null = no filter)
+  getSearchLines?(): number[] | null;                        // current search results' 0-based lines
+  getSelectionLines?(): number[] | null;                     // current viewer selection's 0-based lines
+  getActiveScope?(): ScopeDescriptor | null;                 // whatever the human/app currently has set
+  resolveComponentLines?(name: string): number[];            // scan → 0-based lines belonging to a component
+  resolveTimeWindow?(from: string, to: string): { startLine: number; endLine: number } | null; // scan → range
+}
+
+const EMPTY_RANGE = (label: string): ResolvedScope => ({ kind: 'range', startLine: 0, endLine: -1, count: 0, label });
+
+function rangeAll(total: number): ResolvedScope {
+  if (total <= 0) return EMPTY_RANGE('whole file (empty)');
+  return { kind: 'range', startLine: 0, endLine: total - 1, count: total, label: 'whole file' };
+}
+
+// Whole file, but flag that a more specific scope was asked for and couldn't be honored yet.
+function fallbackAll(total: number, warning: string): ResolvedScope {
+  return { ...rangeAll(total), warning };
+}
+
+function fromIndices(lines: number[], label: string, total: number): ResolvedScope {
+  const clean = Array.from(new Set(
+    (lines || []).filter(n => Number.isInteger(n) && n >= 0 && n < total)
+  )).sort((a, b) => a - b);
+  return { kind: 'indices', lines: clean, count: clean.length, label };
+}
+
+export function resolveScope(
+  ctx: ScopeResolverContext,
+  descriptor?: ScopeDescriptor | null,
+  depth = 0,
+): ResolvedScope {
+  const total = ctx.getTotalLines();
+  const d: ScopeDescriptor = descriptor ?? { type: 'all' };
+
+  switch (d.type) {
+    case 'all':
+      return rangeAll(total);
+
+    case 'range': {
+      if (total <= 0) return EMPTY_RANGE('range (empty)');
+      const lo = Math.max(0, Math.min(d.start, d.end));
+      const hi = Math.min(total - 1, Math.max(d.start, d.end));
+      if (lo > hi) return EMPTY_RANGE('range (empty)');
+      return { kind: 'range', startLine: lo, endLine: hi, count: hi - lo + 1, label: `lines ${lo + 1}–${hi + 1}` };
+    }
+
+    case 'indices':
+      return fromIndices(d.lines, d.label || `${(d.lines || []).length} lines`, total);
+
+    case 'filter': {
+      const f = ctx.getFilteredLines();
+      if (f == null) return fallbackAll(total, 'no active filter — scoped to whole file');
+      return fromIndices(f, `filter (${f.length})`, total);
+    }
+
+    case 'search': {
+      const s = ctx.getSearchLines?.() ?? null;
+      if (s == null) return fallbackAll(total, 'no search results available — scoped to whole file');
+      return fromIndices(s, `search (${s.length})`, total);
+    }
+
+    case 'selection': {
+      const s = ctx.getSelectionLines?.() ?? null;
+      if (s == null) return fallbackAll(total, 'no selection available — scoped to whole file');
+      return fromIndices(s, `selection (${s.length})`, total);
+    }
+
+    case 'active': {
+      if (depth > 3) return fallbackAll(total, 'scope recursion — scoped to whole file');
+      const a = ctx.getActiveScope?.() ?? null;
+      if (a == null || a.type === 'active') return fallbackAll(total, 'no active scope — whole file');
+      return resolveScope(ctx, a, depth + 1);
+    }
+
+    case 'component': {
+      if (!ctx.resolveComponentLines) return fallbackAll(total, 'component scope unavailable — whole file');
+      const lines = ctx.resolveComponentLines(d.name);
+      return fromIndices(lines, `component:${d.name} (${lines.length})`, total);
+    }
+
+    case 'time': {
+      if (!ctx.resolveTimeWindow) return fallbackAll(total, 'time scope unavailable — whole file');
+      const w = ctx.resolveTimeWindow(d.from, d.to);
+      if (!w) return EMPTY_RANGE(`time ${d.from}…${d.to} (no lines)`);
+      if (total <= 0) return EMPTY_RANGE('time (empty)');
+      const lo = Math.max(0, Math.min(w.startLine, w.endLine));
+      const hi = Math.min(total - 1, Math.max(w.startLine, w.endLine));
+      if (lo > hi) return EMPTY_RANGE('time (empty)');
+      return { kind: 'range', startLine: lo, endLine: hi, count: hi - lo + 1, label: `time ${d.from}…${d.to}` };
+    }
+
+    default:
+      return rangeAll(total);
+  }
+}
+
+// A compact, JSON-safe summary of a resolved scope for tool/endpoint responses,
+// so both operators can see "what am I looking through" (count + human label).
+export interface ScopeInfo {
+  kind: 'range' | 'indices';
+  label: string;
+  count: number;
+  startLine?: number; // 1-based, ranges only (for display)
+  endLine?: number;   // 1-based, ranges only
+  warning?: string;
+}
+
+export function scopeInfo(resolved: ResolvedScope): ScopeInfo {
+  if (resolved.kind === 'range') {
+    return {
+      kind: 'range',
+      label: resolved.label,
+      count: resolved.count,
+      startLine: resolved.count > 0 ? resolved.startLine + 1 : undefined,
+      endLine: resolved.count > 0 ? resolved.endLine + 1 : undefined,
+      ...(resolved.warning ? { warning: resolved.warning } : {}),
+    };
+  }
+  return {
+    kind: 'indices',
+    label: resolved.label,
+    count: resolved.count,
+    ...(resolved.warning ? { warning: resolved.warning } : {}),
+  };
+}
+
+// True when a resolved scope covers the entire file (so callers can shortcut to
+// the existing whole-file engine path instead of the subset path).
+export function isWholeFile(resolved: ResolvedScope, total: number): boolean {
+  return resolved.kind === 'range'
+    && !resolved.warning
+    && resolved.startLine === 0
+    && resolved.endLine === total - 1
+    && total > 0;
+}
