@@ -258,16 +258,28 @@ server.tool(
 // Shared `scope` parameter — restrict any scopeable verb to a subset of the log
 // (VERB × SCOPE). Line numbers are 1-based (viewer lines); the API converts to
 // 0-based via toApiScope, exactly like the trend tools' startLine/endLine.
-const scopeSchema = z.object({
+// A leaf scope (everything except compose). compose intersects an array of these.
+const scopeLeafSchema = z.object({
   type: z.enum(['all', 'active', 'filter', 'search', 'selection', 'range', 'time', 'component', 'indices']),
+  start: z.number().int().min(1).optional(),
+  end: z.number().int().min(1).optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
+  name: z.string().optional(),
+  lines: z.array(z.number().int().min(1)).optional(),
+  label: z.string().optional(),
+});
+const scopeSchema = z.object({
+  type: z.enum(['all', 'active', 'filter', 'search', 'selection', 'range', 'time', 'component', 'indices', 'compose']),
   start: z.number().int().min(1).optional().describe('range: 1-based start line'),
   end: z.number().int().min(1).optional().describe('range: 1-based end line'),
   from: z.string().optional().describe('time: window start (ISO/parseable)'),
   to: z.string().optional().describe('time: window end'),
   name: z.string().optional().describe('component: component/channel name'),
   lines: z.array(z.number().int().min(1)).optional().describe('indices: explicit 1-based line-set'),
+  scopes: z.array(scopeLeafSchema).optional().describe('compose: intersect these scopes (e.g. filter ∩ a range)'),
   label: z.string().optional(),
-}).optional().describe('Restrict this tool to a subset of the log. e.g. {"type":"filter"} runs inside the active filter · {"type":"range","start":100,"end":200} a 1-based line range · {"type":"indices","lines":[8047,9252]} an explicit line-set · {"type":"all"} (default) whole file. An empty filter yields "0 lines in scope"; a scope that can\'t be resolved yet falls back to whole-file with a warning.');
+}).optional().describe('Restrict this tool to a subset of the log. e.g. {"type":"filter"} runs inside the active filter · {"type":"range","start":100,"end":200} a 1-based line range · {"type":"indices","lines":[8047,9252]} an explicit line-set · {"type":"compose","scopes":[{"type":"filter"},{"type":"range","start":100,"end":500}]} the INTERSECTION (filter ∩ lines 100–500) · {"type":"all"} (default) whole file. An empty filter yields "0 lines in scope"; a scope that can\'t be resolved yet falls back to whole-file with a warning.');
 
 // === Tool: logan_search ===
 server.tool(
