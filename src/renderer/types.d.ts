@@ -39,7 +39,8 @@ type ScopeDescriptor =
   | { type: 'range'; start: number; end: number }
   | { type: 'time'; from: string; to: string }
   | { type: 'component'; name: string }
-  | { type: 'indices'; lines: number[]; label?: string };
+  | { type: 'indices'; lines: number[]; label?: string }
+  | { type: 'compose'; scopes: ScopeDescriptor[]; label?: string };
 
 interface ScopeInfo {
   kind: 'range' | 'indices';
