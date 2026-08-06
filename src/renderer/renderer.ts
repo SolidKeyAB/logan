@@ -20840,6 +20840,12 @@ function init(): void {
     }
   });
 
+  // Decoded file opened whose marks were pinned by an older decoder version —
+  // bookmarks/annotations/highlights may now point at the wrong line.
+  window.api.onStaleMarksWarning((info) => {
+    showToast(`⚠ Bookmarks/annotations on this file were made with an older decoder (${info.storedBy.adapterId} v${info.storedBy.decoderVersion} → v${info.currentBy.decoderVersion}). Pinned line positions may be off — re-verify them.`);
+  });
+
   // File changed banner buttons
   document.getElementById('btn-reload-file')?.addEventListener('click', () => {
     document.getElementById('file-changed-banner')?.classList.add('hidden');
