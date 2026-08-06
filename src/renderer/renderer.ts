@@ -280,6 +280,7 @@ interface AppState {
   selectedLine: number | null;
   selectionStart: number | null;
   selectionEnd: number | null;
+  activeScope: ScopeInfo | null;
   savedRanges: Array<{ startLine: number; endLine: number }>;
   splitFiles: string[];
   currentSplitIndex: number;
@@ -368,6 +369,7 @@ const state: AppState = {
   selectedLine: null,
   selectionStart: null,
   selectionEnd: null,
+  activeScope: null,
   savedRanges: [],
   splitFiles: [],
   currentSplitIndex: -1,
@@ -824,6 +826,7 @@ const elements = {
   statusLines: document.getElementById('status-lines') as HTMLSpanElement,
   statusFiltered: document.getElementById('status-filtered') as HTMLSpanElement,
   filteredCount: document.getElementById('filtered-count') as HTMLSpanElement,
+  statusScope: document.getElementById('status-scope') as HTMLSpanElement,
   statusCursor: document.getElementById('status-cursor') as HTMLSpanElement,
   statusSize: document.getElementById('status-size') as HTMLSpanElement,
   progressContainer: document.getElementById('progress-container') as HTMLDivElement,
@@ -4452,6 +4455,61 @@ function openMakePatternModal(sample: string): void {
   mpEl<HTMLDivElement>('makepattern-modal')?.classList.remove('hidden');
 }
 
+// ── Active scope ("Use … as scope" + status-bar breadcrumb) ──────────
+// The human sets what the AI's scope:"active" then runs inside — same
+// instrument, two operators. search/selection are pre-resolved to concrete
+// {type:'indices'} here so the main process needs no renderer state.
+async function applyActiveScope(desc: ScopeDescriptor | null): Promise<void> {
+  try {
+    const res = await window.api.setActiveScope(desc);
+    if (res && res.success) {
+      state.activeScope = res.info ?? null;
+      renderScopeBreadcrumb();
+      showToast(desc ? `Scope → ${res.info?.label ?? 'set'}` : 'Scope cleared (whole file)');
+    } else {
+      showToast(res?.error || 'Could not set scope');
+    }
+  } catch {
+    showToast('Could not set scope');
+  }
+}
+
+// Pull the current file's active scope from main (keeps the breadcrumb in sync
+// after a file switch, since scope is stored per-file in the main process).
+async function syncActiveScope(): Promise<void> {
+  try {
+    const res = await window.api.getActiveScope();
+    state.activeScope = (res && res.success && res.info) ? res.info : null;
+  } catch {
+    state.activeScope = null;
+  }
+  renderScopeBreadcrumb();
+}
+
+function renderScopeBreadcrumb(): void {
+  const el = elements.statusScope;
+  if (!el) return;
+  const info = state.activeScope;
+  if (!info) { el.classList.add('hidden'); el.textContent = ''; el.removeAttribute('title'); return; }
+  el.classList.remove('hidden');
+  el.textContent = '';
+  const icon = document.createElement('span');
+  icon.textContent = '◉'; // ◉
+  el.appendChild(icon);
+  const label = document.createElement('span');
+  label.className = 'status-scope-label';
+  label.textContent = `Scope: ${info.label}`;
+  el.appendChild(label);
+  const clear = document.createElement('span');
+  clear.className = 'status-scope-clear';
+  clear.textContent = '×'; // ×
+  clear.addEventListener('click', (e) => { e.stopPropagation(); void applyActiveScope(null); });
+  el.appendChild(clear);
+  el.title = info.warning
+    ? info.warning
+    : `The AI's scope:"active" runs inside: ${info.label} (${info.count.toLocaleString()} lines). × to clear.`;
+}
+
 function handleContextMenu(event: MouseEvent): void {
   event.preventDefault();
 
@@ -4735,6 +4793,39 @@ function handleContextMenu(event: MouseEvent): void {
       }
     });
     menu.appendChild(saveConstItem);
+  }
+
+  // 🎯 Scope verbs — set what the AI's scope:"active" runs inside (VERB × SCOPE).
+  // Only the applicable options appear; each sets the active scope + breadcrumb.
+  {
+    const scopeItems: HTMLDivElement[] = [];
+    if (state.isFiltered && state.filteredLineNumbers && state.filteredLineNumbers.length) {
+      const it = menuItem('\u{1F3AF}', `Use filter as scope (${state.filteredLineNumbers.length.toLocaleString()} lines)`);
+      it.addEventListener('click', () => { menu.remove(); void applyActiveScope({ type: 'filter' }); });
+      scopeItems.push(it);
+    }
+    if (state.searchResults && state.searchResults.length) {
+      const lines = state.searchResults.map(r => r.lineNumber);
+      const it = menuItem('\u{1F3AF}', `Use search results as scope (${lines.length.toLocaleString()} lines)`);
+      it.addEventListener('click', () => { menu.remove(); void applyActiveScope({ type: 'indices', lines, label: `search (${lines.length})` }); });
+      scopeItems.push(it);
+    }
+    if (state.selectionStart !== null && state.selectionEnd !== null) {
+      const a = Math.min(state.selectionStart, state.selectionEnd);
+      const b = Math.max(state.selectionStart, state.selectionEnd);
+      const it = menuItem('\u{1F3AF}', `Use selection as scope (lines ${a + 1}–${b + 1})`);
+      it.addEventListener('click', () => { menu.remove(); void applyActiveScope({ type: 'range', start: a, end: b }); });
+      scopeItems.push(it);
+    }
+    if (state.activeScope) {
+      const it = menuItem('\u{2715}', `Clear scope (${state.activeScope.label})`);
+      it.addEventListener('click', () => { menu.remove(); void applyActiveScope(null); });
+      scopeItems.push(it);
+    }
+    if (scopeItems.length) {
+      menu.appendChild(menuSeparator());
+      for (const it of scopeItems) menu.appendChild(it);
+    }
   }
 
   // 💬 Comment… — prompt for a note and add an annotation at the selected line.
@@ -19254,6 +19345,7 @@ function showToast(message: string): void {
 }
 
 function updateStatusBar(): void {
+  renderScopeBreadcrumb(); // paint the active-scope breadcrumb from state
   if (state.filePath) {
     let fileName = getFileName(state.filePath);
 
@@ -20808,6 +20900,9 @@ function init(): void {
   // Check search engine on startup
   checkSearchEngine();
 
+  // Sync the active-scope breadcrumb with the main process (a file may already be open)
+  void syncActiveScope();
+
   // MCP navigation — allow main process to scroll the viewer to a specific line
   window.api.onNavigateToLine((lineNumber: number) => {
     if (lineNumber >= 0 && lineNumber < getTotalLines()) {
@@ -22098,6 +22193,9 @@ async function switchToTab(tabId: string): Promise<void> {
 
       // Update with fresh info from backend
       state.totalLines = result.info.totalLines;
+
+      // Active scope is stored per-file in main — resync the breadcrumb for this tab
+      void syncActiveScope();
 
       // Load bookmarks and highlights from backend (persisted per-file)
       if (result.bookmarks && Array.isArray(result.bookmarks)) {
