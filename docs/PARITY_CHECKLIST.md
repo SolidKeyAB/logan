@@ -69,4 +69,4 @@ when each is next touched):
   verb and should get an `/api/merge-timeline` + MCP tool.
 - **Esotrace manual / folder decode** — IPC-only; part of the file-handler
   Phase-2 work, which must land behind a written security gate (see
-  `docs/TECH_DEBT.md`) before its verbs are exposed to the AI.
+  `docs/FILE_HANDLER_SECURITY.md`) before its verbs are exposed to the AI.
