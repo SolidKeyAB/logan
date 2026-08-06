@@ -141,6 +141,10 @@ export interface LocalFileData {
   annotations?: Annotation[]; // agent annotations
   videoFilePath?: string;
   videoSyncOffsetMs?: number;
+  // Decode identity of the adapter that produced the normalized text these marks
+  // were pinned against (absent for plain-text passthrough). If a later open
+  // decodes with a different adapter/version, marks may be stale — see index.ts.
+  decodedBy?: { adapterId: string; decoderVersion: number };
 }
 
 // Search config definition

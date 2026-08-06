@@ -136,10 +136,28 @@ function getFilteredLines(): number[] | null {
 // Cache FileHandlers by path to avoid re-indexing when switching tabs
 const fileHandlerCache = new Map<string, FileHandler>();
 
-// Resolved source (normalized path, format capabilities, lineMap, cache cleanup)
-// per opened file. Populated when a file is opened through the adapter layer;
-// kept in lockstep with fileHandlerCache so cleanup() runs on eviction/close.
+// Resolved source (normalized path, format capabilities, decode identity, cache
+// cleanup) per opened file. Populated when a file is opened through the adapter
+// layer; kept in lockstep with fileHandlerCache so cleanup() runs on
+// eviction/close.
 const sourceRegistry = new Map<string, NormalizedSource>();
+
+// The decode identity of a file's current adapter, or undefined for plain-text
+// passthrough (adapterId 'text' / no decode → marks are always 1:1). Stamped into
+// the sidecar as `decodedBy` and compared on open to detect stale marks.
+function decodeIdentity(filePath: string): { adapterId: string; decoderVersion: number } | undefined {
+  const src = sourceRegistry.get(filePath);
+  if (!src || !src.adapterId || src.adapterId === 'text') return undefined;
+  return { adapterId: src.adapterId, decoderVersion: src.decoderVersion ?? 0 };
+}
+
+// True if the sidecar carries any user/agent marks that could be mispositioned by
+// a decoder-layout change.
+function hasPinnedMarks(data: LocalFileData): boolean {
+  return !!((data.bookmarks && data.bookmarks.length) ||
+            (data.annotations && data.annotations.length) ||
+            (data.highlights && data.highlights.length));
+}
 
 function releaseSource(filePath: string): void {
   const source = sourceRegistry.get(filePath);
@@ -2628,10 +2646,27 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
     loadAnnotationsForFile(persistPath);
     pushAnnotationsToRenderer();
 
-    // Update lastOpened in local sidecar
+    // Update lastOpened in local sidecar + stamp/verify the decode identity.
     if (canWriteLocal(persistPath)) {
       const localData = loadLocalFileData(persistPath);
+      const decode = decodeIdentity(persistPath);
+      // Stale-marks check: this decoded file already carries marks stamped by a
+      // DIFFERENT adapter/decoderVersion → a formatting change may have shifted
+      // line numbers, so pinned lines could now point at the wrong place. Warn
+      // once (the stamp is then refreshed below so we don't nag every open).
+      if (decode && localData.decodedBy &&
+          (localData.decodedBy.adapterId !== decode.adapterId ||
+           localData.decodedBy.decoderVersion !== decode.decoderVersion) &&
+          hasPinnedMarks(localData)) {
+        console.warn(`[stale-marks] ${persistPath}: marks pinned by ${localData.decodedBy.adapterId} v${localData.decodedBy.decoderVersion}, now decoded by ${decode.adapterId} v${decode.decoderVersion}`);
+        mainWindow?.webContents.send('stale-marks-warning', {
+          filePath: persistPath,
+          storedBy: localData.decodedBy,
+          currentBy: decode,
+        });
+      }
       localData.lastOpened = new Date().toISOString();
+      if (decode) localData.decodedBy = decode; // (re)stamp with the current decode
       saveLocalFileData(persistPath, localData);
     }
     logActivity(persistPath, 'file_opened', { filePath: persistPath });
