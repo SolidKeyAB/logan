@@ -904,7 +904,7 @@ const api = {
   // Usage Monitor (per-feature usage counts, split human vs AI)
   bumpUsage: (verb: string): Promise<void> =>
     ipcRenderer.invoke(IPC.USAGE_BUMP, verb),
-  getUsage: (): Promise<{ success: boolean; entries?: any[] }> =>
+  getUsage: (): Promise<{ success: boolean; entries?: any[]; features?: any[] }> =>
     ipcRenderer.invoke(IPC.USAGE_GET),
   clearUsage: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke(IPC.USAGE_CLEAR),

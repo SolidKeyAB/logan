@@ -9,6 +9,7 @@ import { type BaselineStore, buildFingerprint } from './baselineStore';
 import { AnalysisResult } from './analyzers/types';
 import { JournalEntry, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps } from './investigationStore';
 import { bumpUsage, enterAiContext, exitAiContext } from './usageStore';
+import { canonicalizeAiVerb } from '../shared/verbRegistry';
 import { synthesizeConclusion, type ConclusionReport, type ConclusionGap, type ConclusionAnnotation, type ConclusionEvent } from './conclusion';
 
 export const API_PORT = 19532;
@@ -693,7 +694,7 @@ export function startApiServer(ctx: ApiContext): void {
           // Usage Monitor: count every real AI tool call (verb = path minus
           // '/api/'). Skip replay + housekeeping paths. Fire-and-forget.
           if (url?.startsWith('/api/') && !USAGE_SKIP_PATHS.has(url)) {
-            bumpUsage(url.replace('/api/', ''), 'ai');
+            bumpUsage(canonicalizeAiVerb(url.replace('/api/', '')), 'ai');
           }
         }
 
