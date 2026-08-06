@@ -37,11 +37,6 @@ export interface AdapterCapabilities {
 }
 
 /** Maps one normalized line back to a position in the original source. */
-export interface LineMapEntry {
-  /** Byte offset (text) or frame index (binary) in the ORIGINAL source. */
-  sourceOffset: number;
-}
-
 /**
  * The product of normalizing a source: UTF-8, newline-delimited text the existing
  * FileHandler can consume unchanged.
@@ -51,11 +46,15 @@ export interface NormalizedSource {
   path: string;
   /** Capabilities of the originating format. */
   capabilities: AdapterCapabilities;
+  /** Id of the adapter that produced this (set by openWithAdapter). 'text' = passthrough. */
+  adapterId?: string;
   /**
-   * Map from normalized line index → original source position. Absent for
-   * passthrough text, where normalized line N is already original line N.
+   * Decoder version of the producing adapter (set by openWithAdapter). Persisted
+   * into the per-file sidecar as `decodedBy` so that if a decoder's output format
+   * changes (version bump), marks pinned against the OLD layout are detectable as
+   * potentially stale instead of silently pointing at the wrong line.
    */
-  lineMap?: LineMapEntry[];
+  decoderVersion?: number;
   /** Release any derived/cache files. No-op (absent) for passthrough text. */
   cleanup?: () => void;
 }
@@ -68,6 +67,14 @@ export interface NormalizedSource {
 export interface SourceAdapter {
   /** Stable id, e.g. 'text', 'jsonl', 'protobuf'. */
   readonly id: string;
+  /**
+   * Version of THIS adapter's normalized output layout. Bump it whenever a change
+   * alters how source records map to normalized lines (added/removed/reordered
+   * lines, changed line formatting). Persisted into the sidecar so marks made
+   * against an older layout can be flagged as potentially stale. Passthrough text
+   * is 0 (no decode, always 1:1).
+   */
+  readonly decoderVersion: number;
   /** Human label for the "Open as…" override menu. */
   readonly label: string;
   readonly capabilities: AdapterCapabilities;
@@ -95,6 +102,7 @@ const TEXT_CAPABILITIES: AdapterCapabilities = {
  */
 export class TextAdapter implements SourceAdapter {
   readonly id = 'text';
+  readonly decoderVersion = 0; // passthrough — normalized line N is original line N
   readonly label = 'Plain text';
   readonly capabilities = TEXT_CAPABILITIES;
 
@@ -155,6 +163,7 @@ function formatJsonRecord(value: unknown): string {
  */
 export class JsonlAdapter implements SourceAdapter {
   readonly id = 'jsonl';
+  readonly decoderVersion = 1;
   readonly label = 'JSON Lines (NDJSON)';
   readonly capabilities: AdapterCapabilities = {
     isBinary: false,
@@ -288,6 +297,7 @@ export function resolveProtoSchema(filePath: string): ProtoSchemaConfig | null {
  */
 export class ProtobufAdapter implements SourceAdapter {
   readonly id = 'protobuf';
+  readonly decoderVersion = 1;
   readonly label = 'Protobuf (length-delimited)';
   readonly capabilities: AdapterCapabilities = {
     isBinary: true,
@@ -378,6 +388,7 @@ export class ProtobufAdapter implements SourceAdapter {
  */
 export class Mf4Adapter implements SourceAdapter {
   readonly id = 'mf4';
+  readonly decoderVersion = 1;
   readonly label = 'ASAM MDF4 (MF4)';
   readonly capabilities: AdapterCapabilities = {
     isBinary: true,
@@ -450,6 +461,7 @@ export class Mf4Adapter implements SourceAdapter {
  */
 export class VtraceAdapter implements SourceAdapter {
   readonly id = 'vtrace';
+  readonly decoderVersion = 1;
   readonly label = 'IVI binary trace (.esotrace)';
   readonly capabilities: AdapterCapabilities = {
     isBinary: true,
@@ -571,8 +583,9 @@ export function pickAdapter(filePath: string, forceId?: string): SourceAdapter {
 /**
  * Open a file through the adapter layer, then hand the normalized text to the
  * existing indexer. For text this is identical to `indexer.open(filePath)` with no
- * added IO. Returns both the FileInfo and the resolved NormalizedSource so callers
- * can track capabilities / lineMap and later release derived files.
+ * added IO. Returns both the FileInfo and the resolved NormalizedSource (stamped
+ * with the producing adapter's id + decoderVersion) so callers can track
+ * capabilities, detect stale marks, and later release derived files.
  */
 export async function openWithAdapter(
   indexer: { open(path: string, onProgress?: (p: number) => void): Promise<FileInfo> },
@@ -594,5 +607,7 @@ export async function openWithAdapter(
 
   const source = await adapter.normalize(filePath, normProgress);
   const info = await indexer.open(source.path, openProgress);
-  return { info, source };
+  // Stamp the producing adapter's identity so callers can persist it and detect
+  // stale marks after a decoder change.
+  return { info, source: { ...source, adapterId: adapter.id, decoderVersion: adapter.decoderVersion } };
 }
