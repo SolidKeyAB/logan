@@ -281,6 +281,7 @@ interface AppState {
   selectionStart: number | null;
   selectionEnd: number | null;
   activeScope: ScopeInfo | null;
+  activeScopeDescriptor: ScopeDescriptor | null;
   savedRanges: Array<{ startLine: number; endLine: number }>;
   splitFiles: string[];
   currentSplitIndex: number;
@@ -370,6 +371,7 @@ const state: AppState = {
   selectionStart: null,
   selectionEnd: null,
   activeScope: null,
+  activeScopeDescriptor: null,
   savedRanges: [],
   splitFiles: [],
   currentSplitIndex: -1,
@@ -4464,6 +4466,7 @@ async function applyActiveScope(desc: ScopeDescriptor | null): Promise<void> {
     const res = await window.api.setActiveScope(desc);
     if (res && res.success) {
       state.activeScope = res.info ?? null;
+      state.activeScopeDescriptor = desc;
       renderScopeBreadcrumb();
       showToast(desc ? `Scope → ${res.info?.label ?? 'set'}` : 'Scope cleared (whole file)');
     } else {
@@ -4474,14 +4477,23 @@ async function applyActiveScope(desc: ScopeDescriptor | null): Promise<void> {
   }
 }
 
+// Intersect the current active scope with another (the "true pipe" — filter ∩
+// search ∩ range …). Appends to an existing compose rather than nesting.
+function composeWith(current: ScopeDescriptor, leaf: ScopeDescriptor): ScopeDescriptor {
+  if (current.type === 'compose') return { type: 'compose', scopes: [...current.scopes, leaf] };
+  return { type: 'compose', scopes: [current, leaf] };
+}
+
 // Pull the current file's active scope from main (keeps the breadcrumb in sync
 // after a file switch, since scope is stored per-file in the main process).
 async function syncActiveScope(): Promise<void> {
   try {
     const res = await window.api.getActiveScope();
     state.activeScope = (res && res.success && res.info) ? res.info : null;
+    state.activeScopeDescriptor = (res && res.success && res.scope) ? res.scope : null;
   } catch {
     state.activeScope = null;
+    state.activeScopeDescriptor = null;
   }
   renderScopeBreadcrumb();
 }
@@ -4796,25 +4808,31 @@ function handleContextMenu(event: MouseEvent): void {
   }
 
   // 🎯 Scope verbs — set what the AI's scope:"active" runs inside (VERB × SCOPE).
-  // Only the applicable options appear; each sets the active scope + breadcrumb.
+  // With a scope already active, these NARROW it (intersect) instead of replacing
+  // — the "true pipe": filter ∩ search ∩ range. Only applicable options appear.
   {
+    const active = state.activeScopeDescriptor;
+    const verb = active ? 'Narrow scope by' : 'Use';
+    const suffix = active ? '' : ' as scope';
+    // Build the descriptor to apply: compose with the current scope when narrowing.
+    const build = (leaf: ScopeDescriptor): ScopeDescriptor => (active ? composeWith(active, leaf) : leaf);
     const scopeItems: HTMLDivElement[] = [];
     if (state.isFiltered && state.filteredLineNumbers && state.filteredLineNumbers.length) {
-      const it = menuItem('\u{1F3AF}', `Use filter as scope (${state.filteredLineNumbers.length.toLocaleString()} lines)`);
-      it.addEventListener('click', () => { menu.remove(); void applyActiveScope({ type: 'filter' }); });
+      const it = menuItem('\u{1F3AF}', `${verb} filter${suffix} (${state.filteredLineNumbers.length.toLocaleString()} lines)`);
+      it.addEventListener('click', () => { menu.remove(); void applyActiveScope(build({ type: 'filter' })); });
       scopeItems.push(it);
     }
     if (state.searchResults && state.searchResults.length) {
       const lines = state.searchResults.map(r => r.lineNumber);
-      const it = menuItem('\u{1F3AF}', `Use search results as scope (${lines.length.toLocaleString()} lines)`);
-      it.addEventListener('click', () => { menu.remove(); void applyActiveScope({ type: 'indices', lines, label: `search (${lines.length})` }); });
+      const it = menuItem('\u{1F3AF}', `${verb} search results${suffix} (${lines.length.toLocaleString()} lines)`);
+      it.addEventListener('click', () => { menu.remove(); void applyActiveScope(build({ type: 'indices', lines, label: `search (${lines.length})` })); });
       scopeItems.push(it);
     }
     if (state.selectionStart !== null && state.selectionEnd !== null) {
       const a = Math.min(state.selectionStart, state.selectionEnd);
       const b = Math.max(state.selectionStart, state.selectionEnd);
-      const it = menuItem('\u{1F3AF}', `Use selection as scope (lines ${a + 1}–${b + 1})`);
-      it.addEventListener('click', () => { menu.remove(); void applyActiveScope({ type: 'range', start: a, end: b }); });
+      const it = menuItem('\u{1F3AF}', `${verb} selection${suffix} (lines ${a + 1}–${b + 1})`);
+      it.addEventListener('click', () => { menu.remove(); void applyActiveScope(build({ type: 'range', start: a, end: b })); });
       scopeItems.push(it);
     }
     if (state.activeScope) {
