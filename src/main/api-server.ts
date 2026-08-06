@@ -10,6 +10,8 @@ import { AnalysisResult } from './analyzers/types';
 import { JournalEntry, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps } from './investigationStore';
 import { bumpUsage, enterAiContext, exitAiContext } from './usageStore';
 import { canonicalizeAiVerb } from '../shared/verbRegistry';
+import { compilePattern, CompileInput } from './compilePattern';
+import { logPattern } from './patternLog';
 import { synthesizeConclusion, type ConclusionReport, type ConclusionGap, type ConclusionAnnotation, type ConclusionEvent } from './conclusion';
 
 export const API_PORT = 19532;
@@ -319,6 +321,7 @@ export interface ApiContext {
   addAnnotation(annotation: Annotation): any;
   removeAnnotation(id: string): any;
   clearAnnotations(): any;
+  extractFilteredToFile(opts?: { includeLineNumbers?: boolean; columnConfig?: any }): Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }>;
 }
 
 let server: http.Server | null = null;
@@ -1180,6 +1183,48 @@ export function startApiServer(ctx: ApiContext): void {
           });
           if (!result.success) return sendError(res, result.error || 'No file open');
           sendJson(res, result);
+          return;
+        }
+
+        // Extract the current active-filter subset to a NEW file — the AI
+        // counterpart of the human "⬇ Extract to file" (EXTRACT_FILTERED_TO_FILE
+        // IPC). Same instrument: both go through ctx.extractFilteredToFile →
+        // runFilteredExtract. Requires an active filter (apply /api/filter first).
+        if (url === '/api/extract') {
+          const result = await ctx.extractFilteredToFile({
+            includeLineNumbers: body.includeLineNumbers,
+            columnConfig: body.columnConfig,
+          });
+          if (!result.success) return sendError(res, result.error || 'Extract failed');
+          sendJson(res, result);
+          return;
+        }
+
+        // Compile a pattern through the SAME controlled-pattern ladder the human
+        // "Make pattern…" flow uses (plain/grok/paint/regex → validated, bounded
+        // regex). Puts the AI on the ladder and records the compile into the
+        // Pattern Log flight recorder, so pattern authoring is visible for BOTH
+        // operators. Returns { ok, source, flags, mode, warnings, error } — the
+        // live RegExp can't cross the boundary, so callers rebuild it locally.
+        if (url === '/api/compile-pattern') {
+          const input: CompileInput = {
+            mode: body.mode,
+            text: body.text,
+            flags: body.flags,
+            matchCase: body.matchCase,
+            wholeWord: body.wholeWord,
+            invert: body.invert,
+            sample: body.sample,
+            spans: body.spans,
+          };
+          const started = Date.now();
+          const r = compilePattern(input);
+          logPattern({
+            operator: 'ai', mode: r.mode, source: r.source, scope: 'compile',
+            scanned: 0, matched: 0, hid: 0, sampleHits: [], ms: Date.now() - started,
+            capped: false, valid: r.ok, error: r.error,
+          });
+          sendJson(res, { success: r.ok, ok: r.ok, source: r.source, flags: r.flags, mode: r.mode, warnings: r.warnings, error: r.error });
           return;
         }
 
