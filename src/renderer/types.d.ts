@@ -756,7 +756,7 @@ interface Api {
 
   // Usage Monitor (per-feature usage counts, split human vs AI)
   bumpUsage: (verb: string) => Promise<void>;
-  getUsage: () => Promise<{ success: boolean; entries?: Array<{ verb: string; operator: 'human' | 'ai'; count: number; firstUsed: string; lastUsed: string; daily: Record<string, number> }> }>;
+  getUsage: () => Promise<{ success: boolean; entries?: Array<{ verb: string; operator: 'human' | 'ai'; count: number; firstUsed: string; lastUsed: string; daily: Record<string, number> }>; features?: Array<{ feature: string; display: string; human: number; ai: number; total: number; lastUsed: string }> }>;
   clearUsage: () => Promise<{ success: boolean }>;
 
   // Pattern log ("flight recorder" of pattern applications)
