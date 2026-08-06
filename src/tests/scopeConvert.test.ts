@@ -36,4 +36,16 @@ describe('toApiScope (1-based viewer → 0-based API)', () => {
     expect(toApiScope({ type: 'time', from: 'a', to: 'b' })).toEqual({ type: 'time', from: 'a', to: 'b' });
     expect(toApiScope({ type: 'component', name: 'Net' })).toEqual({ type: 'component', name: 'Net' });
   });
+
+  it('compose: recurses, converting range/indices inside and passing filter through', () => {
+    expect(toApiScope({
+      type: 'compose',
+      label: 'errors 100-200',
+      scopes: [{ type: 'filter' }, { type: 'range', start: 100, end: 200 }, { type: 'indices', lines: [5] }],
+    })).toEqual({
+      type: 'compose',
+      label: 'errors 100-200',
+      scopes: [{ type: 'filter' }, { type: 'range', start: 99, end: 199 }, { type: 'indices', lines: [4] }],
+    });
+  });
 });
