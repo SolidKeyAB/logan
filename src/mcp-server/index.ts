@@ -1524,6 +1524,62 @@ server.tool(
   }
 );
 
+// Parity tool: materialize the current active filter's matching lines into a NEW
+// small file (the AI counterpart of the human "⬇ Extract to file"). Apply a
+// filter first (logan_filter); then extract to get a compact file you can open
+// and navigate on the fast path, with each line prefixed by its 1-based source
+// line number so it maps back to the original.
+server.tool(
+  'logan_extract',
+  'Extract the current active FILTER subset into a NEW file and return its path + line count. Requires an active filter — call logan_filter first. Each extracted line is prefixed with its 1-based ORIGINAL source line number (unless includeLineNumbers=false), so you can map back. This is the AI counterpart of the human "Extract to file" button (same underlying action).',
+  {
+    includeLineNumbers: z.boolean().default(true).describe('Prefix each extracted line with its 1-based original source line number (tab-separated)'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data in the returned path/metadata'),
+  },
+  async ({ includeLineNumbers, redact }) => {
+    try {
+      const result = await apiCall('POST', '/api/extract', { includeLineNumbers });
+      if (!result.success) {
+        return { content: [{ type: 'text', text: `Error: ${result.error || 'extract failed'}` }], isError: true };
+      }
+      const output = redact ? maybeRedact(result, true) : result;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// Parity tool: compile a pattern through LOGAN's controlled-pattern ladder
+// (plain/grok/paint/regex → a validated, bounded regex) — the same primitive the
+// human "Make pattern…" flow uses. Returns the compiled { source, flags } plus
+// any safety warnings, and records the compile into the Pattern Log flight
+// recorder. Use it to validate a regex before searching/filtering with it.
+server.tool(
+  'logan_compile_pattern',
+  'Compile a pattern through LOGAN\'s controlled-pattern ladder and validate it BEFORE using it in a search/filter. Modes: "plain" (literal text, with matchCase/wholeWord/invert), "grok" (%{NAME} tokens), "paint" (named spans over a sample), "regex" (raw regex, validated + bounded). Returns { ok, source, flags, mode, warnings, error }; the compile is recorded in the Pattern Log. Not redacted by default — the response is your own pattern + validation metadata, not log content.',
+  {
+    mode: z.enum(['plain', 'grok', 'paint', 'regex']).describe('Pattern mode'),
+    text: z.string().optional().describe('Pattern text (plain/grok/regex modes)'),
+    flags: z.string().optional().describe('Regex flags, e.g. "i" or "im"'),
+    matchCase: z.boolean().optional().describe('plain mode: case-sensitive'),
+    wholeWord: z.boolean().optional().describe('plain mode: match whole words only'),
+    invert: z.boolean().optional().describe('Invert the match'),
+    sample: z.string().optional().describe('paint mode: the sample line the spans are painted over'),
+    spans: z.array(z.object({ start: z.number(), end: z.number(), name: z.string() })).optional().describe('paint mode: named spans { start, end, name }'),
+    redact: z.boolean().default(false).describe('Redact the returned pattern metadata (off by default — this is your own pattern)'),
+  },
+  async ({ mode, text, flags, matchCase, wholeWord, invert, sample, spans, redact }) => {
+    try {
+      const result = await apiCall('POST', '/api/compile-pattern', { mode, text, flags, matchCase, wholeWord, invert, sample, spans });
+      const output = redact ? maybeRedact(result, true) : result;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // --- Start server ---
 
 async function main(): Promise<void> {
