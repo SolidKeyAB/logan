@@ -13,6 +13,7 @@ import * as os from 'os';
 import * as http from 'http';
 import { Obfuscator } from './obfuscate';
 import { runRecipe, RECIPE_SYMPTOMS, DOMAIN_IDS } from './recipes';
+import { toApiScope } from '../shared/scopeConvert';
 
 const PORT_FILE = path.join(os.homedir(), '.logan', 'mcp-port');
 
@@ -254,20 +255,35 @@ server.tool(
   }
 );
 
+// Shared `scope` parameter — restrict any scopeable verb to a subset of the log
+// (VERB × SCOPE). Line numbers are 1-based (viewer lines); the API converts to
+// 0-based via toApiScope, exactly like the trend tools' startLine/endLine.
+const scopeSchema = z.object({
+  type: z.enum(['all', 'active', 'filter', 'search', 'selection', 'range', 'time', 'component', 'indices']),
+  start: z.number().int().min(1).optional().describe('range: 1-based start line'),
+  end: z.number().int().min(1).optional().describe('range: 1-based end line'),
+  from: z.string().optional().describe('time: window start (ISO/parseable)'),
+  to: z.string().optional().describe('time: window end'),
+  name: z.string().optional().describe('component: component/channel name'),
+  lines: z.array(z.number().int().min(1)).optional().describe('indices: explicit 1-based line-set'),
+  label: z.string().optional(),
+}).optional().describe('Restrict this tool to a subset of the log. e.g. {"type":"filter"} runs inside the active filter · {"type":"range","start":100,"end":200} a 1-based line range · {"type":"indices","lines":[8047,9252]} an explicit line-set · {"type":"all"} (default) whole file. An empty filter yields "0 lines in scope"; a scope that can\'t be resolved yet falls back to whole-file with a warning.');
+
 // === Tool: logan_search ===
 server.tool(
   'logan_search',
-  'Search for a pattern in the currently open log file. Returns matching lines with line numbers.',
+  'Search for a pattern in the currently open log file. Returns matching lines with line numbers. Pass `scope` to search only within a subset (e.g. within the active filter or a line range).',
   {
     pattern: z.string().describe('Search pattern (text or regex)'),
     isRegex: z.boolean().default(false).describe('Treat pattern as regex'),
     matchCase: z.boolean().default(false).describe('Case-sensitive search'),
     wholeWord: z.boolean().default(false).describe('Match whole words only'),
+    scope: scopeSchema,
     redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
   },
-  async ({ pattern, isRegex, matchCase, wholeWord, redact }) => {
+  async ({ pattern, isRegex, matchCase, wholeWord, scope, redact }) => {
     try {
-      const result = await apiCall('POST', '/api/search', { pattern, isRegex, matchCase, wholeWord });
+      const result = await apiCall('POST', '/api/search', { pattern, isRegex, matchCase, wholeWord, scope: toApiScope(scope as any) });
       const output = redact ? maybeRedact(result, true) : result;
       // Summarize if too many matches
       if (output.success && output.matches && output.matches.length > 200) {
@@ -289,14 +305,15 @@ server.tool(
 // === Tool: logan_analyze ===
 server.tool(
   'logan_analyze',
-  'Run analysis on the currently open log file — detects crashes, counts error/warning levels, identifies top failing components, and suggests filters',
+  'Run analysis on the currently open log file — detects crashes, counts error/warning levels, identifies top failing components, and suggests filters. Pass `scope` to analyze only a subset (e.g. the active filter, a line range, or an explicit line-set).',
   {
     analyzerName: z.string().optional().describe('Specific analyzer name (omit for default)'),
+    scope: scopeSchema,
     redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
   },
-  async ({ analyzerName, redact }) => {
+  async ({ analyzerName, scope, redact }) => {
     try {
-      const result = await apiCall('POST', '/api/analyze', { analyzerName });
+      const result = await apiCall('POST', '/api/analyze', { analyzerName, scope: toApiScope(scope as any) });
       const output = redact ? maybeRedact(result, true) : result;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
     } catch (err: any) {
@@ -416,14 +433,15 @@ server.tool(
 // === Tool: logan_time_gaps ===
 server.tool(
   'logan_time_gaps',
-  'Find gaps in timestamps between consecutive log lines — useful for detecting pauses, hangs, or missing data',
+  'Find gaps in timestamps between consecutive log lines — useful for detecting pauses, hangs, or missing data. Pass `scope` to look for gaps only within a subset (e.g. the active filter or a line range).',
   {
     thresholdSeconds: z.number().min(1).default(30).describe('Minimum gap duration in seconds to report'),
+    scope: scopeSchema,
     redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
   },
-  async ({ thresholdSeconds, redact }) => {
+  async ({ thresholdSeconds, scope, redact }) => {
     try {
-      const result = await apiCall('POST', '/api/time-gaps', { thresholdSeconds });
+      const result = await apiCall('POST', '/api/time-gaps', { thresholdSeconds, scope: toApiScope(scope as any) });
       const output = redact ? maybeRedact(result, true) : result;
       return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
     } catch (err: any) {
@@ -876,12 +894,13 @@ server.tool(
     topFields: z.number().min(1).default(25).describe('Max discovered fields to include (most frequent first)'),
     topGaps: z.number().min(1).default(8).describe('Max time gaps to include (largest first)'),
     baselineId: z.string().optional().describe('If set, include a delta vs. this saved baseline'),
+    scope: scopeSchema,
     redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
   },
-  async ({ thresholdSeconds, fieldSampleSize, topFields, topGaps, baselineId, redact }) => {
+  async ({ thresholdSeconds, fieldSampleSize, topFields, topGaps, baselineId, scope, redact }) => {
     try {
       const result = await apiCall('POST', '/api/evidence-pack', {
-        thresholdSeconds, fieldSampleSize, topFields, topGaps, baselineId,
+        thresholdSeconds, fieldSampleSize, topFields, topGaps, baselineId, scope: toApiScope(scope as any),
       });
       if (!result.success) {
         return { content: [{ type: 'text', text: `Error: ${result.error || 'evidence pack failed'}` }], isError: true };
