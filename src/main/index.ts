@@ -855,6 +855,7 @@ app.whenReady().then(() => {
     getFileHandler: () => getFileHandler(),
     getFileHandlerForPath: (fp: string) => fileHandlerCache.get(fp) || null,
     getFilteredLines: () => getFilteredLines(),
+    extractFilteredToFile: (opts?: { includeLineNumbers?: boolean; columnConfig?: ColumnConfig }) => runFilteredExtract(opts),
     getBookmarks: () => bookmarks,
     getHighlights: () => highlights,
     openFile: async (filePath: string) => {
@@ -4273,7 +4274,11 @@ function streamFilteredExtractToFd(
 // NEW small file and hand back its path (the renderer opens it). This sidesteps
 // virtualizing a filtered view over a huge file — the extract opens on the normal
 // fast path with a small line count (no scroll-height limits, no heavy re-render).
-ipcMain.handle(IPC.EXTRACT_FILTERED_TO_FILE, async (_, opts?: { includeLineNumbers?: boolean; columnConfig?: ColumnConfig }) => {
+// Shared impl behind BOTH the human "⬇ Extract to file" (EXTRACT_FILTERED_TO_FILE
+// IPC) and the AI /api/extract endpoint (via ApiContext.extractFilteredToFile) —
+// same instrument, two operators. Materializes the active-filter subset to a NEW
+// small file and returns its path.
+async function runFilteredExtract(opts?: { includeLineNumbers?: boolean; columnConfig?: ColumnConfig }): Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }> {
   const handler = getFileHandler();
   if (!handler) return { success: false, error: 'No file open' };
   const filtered = getFilteredLines();
@@ -4304,6 +4309,10 @@ ipcMain.handle(IPC.EXTRACT_FILTERED_TO_FILE, async (_, opts?: { includeLineNumbe
   } catch (error) {
     return { success: false, error: String(error) };
   }
+}
+
+ipcMain.handle(IPC.EXTRACT_FILTERED_TO_FILE, async (_, opts?: { includeLineNumbers?: boolean; columnConfig?: ColumnConfig }) => {
+  return runFilteredExtract(opts);
 });
 
 // === Agent Memory ===
