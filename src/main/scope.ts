@@ -86,6 +86,14 @@ export function resolveScope(
       return resolveScope(ctx, a, depth + 1);
     }
 
+    case 'compose': {
+      if (depth > 4) return fallbackAll(total, 'scope nesting too deep — whole file');
+      const parts = (d.scopes || []).map(s => resolveScope(ctx, s, depth + 1));
+      const composed = intersectResolved(parts, total);
+      if (d.label) composed.label = d.label;
+      return composed;
+    }
+
     case 'component': {
       if (!ctx.resolveComponentLines) return fallbackAll(total, 'component scope unavailable — whole file');
       const lines = ctx.resolveComponentLines(d.name);
@@ -106,6 +114,44 @@ export function resolveScope(
     default:
       return rangeAll(total);
   }
+}
+
+// Intersect several resolved scopes into one — the "true pipe" (filter ∩ search
+// ∩ range …). Pure ranges intersect to a range without materializing; once any
+// part is an explicit line-set, we seed from the smallest set and filter it by
+// every other set/range, so we never expand a whole-file range into memory.
+export function intersectResolved(parts: ResolvedScope[], total: number): ResolvedScope {
+  if (parts.length === 0) return rangeAll(total);
+  if (parts.length === 1) return parts[0];
+
+  const warnings = parts.map(p => p.warning).filter((w): w is string => !!w);
+  const warn = warnings.length ? warnings.join('; ') : undefined;
+  const label = parts.map(p => p.label).join(' ∩ ');
+
+  const ranges = parts.filter((p): p is Extract<ResolvedScope, { kind: 'range' }> => p.kind === 'range');
+  const indexSets = parts.filter((p): p is Extract<ResolvedScope, { kind: 'indices' }> => p.kind === 'indices');
+
+  // Any empty part ⇒ empty intersection.
+  if (parts.some(p => p.count === 0)) {
+    return { kind: 'range', startLine: 0, endLine: -1, count: 0, label: `${label} (empty)`, ...(warn ? { warning: warn } : {}) };
+  }
+
+  // Pure ranges → intersection is itself a range [max(starts), min(ends)].
+  if (indexSets.length === 0) {
+    let lo = 0, hi = total - 1;
+    for (const r of ranges) { lo = Math.max(lo, r.startLine); hi = Math.min(hi, r.endLine); }
+    if (total <= 0 || lo > hi) return { kind: 'range', startLine: 0, endLine: -1, count: 0, label: `${label} (empty)`, ...(warn ? { warning: warn } : {}) };
+    return { kind: 'range', startLine: lo, endLine: hi, count: hi - lo + 1, label, ...(warn ? { warning: warn } : {}) };
+  }
+
+  // Seed from the smallest explicit set, then keep only lines present in every
+  // other set and inside every range.
+  const seed = indexSets.reduce((a, b) => (a.lines.length <= b.lines.length ? a : b)).lines;
+  const otherSets = indexSets.map(p => new Set(p.lines));
+  const inAllRanges = (n: number) => ranges.every(r => n >= r.startLine && n <= r.endLine);
+  const lines = seed.filter(n => inAllRanges(n) && otherSets.every(s => s.has(n)));
+
+  return { kind: 'indices', lines, count: lines.length, label, ...(warn ? { warning: warn } : {}) };
 }
 
 // Build a compact, JSON-safe summary of a resolved scope (see ScopeInfo in

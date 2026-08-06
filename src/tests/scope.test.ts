@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { resolveScope, scopeInfo, isWholeFile, ScopeResolverContext } from '../main/scope';
-import { ScopeDescriptor } from '../shared/types';
+import { resolveScope, scopeInfo, isWholeFile, intersectResolved, ScopeResolverContext } from '../main/scope';
+import { ScopeDescriptor, ResolvedScope } from '../shared/types';
 
 function makeCtx(overrides: Partial<ScopeResolverContext> & { total: number }): ScopeResolverContext {
   const { total, ...rest } = overrides;
@@ -127,6 +127,61 @@ describe('scopeInfo', () => {
   it('propagates warnings', () => {
     const info = scopeInfo(resolveScope(makeCtx({ total: 100 }), { type: 'filter' }));
     expect(info.warning).toMatch(/no active filter/);
+  });
+});
+
+describe('intersectResolved (the true pipe)', () => {
+  const range = (s: number, e: number): ResolvedScope => ({ kind: 'range', startLine: s, endLine: e, count: e - s + 1, label: `r${s}-${e}` });
+  const idx = (lines: number[]): ResolvedScope => ({ kind: 'indices', lines, count: lines.length, label: 'idx' });
+
+  it('empty list → whole file', () => {
+    expect(intersectResolved([], 100)).toMatchObject({ kind: 'range', count: 100 });
+  });
+
+  it('single part → identity', () => {
+    expect(intersectResolved([idx([1, 2, 3])], 100)).toMatchObject({ kind: 'indices', lines: [1, 2, 3] });
+  });
+
+  it('pure ranges intersect to a range without materializing', () => {
+    expect(intersectResolved([range(0, 99), range(50, 200)], 100))
+      .toMatchObject({ kind: 'range', startLine: 50, endLine: 99, count: 50 });
+  });
+
+  it('index-set ∩ range keeps only in-range lines', () => {
+    expect(intersectResolved([idx([1, 5, 10, 50, 90]), range(5, 50)], 100))
+      .toMatchObject({ kind: 'indices', lines: [5, 10, 50], count: 3 });
+  });
+
+  it('index-set ∩ index-set keeps the common lines', () => {
+    expect(intersectResolved([idx([1, 2, 3, 4]), idx([3, 4, 5, 6])], 100))
+      .toMatchObject({ kind: 'indices', lines: [3, 4], count: 2 });
+  });
+
+  it('disjoint sets → empty', () => {
+    expect(intersectResolved([idx([1, 2]), idx([3, 4])], 100).count).toBe(0);
+  });
+
+  it('any empty part → empty', () => {
+    expect(intersectResolved([idx([1, 2]), idx([])], 100).count).toBe(0);
+  });
+});
+
+describe('resolveScope compose', () => {
+  it('filter ∩ range via a compose descriptor', () => {
+    const ctx = makeCtx({ total: 100, getFilteredLines: () => [1, 5, 10, 50, 90] });
+    const r = resolveScope(ctx, { type: 'compose', scopes: [{ type: 'filter' }, { type: 'range', start: 5, end: 50 }] });
+    expect(r).toMatchObject({ kind: 'indices', lines: [5, 10, 50], count: 3 });
+  });
+
+  it('honors an explicit compose label', () => {
+    const ctx = makeCtx({ total: 100, getFilteredLines: () => [1, 2, 3] });
+    const r = resolveScope(ctx, { type: 'compose', scopes: [{ type: 'filter' }, { type: 'all' }], label: 'my scope' });
+    expect(r.label).toBe('my scope');
+  });
+
+  it('compose with an empty filter → empty', () => {
+    const ctx = makeCtx({ total: 100, getFilteredLines: () => [] });
+    expect(resolveScope(ctx, { type: 'compose', scopes: [{ type: 'filter' }, { type: 'range', start: 0, end: 9 }] }).count).toBe(0);
   });
 });
 
