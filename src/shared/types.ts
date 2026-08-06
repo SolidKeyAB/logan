@@ -462,7 +462,8 @@ export type ScopeDescriptor =
   | { type: 'range'; start: number; end: number }          // contiguous, 0-based inclusive
   | { type: 'time'; from: string; to: string }             // wall-clock window
   | { type: 'component'; name: string }                    // lines belonging to a component
-  | { type: 'indices'; lines: number[]; label?: string };  // explicit line-set (selection, findings, AI hits)
+  | { type: 'indices'; lines: number[]; label?: string }   // explicit line-set (selection, findings, AI hits)
+  | { type: 'compose'; scopes: ScopeDescriptor[]; label?: string }; // intersect (filter ∩ search ∩ range …)
 
 // The two canonical shapes engines consume. Both seams already exist in the
 // codebase: `range` → trend engine ScanRange; `indices` → EXTRACT index-loop.

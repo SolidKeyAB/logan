@@ -15,6 +15,12 @@ export function toApiScope(scope?: ScopeDescriptor | null): ScopeDescriptor | un
         lines: (scope.lines || []).map(n => Math.max(0, n - 1)),
         ...(scope.label ? { label: scope.label } : {}),
       };
+    case 'compose':
+      return {
+        type: 'compose',
+        scopes: (scope.scopes || []).map(s => toApiScope(s)).filter((s): s is ScopeDescriptor => !!s),
+        ...(scope.label ? { label: scope.label } : {}),
+      };
     default:
       return scope;
   }
