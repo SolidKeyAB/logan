@@ -147,3 +147,44 @@ export function isWholeFile(resolved: ResolvedScope, total: number): boolean {
     && resolved.endLine === total - 1
     && total > 0;
 }
+
+// Minimal line source — FileHandler.getLines(startLine, count) satisfies this
+// (0-based; each entry carries at least the line text).
+export interface ScopeTextReader {
+  getLines(startLine: number, count: number): Array<{ text: string }>;
+}
+
+// Walk every line in a resolved scope IN ORDER, batching reads. `fn` receives the
+// line text and its real 0-based line number (computed from the scope position,
+// so the reader need only return text). Return `false` from `fn` to stop early.
+// A `range` reads in fixed batches; an `indices` set collapses consecutive runs
+// into single batched reads so a dense filter isn't one syscall per line.
+export function forEachScopeLine(
+  reader: ScopeTextReader,
+  resolved: ResolvedScope,
+  fn: (text: string, lineNumber: number) => boolean | void,
+): void {
+  const BATCH = 5000;
+  if (resolved.kind === 'range') {
+    for (let start = resolved.startLine; start <= resolved.endLine; start += BATCH) {
+      const want = Math.min(BATCH, resolved.endLine - start + 1);
+      const lines = reader.getLines(start, want);
+      for (let i = 0; i < lines.length; i++) {
+        if (fn(lines[i].text, start + i) === false) return;
+      }
+    }
+  } else {
+    const arr = resolved.lines;
+    let i = 0;
+    while (i < arr.length) {
+      let runEnd = i;
+      while (runEnd + 1 < arr.length && arr[runEnd + 1] === arr[runEnd] + 1) runEnd++;
+      const runStart = arr[i];
+      const batch = reader.getLines(runStart, runEnd - i + 1);
+      for (let j = 0; j < batch.length; j++) {
+        if (fn(batch[j].text, runStart + j) === false) return;
+      }
+      i = runEnd + 1;
+    }
+  }
+}

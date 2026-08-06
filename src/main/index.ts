@@ -24,7 +24,7 @@ import { getRipgrepPath } from './ripgrepPath';
 import { openWithAdapter, NormalizedSource } from './sourceAdapter';
 import { resolveFileHandlers, runFileHandler, FileHandlerQuery } from './fileHandlers';
 import { extractBodyLine, extractHeaderLine } from '../shared/extractFormat';
-import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation, PatternProperty } from '../shared/types';
+import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation, PatternProperty, ScopeDescriptor, ResolvedScope } from '../shared/types';
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
@@ -41,6 +41,10 @@ import { carryForwardTimestamps, buildOriginTags, formatWallClock } from './merg
 import { compileColumnPattern, makeColumnExtractor, ColumnPatternSpec } from './columnPattern';
 import { parseVtraceToFile } from './vtraceParse';
 import { runTrendJob } from './trendWorkerClient';
+import { resolveScope, isWholeFile, scopeInfo, forEachScopeLine, ScopeResolverContext } from './scope';
+import { analyzeScope } from './analyzers/scopedAnalysis';
+import { detectColumns } from './analyzers/lineClassify';
+import { GapDetector } from './timeGaps';
 // Native-dependent modules — lazy-loaded to prevent SIGSEGV if bindings aren't built
 let SerialHandler: any = null;
 let LogcatHandler: any = null;
@@ -131,6 +135,21 @@ const filterState = new Map<string, number[] | null>();
 function getFilteredLines(): number[] | null {
   if (!currentFilePath) return null;
   return filterState.get(currentFilePath) || null;
+}
+
+// Build the resolver context for the CURRENT file. Only the cheap cases
+// (all/range/indices/filter) are wired today; search/selection/active/time/
+// component fall back to whole-file + warning until later PRs inject them.
+function buildScopeContext(): ScopeResolverContext {
+  const handler = getFileHandler();
+  return {
+    getTotalLines: () => (handler ? handler.getTotalLines() : 0),
+    getFilteredLines: () => getFilteredLines(),
+  };
+}
+
+function resolveCurrentScope(scope?: ScopeDescriptor | null): ResolvedScope {
+  return resolveScope(buildScopeContext(), scope ?? undefined);
 }
 
 // Cache FileHandlers by path to avoid re-indexing when switching tabs
@@ -912,6 +931,7 @@ app.whenReady().then(() => {
     getFileHandler: () => getFileHandler(),
     getFileHandlerForPath: (fp: string) => fileHandlerCache.get(fp) || null,
     getFilteredLines: () => getFilteredLines(),
+    resolveScope: (scope?: ScopeDescriptor) => resolveCurrentScope(scope),
     extractFilteredToFile: (opts?: { includeLineNumbers?: boolean; columnConfig?: ColumnConfig }) => runFilteredExtract(opts),
     getBookmarks: () => bookmarks,
     getHighlights: () => highlights,
@@ -966,20 +986,30 @@ app.whenReady().then(() => {
       const lines = handler.getLines(startLine, count);
       return { success: true, lines };
     },
-    search: async (options: SearchOptions) => {
+    search: async (options: SearchOptions & { scope?: ScopeDescriptor }) => {
       const handler = getFileHandler();
       if (!handler) return { success: false, error: 'No file open' };
       searchSignal = { cancelled: false };
       const t0 = Date.now();
       try {
-        const matches = await handler.search(options, () => {}, searchSignal);
+        let matches = await handler.search(options, () => {}, searchSignal);
+        // Scope = "search within this subset": keep only matches whose line is in scope.
+        let scopeMeta: ReturnType<typeof scopeInfo> | undefined;
+        if (options.scope && options.scope.type !== 'all') {
+          const resolved = resolveCurrentScope(options.scope);
+          scopeMeta = scopeInfo(resolved);
+          const inScope = resolved.kind === 'range'
+            ? (ln: number) => ln >= resolved.startLine && ln <= resolved.endLine
+            : ((set) => (ln: number) => set.has(ln))(new Set(resolved.lines));
+          matches = matches.filter(m => inScope(m.lineNumber));
+        }
         if (currentFilePath) logActivity(currentFilePath, 'search', { pattern: options.pattern, isRegex: options.isRegex, matchCount: matches.length });
         recordPatternApplication({
           scope: 'search', source: options.pattern || '', mode: options.isRegex ? 'regex' : 'plain',
           scanned: handler.getTotalLines(), matched: matches.length,
           sampleHits: matches.slice(0, 5).map(m => m.lineNumber + 1), ms: Date.now() - t0,
         });
-        return { success: true, matches };
+        return { success: true, matches, ...(scopeMeta ? { scope: scopeMeta } : {}) };
       } catch (error) {
         recordPatternApplication({
           scope: 'search', source: options.pattern || '', mode: options.isRegex ? 'regex' : 'plain',
@@ -988,8 +1018,22 @@ app.whenReady().then(() => {
         return { success: false, error: String(error) };
       }
     },
-    analyze: async (analyzerName?: string) => {
+    analyze: async (analyzerName?: string, scope?: ScopeDescriptor) => {
       if (!currentFilePath) return { success: false, error: 'No file open' };
+      const handler = getFileHandler();
+      const resolved = resolveCurrentScope(scope);
+      const total = handler ? handler.getTotalLines() : 0;
+
+      // Scoped analysis: run the shared classifier over only the resolved subset.
+      // Does NOT overwrite the whole-file analysis cache used for baselines.
+      if (handler && scope && scope.type !== 'all' && !isWholeFile(resolved, total)) {
+        const columns = await detectColumns(currentFilePath).catch(() => []);
+        const result = analyzeScope(handler, resolved, columns);
+        logActivity(currentFilePath, 'analysis_run', { analyzerName: 'column-aware-scoped', scope: resolved.label });
+        return { success: true, result, scope: scopeInfo(resolved) };
+      }
+
+      // Whole-file analysis (unchanged) — caches for the baseline step.
       const analyzer = analyzerName ? analyzerRegistry.get(analyzerName) : analyzerRegistry.getDefault();
       if (!analyzer) return { success: false, error: 'Analyzer not found' };
       analyzeSignal = { cancelled: false };
@@ -997,7 +1041,7 @@ app.whenReady().then(() => {
         const result = await analyzer.analyze(currentFilePath, {}, () => {}, analyzeSignal);
         logActivity(currentFilePath, 'analysis_run', { analyzerName: analyzer.name });
         cacheAnalysisResult(currentFilePath, result);
-        return { success: true, result };
+        return { success: true, result, scope: scopeInfo(resolved) };
       } catch (error) {
         return { success: false, error: String(error) };
       }
@@ -1162,44 +1206,21 @@ app.whenReady().then(() => {
       if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
       timeGapSignal = { cancelled: false };
       try {
-        const totalLines = handler.getTotalLines();
-        const gaps: any[] = [];
-        const MAX_GAPS = 500;
         const thresholdSeconds = options.thresholdSeconds || 30;
-        let prevTimestamp: Date | null = null;
-        let prevTimestampStr: string | null = null;
-        let prevLineNumber = 0;
-        const batchSize = 5000;
-        for (let start = 0; start < totalLines && gaps.length < MAX_GAPS; start += batchSize) {
-          if (timeGapSignal.cancelled) return { success: false, error: 'Cancelled' };
-          const count = Math.min(batchSize, totalLines - start);
-          const lines = handler.getLines(start, count);
-          for (const line of lines) {
-            const parsed = parseTimestampFast(line.text);
-            if (parsed && prevTimestamp) {
-              const diffSeconds = (parsed.date.getTime() - prevTimestamp.getTime()) / 1000;
-              if (Math.abs(diffSeconds) >= thresholdSeconds) {
-                gaps.push({
-                  lineNumber: line.lineNumber,
-                  prevLineNumber,
-                  gapSeconds: Math.abs(diffSeconds),
-                  prevTimestamp: prevTimestampStr || '',
-                  currTimestamp: parsed.str,
-                  linePreview: line.text.length > 80 ? line.text.substring(0, 80) + '...' : line.text,
-                });
-                if (gaps.length >= MAX_GAPS) break;
-              }
-            }
-            if (parsed) {
-              prevTimestamp = parsed.date;
-              prevTimestampStr = parsed.str;
-              prevLineNumber = line.lineNumber;
-            }
-          }
-        }
-        gaps.sort((a, b) => b.gapSeconds - a.gapSeconds);
-        logActivity(currentFilePath, 'time_gap_analysis', { threshold: thresholdSeconds, gapsFound: gaps.length });
-        return { success: true, gaps, totalLines };
+        const resolved = resolveCurrentScope(options.scope);
+        const detector = new GapDetector(thresholdSeconds, 500);
+        let cancelled = false;
+        let scanned = 0;
+        forEachScopeLine(handler, resolved, (text, lineNumber) => {
+          if (timeGapSignal.cancelled) { cancelled = true; return false; }
+          detector.feed(lineNumber, text);
+          scanned++;
+          return !detector.full; // stop once we've hit the gap cap
+        });
+        if (cancelled) return { success: false, error: 'Cancelled' };
+        const gaps = detector.sorted();
+        logActivity(currentFilePath, 'time_gap_analysis', { threshold: thresholdSeconds, gapsFound: gaps.length, scope: resolved.label });
+        return { success: true, gaps, totalLines: scanned, scope: scopeInfo(resolved) };
       } catch (error) {
         return { success: false, error: String(error) };
       }
