@@ -631,6 +631,7 @@ interface Api {
   onOpenFileFromCli: (callback: (filePath: string) => void) => () => void;
   onOpenFolderFromCli: (callback: (folderPath: string) => void) => () => void;
   onFileChanged: (callback: (filePath: string) => void) => () => void;
+  onStaleMarksWarning: (callback: (info: { filePath: string; storedBy: { adapterId: string; decoderVersion: number }; currentBy: { adapterId: string; decoderVersion: number } }) => void) => () => void;
   reloadFile: (filePath: string) => Promise<{ success: boolean }>;
 
   // Agent chat
