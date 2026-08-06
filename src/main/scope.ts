@@ -7,7 +7,7 @@
 // this function stays pure and unit-testable. PR1 ships the cheap cases
 // (all / range / indices / filter); PR2/PR3 wire the injected resolvers.
 
-import { ScopeDescriptor, ResolvedScope } from '../shared/types';
+import { ScopeDescriptor, ResolvedScope, ScopeInfo } from '../shared/types';
 
 export interface ScopeResolverContext {
   getTotalLines(): number;                                   // visible line count (0-based indices 0..N-1)
@@ -108,17 +108,8 @@ export function resolveScope(
   }
 }
 
-// A compact, JSON-safe summary of a resolved scope for tool/endpoint responses,
-// so both operators can see "what am I looking through" (count + human label).
-export interface ScopeInfo {
-  kind: 'range' | 'indices';
-  label: string;
-  count: number;
-  startLine?: number; // 1-based, ranges only (for display)
-  endLine?: number;   // 1-based, ranges only
-  warning?: string;
-}
-
+// Build a compact, JSON-safe summary of a resolved scope (see ScopeInfo in
+// shared/types) so both operators can see "what am I looking through".
 export function scopeInfo(resolved: ResolvedScope): ScopeInfo {
   if (resolved.kind === 'range') {
     return {
