@@ -656,6 +656,14 @@ const api = {
     return () => ipcRenderer.removeListener('file-changed', handler);
   },
 
+  // Fired when an opened decoded file's marks were pinned by a different decoder
+  // version than the current one (line positions may be stale).
+  onStaleMarksWarning: (callback: (info: { filePath: string; storedBy: { adapterId: string; decoderVersion: number }; currentBy: { adapterId: string; decoderVersion: number } }) => void): (() => void) => {
+    const handler = (_: any, info: any) => callback(info);
+    ipcRenderer.on('stale-marks-warning', handler);
+    return () => ipcRenderer.removeListener('stale-marks-warning', handler);
+  },
+
   reloadFile: (filePath: string): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('reload-file', filePath),
 

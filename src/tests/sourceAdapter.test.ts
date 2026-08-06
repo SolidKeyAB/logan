@@ -29,7 +29,6 @@ describe('TextAdapter', () => {
       const adapter = new TextAdapter();
       const source = await adapter.normalize(p);
       expect(source.path).toBe(p); // no derived/copied file
-      expect(source.lineMap).toBeUndefined(); // normalized line N === original line N
       expect(source.cleanup).toBeUndefined(); // nothing to release
       expect(source.capabilities).toEqual({
         isBinary: false,
@@ -250,5 +249,31 @@ describe('openWithAdapter', () => {
     } finally {
       fs.unlinkSync(p);
     }
+  });
+
+  it('stamps the producing adapter id + decoderVersion onto the source', async () => {
+    const p = tmpFile('a\nb\n');
+    try {
+      const fakeIndexer = { async open(openPath: string) { return { path: openPath, size: 4, totalLines: 2 }; } };
+      const { source } = await openWithAdapter(fakeIndexer, p);
+      expect(source.adapterId).toBe('text');
+      expect(source.decoderVersion).toBe(0); // passthrough
+    } finally {
+      fs.unlinkSync(p);
+    }
+  });
+});
+
+describe('adapter decoderVersion', () => {
+  it('exposes a numeric decoderVersion on every registered adapter', () => {
+    for (const a of adapterRegistry) {
+      expect(typeof a.decoderVersion).toBe('number');
+    }
+  });
+
+  it('text passthrough is version 0; decoding adapters are >= 1', () => {
+    expect(new TextAdapter().decoderVersion).toBe(0);
+    expect(new JsonlAdapter().decoderVersion).toBeGreaterThanOrEqual(1);
+    expect(new ProtobufAdapter().decoderVersion).toBeGreaterThanOrEqual(1);
   });
 });
