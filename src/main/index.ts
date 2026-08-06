@@ -407,6 +407,45 @@ function logActivity(filePath: string, action: ActivityEntry['action'], details:
   }
 }
 
+// Record a real pattern APPLICATION (a search or filter run) into the Pattern Log
+// flight recorder. operator is derived from the AI-context flag — the same gate
+// logActivity() uses — so BOTH the human IPC paths and the AI /api paths feed the
+// log through one choke point (before this, only "Make pattern…" fed it, so
+// normal + all AI pattern use was invisible). Skips empty patterns (e.g. a
+// level-only filter has nothing to record). Never throws (patternLog swallows).
+function recordPatternApplication(a: {
+  scope: string; source: string; mode?: string;
+  scanned: number; matched: number; hid?: number;
+  sampleHits?: number[]; ms?: number; capped?: boolean;
+  valid?: boolean; error?: string;
+}): void {
+  if (!a.source) return;
+  logPattern({
+    operator: isAiContext() ? 'ai' : 'human',
+    mode: a.mode ?? 'plain',
+    source: a.source,
+    scope: a.scope,
+    scanned: a.scanned,
+    matched: a.matched,
+    hid: a.hid ?? 0,
+    sampleHits: a.sampleHits ?? [],
+    ms: a.ms ?? 0,
+    capped: a.capped ?? false,
+    valid: a.valid ?? true,
+    error: a.error,
+  });
+}
+
+// Collapse a filter config's include patterns into a single loggable source
+// string. Level-only filters (no include patterns) return '' → not recorded.
+function summarizeFilterPatterns(config: any): string {
+  const inc = Array.isArray(config?.includePatterns) ? config.includePatterns : [];
+  return inc
+    .map((p: any) => (typeof p === 'string' ? p : (p && p.pattern) || ''))
+    .filter(Boolean)
+    .join(' | ');
+}
+
 // Bookmarks storage structure: { "/path/to/file.log": [bookmark1, bookmark2, ...] }
 interface BookmarksStore {
   [filePath: string]: Bookmark[];
@@ -913,11 +952,21 @@ app.whenReady().then(() => {
       const handler = getFileHandler();
       if (!handler) return { success: false, error: 'No file open' };
       searchSignal = { cancelled: false };
+      const t0 = Date.now();
       try {
         const matches = await handler.search(options, () => {}, searchSignal);
         if (currentFilePath) logActivity(currentFilePath, 'search', { pattern: options.pattern, isRegex: options.isRegex, matchCount: matches.length });
+        recordPatternApplication({
+          scope: 'search', source: options.pattern || '', mode: options.isRegex ? 'regex' : 'plain',
+          scanned: handler.getTotalLines(), matched: matches.length,
+          sampleHits: matches.slice(0, 5).map(m => m.lineNumber + 1), ms: Date.now() - t0,
+        });
         return { success: true, matches };
       } catch (error) {
+        recordPatternApplication({
+          scope: 'search', source: options.pattern || '', mode: options.isRegex ? 'regex' : 'plain',
+          scanned: 0, matched: 0, ms: Date.now() - t0, valid: false, error: String(error),
+        });
         return { success: false, error: String(error) };
       }
     },
@@ -939,6 +988,7 @@ app.whenReady().then(() => {
       const handler = getFileHandler();
       if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
       filterSignal = { cancelled: false };
+      const tFilter0 = Date.now();
       try {
         const totalLines = handler.getTotalLines();
         const matchingLines: Set<number> = new Set();
@@ -974,6 +1024,11 @@ app.whenReady().then(() => {
         const sortedLines = Array.from(matchingLines).sort((a, b) => a - b);
         filterState.set(currentFilePath, sortedLines);
         logActivity(currentFilePath, 'filter_applied', { levels: config.levels, filteredLines: sortedLines.length });
+        recordPatternApplication({
+          scope: 'filter', source: summarizeFilterPatterns(config), mode: 'regex',
+          scanned: totalLines, matched: sortedLines.length,
+          hid: Math.max(0, totalLines - sortedLines.length), ms: Date.now() - tFilter0,
+        });
         return { success: true, stats: { filteredLines: sortedLines.length } };
       } catch (error) {
         return { success: false, error: String(error) };
@@ -2719,6 +2774,7 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
   const silent = !!options.silent;
   const signal = silent ? { cancelled: false } : (searchSignal = { cancelled: false });
 
+  const t0 = Date.now();
   try {
     const matches = await handler.search(
       options,
@@ -2729,6 +2785,13 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
     );
 
     if (!silent && currentFilePath) logActivity(currentFilePath, 'search', { pattern: options.pattern, isRegex: options.isRegex, matchCount: matches.length });
+    // Feed the Pattern Log flight recorder for real (non-silent) searches. Silent
+    // searches are the Make-pattern live preview and must not flood the log.
+    if (!silent) recordPatternApplication({
+      scope: 'search', source: options.pattern || '', mode: options.isRegex ? 'regex' : 'plain',
+      scanned: handler.getTotalLines(), matched: matches.length,
+      sampleHits: matches.slice(0, 5).map(m => m.lineNumber + 1), ms: Date.now() - t0,
+    });
 
     // Check if filter is active for current file
     const filteredIndices = getFilteredLines();
@@ -2788,6 +2851,12 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
 
     return { success: true, matches };
   } catch (error) {
+    // Record the FAILED pattern too — a silently-broken regex is exactly what the
+    // flight recorder exists to surface.
+    if (!silent) recordPatternApplication({
+      scope: 'search', source: options.pattern || '', mode: options.isRegex ? 'regex' : 'plain',
+      scanned: 0, matched: 0, ms: Date.now() - t0, valid: false, error: String(error),
+    });
     return { success: false, error: String(error) };
   }
 });
@@ -4993,6 +5062,7 @@ ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
   }
 
   filterSignal = { cancelled: false };
+  const tFilterH0 = Date.now();
 
   try {
     const totalLines = handler.getTotalLines();
@@ -5148,6 +5218,11 @@ ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
     filterState.set(currentFilePath, sortedLines);
 
     logActivity(currentFilePath, 'filter_applied', { levels: config.levels, filteredLines: sortedLines.length });
+    recordPatternApplication({
+      scope: 'filter', source: summarizeFilterPatterns(config), mode: 'regex',
+      scanned: totalLines, matched: sortedLines.length,
+      hid: Math.max(0, totalLines - sortedLines.length), ms: Date.now() - tFilterH0,
+    });
 
     return {
       success: true,
