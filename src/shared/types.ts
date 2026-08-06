@@ -442,3 +442,26 @@ export const IPC = {
   CONSTANTS_GET: 'constants-get',
   CONSTANTS_DELETE: 'constants-delete',
 } as const;
+
+// ─── Scope — run any verb over any subset of the log (VERB × SCOPE) ───
+// A ScopeDescriptor is what a caller supplies; resolveScope() turns it into a
+// ResolvedScope (a concrete contiguous range OR an explicit line-set) that the
+// engines already know how to consume (trend ScanRange / the EXTRACT index-loop).
+// Line numbers here are 0-based internal indices (the HTTP/main convention). The
+// MCP layer converts from 1-based viewer lines, exactly like trend start/endLine.
+export type ScopeDescriptor =
+  | { type: 'all' }                                        // whole file (default — today's behaviour)
+  | { type: 'active' }                                     // whatever the human/app currently has set
+  | { type: 'filter' }                                     // the active filter's line-set
+  | { type: 'search' }                                     // current search results' line-set
+  | { type: 'selection' }                                  // the current viewer selection
+  | { type: 'range'; start: number; end: number }          // contiguous, 0-based inclusive
+  | { type: 'time'; from: string; to: string }             // wall-clock window
+  | { type: 'component'; name: string }                    // lines belonging to a component
+  | { type: 'indices'; lines: number[]; label?: string };  // explicit line-set (selection, findings, AI hits)
+
+// The two canonical shapes engines consume. Both seams already exist in the
+// codebase: `range` → trend engine ScanRange; `indices` → EXTRACT index-loop.
+export type ResolvedScope =
+  | { kind: 'range'; startLine: number; endLine: number; label: string; count: number; warning?: string }
+  | { kind: 'indices'; lines: number[]; label: string; count: number; warning?: string };
