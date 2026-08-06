@@ -441,6 +441,10 @@ export const IPC = {
   CONSTANTS_SAVE: 'constants-save',
   CONSTANTS_GET: 'constants-get',
   CONSTANTS_DELETE: 'constants-delete',
+  // Active scope ("Use filter/search/selection as scope" — human sets what the
+  // AI's scope:"active" then runs inside; same instrument, two operators)
+  SET_ACTIVE_SCOPE: 'set-active-scope',
+  GET_ACTIVE_SCOPE: 'get-active-scope',
 } as const;
 
 // ─── Scope — run any verb over any subset of the log (VERB × SCOPE) ───
@@ -465,3 +469,14 @@ export type ScopeDescriptor =
 export type ResolvedScope =
   | { kind: 'range'; startLine: number; endLine: number; label: string; count: number; warning?: string }
   | { kind: 'indices'; lines: number[]; label: string; count: number; warning?: string };
+
+// A compact, JSON-safe summary of a resolved scope for tool/endpoint/IPC
+// responses — "what am I looking through" (human label + line count).
+export interface ScopeInfo {
+  kind: 'range' | 'indices';
+  label: string;
+  count: number;
+  startLine?: number; // 1-based, ranges only (for display)
+  endLine?: number;   // 1-based, ranges only
+  warning?: string;
+}
