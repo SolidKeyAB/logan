@@ -32,6 +32,7 @@ import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessa
 import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
 import { BaselineStore, buildFingerprint } from './baselineStore';
 import { bumpUsage, getUsage, clearUsage, flushUsage, isAiContext } from './usageStore';
+import { canonicalizeHumanVerb, aggregateUsageByFeature } from '../shared/verbRegistry';
 import { saveConstant, getConstants, deleteConstant, flushConstants } from './constantsStore';
 import { getPatternLog, clearPatternLog, logPattern, PatternLogEntry, flushPatternLog } from './patternLog';
 import { compilePattern, CompileInput } from './compilePattern';
@@ -386,7 +387,7 @@ function logActivity(filePath: string, action: ActivityEntry['action'], details:
   // code paths serve the agent, and the AI verb is already counted by the
   // api-server 'ai' tap. Without this, an AI /api/search would double-count as
   // human::search, corrupting the human/AI split.
-  if (!isAiContext()) bumpUsage(action, 'human');
+  if (!isAiContext()) bumpUsage(canonicalizeHumanVerb(action), 'human');
   if (!canWriteLocal(filePath)) return;
   try {
     const data = loadLocalFileData(filePath);
@@ -7408,7 +7409,10 @@ ipcMain.handle(IPC.USAGE_BUMP, (_, verb: string) => {
 });
 
 ipcMain.handle(IPC.USAGE_GET, () => {
-  return { success: true, entries: getUsage() };
+  const entries = getUsage();
+  // Join human + AI counts per canonical feature so the panel's operator split
+  // lines up (raw human action names and AI api slugs otherwise never match).
+  return { success: true, entries, features: aggregateUsageByFeature(entries) };
 });
 
 ipcMain.handle(IPC.USAGE_CLEAR, () => {

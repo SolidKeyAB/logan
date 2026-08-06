@@ -6199,43 +6199,69 @@ function trackUsage(verb: string): void {
 // 'asc' = least-used first (surfaces near-dead features).
 let usageSortAsc = false;
 
+// One row per canonical FEATURE, with the human and AI counts joined onto the
+// same line. The main process (aggregateUsageByFeature over the canonical verb
+// registry) does the joining; the renderer is a pure consumer of `features`.
+interface UsageFeatureRow { feature: string; display: string; human: number; ai: number; total: number; lastUsed: string }
+
 async function renderUsagePanel(): Promise<void> {
   const content = document.getElementById('usage-content');
   const status = document.getElementById('usage-status');
   if (!content) return;
   content.innerHTML = '<p class="placeholder">Loading usage stats…</p>';
-  let entries: Array<{ verb: string; operator: 'human' | 'ai'; count: number; firstUsed: string; lastUsed: string; daily: Record<string, number> }> = [];
+  let features: UsageFeatureRow[] = [];
   try {
     const res = await window.api.getUsage();
-    if (res.success && res.entries) entries = res.entries;
+    if (res.success) {
+      if (Array.isArray(res.features)) {
+        features = res.features as UsageFeatureRow[];
+      } else if (Array.isArray(res.entries)) {
+        // Fallback (older main without server-side aggregation): group raw
+        // entries by verb, keeping the operator split. No registry mapping.
+        const byVerb = new Map<string, UsageFeatureRow>();
+        for (const e of res.entries) {
+          const verb = typeof e?.verb === 'string' ? e.verb : '(unknown)';
+          const count = typeof e?.count === 'number' ? e.count : 0;
+          const lastUsed = typeof e?.lastUsed === 'string' ? e.lastUsed : '';
+          let row = byVerb.get(verb);
+          if (!row) { row = { feature: verb, display: verb, human: 0, ai: 0, total: 0, lastUsed: '' }; byVerb.set(verb, row); }
+          if (e?.operator === 'ai') row.ai += count; else row.human += count;
+          row.total += count;
+          if (lastUsed > row.lastUsed) row.lastUsed = lastUsed;
+        }
+        features = [...byVerb.values()].sort((a, b) => b.total - a.total || b.lastUsed.localeCompare(a.lastUsed));
+      }
+    }
   } catch { /* non-critical */ }
 
-  if (entries.length === 0) {
-    content.innerHTML = '<p class="placeholder">No usage recorded yet. As you (and the AI agent) use panels, searches, filters and other features, counts appear here — sorted so your workhorses and dead features stand out. <em>Features never used simply won\'t appear.</em> Local-only; counts, never content.</p>';
+  if (features.length === 0) {
+    content.innerHTML = '<p class="placeholder">No usage recorded yet. As you (and the AI agent) use panels, searches, filters and other features, counts appear here — sorted so your workhorses and dead features stand out. Each row joins the <strong>human</strong> and <strong>AI</strong> count for that feature. <em>Features never used simply won\'t appear.</em> Local-only; counts, never content.</p>';
     if (status) status.textContent = '';
     return;
   }
 
-  // getUsage() already sorts by count desc; reverse for ascending view.
-  const rows = usageSortAsc ? [...entries].reverse() : entries;
-  const total = entries.reduce((sum, e) => sum + (typeof e.count === 'number' ? e.count : 0), 0);
-  const maxCount = Math.max(...entries.map(e => typeof e.count === 'number' ? e.count : 0), 1);
+  // Main already sorts by total desc; reverse for the ascending view.
+  const rows = usageSortAsc ? [...features].reverse() : features;
+  const total = features.reduce((sum, f) => sum + (typeof f.total === 'number' ? f.total : 0), 0);
+  const maxCount = Math.max(...features.map(f => typeof f.total === 'number' ? f.total : 0), 1);
 
-  const rowsHtml = rows.map(e => {
-    // Defensive defaults: a hand-edited ~/.logan/usage.json entry missing a field
-    // must not throw (main also sanitizes, but this keeps the panel alive too).
-    const count = typeof e.count === 'number' ? e.count : 0;
-    const verb = typeof e.verb === 'string' ? e.verb : '(unknown)';
-    const lastUsed = typeof e.lastUsed === 'string' ? e.lastUsed : '';
-    const pct = Math.round((count / maxCount) * 100);
-    const badgeClass = e.operator === 'ai' ? 'usage-badge-ai' : 'usage-badge-human';
-    const badgeLabel = e.operator === 'ai' ? 'AI' : 'HUMAN';
+  const rowsHtml = rows.map(f => {
+    // Defensive defaults: a hand-edited ~/.logan/usage.json entry missing a
+    // field must not throw (main also sanitizes, but this keeps the panel alive).
+    const human = typeof f.human === 'number' ? f.human : 0;
+    const ai = typeof f.ai === 'number' ? f.ai : 0;
+    const totalCount = typeof f.total === 'number' ? f.total : human + ai;
+    const display = typeof f.display === 'string' ? f.display : (typeof f.feature === 'string' ? f.feature : '(unknown)');
+    const lastUsed = typeof f.lastUsed === 'string' ? f.lastUsed : '';
+    const pct = Math.round((totalCount / maxCount) * 100);
     return `
       <div class="usage-row">
         <div class="usage-row-main">
-          <span class="usage-badge ${badgeClass}">${badgeLabel}</span>
-          <span class="usage-verb" title="${escapeHtml(verb)}">${escapeHtml(verb)}</span>
-          <span class="usage-count">${count.toLocaleString()}</span>
+          <span class="usage-verb" title="${escapeHtml(display)}">${escapeHtml(display)}</span>
+          <span class="usage-count">
+            <span class="usage-badge usage-badge-human" title="Human uses">${human.toLocaleString()}</span>
+            <span class="usage-badge usage-badge-ai" title="AI uses">${ai.toLocaleString()}</span>
+          </span>
         </div>
         <div class="usage-bar"><div class="usage-bar-fill" style="width:${pct}%"></div></div>
         <div class="usage-meta">last used ${escapeHtml(lastUsed ? getRelativeTime(lastUsed) : 'unknown')}</div>
@@ -6243,7 +6269,7 @@ async function renderUsagePanel(): Promise<void> {
   }).join('');
 
   content.innerHTML = `<div class="usage-list">${rowsHtml}</div>`;
-  if (status) status.textContent = `${entries.length} features · ${total.toLocaleString()} total uses`;
+  if (status) status.textContent = `${features.length} features · ${total.toLocaleString()} total uses`;
 }
 
 function openBottomTab(tabId: string): void {
