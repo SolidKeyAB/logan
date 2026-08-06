@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { ScopeDescriptor, ScopeInfo } from '../shared/types';
 
 // IPC Channel constants (must match main process)
 const IPC = {
@@ -122,6 +123,9 @@ const IPC = {
   CONSTANTS_SAVE: 'constants-save',
   CONSTANTS_GET: 'constants-get',
   CONSTANTS_DELETE: 'constants-delete',
+  // Active scope ("Use … as scope" / breadcrumb)
+  SET_ACTIVE_SCOPE: 'set-active-scope',
+  GET_ACTIVE_SCOPE: 'get-active-scope',
 } as const;
 
 // API exposed to renderer
@@ -947,6 +951,12 @@ const api = {
     ipcRenderer.invoke(IPC.CONSTANTS_GET),
   deleteConstant: (name: string): Promise<{ success: boolean; removed?: boolean }> =>
     ipcRenderer.invoke(IPC.CONSTANTS_DELETE, name),
+
+  // Active scope ("Use filter/search/selection as scope" + breadcrumb)
+  setActiveScope: (desc: ScopeDescriptor | null): Promise<{ success: boolean; scope?: ScopeDescriptor | null; info?: ScopeInfo | null; error?: string }> =>
+    ipcRenderer.invoke(IPC.SET_ACTIVE_SCOPE, desc),
+  getActiveScope: (): Promise<{ success: boolean; scope?: ScopeDescriptor | null; info?: ScopeInfo | null }> =>
+    ipcRenderer.invoke(IPC.GET_ACTIVE_SCOPE),
 
   // Window controls
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),

@@ -28,6 +28,28 @@ interface SearchResult {
   lineText: string;
 }
 
+// Scope — run any verb over a subset (mirrors src/shared/types.ts; the renderer
+// is a script so shared types are duplicated here). Line numbers 0-based.
+type ScopeDescriptor =
+  | { type: 'all' }
+  | { type: 'active' }
+  | { type: 'filter' }
+  | { type: 'search' }
+  | { type: 'selection' }
+  | { type: 'range'; start: number; end: number }
+  | { type: 'time'; from: string; to: string }
+  | { type: 'component'; name: string }
+  | { type: 'indices'; lines: number[]; label?: string };
+
+interface ScopeInfo {
+  kind: 'range' | 'indices';
+  label: string;
+  count: number;
+  startLine?: number; // 1-based, ranges only
+  endLine?: number;
+  warning?: string;
+}
+
 interface SearchColumnConfig {
   delimiter: string;
   columns: Array<{ index: number; visible: boolean }>;
@@ -772,6 +794,10 @@ interface Api {
   saveConstant: (name: string, value: string) => Promise<{ success: boolean; error?: string }>;
   getConstants: () => Promise<{ success: boolean; entries?: Array<{ name: string; value: string; createdAt: string; updatedAt: string }> }>;
   deleteConstant: (name: string) => Promise<{ success: boolean; removed?: boolean }>;
+
+  // Active scope ("Use filter/search/selection as scope" + breadcrumb)
+  setActiveScope: (desc: ScopeDescriptor | null) => Promise<{ success: boolean; scope?: ScopeDescriptor | null; info?: ScopeInfo | null; error?: string }>;
+  getActiveScope: () => Promise<{ success: boolean; scope?: ScopeDescriptor | null; info?: ScopeInfo | null }>;
 
   // Window controls
   windowMinimize: () => Promise<void>;

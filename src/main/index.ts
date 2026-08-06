@@ -137,14 +137,34 @@ function getFilteredLines(): number[] | null {
   return filterState.get(currentFilePath) || null;
 }
 
-// Build the resolver context for the CURRENT file. Only the cheap cases
-// (all/range/indices/filter) are wired today; search/selection/active/time/
-// component fall back to whole-file + warning until later PRs inject them.
+// Active scope — what the human/app currently has set, mirroring filterState.
+// The human sets it via "Use … as scope" (renderer → SET_ACTIVE_SCOPE); the AI's
+// scope:"active" then resolves against the very same cell (same instrument, two
+// operators). The renderer pre-resolves search/selection to concrete `indices`
+// descriptors at set-time, so main needs no renderer state to resolve them.
+const activeScope = new Map<string, ScopeDescriptor | null>();
+
+function getActiveScope(): ScopeDescriptor | null {
+  if (!currentFilePath) return null;
+  return activeScope.get(currentFilePath) ?? null;
+}
+
+function setActiveScope(desc: ScopeDescriptor | null): void {
+  if (!currentFilePath) return;
+  if (desc && desc.type !== 'all') activeScope.set(currentFilePath, desc);
+  else activeScope.delete(currentFilePath);
+}
+
+// Build the resolver context for the CURRENT file. all/range/indices/filter are
+// resolved directly; active reads the cell above; the renderer supplies concrete
+// indices for search/selection, so those arrive as {type:'indices'}. time/
+// component still fall back to whole-file + warning (need a scan — later PR).
 function buildScopeContext(): ScopeResolverContext {
   const handler = getFileHandler();
   return {
     getTotalLines: () => (handler ? handler.getTotalLines() : 0),
     getFilteredLines: () => getFilteredLines(),
+    getActiveScope: () => getActiveScope(),
   };
 }
 
@@ -7623,6 +7643,19 @@ ipcMain.handle(IPC.CONSTANTS_GET, () => {
 
 ipcMain.handle(IPC.CONSTANTS_DELETE, (_, name: string) => {
   return { success: true, removed: deleteConstant(name) };
+});
+
+// ── Active scope IPC ("Use … as scope" / breadcrumb) ─────────────────
+ipcMain.handle(IPC.SET_ACTIVE_SCOPE, (_, desc: ScopeDescriptor | null) => {
+  if (!currentFilePath) return { success: false, error: 'No file open' };
+  setActiveScope(desc);
+  const resolved = resolveCurrentScope(getActiveScope());
+  return { success: true, scope: getActiveScope(), info: scopeInfo(resolved) };
+});
+
+ipcMain.handle(IPC.GET_ACTIVE_SCOPE, () => {
+  const scope = getActiveScope();
+  return { success: true, scope, info: scope ? scopeInfo(resolveCurrentScope(scope)) : null };
 });
 
 
