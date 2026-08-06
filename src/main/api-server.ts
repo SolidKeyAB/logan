@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { BrowserWindow } from 'electron';
-import { SearchOptions, Bookmark, Highlight, Annotation } from '../shared/types';
+import { SearchOptions, Bookmark, Highlight, Annotation, ScopeDescriptor, ResolvedScope } from '../shared/types';
 import { FileHandler } from './fileHandler';
 import { type BaselineStore, buildFingerprint } from './baselineStore';
 import { AnalysisResult } from './analyzers/types';
@@ -284,12 +284,13 @@ export interface ApiContext {
   getFileHandler(): FileHandler | null;
   getFileHandlerForPath(filePath: string): FileHandler | null;
   getFilteredLines(): number[] | null;
+  resolveScope(scope?: ScopeDescriptor): ResolvedScope;
   getBookmarks(): Map<string, Bookmark>;
   getHighlights(): Map<string, Highlight>;
   openFile(filePath: string): Promise<any>;
   getLines(startLine: number, count: number): any;
-  search(options: SearchOptions): Promise<any>;
-  analyze(analyzerName?: string): Promise<any>;
+  search(options: SearchOptions & { scope?: ScopeDescriptor }): Promise<any>;
+  analyze(analyzerName?: string, scope?: ScopeDescriptor): Promise<any>;
   applyFilter(config: any): Promise<any>;
   clearFilter(): any;
   addBookmark(bookmark: Bookmark): any;
@@ -365,6 +366,7 @@ export interface EvidencePackOptions {
   fieldSampleSize?: number;
   analyzerName?: string;
   baselineId?: string;
+  scope?: ScopeDescriptor;
 }
 
 // Compose a compact "evidence pack" — one briefing (severity, level counts,
@@ -387,8 +389,20 @@ export async function buildEvidencePack(
   const topGapsN = opts.topGaps ?? 8;
   const topComponentsN = opts.topComponents ?? 10;
 
+  // Resolve the scope once — every sub-step below runs inside it. Field discovery
+  // consumes a range, so an index-set scope is approximated by its bounding range.
+  const scoped = !!opts.scope && opts.scope.type !== 'all';
+  const resolvedScope: ResolvedScope = ctx.resolveScope(opts.scope);
+  const fieldBounds = scoped
+    ? (resolvedScope.kind === 'range'
+        ? { startLine: resolvedScope.startLine, endLine: resolvedScope.endLine }
+        : (resolvedScope.lines.length
+            ? { startLine: resolvedScope.lines[0], endLine: resolvedScope.lines[resolvedScope.lines.length - 1] }
+            : { startLine: 0, endLine: -1 }))
+    : {};
+
   // 1. Analysis (also caches getAnalysisResult() for the baseline step)
-  const analysisResp = await ctx.analyze(opts.analyzerName);
+  const analysisResp = await ctx.analyze(opts.analyzerName, opts.scope);
   const aresult = analysisResp?.success ? analysisResp.result : (analysisResp?.result ?? null);
   const levelCounts = aresult?.levelCounts || {};
   const totalAnalyzed = aresult?.stats?.analyzedLines || totalLines;
@@ -401,7 +415,7 @@ export async function buildEvidencePack(
   const filterSuggestions = aresult?.insights?.filterSuggestions || [];
 
   // 2. Time gaps (top N, with 1-based viewerLine)
-  const gapsResp = await ctx.detectTimeGaps({ thresholdSeconds });
+  const gapsResp = await ctx.detectTimeGaps({ thresholdSeconds, scope: opts.scope });
   const allGaps = gapsResp?.success ? (gapsResp.gaps || []) : [];
   const timeGaps = allGaps.slice(0, topGapsN).map((g: any) => ({
     viewerLine: g.lineNumber + 1,
@@ -412,7 +426,7 @@ export async function buildEvidencePack(
   }));
 
   // 3. Discovered fields (the agent's vocabulary) — top N by frequency
-  const fieldsResp = await ctx.trendDiscoverFields({ sampleSize: opts.fieldSampleSize });
+  const fieldsResp = await ctx.trendDiscoverFields({ sampleSize: opts.fieldSampleSize, ...fieldBounds });
   const allFields = fieldsResp?.success ? (fieldsResp.fields || []) : [];
   const fields = allFields.slice(0, topFieldsN).map((f: any) => ({
     name: f.name, type: f.type, occurrences: f.occurrences,
@@ -453,6 +467,7 @@ export async function buildEvidencePack(
 
   const pack = {
     file: { path: filePath, totalLines, timeRange: aresult?.timeRange || null },
+    scope: analysisResp?.scope,
     severity,
     summary: parts.join(', '),
     levels: {
@@ -784,7 +799,7 @@ export function startApiServer(ctx: ApiContext): void {
             matchCase: body.matchCase ?? false,
             wholeWord: body.wholeWord ?? false,
           };
-          const result = await ctx.search(options);
+          const result = await ctx.search({ ...options, scope: body.scope });
           // Add viewerLine (1-based) to each match so agents use the right number
           if (result?.matches) {
             result.matches = result.matches.map((m: any) => ({ ...m, viewerLine: m.lineNumber + 1 }));
@@ -794,7 +809,7 @@ export function startApiServer(ctx: ApiContext): void {
         }
 
         if (url === '/api/analyze') {
-          const result = await ctx.analyze(body.analyzerName);
+          const result = await ctx.analyze(body.analyzerName, body.scope);
           sendJson(res, result);
           return;
         }
@@ -964,6 +979,7 @@ export function startApiServer(ctx: ApiContext): void {
         if (url === '/api/time-gaps') {
           const result = await ctx.detectTimeGaps({
             thresholdSeconds: body.thresholdSeconds ?? 30,
+            scope: body.scope,
           });
           sendJson(res, result);
           return;
@@ -1180,6 +1196,7 @@ export function startApiServer(ctx: ApiContext): void {
             fieldSampleSize: body.fieldSampleSize,
             analyzerName: body.analyzerName,
             baselineId: body.baselineId,
+            scope: body.scope,
           });
           if (!result.success) return sendError(res, result.error || 'No file open');
           sendJson(res, result);
