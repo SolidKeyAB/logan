@@ -172,6 +172,26 @@ export interface PatternProperty {
   createdAt: number;
 }
 
+// A reusable, named search/regex pattern in the Pattern Library. Written once,
+// then applied through different "lenses" (highlight / filter / columns / trend
+// / pin) and saved at one of three scopes. PR-1 only uses scope 'global'; the
+// scope + defaultLens fields are carried from day one so later PRs don't need a
+// data migration.
+export interface SavedPattern {
+  id: string;
+  label: string;
+  regex: string;          // the pattern source (literal text unless isRegex)
+  isRegex?: boolean;
+  matchCase?: boolean;
+  wholeWord?: boolean;
+  color?: string;
+  defaultLens?: string;   // 'highlight' | 'filter' | 'columns' | 'trend' | 'flips' | 'pin' (later PRs)
+  scope: 'global' | 'ticket' | 'file';
+  ticketId?: string;      // set when scope === 'ticket' (later PRs)
+  createdAt: number;
+  updatedAt: number;
+}
+
 // Serial port types
 export interface SerialPortConfig {
   path: string;
@@ -349,6 +369,10 @@ export const IPC = {
   PATTERN_PROP_LIST: 'pattern-prop-list',
   PATTERN_PROP_SAVE: 'pattern-prop-save',
   PATTERN_PROP_DELETE: 'pattern-prop-delete',
+  // Pattern Library (reusable named search/regex patterns, global store for PR-1)
+  PATTERN_LIB_LIST: 'pattern-lib-list',
+  PATTERN_LIB_SAVE: 'pattern-lib-save',
+  PATTERN_LIB_DELETE: 'pattern-lib-delete',
   SEARCH_CONFIG_SESSION_LIST: 'search-config-session-list',
   SEARCH_CONFIG_SESSION_SAVE: 'search-config-session-save',
   SEARCH_CONFIG_SESSION_DELETE: 'search-config-session-delete',

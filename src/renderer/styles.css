@@ -8783,6 +8783,60 @@ kbd {
 }
 .trend-prop-del:hover { color: var(--danger-color, #ff6b6b); }
 
+/* Pattern Library chip bar (reusable saved patterns, under the search-config chips) */
+.pattern-lib-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 2px 2px;
+}
+.pattern-lib-chips.hidden { display: none; }
+.pattern-lib-lead {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-right: 2px;
+}
+.pattern-lib-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--accent-color, #5b8def);
+  border-radius: 12px;
+  padding: 1px 4px 1px 8px;
+  font-size: 11px;
+}
+.pattern-lib-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.pattern-lib-chip-name {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.pattern-lib-chip-name:hover { color: var(--accent-hover, #7aa7ff); }
+.pattern-lib-chip-del {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pattern-lib-chip-del:hover { color: var(--danger-color, #ff6b6b); }
+
 .trends-content {
   flex: 1;
   min-height: 0;
