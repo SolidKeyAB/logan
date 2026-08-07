@@ -7198,7 +7198,7 @@ function createTrendCellShell(type: string, label: string, byAgent = false): Tre
 // `override` lets a saved pattern-property chart itself without going through the
 // toolbar inputs: it carries an explicit label (field), regex and flags. When
 // omitted, values are read from the field/pattern inputs as before.
-async function addTrendCell(override?: { field?: string; pattern?: string; patternFlags?: string }): Promise<void> {
+async function addTrendCell(override?: { field?: string; pattern?: string; patternFlags?: string; type?: string }): Promise<void> {
   if (!state.filePath) { showToast('Open a log file first'); return; }
   const fieldSelect = trendEl<HTMLInputElement>('trends-field-select');
   const cellTypeSel = trendEl<HTMLSelectElement>('trends-cell-type');
@@ -7210,7 +7210,9 @@ async function addTrendCell(override?: { field?: string; pattern?: string; patte
   const patternFlags = override?.patternFlags || '';
   if (!field && !pattern) { showToast('Pick a field or enter a regex pattern'); return; }
 
-  const type = cellTypeSel?.value || 'series';
+  // An explicit override (e.g. a Pattern Library lens) forces the cell kind;
+  // otherwise fall back to the panel's type selector.
+  const type = override?.type || cellTypeSel?.value || 'series';
   // The engine's makeExtractor prefers `pattern` when present, so for pattern-only
   // mode we still pass a non-empty `field` (the label) to satisfy the IPC guard.
   const fieldArg = field || pattern;
@@ -11777,16 +11779,21 @@ async function loadSavedPatterns(): Promise<void> {
   renderPatternLibChips();
 }
 
-// ─── Pattern Library lenses (PR-2): apply one saved pattern many ways ────────
-// The same saved pattern can be applied as a live search config, a highlight,
-// or a filter. The chosen lens is remembered as the pattern's defaultLens so a
-// plain chip-click re-applies it; the ▾ menu switches it. (Columns/trend/pin
-// lenses arrive in later PRs — Pattern Columns has no "apply" path yet.)
-type PatternLens = 'search' | 'highlight' | 'filter';
+// ─── Pattern Library lenses (PR-2/PR-3): apply one saved pattern many ways ────
+// The same saved pattern can be applied as a live search config, a highlight, a
+// filter, a Trends cell (occurrences/captured value over time), a flips list
+// (every change of the matched value), or pinned on the overview timeline. The
+// chosen lens is remembered as the pattern's defaultLens so a plain chip-click
+// re-applies it; the ▾ menu switches it. (Columns lens is still deferred —
+// Pattern Columns has no "apply" path yet.)
+type PatternLens = 'search' | 'highlight' | 'filter' | 'trend' | 'flips' | 'pin';
 const PATTERN_LENSES: Array<{ id: PatternLens; label: string }> = [
   { id: 'search', label: 'Search config' },
   { id: 'highlight', label: 'Highlight' },
   { id: 'filter', label: 'Filter' },
+  { id: 'trend', label: 'Trend' },
+  { id: 'flips', label: 'Flips' },
+  { id: 'pin', label: 'Pin on timeline' },
 ];
 function patternLensLabel(id: string): string {
   return (PATTERN_LENSES.find(l => l.id === id) || PATTERN_LENSES[0]).label;
@@ -11911,8 +11918,9 @@ async function deleteSavedPattern(id: string): Promise<void> {
 
 // Apply a saved pattern as a live search config on the current file. If an
 // identical config already exists we don't mint a duplicate — we just (re-)enable
-// it, so repeated clicks are safe.
-async function applySavedPattern(p: SavedPatternDef): Promise<void> {
+// it, so repeated clicks are safe. Returns the id of the config that was applied
+// or re-enabled (null if nothing was applied), so the pin lens can target its lane.
+async function applySavedPattern(p: SavedPatternDef): Promise<string | null> {
   const same = (c: SearchConfigDef) =>
     c.pattern === p.regex && !!c.isRegex === !!p.isRegex &&
     !!c.matchCase === !!p.matchCase && !!c.wholeWord === !!p.wholeWord;
@@ -11920,7 +11928,7 @@ async function applySavedPattern(p: SavedPatternDef): Promise<void> {
   if (dup) {
     if (!dup.enabled) { await toggleSearchConfigEnabled(dup.id); }
     else { showToast(`Already a search config: ${p.label}`); }
-    return;
+    return dup.id;
   }
   const config: SearchConfigDef = {
     id: `sc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -11938,6 +11946,7 @@ async function applySavedPattern(p: SavedPatternDef): Promise<void> {
   await window.api.searchConfigSave(config);
   await runSearchConfigsBatch(true);
   showToast(`Applied pattern: ${p.label}`);
+  return config.id;
 }
 
 // Apply a saved pattern as a highlight (paints matches in place — non-destructive,
@@ -11973,12 +11982,43 @@ async function applyPatternAsFilter(p: SavedPatternDef): Promise<void> {
   showToast(`Filtered to: ${p.label}`);
 }
 
+// Apply a saved pattern as a Trends cell. `kind:'series'` charts the pattern's
+// occurrences over time (or its captured value, if the regex has a group);
+// `kind:'transitions'` lists every flip of that value. Opens the Trends panel so
+// the cell is visible. The trend engine treats the pattern as a regex, so a
+// literal pattern is regex-escaped and the case flag maps to the 'i' regex flag
+// (whole-word has no equivalent in the value extractor and is ignored).
+async function applyPatternAsTrend(p: SavedPatternDef, kind: 'series' | 'transitions'): Promise<void> {
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  const pattern = p.isRegex ? p.regex : escapeRegex(p.regex);
+  const patternFlags = p.matchCase ? '' : 'i';
+  openBottomTab('trends');
+  await addTrendCell({ field: p.label, pattern, patternFlags, type: kind });
+}
+
+// Apply a saved pattern as a search config, then PIN its lane on the overview
+// timeline strip: its first & last match get bright carets and the header shows
+// first · last · span · count (identical to clicking that lane in the strip).
+// Needs ≥1 match — a zero-match pattern has no lane to pin, so we say so.
+async function applyPatternAsPin(p: SavedPatternDef): Promise<void> {
+  const configId = await applySavedPattern(p);
+  if (!configId) return;
+  scOvPinnedConfigId = configId;
+  await renderSearchConfigsOverview();
+  if ((state.searchConfigResults.get(configId)?.length || 0) === 0) {
+    showToast(`No matches to pin for "${p.label}"`);
+  }
+}
+
 // Route a saved pattern through the chosen lens, then remember that lens as the
 // pattern's default so a plain chip-click re-applies it next time.
 async function applyPatternAsLens(p: SavedPatternDef, lens: PatternLens): Promise<void> {
   switch (lens) {
     case 'highlight': await applyPatternAsHighlight(p); break;
     case 'filter': await applyPatternAsFilter(p); break;
+    case 'trend': await applyPatternAsTrend(p, 'series'); break;
+    case 'flips': await applyPatternAsTrend(p, 'transitions'); break;
+    case 'pin': await applyPatternAsPin(p); break;
     case 'search':
     default: await applySavedPattern(p); break;
   }
