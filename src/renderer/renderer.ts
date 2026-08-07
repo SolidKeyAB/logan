@@ -5304,8 +5304,37 @@ async function openFolder(): Promise<void> {
   await addFolderByPath(folderPath);
 }
 
-function removeFolder(folderPath: string): void {
+// True if `filePath` lives inside `folderPath` (path-separator agnostic).
+function isPathInsideFolder(filePath: string, folderPath: string): boolean {
+  if (!filePath || !folderPath) return false;
+  const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '');
+  const f = norm(filePath);
+  const dir = norm(folderPath);
+  return f === dir || f.startsWith(dir + '/');
+}
+
+async function removeFolder(folderPath: string): Promise<void> {
   const folder = state.folders.find((f) => f.path === folderPath);
+
+  // If any open tabs belong to this folder, ask whether to close them too.
+  const tabsInFolder = state.tabs.filter((t) => isPathInsideFolder(t.filePath, folderPath));
+  if (tabsInFolder.length > 0) {
+    const n = tabsInFolder.length;
+    const choice = await showConfirmDialog({
+      title: 'Remove folder',
+      message: `${n} open tab${n === 1 ? '' : 's'} belong${n === 1 ? 's' : ''} to this folder. Do you want to close ${n === 1 ? 'it' : 'them'} too?`,
+      buttons: [
+        { label: `Close folder & ${n} tab${n === 1 ? '' : 's'}`, value: 'close-tabs', danger: true },
+        { label: 'Keep tabs open', value: 'keep', primary: true },
+        { label: 'Cancel', value: 'cancel' },
+      ],
+    });
+    if (choice === null || choice === 'cancel') return;
+    if (choice === 'close-tabs') {
+      for (const t of tabsInFolder) closeTab(t.id);
+    }
+  }
+
   // Disconnect the SSH connection if one was created exclusively for this folder
   if (folder?.connectionId) {
     window.api.liveDisconnect(folder.connectionId).catch(() => {});
@@ -5576,7 +5605,7 @@ function renderFolderTree(): void {
     });
     header.querySelector('.folder-close')?.addEventListener('click', (e) => {
       e.stopPropagation();
-      removeFolder(folderPath);
+      void removeFolder(folderPath);
     });
   });
 
@@ -11076,6 +11105,51 @@ function showInputDialog(title: string, label: string, defaultValue: string): Pr
       if (e.key === 'Enter') cleanup(input.value.trim() || null);
       if (e.key === 'Escape') cleanup(null);
     });
+  });
+}
+
+// A small modal with a message and 2-3 custom buttons. Resolves with the chosen
+// button's `value`, or null if dismissed (Escape / backdrop click).
+function showConfirmDialog(opts: {
+  title: string;
+  message: string;
+  buttons: { label: string; value: string; primary?: boolean; danger?: boolean }[];
+}): Promise<string | null> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10000;display:flex;align-items:center;justify-content:center;';
+    const dialog = document.createElement('div');
+    dialog.style.cssText = 'background:#1e1e1e;border:1px solid #555;border-radius:6px;padding:16px;min-width:320px;max-width:440px;';
+    const btnHtml = opts.buttons
+      .map((b) => {
+        const style = b.danger
+          ? 'background:#a1260d;border:none;color:#fff;'
+          : b.primary
+            ? 'background:var(--accent-color,#007acc);border:none;color:#fff;'
+            : 'background:none;border:1px solid #555;color:#aaa;';
+        return `<button class="dlg-btn" data-value="${escapeHtml(b.value)}" style="${style}padding:4px 12px;border-radius:3px;cursor:pointer;font-size:11px;">${escapeHtml(b.label)}</button>`;
+      })
+      .join('');
+    dialog.innerHTML = `
+      <div style="font-size:13px;font-weight:600;color:#ddd;margin-bottom:8px;">${escapeHtml(opts.title)}</div>
+      <div style="font-size:12px;color:#bbb;line-height:1.5;">${escapeHtml(opts.message)}</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap;">${btnHtml}</div>
+    `;
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    const cleanup = (val: string | null) => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKey);
+      resolve(val);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') cleanup(null); };
+
+    dialog.querySelectorAll('.dlg-btn').forEach((btn) => {
+      btn.addEventListener('click', () => cleanup((btn as HTMLElement).dataset.value ?? null));
+    });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) cleanup(null); });
+    document.addEventListener('keydown', onKey);
   });
 }
 
@@ -22311,37 +22385,64 @@ function closeTab(tabId: string): void {
       switchToTab(state.tabs[newIndex].id);
     } else {
       // No more tabs - reset to welcome state
-      state.activeTabId = null;
-      state.filePath = null;
-      state.fileStats = null;
-      state.totalLines = 0;
-      state.searchResults = [];
-      state.currentSearchIndex = -1;
-      state.hiddenSearchMatches = [];
-      state.bookmarks = [];
-      state.highlights = [];
-      cachedLines.clear();
-      state.splitFiles = [];
-      state.currentSplitIndex = -1;
-
-      // Show welcome message
-      if (logViewerWrapper) {
-        logViewerWrapper.remove();
-        logViewerWrapper = null;
-        logViewerElement = null;
-        logContentElement = null;
-      }
-      elements.welcomeMessage.classList.remove('hidden');
-      closeBottomPanel();
-      updateStatusBar();
-      updateFileStatsUI();
-      updateBookmarksUI();
-      updateHighlightsUI();
+      resetToWelcomeState();
     }
   }
 
   renderTabBar();
   // setupHelpTooltips moved outside init
+}
+
+// Reset the viewer back to the empty welcome state (no tabs open).
+function resetToWelcomeState(): void {
+  state.activeTabId = null;
+  state.filePath = null;
+  state.fileStats = null;
+  state.totalLines = 0;
+  state.searchResults = [];
+  state.currentSearchIndex = -1;
+  state.hiddenSearchMatches = [];
+  state.bookmarks = [];
+  state.highlights = [];
+  cachedLines.clear();
+  state.splitFiles = [];
+  state.currentSplitIndex = -1;
+
+  // Show welcome message
+  if (logViewerWrapper) {
+    logViewerWrapper.remove();
+    logViewerWrapper = null;
+    logViewerElement = null;
+    logContentElement = null;
+  }
+  elements.welcomeMessage.classList.remove('hidden');
+  closeBottomPanel();
+  updateStatusBar();
+  updateFileStatsUI();
+  updateBookmarksUI();
+  updateHighlightsUI();
+}
+
+// Close every open tab and return to the welcome state.
+function closeAllTabs(): void {
+  if (state.tabs.length === 0) return;
+  if (viewMode !== 'single') deactivateSplitView();
+  state.tabs = [];
+  resetToWelcomeState();
+  renderTabBar();
+}
+
+// Close every tab except the given one, keeping it active.
+function closeOtherTabs(keepTabId: string): void {
+  const others = state.tabs.filter((t) => t.id !== keepTabId).map((t) => t.id);
+  if (others.length === 0) return;
+  // Drop split/diff if the secondary pane is one of the tabs being closed.
+  if (viewMode !== 'single' && splitDiffState.secondaryTabId && others.includes(splitDiffState.secondaryTabId)) {
+    deactivateSplitView();
+  }
+  state.tabs = state.tabs.filter((t) => t.id === keepTabId);
+  if (state.activeTabId !== keepTabId) switchToTab(keepTabId);
+  renderTabBar();
 }
 
 function renderTabBar(): void {
@@ -22483,6 +22584,12 @@ function showFileContextMenu(e: MouseEvent, filePath: string, tabId?: string, fi
   if (tabId) {
     items.push(`<div class="tab-context-separator"></div>`);
     items.push(`<div class="tab-context-item" data-action="close">Close Tab</div>`);
+    if (state.tabs.length >= 2) {
+      items.push(`<div class="tab-context-item" data-action="close-others">Close Other Tabs</div>`);
+    }
+  }
+  if (tabId && state.tabs.length >= 1) {
+    items.push(`<div class="tab-context-item" data-action="close-all">Close All Tabs</div>`);
   }
 
   menu.innerHTML = items.join('');
@@ -22523,6 +22630,12 @@ function showFileContextMenu(e: MouseEvent, filePath: string, tabId?: string, fi
         break;
       case 'close':
         if (tabId) closeTab(tabId);
+        break;
+      case 'close-others':
+        if (tabId) closeOtherTabs(tabId);
+        break;
+      case 'close-all':
+        closeAllTabs();
         break;
     }
   });
