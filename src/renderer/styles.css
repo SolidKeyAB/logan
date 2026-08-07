@@ -6239,12 +6239,100 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
+.sc-ov-canvas-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
 .sc-ov-canvas {
   flex: 1;
   min-width: 0;
   display: block;
   border-radius: 2px;
   background: #14141a;
+}
+
+/* Pinned first/last carets: a bright vertical tick overlaying the strip, with a
+   small downward triangle so it reads as a dropped "pin". pointer-events:none so
+   the canvas underneath keeps its click-to-navigate + hover tooltip. */
+.sc-ov-pin {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  margin-left: -1px; /* centre the 2px tick on its x fraction */
+  background: #ffffff;
+  box-shadow: 0 0 3px rgba(255, 255, 255, 0.55);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.sc-ov-pin::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: -2px;
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+  border-top: 4px solid #ffffff;
+}
+
+/* Header readout describing the pinned lane (first · last · span · count). */
+.sc-ov-pin-readout {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  justify-content: center;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sc-ov-pin-readout:empty {
+  display: none;
+}
+
+.sc-ov-pin-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.sc-ov-pin-pattern {
+  max-width: 30%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.sc-ov-pin-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.sc-ov-pin-clear {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.sc-ov-pin-clear:hover {
+  color: var(--text-primary);
 }
 
 .sc-ov-tooltip {
