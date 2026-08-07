@@ -16509,10 +16509,42 @@ async function performSearch(): Promise<void> {
 
   showProgress('Searching...');
 
+  // Live-streaming results. Matches arrive in batches via SEARCH_PROGRESS as ripgrep
+  // finds them. Start this search from an empty set and append each batch so the user
+  // watches results populate (clear proof it isn't stuck) and can click/navigate the
+  // found ones while the rest keep streaming in. The awaited result below then
+  // replaces this with the authoritative full set (final index + hidden-match
+  // reconciliation). Note: with an active filter the streamed batches are the raw
+  // pre-filter matches, so the live count may briefly overshoot before the final
+  // resolve trims it to the visible set — cosmetic, self-correcting.
+  state.searchResults = [];
+  state.currentSearchIndex = -1;
+  let streamedAny = false;
+  let streamRenderScheduled = false;
+
   const unsubscribe = window.api.onSearchProgress((data) => {
     updateProgress(data.percent);
     setButtonProgress(elements.btnSearch, data.percent); // ring fills on the Search button
     elements.progressText.textContent = `Searching... ${data.matchCount} matches`;
+
+    if (data.matches && data.matches.length) {
+      for (const m of data.matches) state.searchResults.push(m);
+      if (!streamedAny) {
+        streamedAny = true;
+        state.currentSearchIndex = 0;
+        if (state.activeBottomTab !== 'search-results') openBottomTab('search-results');
+      }
+      updateSearchUI(); // live "N/…" count in the search bar
+      // Coalesce the (virtualized, cheap) results-list repaint to one per frame so a
+      // fast burst of batches can't thrash the DOM.
+      if (!streamRenderScheduled) {
+        streamRenderScheduled = true;
+        requestAnimationFrame(() => {
+          streamRenderScheduled = false;
+          renderSearchResultsList();
+        });
+      }
+    }
   });
 
   try {
