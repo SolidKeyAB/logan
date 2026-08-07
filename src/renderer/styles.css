@@ -8837,6 +8837,9 @@ kbd {
 }
 .pattern-lib-chip-del:hover { color: var(--danger-color, #ff6b6b); }
 .pattern-lib-chip-lens {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
   background: none;
   border: none;
   padding: 0 1px;
@@ -8844,6 +8847,13 @@ kbd {
   font-size: 10px;
   line-height: 1;
   cursor: pointer;
+}
+/* Current-lens icon carried on the ▾ button so a plain chip-click's effect is
+   legible at rest. Slightly bigger than the caret and rendered upright. */
+.pattern-lib-chip-lens-ico {
+  font-size: 11px;
+  line-height: 1;
+  filter: saturate(0.9);
 }
 .pattern-lib-chip-lens:hover { color: var(--accent-hover, #7aa7ff); }
 
@@ -8856,18 +8866,40 @@ kbd {
   border-radius: 5px;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
   padding: 3px;
-  min-width: 128px;
+  min-width: 232px;
 }
 .pattern-lens-item {
   padding: 5px 9px;
-  font-size: 12px;
-  font-family: var(--font-mono);
-  color: var(--text-primary);
-  white-space: pre;
   border-radius: 3px;
   cursor: pointer;
 }
 .pattern-lens-item:hover { background: var(--bg-tertiary); }
+.pattern-lens-item-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.pattern-lens-check {
+  width: 11px;
+  flex-shrink: 0;
+  color: var(--accent-color, #5b8def);
+  font-size: 11px;
+}
+.pattern-lens-ico {
+  width: 15px;
+  flex-shrink: 0;
+  text-align: center;
+}
+.pattern-lens-label { font-family: var(--font-mono); }
+.pattern-lens-item-current .pattern-lens-label { color: var(--accent-hover, #7aa7ff); }
+/* One-line description, aligned under the label (past the check + icon gutter). */
+.pattern-lens-hint {
+  margin-left: 32px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
 
 .trends-content {
   flex: 1;
