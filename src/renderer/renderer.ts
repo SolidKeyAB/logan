@@ -569,6 +569,43 @@ let searchDirection: 'forward' | 'backward' = 'forward';
 // results instead of re-scanning the whole file — pressing Enter again just
 // advances to the next match. Reset when the file changes.
 let lastFindSignature: string | null = null;
+// Monotonic search generation. Each performSearch() bumps it; streamed events and the
+// awaited result of any superseded search are dropped so overlapping searches can't
+// stream matches into each other's results.
+let searchGeneration = 0;
+
+// O(1) line → matches lookup for highlight rendering. Rebuilt lazily whenever
+// state.searchResults is REPLACED (detected by array-reference change), and appended
+// to directly on the streaming path (same reference). Replaces a per-visible-line
+// `state.searchResults.filter(...)` that was O(matches) × rows-per-frame — brutal
+// while scrolling a 100k-match result set, especially mid-stream.
+let searchLineIndex: Map<number, SearchResult[]> = new Map();
+let searchLineIndexRef: SearchResult[] | null = null;
+
+function rebuildSearchLineIndex(): void {
+  const map = new Map<number, SearchResult[]>();
+  for (const m of state.searchResults) {
+    const arr = map.get(m.lineNumber);
+    if (arr) arr.push(m); else map.set(m.lineNumber, [m]);
+  }
+  searchLineIndex = map;
+  searchLineIndexRef = state.searchResults;
+}
+
+function addToSearchLineIndex(m: SearchResult): void {
+  // If the array was replaced out from under us, rebuild once (it already includes m).
+  if (searchLineIndexRef !== state.searchResults) { rebuildSearchLineIndex(); return; }
+  const arr = searchLineIndex.get(m.lineNumber);
+  if (arr) arr.push(m); else searchLineIndex.set(m.lineNumber, [m]);
+}
+
+function searchMatchesForLine(lineNumber: number): SearchResult[] | undefined {
+  // Auto-rebuild if state.searchResults was replaced anywhere (file open, clear, tab
+  // restore, final search result) — the reference check keeps us correct without
+  // having to touch every assignment site.
+  if (searchLineIndexRef !== state.searchResults) rebuildSearchLineIndex();
+  return searchLineIndex.get(lineNumber);
+}
 
 // JSON formatting setting
 let jsonFormattingEnabled = false;
@@ -3064,8 +3101,8 @@ interface SearchRange {
 }
 
 function applySearchHighlightsRaw(text: string, lineNumber: number): { searchRanges: SearchRange[] } {
-  // Find search matches for this line
-  const lineMatches = state.searchResults.filter(m => m.lineNumber === lineNumber);
+  // Find search matches for this line (O(1) via the line index instead of scanning all)
+  const lineMatches = searchMatchesForLine(lineNumber) || [];
   if (lineMatches.length === 0 || !elements.searchInput.value) {
     return { searchRanges: [] };
   }
@@ -16509,6 +16546,11 @@ async function performSearch(): Promise<void> {
 
   showProgress('Searching...');
 
+  // Claim a generation for this search. A newer search bumps searchGeneration and
+  // cancels this one on the main side; both the streamed-event handler and the
+  // awaited result below bail when they're no longer the current generation.
+  const myGen = ++searchGeneration;
+
   // Live-streaming results. Matches arrive in batches via SEARCH_PROGRESS as ripgrep
   // finds them. Start this search from an empty set and append each batch so the user
   // watches results populate (clear proof it isn't stuck) and can click/navigate the
@@ -16519,16 +16561,37 @@ async function performSearch(): Promise<void> {
   // resolve trims it to the visible set — cosmetic, self-correcting.
   state.searchResults = [];
   state.currentSearchIndex = -1;
+  rebuildSearchLineIndex(); // reset the line index to match the now-empty result set
   let streamedAny = false;
   let streamRenderScheduled = false;
+  let liveMatchCount = 0; // authoritative running count from main (can exceed the
+                          // streamed/capped panel length once the stream cap is hit)
+
+  // Heartbeat. The worst "is it stuck?" case is a rare/absent pattern that scans the
+  // whole file with ZERO matches — no matches means no SEARCH_PROGRESS events, so a
+  // plain bar would sit frozen. A local elapsed-time ticker keeps the user informed
+  // ("Searching… N matches · 12s") whether or not matches are flowing.
+  const searchStartMs = performance.now();
+  const setHeartbeatText = () => {
+    const secs = Math.round((performance.now() - searchStartMs) / 1000);
+    elements.progressText.textContent = `Searching… ${liveMatchCount.toLocaleString()} matches · ${secs}s`;
+  };
+  const heartbeat = window.setInterval(setHeartbeatText, 500);
 
   const unsubscribe = window.api.onSearchProgress((data) => {
+    // Ignore events once a newer search has superseded this one — otherwise an
+    // in-flight, being-cancelled search would push stale matches into the new
+    // search's set (SEARCH_PROGRESS is broadcast to every live subscription).
+    if (myGen !== searchGeneration) return;
+    if (data.searchId !== undefined && data.searchId !== myGen) return;
+
     updateProgress(data.percent);
     setButtonProgress(elements.btnSearch, data.percent); // ring fills on the Search button
-    elements.progressText.textContent = `Searching... ${data.matchCount} matches`;
+    liveMatchCount = data.matchCount;
+    setHeartbeatText();
 
     if (data.matches && data.matches.length) {
-      for (const m of data.matches) state.searchResults.push(m);
+      for (const m of data.matches) { state.searchResults.push(m); addToSearchLineIndex(m); }
       if (!streamedAny) {
         streamedAny = true;
         state.currentSearchIndex = 0;
@@ -16555,6 +16618,7 @@ async function performSearch(): Promise<void> {
       isWildcard: elements.searchWildcard.checked,
       matchCase: elements.searchCase.checked,
       wholeWord: elements.searchWholeWord.checked,
+      searchId: myGen,
     };
 
     // Add column config if columns are filtered
@@ -16567,8 +16631,18 @@ async function performSearch(): Promise<void> {
 
     const result = await window.api.search(searchOptions);
 
+    // A newer search started while this one was in flight (its rg was cancelled on the
+    // main side) — discard this stale result so it can't clobber the newer one.
+    if (myGen !== searchGeneration) return;
+
     if (result.success && result.matches) {
+      // Preserve what the user is currently looking at: if they clicked/navigated to a
+      // streamed match mid-search, keep it selected across the authoritative replace
+      // instead of yanking the viewport back to match #0.
+      const prevMatch = state.currentSearchIndex >= 0 ? state.searchResults[state.currentSearchIndex] : null;
+
       state.searchResults = result.matches;
+      rebuildSearchLineIndex(); // refresh the O(1) line→matches index for highlighting
       // Remember what we just searched so an identical repeat reuses these results.
       lastFindSignature = signature;
       // Merge hidden matches from filter and from hidden columns
@@ -16576,11 +16650,20 @@ async function performSearch(): Promise<void> {
       const columnHidden: HiddenMatch[] = (result as any).hiddenColumnMatches || [];
       state.hiddenSearchMatches = [...filterHidden, ...columnHidden];
 
-      // Determine starting match index based on direction and start line
+      // If the user parked on a streamed match, re-locate it by identity and DON'T
+      // auto-jump (they're already reading it). Otherwise pick the start match by
+      // direction/start-line as before and jump to it.
+      let relocated = -1;
+      if (prevMatch) {
+        relocated = result.matches.findIndex(m => m.lineNumber === prevMatch.lineNumber && m.column === prevMatch.column);
+      }
+
       const startLineVal = parseInt(elements.searchStartLine.value, 10);
       const startLine = startLineVal > 0 ? startLineVal - 1 : null; // Convert to 0-indexed
 
-      if (result.matches.length > 0 && startLine !== null) {
+      if (relocated >= 0) {
+        state.currentSearchIndex = relocated;
+      } else if (result.matches.length > 0 && startLine !== null) {
         if (searchDirection === 'forward') {
           const idx = result.matches.findIndex(m => m.lineNumber >= startLine);
           state.currentSearchIndex = idx >= 0 ? idx : 0;
@@ -16607,14 +16690,20 @@ async function performSearch(): Promise<void> {
         openBottomTab('search-results');
       }
 
-      if (state.currentSearchIndex >= 0) {
+      // Only auto-scroll when the user hasn't already parked on a streamed match.
+      if (relocated < 0 && state.currentSearchIndex >= 0) {
         goToSearchResult(state.currentSearchIndex);
       }
     }
   } finally {
+    clearInterval(heartbeat);
     unsubscribe();
-    setButtonProgress(elements.btnSearch, null); // clear the Search button ring
-    hideProgress();
+    // Only clear the shared progress UI if we're still the current search — a newer
+    // one owns it otherwise.
+    if (myGen === searchGeneration) {
+      setButtonProgress(elements.btnSearch, null); // clear the Search button ring
+      hideProgress();
+    }
   }
 }
 
