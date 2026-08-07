@@ -24,7 +24,7 @@ import { getRipgrepPath } from './ripgrepPath';
 import { openWithAdapter, NormalizedSource } from './sourceAdapter';
 import { resolveFileHandlers, runFileHandler, FileHandlerQuery } from './fileHandlers';
 import { extractBodyLine, extractHeaderLine } from '../shared/extractFormat';
-import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation, PatternProperty, ScopeDescriptor, ResolvedScope } from '../shared/types';
+import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation, PatternProperty, SavedPattern, ScopeDescriptor, ResolvedScope } from '../shared/types';
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
@@ -3673,6 +3673,63 @@ ipcMain.handle(IPC.PATTERN_PROP_DELETE, async (_, id: string) => {
   const props = loadPatternPropertiesStore().filter(p => p.id !== id);
   savePatternPropertiesStore(props);
   return { success: true, properties: props };
+});
+
+// === Pattern Library (reusable named search/regex patterns, global store) ===
+
+const getPatternLibraryPath = () => path.join(getConfigDir(), 'patterns.json');
+
+function loadPatternLibraryStore(): SavedPattern[] {
+  try {
+    ensureConfigDir();
+    const p = getPatternLibraryPath();
+    if (fs.existsSync(p)) {
+      const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'));
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (error) {
+    console.error('Failed to load pattern library:', error);
+  }
+  return [];
+}
+
+function savePatternLibraryStore(patterns: SavedPattern[]): void {
+  try {
+    ensureConfigDir();
+    fs.writeFileSync(getPatternLibraryPath(), JSON.stringify(patterns, null, 2), 'utf-8');
+  } catch (error) {
+    console.error('Failed to save pattern library:', error);
+  }
+}
+
+ipcMain.handle(IPC.PATTERN_LIB_LIST, async () => {
+  return { success: true, patterns: loadPatternLibraryStore() };
+});
+
+ipcMain.handle(IPC.PATTERN_LIB_SAVE, async (_, pattern: SavedPattern) => {
+  if (!pattern || !pattern.id || !pattern.label || !pattern.regex) {
+    return { success: false, error: 'Invalid pattern' };
+  }
+  // Only validate compilation when it's meant to be a regex — a literal pattern
+  // is allowed to contain characters that wouldn't parse as a regex.
+  if (pattern.isRegex) {
+    try {
+      new RegExp(pattern.regex, pattern.matchCase ? '' : 'i');
+    } catch (e) {
+      return { success: false, error: `Invalid regex: ${String(e)}` };
+    }
+  }
+  const patterns = loadPatternLibraryStore();
+  const idx = patterns.findIndex(p => p.id === pattern.id);
+  if (idx >= 0) patterns[idx] = pattern; else patterns.push(pattern);
+  savePatternLibraryStore(patterns);
+  return { success: true, patterns };
+});
+
+ipcMain.handle(IPC.PATTERN_LIB_DELETE, async (_, id: string) => {
+  const patterns = loadPatternLibraryStore().filter(p => p.id !== id);
+  savePatternLibraryStore(patterns);
+  return { success: true, patterns };
 });
 
 // === Pattern Columns (paint / grok / regex → named columns) ===

@@ -217,6 +217,24 @@ interface PatternPropertyDef {
   createdAt: number;
 }
 
+// A reusable, named search/regex pattern in the Pattern Library. Written once,
+// applied through different lenses and saved at global/ticket/file scope. PR-1
+// uses only scope 'global'; scope + defaultLens carried for later PRs.
+interface SavedPatternDef {
+  id: string;
+  label: string;
+  regex: string;
+  isRegex?: boolean;
+  matchCase?: boolean;
+  wholeWord?: boolean;
+  color?: string;
+  defaultLens?: string;
+  scope: 'global' | 'ticket' | 'file';
+  ticketId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 interface SshProfile {
   id: string;
   name: string;
@@ -621,6 +639,9 @@ interface Api {
   patternPropList: () => Promise<{ success: boolean; properties?: PatternPropertyDef[]; error?: string }>;
   patternPropSave: (prop: PatternPropertyDef) => Promise<{ success: boolean; properties?: PatternPropertyDef[]; error?: string }>;
   patternPropDelete: (id: string) => Promise<{ success: boolean; properties?: PatternPropertyDef[]; error?: string }>;
+  patternLibList: () => Promise<{ success: boolean; patterns?: SavedPatternDef[]; error?: string }>;
+  patternLibSave: (pattern: SavedPatternDef) => Promise<{ success: boolean; patterns?: SavedPatternDef[]; error?: string }>;
+  patternLibDelete: (id: string) => Promise<{ success: boolean; patterns?: SavedPatternDef[]; error?: string }>;
   searchConfigSessionList: () => Promise<{ success: boolean; sessions?: SearchConfigSessionDef[] }>;
   searchConfigSessionSave: (session: SearchConfigSessionDef) => Promise<{ success: boolean }>;
   searchConfigSessionDelete: (sessionId: string, isGlobal: boolean) => Promise<{ success: boolean }>;
