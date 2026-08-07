@@ -2848,17 +2848,39 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
   // cancel the user's in-flight search, skip the progress UI, and skip
   // logActivity (which would fabricate history + human::search on every keystroke).
   const silent = !!options.silent;
+  // A new non-silent search supersedes any in-flight one: cancel the previous signal
+  // BEFORE replacing it, so we never have two rg processes streaming into the same
+  // renderer. Silent (preview) searches use a private signal and neither cancel nor
+  // are cancelled by the user's search.
+  if (!silent) searchSignal.cancelled = true;
   const signal = silent ? { cancelled: false } : (searchSignal = { cancelled: false });
+  const searchId = options.searchId;
+
+  // Compute the active filter set up front so streamed deltas can be filter-aware:
+  // forward only matches on visible lines, tagged with their displayIndex, so streamed
+  // rows are identical to the final filteredMatches. Fixes the transient over-count and
+  // clicking a streamed match that sits on a filtered-out line.
+  const streamFilterIndices = silent ? null : getFilteredLines();
+  const streamFilterSet = streamFilterIndices && streamFilterIndices.length > 0 ? new Set(streamFilterIndices) : null;
+  const streamDisplayIndex = new Map<number, number>();
+  if (streamFilterSet) streamFilterIndices!.forEach((ln, idx) => streamDisplayIndex.set(ln, idx));
 
   const t0 = Date.now();
   try {
     const matches = await handler.search(
       options,
       (percent, matchCount, deltaMatches) => {
-        // Forward the running % + count AND the new matches since the last tick, so
-        // the renderer can populate the results panel live (proof it's not stuck +
-        // lets the user click partial results while the rest keep streaming in).
-        if (!silent) mainWindow?.webContents.send(IPC.SEARCH_PROGRESS, { percent, matchCount, matches: deltaMatches });
+        // Forward the running % + count AND the new matches since the last tick, so the
+        // renderer can populate the results panel live. searchId lets the renderer drop
+        // late events from a search that a newer one has superseded.
+        if (silent) return;
+        let outMatches = deltaMatches;
+        if (streamFilterSet && deltaMatches) {
+          outMatches = deltaMatches
+            .filter(m => streamFilterSet.has(m.lineNumber))
+            .map(m => ({ ...m, displayIndex: streamDisplayIndex.get(m.lineNumber) }));
+        }
+        mainWindow?.webContents.send(IPC.SEARCH_PROGRESS, { percent, matchCount, matches: outMatches, searchId });
       },
       signal
     );

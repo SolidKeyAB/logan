@@ -270,8 +270,8 @@ const api = {
     return () => ipcRenderer.removeListener('indexing-progress', handler);
   },
 
-  onSearchProgress: (callback: (data: { percent: number; matchCount: number; matches?: Array<{ lineNumber: number; column: number; length: number; lineText: string }> }) => void): (() => void) => {
-    const handler = (_: any, data: { percent: number; matchCount: number; matches?: Array<{ lineNumber: number; column: number; length: number; lineText: string }> }) => callback(data);
+  onSearchProgress: (callback: (data: { percent: number; matchCount: number; matches?: Array<{ lineNumber: number; column: number; length: number; lineText: string }>; searchId?: number }) => void): (() => void) => {
+    const handler = (_: any, data: { percent: number; matchCount: number; matches?: Array<{ lineNumber: number; column: number; length: number; lineText: string }>; searchId?: number }) => callback(data);
     ipcRenderer.on(IPC.SEARCH_PROGRESS, handler);
     return () => ipcRenderer.removeListener(IPC.SEARCH_PROGRESS, handler);
   },
