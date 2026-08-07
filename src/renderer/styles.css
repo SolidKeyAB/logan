@@ -8836,6 +8836,38 @@ kbd {
   cursor: pointer;
 }
 .pattern-lib-chip-del:hover { color: var(--danger-color, #ff6b6b); }
+.pattern-lib-chip-lens {
+  background: none;
+  border: none;
+  padding: 0 1px;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pattern-lib-chip-lens:hover { color: var(--accent-hover, #7aa7ff); }
+
+/* "Use as…" lens menu popped from a pattern chip's ▾ button */
+.pattern-lens-menu {
+  position: fixed;
+  z-index: 10000;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  padding: 3px;
+  min-width: 128px;
+}
+.pattern-lens-item {
+  padding: 5px 9px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  white-space: pre;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.pattern-lens-item:hover { background: var(--bg-tertiary); }
 
 .trends-content {
   flex: 1;

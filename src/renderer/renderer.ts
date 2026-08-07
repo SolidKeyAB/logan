@@ -11777,6 +11777,21 @@ async function loadSavedPatterns(): Promise<void> {
   renderPatternLibChips();
 }
 
+// ─── Pattern Library lenses (PR-2): apply one saved pattern many ways ────────
+// The same saved pattern can be applied as a live search config, a highlight,
+// or a filter. The chosen lens is remembered as the pattern's defaultLens so a
+// plain chip-click re-applies it; the ▾ menu switches it. (Columns/trend/pin
+// lenses arrive in later PRs — Pattern Columns has no "apply" path yet.)
+type PatternLens = 'search' | 'highlight' | 'filter';
+const PATTERN_LENSES: Array<{ id: PatternLens; label: string }> = [
+  { id: 'search', label: 'Search config' },
+  { id: 'highlight', label: 'Highlight' },
+  { id: 'filter', label: 'Filter' },
+];
+function patternLensLabel(id: string): string {
+  return (PATTERN_LENSES.find(l => l.id === id) || PATTERN_LENSES[0]).label;
+}
+
 function renderPatternLibChips(): void {
   const bar = document.getElementById('pattern-lib-chips');
   if (!bar) return;
@@ -11790,10 +11805,11 @@ function renderPatternLibChips(): void {
   bar.appendChild(lead);
 
   for (const p of savedPatterns) {
+    const lens = (p.defaultLens as PatternLens) || 'search';
     const chip = document.createElement('span');
     chip.className = 'pattern-lib-chip';
     const flags = `${p.isRegex ? ' ·regex' : ''}${p.matchCase ? ' ·case' : ''}${p.wholeWord ? ' ·word' : ''}`;
-    chip.title = `${p.regex}${flags}\nClick to apply as a search config on this file`;
+    chip.title = `${p.regex}${flags}\nClick to apply as ${patternLensLabel(lens)} · ▾ to change lens`;
 
     if (p.color) {
       const swatch = document.createElement('span');
@@ -11805,7 +11821,14 @@ function renderPatternLibChips(): void {
     const name = document.createElement('button');
     name.className = 'pattern-lib-chip-name';
     name.textContent = p.label;
-    name.addEventListener('click', () => { void applySavedPattern(p); });
+    name.addEventListener('click', () => { void applyPatternAsLens(p, lens); });
+
+    // Lens switcher — pick how this pattern applies; the choice is remembered.
+    const lensBtn = document.createElement('button');
+    lensBtn.className = 'pattern-lib-chip-lens';
+    lensBtn.textContent = '▾';
+    lensBtn.title = `Apply as… (now: ${patternLensLabel(lens)})`;
+    lensBtn.addEventListener('click', (e) => { e.stopPropagation(); showPatternLensMenu(e as MouseEvent, p); });
 
     const del = document.createElement('button');
     del.className = 'pattern-lib-chip-del';
@@ -11814,6 +11837,7 @@ function renderPatternLibChips(): void {
     del.addEventListener('click', (e) => { e.stopPropagation(); void deleteSavedPattern(p.id); });
 
     chip.appendChild(name);
+    chip.appendChild(lensBtn);
     chip.appendChild(del);
     bar.appendChild(chip);
   }
@@ -11914,6 +11938,81 @@ async function applySavedPattern(p: SavedPatternDef): Promise<void> {
   await window.api.searchConfigSave(config);
   await runSearchConfigsBatch(true);
   showToast(`Applied pattern: ${p.label}`);
+}
+
+// Apply a saved pattern as a highlight (paints matches in place — non-destructive,
+// keeps the full file visible). Honors regex/case/word flags.
+async function applyPatternAsHighlight(p: SavedPatternDef): Promise<void> {
+  const ok = await commitHighlight({
+    id: `highlight-${Date.now()}`,
+    pattern: p.regex,
+    isRegex: !!p.isRegex,
+    matchCase: !!p.matchCase,
+    wholeWord: !!p.wholeWord,
+    backgroundColor: p.color || '#ffff00',
+    includeWhitespace: false,
+    highlightAll: true,
+  });
+  showToast(ok ? `Highlighting: ${p.label}` : 'Highlight failed');
+}
+
+// Apply a saved pattern as an include-filter (narrows the viewer to matching
+// lines). exactMatch:false makes the include pattern regex-matched (mirrors the
+// main filter compiler), so regex patterns filter correctly; a literal pattern
+// uses exactMatch:true for a plain substring match. Undo via the Filter panel's
+// clear. Filters have no whole-word notion, so that flag is ignored here.
+async function applyPatternAsFilter(p: SavedPatternDef): Promise<void> {
+  await applyFilter({
+    levels: [],
+    includePatterns: [{ pattern: p.regex, caseSensitive: !!p.matchCase }],
+    excludePatterns: [],
+    matchCase: !!p.matchCase,
+    exactMatch: !p.isRegex,
+    contextLines: 0,
+  });
+  showToast(`Filtered to: ${p.label}`);
+}
+
+// Route a saved pattern through the chosen lens, then remember that lens as the
+// pattern's default so a plain chip-click re-applies it next time.
+async function applyPatternAsLens(p: SavedPatternDef, lens: PatternLens): Promise<void> {
+  switch (lens) {
+    case 'highlight': await applyPatternAsHighlight(p); break;
+    case 'filter': await applyPatternAsFilter(p); break;
+    case 'search':
+    default: await applySavedPattern(p); break;
+  }
+  if ((p.defaultLens || 'search') !== lens) {
+    const updated: SavedPatternDef = { ...p, defaultLens: lens, updatedAt: Date.now() };
+    const res = await window.api.patternLibSave(updated);
+    if (res.success) { savedPatterns = res.patterns || savedPatterns; renderPatternLibChips(); }
+  }
+}
+
+// Small popup listing the lenses; the current default is check-marked. Mirrors
+// the notes/tab context-menu pattern (close on outside click, clamp on-screen).
+function showPatternLensMenu(e: MouseEvent, p: SavedPatternDef): void {
+  document.querySelector('.pattern-lens-menu')?.remove();
+  const current = (p.defaultLens as PatternLens) || 'search';
+  const menu = document.createElement('div');
+  menu.className = 'pattern-lens-menu';
+  for (const l of PATTERN_LENSES) {
+    const item = document.createElement('div');
+    item.className = 'pattern-lens-item';
+    item.textContent = `${l.id === current ? '✓ ' : '  '}${l.label}`;
+    item.addEventListener('click', () => { menu.remove(); void applyPatternAsLens(p, l.id); });
+    menu.appendChild(item);
+  }
+  menu.style.left = `${e.clientX}px`;
+  menu.style.top = `${e.clientY}px`;
+  document.body.appendChild(menu);
+  const r = menu.getBoundingClientRect();
+  if (r.right > window.innerWidth - 4) menu.style.left = `${Math.max(4, window.innerWidth - r.width - 4)}px`;
+  if (r.bottom > window.innerHeight - 4) menu.style.top = `${Math.max(4, e.clientY - r.height)}px`;
+  const close = (ev: MouseEvent) => {
+    if (!menu.contains(ev.target as Node)) { menu.remove(); document.removeEventListener('click', close); }
+  };
+  setTimeout(() => document.addEventListener('click', close), 0);
 }
 
 // `showUiProgress` drives the shared progress bar/overlay while the batch scans the
