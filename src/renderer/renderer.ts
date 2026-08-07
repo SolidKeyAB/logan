@@ -11761,6 +11761,161 @@ async function toggleSearchConfigEnabled(id: string): Promise<void> {
   }
 }
 
+// ─── Pattern Library (PR-1): reusable named patterns, global store ───────────
+// Write a search/regex pattern once, save it, and one-click re-apply it as a
+// search config on ANY file. Scope is 'global' for now; ticket/file scopes and
+// the multi-lens switcher (highlight/filter/columns/trend/pin) land in later PRs.
+let savedPatterns: SavedPatternDef[] = [];
+
+async function loadSavedPatterns(): Promise<void> {
+  try {
+    const res = await window.api.patternLibList();
+    savedPatterns = (res.success && res.patterns) ? res.patterns : [];
+  } catch {
+    savedPatterns = [];
+  }
+  renderPatternLibChips();
+}
+
+function renderPatternLibChips(): void {
+  const bar = document.getElementById('pattern-lib-chips');
+  if (!bar) return;
+  bar.innerHTML = '';
+  if (savedPatterns.length === 0) { bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+
+  const lead = document.createElement('span');
+  lead.className = 'pattern-lib-lead';
+  lead.textContent = 'Saved:';
+  bar.appendChild(lead);
+
+  for (const p of savedPatterns) {
+    const chip = document.createElement('span');
+    chip.className = 'pattern-lib-chip';
+    const flags = `${p.isRegex ? ' ·regex' : ''}${p.matchCase ? ' ·case' : ''}${p.wholeWord ? ' ·word' : ''}`;
+    chip.title = `${p.regex}${flags}\nClick to apply as a search config on this file`;
+
+    if (p.color) {
+      const swatch = document.createElement('span');
+      swatch.className = 'pattern-lib-swatch';
+      swatch.style.backgroundColor = p.color;
+      chip.appendChild(swatch);
+    }
+
+    const name = document.createElement('button');
+    name.className = 'pattern-lib-chip-name';
+    name.textContent = p.label;
+    name.addEventListener('click', () => { void applySavedPattern(p); });
+
+    const del = document.createElement('button');
+    del.className = 'pattern-lib-chip-del';
+    del.textContent = '×';
+    del.title = `Delete pattern "${p.label}"`;
+    del.addEventListener('click', (e) => { e.stopPropagation(); void deleteSavedPattern(p.id); });
+
+    chip.appendChild(name);
+    chip.appendChild(del);
+    bar.appendChild(chip);
+  }
+}
+
+// Grab the pattern the user is currently working with: prefer the search-config
+// form (this tab's own input), fall back to the main search bar.
+function readCurrentPatternForSave(): { regex: string; isRegex: boolean; matchCase: boolean; wholeWord: boolean; color: string } | null {
+  const scPattern = elements.scPatternInput?.value.trim() || '';
+  if (scPattern) {
+    return {
+      regex: scPattern,
+      isRegex: !!elements.scRegex?.checked,
+      matchCase: !!elements.scMatchCase?.checked,
+      wholeWord: !!elements.scWholeWord?.checked,
+      color: elements.scColorInput?.value || '#ffff00',
+    };
+  }
+  const searchVal = elements.searchInput?.value.trim() || '';
+  if (searchVal) {
+    const chk = (id: string) => !!(document.getElementById(id) as HTMLInputElement | null)?.checked;
+    return {
+      regex: searchVal,
+      isRegex: chk('search-regex'),
+      matchCase: chk('search-case'),
+      wholeWord: chk('search-whole-word'),
+      color: '#ffff00',
+    };
+  }
+  return null;
+}
+
+async function saveCurrentPattern(): Promise<void> {
+  const cur = readCurrentPatternForSave();
+  if (!cur) {
+    showToast('Type a pattern in the + Add form or the search bar first');
+    return;
+  }
+  if (cur.isRegex) {
+    try { new RegExp(cur.regex); } catch (e) { showToast(`Invalid regex: ${String(e)}`); return; }
+  }
+  const label = await showInputDialog('Save pattern', 'Name this pattern', cur.regex.slice(0, 40));
+  if (!label) return;
+  const existing = savedPatterns.find(p => p.label.toLowerCase() === label.toLowerCase());
+  const now = Date.now();
+  const pattern: SavedPatternDef = {
+    id: existing?.id || `pat-${now}-${Math.random().toString(36).slice(2, 6)}`,
+    label,
+    regex: cur.regex,
+    isRegex: cur.isRegex,
+    matchCase: cur.matchCase,
+    wholeWord: cur.wholeWord,
+    color: cur.color,
+    scope: 'global',
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  };
+  const res = await window.api.patternLibSave(pattern);
+  if (!res.success) { showToast(res.error || 'Save failed'); return; }
+  savedPatterns = res.patterns || savedPatterns;
+  renderPatternLibChips();
+  showToast(`Saved pattern "${label}"`);
+}
+
+async function deleteSavedPattern(id: string): Promise<void> {
+  const res = await window.api.patternLibDelete(id);
+  if (!res.success) { showToast(res.error || 'Delete failed'); return; }
+  savedPatterns = res.patterns || [];
+  renderPatternLibChips();
+}
+
+// Apply a saved pattern as a live search config on the current file. If an
+// identical config already exists we don't mint a duplicate — we just (re-)enable
+// it, so repeated clicks are safe.
+async function applySavedPattern(p: SavedPatternDef): Promise<void> {
+  const same = (c: SearchConfigDef) =>
+    c.pattern === p.regex && !!c.isRegex === !!p.isRegex &&
+    !!c.matchCase === !!p.matchCase && !!c.wholeWord === !!p.wholeWord;
+  const dup = state.searchConfigs.find(same);
+  if (dup) {
+    if (!dup.enabled) { await toggleSearchConfigEnabled(dup.id); }
+    else { showToast(`Already a search config: ${p.label}`); }
+    return;
+  }
+  const config: SearchConfigDef = {
+    id: `sc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    pattern: p.regex,
+    isRegex: !!p.isRegex,
+    matchCase: !!p.matchCase,
+    wholeWord: !!p.wholeWord,
+    color: p.color || '#ffff00',
+    enabled: true,
+    isGlobal: false,
+    createdAt: Date.now(),
+  };
+  state.searchConfigs.push(config);
+  renderSearchConfigsChips();
+  await window.api.searchConfigSave(config);
+  await runSearchConfigsBatch(true);
+  showToast(`Applied pattern: ${p.label}`);
+}
+
 // `showUiProgress` drives the shared progress bar/overlay while the batch scans the
 // whole file. User-initiated runs (add config, toggle on, apply session) pass true so
 // the run isn't silent on big files; the auto-run on file open passes false because it
@@ -21496,6 +21651,8 @@ function init(): void {
 
   // Search configs panel events (inside bottom panel)
   elements.btnAddSearchConfig.addEventListener('click', () => showSearchConfigForm());
+  document.getElementById('btn-pattern-lib-save')?.addEventListener('click', () => { void saveCurrentPattern(); });
+  void loadSavedPatterns(); // Pattern Library is global — load once at startup
   elements.btnScExportAll.addEventListener('click', exportAllSearchConfigResults);
   elements.btnScDistance.addEventListener('click', openDistancePanel);
   // Repaint the config overview strip at the correct pixel width when the panel

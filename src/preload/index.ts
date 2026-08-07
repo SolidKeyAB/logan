@@ -38,6 +38,9 @@ const IPC = {
   PATTERN_PROP_LIST: 'pattern-prop-list',
   PATTERN_PROP_SAVE: 'pattern-prop-save',
   PATTERN_PROP_DELETE: 'pattern-prop-delete',
+  PATTERN_LIB_LIST: 'pattern-lib-list',
+  PATTERN_LIB_SAVE: 'pattern-lib-save',
+  PATTERN_LIB_DELETE: 'pattern-lib-delete',
   SEARCH_CONFIG_SESSION_LIST: 'search-config-session-list',
   SEARCH_CONFIG_SESSION_SAVE: 'search-config-session-save',
   SEARCH_CONFIG_SESSION_DELETE: 'search-config-session-delete',
@@ -596,6 +599,14 @@ const api = {
     ipcRenderer.invoke(IPC.PATTERN_PROP_SAVE, prop),
   patternPropDelete: (id: string): Promise<{ success: boolean; properties?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.PATTERN_PROP_DELETE, id),
+
+  // Pattern Library (reusable named search/regex patterns; global store).
+  patternLibList: (): Promise<{ success: boolean; patterns?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.PATTERN_LIB_LIST),
+  patternLibSave: (pattern: any): Promise<{ success: boolean; patterns?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.PATTERN_LIB_SAVE, pattern),
+  patternLibDelete: (id: string): Promise<{ success: boolean; patterns?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.PATTERN_LIB_DELETE, id),
 
   // Search config sessions
   searchConfigSessionList: (): Promise<{ success: boolean; sessions?: any[] }> =>
