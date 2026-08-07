@@ -2335,15 +2335,21 @@ function handleScroll(): void {
     slowScrollFrames = Math.max(0, slowScrollFrames - 1);
   }
 
-  // Defer data loading to RAF to avoid blocking scroll
-  if (scrollRAF !== null) {
-    cancelAnimationFrame(scrollRAF);
+  // Defer data loading to RAF to avoid blocking scroll.
+  // IMPORTANT: do NOT cancel a pending load-RAF here. During a fast continuous
+  // fling a scroll event fires roughly every frame, and the old cancel-then-
+  // reschedule meant the RAF was always canceled before it ran — loadVisibleLines()
+  // was starved for the entire fling, so no data was ever fetched and the viewport
+  // stayed blank/white where lines should be. Schedule only when none is pending;
+  // the callback reads the LATEST visible range (updated synchronously above), so a
+  // load fires ~every frame and always targets the current scroll position.
+  if (scrollRAF === null) {
+    scrollRAF = requestAnimationFrame(() => {
+      scrollRAF = null;
+      // Load any missing data in background
+      loadVisibleLines();
+    });
   }
-  scrollRAF = requestAnimationFrame(() => {
-    scrollRAF = null;
-    // Load any missing data in background
-    loadVisibleLines();
-  });
 
   // Sync scroll to secondary (in diff mode)
   if (viewMode === 'diff' && splitDiffState.syncScroll && !splitDiffState.isSyncScrolling && secondaryViewer) {
@@ -2359,6 +2365,10 @@ function handleScroll(): void {
   if (scrollEndTimer) clearTimeout(scrollEndTimer);
   scrollEndTimer = setTimeout(() => {
     isScrolling = false;
+    // Safety net: guarantee the final resting range is fetched even if the last
+    // load-RAF happened to be coalesced away mid-fling, so the view never settles
+    // on a blank region.
+    loadVisibleLines();
   }, 150);
 }
 
@@ -2711,6 +2721,16 @@ function renderVisibleLines(): void {
       if (estimatedWidth > maxContentWidth) {
         maxContentWidth = estimatedWidth;
       }
+    } else if (!wordWrapEnabled && !jsonFormattingEnabled) {
+      // Uncached row: render a faint skeleton placeholder (carrying its line
+      // number) instead of nothing, so a fast fling shows greyed rows filling in
+      // rather than a white gap while the async getLines() load is in flight.
+      // Absolute-positioned mode only — wrap/JSON modes flow naturally (variable
+      // row height) and don't exhibit the blank-gap symptom.
+      const ph = createPlaceholderLinePooled(i);
+      const top = usingScaled ? scrollTop + (i - firstVisibleLine) * getLineHeight() : i * getLineHeight();
+      ph.style.cssText = `position:absolute;top:0;left:0;transform:translateY(${top}px);will-change:transform;white-space:pre;`;
+      fragment.appendChild(ph);
     }
   }
 
@@ -2858,6 +2878,28 @@ function createLineElementPooled(line: LogLine): HTMLDivElement {
   const contentHtml = `<span class="line-content">${formattedContent}</span>`;
   div.innerHTML = lineNumHtml + contentHtml;
 
+  return div;
+}
+
+// Faint skeleton row for a not-yet-loaded (uncached) line index. Reuses the pool
+// so it costs the same as a real row. Shows the line number (when unfiltered — under
+// a filter the real line number isn't known until the row actually loads) plus a dim
+// bar standing in for the text. Purely visual; it's replaced by the real row the
+// moment loadVisibleLines() fills the cache and re-renders.
+function createPlaceholderLinePooled(displayIndex: number): HTMLDivElement {
+  const div = lineElementPool.acquire();
+  div.className = 'log-line placeholder-line';
+  div.title = '';
+  delete div.dataset.bookmarkColor;
+  div.dataset.lineNumber = '';
+  const numHtml = state.isFiltered
+    ? '<span class="line-number"></span>'
+    : `<span class="line-number">${displayIndex + 1}</span>`;
+  // Dim inline bar (currentColor adapts to the theme); width jittered by index so
+  // the skeleton reads as text, not a solid block.
+  const barWidth = 30 + (displayIndex % 7) * 8; // 30–78%
+  const bar = `<span style="display:inline-block;width:${barWidth}%;max-width:60ch;height:0.72em;background:currentColor;opacity:0.10;border-radius:2px;vertical-align:middle;"></span>`;
+  div.innerHTML = numHtml + `<span class="line-content">${bar}</span>`;
   return div;
 }
 
