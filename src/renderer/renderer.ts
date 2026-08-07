@@ -12079,6 +12079,12 @@ let scOverviewOrder: string[] = (() => {
   catch { return []; }
 })();
 let scOvDraggingId: string | null = null;
+// The lane the user clicked to "pin" — its first & last match get bright carets
+// on the strip and an exact first·last·span·count readout in the header. Cleared
+// by Esc, the ✕ in the readout, or clicking empty space in the strip. Kept out of
+// TabState on purpose: it's a transient inspection, not saved per-file.
+let scOvPinnedConfigId: string | null = null;
+let scOvHostBound = false; // guard so host-level listeners bind exactly once
 
 function scOverviewOrderRank(id: string): number {
   const i = scOverviewOrder.indexOf(id);
@@ -12149,6 +12155,27 @@ async function renderSearchConfigsOverview(): Promise<void> {
   host.classList.remove('hidden');
   host.innerHTML = '';
 
+  // Clearing a pinned lane, bound once on the persistent host element (host is
+  // reused across renders — re-binding each time would stack duplicate handlers).
+  if (!scOvHostBound) {
+    scOvHostBound = true;
+    // Click on empty strip chrome (not a lane canvas, not the ✕) unpins.
+    host.addEventListener('click', (e) => {
+      if (!scOvPinnedConfigId) return;
+      const t = e.target as HTMLElement;
+      if (t.closest('.sc-ov-canvas') || t.closest('.sc-ov-pin-clear')) return;
+      scOvPinnedConfigId = null;
+      renderSearchConfigsOverview();
+    });
+    // Esc unpins (only when something is pinned; never swallow Esc otherwise).
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && scOvPinnedConfigId && !host.classList.contains('hidden')) {
+        scOvPinnedConfigId = null;
+        renderSearchConfigsOverview();
+      }
+    });
+  }
+
   const totalLines = Math.max(1, getTotalLines());
   const dpr = window.devicePixelRatio || 1;
   const LANE_H = 12;
@@ -12179,7 +12206,12 @@ async function renderSearchConfigsOverview(): Promise<void> {
   actions.className = 'sc-ov-actions';
   actions.appendChild(toggle);
   actions.appendChild(exportBtn);
+  // Readout for the pinned lane (first · last · span · count) — filled after the
+  // lane loop once we know that lane's extents. Sits centred between title/actions.
+  const pinReadout = document.createElement('div');
+  pinReadout.className = 'sc-ov-pin-readout';
   header.appendChild(title);
+  header.appendChild(pinReadout);
   header.appendChild(actions);
   host.appendChild(header);
 
@@ -12257,8 +12289,20 @@ async function renderSearchConfigsOverview(): Promise<void> {
     timeKeyByLine = computeSubTimestampSpread(timed);
   }
 
+  // A pinned lane that no longer exists (config disabled / re-run to 0 matches)
+  // should not linger — drop the pin so the readout/carets don't reference it.
+  if (scOvPinnedConfigId && !configs.some(c => c.id === scOvPinnedConfigId)) {
+    scOvPinnedConfigId = null;
+  }
+  // Extents of the pinned lane, captured during the loop, rendered into the header
+  // readout afterwards (first/last epoch in time mode, raw line either way).
+  let pinnedExtent: { config: SearchConfigDef; firstEpoch: number; lastEpoch: number;
+    firstRaw: number; lastRaw: number; count: number } | null = null;
+  let pinnedNoTime: SearchConfigDef | null = null; // pinned, but no timestamped matches
+
   for (const config of configs) {
     const results = state.searchConfigResults.get(config.id) || [];
+    const isPinned = config.id === scOvPinnedConfigId;
 
     const lane = document.createElement('div');
     lane.className = 'sc-ov-lane';
@@ -12282,6 +12326,24 @@ async function renderSearchConfigsOverview(): Promise<void> {
       }
     }
     pts.sort((a, b) => a.key - b.key);
+
+    // First/last match of this lane (sorted by domain key). Used for the pinned
+    // carets, the header readout, and the hover-tooltip span preview.
+    const laneFirst = pts.length ? pts[0] : null;
+    const laneLast = pts.length ? pts[pts.length - 1] : null;
+    const spanSuffix = laneFirst && laneLast
+      ? (useTime
+          ? ` · span ${formatDurationMs(laneLast.epoch - laneFirst.epoch)}`
+          : ` · lines ${laneFirst.raw + 1}–${laneLast.raw + 1}`)
+      : '';
+    if (isPinned) {
+      if (laneFirst && laneLast) {
+        pinnedExtent = { config, firstEpoch: laneFirst.epoch, lastEpoch: laneLast.epoch,
+          firstRaw: laneFirst.raw, lastRaw: laneLast.raw, count: pts.length };
+      } else {
+        pinnedNoTime = config;
+      }
+    }
 
     // Legend: drag-grip + swatch + truncated pattern + count. The label doubles
     // as the drag handle for reordering lanes (the canvas keeps click-to-navigate).
@@ -12308,13 +12370,31 @@ async function renderSearchConfigsOverview(): Promise<void> {
     label.appendChild(txt);
     label.appendChild(cnt);
 
-    // Canvas strip (fills the remaining lane width via flex:1).
+    // Canvas strip (fills the remaining lane width via flex:1). Wrapped in a
+    // positioned container so the pinned first/last carets can overlay it.
+    const canvasWrap = document.createElement('div');
+    canvasWrap.className = 'sc-ov-canvas-wrap';
     const canvas = document.createElement('canvas');
     canvas.className = 'sc-ov-canvas';
     canvas.style.height = `${LANE_H}px`;
+    canvasWrap.appendChild(canvas);
+
+    // Pinned lane → drop a bright caret on the first and last match. Left = first,
+    // right = last by construction; exact stamps live in the header readout.
+    if (isPinned && laneFirst && laneLast) {
+      const addCaret = (key: number, which: 'first' | 'last') => {
+        const frac = Math.max(0, Math.min(1, (key - domainMin) / domainSpan));
+        const pin = document.createElement('div');
+        pin.className = `sc-ov-pin sc-ov-pin-${which}`;
+        pin.style.left = `${frac * 100}%`;
+        canvasWrap.appendChild(pin);
+      };
+      addCaret(laneFirst.key, 'first');
+      addCaret(laneLast.key, 'last');
+    }
 
     lane.appendChild(label);
-    lane.appendChild(canvas);
+    lane.appendChild(canvasWrap);
     host.appendChild(lane);
 
     // Drag-to-reorder: the label is the handle; each lane is a drop target.
@@ -12414,6 +12494,12 @@ async function renderSearchConfigsOverview(): Promise<void> {
       if (!hit) return;
       goToLine(hit.pos, hit.raw);
       renderVisibleLines();
+      // Pin this lane so its first & last extents show on the strip + header.
+      // (Re-clicking the same lane just re-navigates — no unpin, no re-render.)
+      if (scOvPinnedConfigId !== config.id) {
+        scOvPinnedConfigId = config.id;
+        renderSearchConfigsOverview();
+      }
     });
     canvas.addEventListener('mousemove', (e) => {
       const rect = canvas.getBoundingClientRect();
@@ -12421,9 +12507,11 @@ async function renderSearchConfigsOverview(): Promise<void> {
       const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
       const hit = nearestAt(frac);
       if (!hit) { tip.style.display = 'none'; return; }
-      tip.textContent = useTime
+      const nearestStr = useTime
         ? `${config.pattern} · ${formatTimestamp(hit.epoch)} · line ${hit.raw + 1}`
         : `${config.pattern} · line ${hit.raw + 1}`;
+      const pinHint = isPinned ? '' : ' · click to pin ends';
+      tip.textContent = `${nearestStr}${spanSuffix}${pinHint}`;
       tip.style.display = 'block';
       // Viewport-fixed coords, clamped on-screen. Prefer above-right of the
       // cursor; flip below/left when there's no room.
@@ -12436,6 +12524,44 @@ async function renderSearchConfigsOverview(): Promise<void> {
       tip.style.top = `${top}px`;
     });
     canvas.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+  }
+
+  // ── Pinned-lane readout: exact first/last/span/count in the header ──
+  const buildClearBtn = (): HTMLButtonElement => {
+    const clear = document.createElement('button');
+    clear.className = 'sc-ov-pin-clear';
+    clear.textContent = '✕';
+    clear.title = 'Clear pinned markers (Esc)';
+    clear.addEventListener('click', (e) => {
+      e.stopPropagation();
+      scOvPinnedConfigId = null;
+      renderSearchConfigsOverview();
+    });
+    return clear;
+  };
+  if (pinnedExtent) {
+    const pe = pinnedExtent;
+    const sw = document.createElement('span');
+    sw.className = 'sc-ov-pin-swatch';
+    sw.style.backgroundColor = pe.config.color;
+    const pat = document.createElement('span');
+    pat.className = 'sc-ov-pin-pattern';
+    pat.textContent = pe.config.pattern;
+    const detail = document.createElement('span');
+    detail.className = 'sc-ov-pin-detail';
+    detail.textContent = useTime
+      ? `first ${formatTimestamp(pe.firstEpoch)} · last ${formatTimestamp(pe.lastEpoch)} · span ${formatDurationMs(pe.lastEpoch - pe.firstEpoch)} · ${pe.count.toLocaleString()}×`
+      : `first line ${(pe.firstRaw + 1).toLocaleString()} · last line ${(pe.lastRaw + 1).toLocaleString()} · ${pe.count.toLocaleString()} match${pe.count !== 1 ? 'es' : ''}`;
+    pinReadout.appendChild(sw);
+    pinReadout.appendChild(pat);
+    pinReadout.appendChild(detail);
+    pinReadout.appendChild(buildClearBtn());
+  } else if (pinnedNoTime) {
+    const detail = document.createElement('span');
+    detail.className = 'sc-ov-pin-detail';
+    detail.textContent = `${pinnedNoTime.pattern} · no timestamped matches to pin`;
+    pinReadout.appendChild(detail);
+    pinReadout.appendChild(buildClearBtn());
   }
 }
 
@@ -12569,6 +12695,9 @@ async function exportSearchConfigsOverviewImage(): Promise<void> {
     const cols = Math.max(1, Math.floor(stripW));
     const counts = new Uint32Array(cols);
     let maxCount = 1, counted = 0;
+    // Extents of the pinned lane, so the PNG carries the same first/last carets.
+    const trackExtent = config.id === scOvPinnedConfigId;
+    let firstKey = Infinity, lastKey = -Infinity;
     for (const r of results) {
       let key: number;
       if (useTime) {
@@ -12583,6 +12712,7 @@ async function exportSearchConfigsOverviewImage(): Promise<void> {
       const cx = Math.min(cols - 1, Math.max(0, Math.floor(((key - domainMin) / domainSpan) * cols)));
       counts[cx]++; counted++;
       if (counts[cx] > maxCount) maxCount = counts[cx];
+      if (trackExtent) { if (key < firstKey) firstKey = key; if (key > lastKey) lastKey = key; }
     }
 
     // count (right-aligned in the label column) + pattern (left, truncated)
@@ -12608,6 +12738,28 @@ async function exportSearchConfigsOverviewImage(): Promise<void> {
       ctx.fillStyle = hexToRgba(config.color, a);
       const bx = Math.max(0, Math.min(cols - minW, x - (minW >> 1)));
       ctx.fillRect(stripX + bx, sy, minW, stripH);
+    }
+
+    // Pinned lane → bake the first/last carets (bright tick + small triangle +
+    // a "first"/"last" label) so the exported image matches the on-screen pins.
+    if (trackExtent && lastKey >= firstKey) {
+      const drawCaret = (key: number, lbl: string, align: CanvasTextAlign) => {
+        const cxp = stripX + Math.max(0, Math.min(1, (key - domainMin) / domainSpan)) * stripW;
+        const x = Math.round(cxp) + 0.5;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x - 1, sy - 2, 2, stripH + 4);
+        ctx.beginPath(); // downward triangle above the tick
+        ctx.moveTo(x - 3, sy - 5); ctx.lineTo(x + 3, sy - 5); ctx.lineTo(x, sy - 1);
+        ctx.closePath(); ctx.fill();
+        ctx.font = '9px -apple-system, "Segoe UI", system-ui, sans-serif';
+        ctx.textAlign = align;
+        ctx.fillStyle = '#c8c8d0';
+        const lx = align === 'left' ? x + 4 : x - 4;
+        ctx.fillText(lbl, lx, sy + stripH + 8);
+        ctx.textAlign = 'left';
+      };
+      drawCaret(firstKey, 'first', 'left');
+      drawCaret(lastKey, 'last', 'right');
     }
   });
 
