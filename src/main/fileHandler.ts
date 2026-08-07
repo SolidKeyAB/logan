@@ -551,6 +551,30 @@ export class FileHandler {
       // the NEW matches since the last tick so the UI can populate results live
       // instead of waiting for the whole search to finish.
       let lastEmittedIndex = 0;
+      // Real scan progress from the last match's byte offset (rg scans sequentially and
+      // we own the per-line offset index) — replaces the fake matches/100 estimate.
+      // Stays 0 for zero-match scans (the renderer's elapsed heartbeat covers that case).
+      let lastMatchAbsLine = 0;
+      let fileSize = 0;
+      try { fileSize = fs.statSync(this.filePath!).size; } catch { /* fall back to estimate */ }
+      // Stream full match objects only for the first STREAM_MATCH_CAP matches (a user
+      // can only interact with a few screenfuls anyway); past that emit counts only.
+      // Truncate streamed line text — the UI truncates at 300 chars and the authoritative
+      // untruncated set still arrives at the end. Prevents a match-dense pattern from
+      // flooding IPC with tens of MB per tick (which made streaming slower than the old
+      // return-at-end path).
+      const STREAM_MATCH_CAP = 2000;
+      const STREAM_TEXT_MAX = 1000;
+      const takeStreamDelta = (): SearchMatch[] | undefined => {
+        if (lastEmittedIndex >= STREAM_MATCH_CAP) return undefined;
+        const upto = Math.min(matches.length, STREAM_MATCH_CAP);
+        if (upto <= lastEmittedIndex) return undefined;
+        const slice = matches.slice(lastEmittedIndex, upto);
+        lastEmittedIndex = upto;
+        return slice.map(m => m.lineText.length > STREAM_TEXT_MAX
+          ? { ...m, lineText: m.lineText.slice(0, STREAM_TEXT_MAX) }
+          : m);
+      };
 
       proc.stdout.on('data', (data: Buffer) => {
         if (signal?.cancelled) {
@@ -590,6 +614,7 @@ export class FileHandler {
             }
           }
 
+          lastMatchAbsLine = lineNum - 1; // absolute 0-based line (incl. header) for offset lookup
           matches.push({
             lineNumber: adjustedLineNum,
             column: column - 1, // ripgrep uses 1-based columns
@@ -607,10 +632,12 @@ export class FileHandler {
         const now = Date.now();
         if (onProgress && now - lastProgressUpdate > 100) {
           lastProgressUpdate = now;
-          // Estimate progress based on matches (ripgrep doesn't report %)
-          const delta = matches.slice(lastEmittedIndex);
-          lastEmittedIndex = matches.length;
-          onProgress(Math.min(90, matches.length / 100), matches.length, delta);
+          // Real % from the last match's byte offset; fall back to the old estimate if
+          // we somehow lack file size / offsets.
+          const pct = fileSize > 0 && lastMatchAbsLine < this.offsets.length
+            ? Math.min(99, (this.offsets[lastMatchAbsLine] / fileSize) * 100)
+            : Math.min(90, matches.length / 100);
+          onProgress(pct, matches.length, takeStreamDelta());
         }
       });
 
@@ -620,10 +647,8 @@ export class FileHandler {
       });
 
       proc.on('close', () => {
-        // Flush any matches found since the last throttled tick.
-        const delta = matches.slice(lastEmittedIndex);
-        lastEmittedIndex = matches.length;
-        onProgress?.(100, matches.length, delta);
+        // Flush any matches found since the last throttled tick (capped/truncated).
+        onProgress?.(100, matches.length, takeStreamDelta());
         resolve(matches);
       });
 
