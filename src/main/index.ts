@@ -2854,8 +2854,11 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
   try {
     const matches = await handler.search(
       options,
-      (percent, matchCount) => {
-        if (!silent) mainWindow?.webContents.send(IPC.SEARCH_PROGRESS, { percent, matchCount });
+      (percent, matchCount, deltaMatches) => {
+        // Forward the running % + count AND the new matches since the last tick, so
+        // the renderer can populate the results panel live (proof it's not stuck +
+        // lets the user click partial results while the rest keep streaming in).
+        if (!silent) mainWindow?.webContents.send(IPC.SEARCH_PROGRESS, { percent, matchCount, matches: deltaMatches });
       },
       signal
     );
