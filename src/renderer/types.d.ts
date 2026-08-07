@@ -584,7 +584,7 @@ interface Api {
 
   // Events
   onIndexingProgress: (callback: (percent: number) => void) => () => void;
-  onSearchProgress: (callback: (data: { percent: number; matchCount: number }) => void) => () => void;
+  onSearchProgress: (callback: (data: { percent: number; matchCount: number; matches?: SearchResult[] }) => void) => () => void;
   onAnalyzeProgress: (callback: (data: { phase: string; percent: number; message?: string }) => void) => () => void;
   onCompareAnalyzeProgress: (callback: (data: { phase: string; percent: number; message?: string }) => void) => () => void;
 

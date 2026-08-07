@@ -449,7 +449,7 @@ export class FileHandler {
 
   async search(
     options: SearchOptions,
-    onProgress?: (percent: number, matchCount: number) => void,
+    onProgress?: (percent: number, matchCount: number, deltaMatches?: SearchMatch[]) => void,
     signal?: { cancelled: boolean }
   ): Promise<SearchMatch[]> {
     if (!this.filePath) return [];
@@ -485,7 +485,7 @@ export class FileHandler {
   // must route to searchWithStream() instead, which applies column filtering.
   private async searchWithRipgrep(
     options: SearchOptions,
-    onProgress?: (percent: number, matchCount: number) => void,
+    onProgress?: (percent: number, matchCount: number, deltaMatches?: SearchMatch[]) => void,
     signal?: { cancelled: boolean }
   ): Promise<SearchMatch[]> {
     if (!this.filePath) return [];
@@ -547,6 +547,10 @@ export class FileHandler {
       const proc = spawn(getRipgrepPath(), args);
       let buffer = '';
       let lastProgressUpdate = Date.now();
+      // Index of the first match not yet handed to onProgress. Lets us stream only
+      // the NEW matches since the last tick so the UI can populate results live
+      // instead of waiting for the whole search to finish.
+      let lastEmittedIndex = 0;
 
       proc.stdout.on('data', (data: Buffer) => {
         if (signal?.cancelled) {
@@ -604,7 +608,9 @@ export class FileHandler {
         if (onProgress && now - lastProgressUpdate > 100) {
           lastProgressUpdate = now;
           // Estimate progress based on matches (ripgrep doesn't report %)
-          onProgress(Math.min(90, matches.length / 100), matches.length);
+          const delta = matches.slice(lastEmittedIndex);
+          lastEmittedIndex = matches.length;
+          onProgress(Math.min(90, matches.length / 100), matches.length, delta);
         }
       });
 
@@ -614,7 +620,10 @@ export class FileHandler {
       });
 
       proc.on('close', () => {
-        onProgress?.(100, matches.length);
+        // Flush any matches found since the last throttled tick.
+        const delta = matches.slice(lastEmittedIndex);
+        lastEmittedIndex = matches.length;
+        onProgress?.(100, matches.length, delta);
         resolve(matches);
       });
 
@@ -841,7 +850,7 @@ export class FileHandler {
 
   private async searchWithStream(
     options: SearchOptions,
-    onProgress?: (percent: number, matchCount: number) => void,
+    onProgress?: (percent: number, matchCount: number, deltaMatches?: SearchMatch[]) => void,
     signal?: { cancelled: boolean }
   ): Promise<SearchMatch[]> {
     if (!this.filePath) return [];
