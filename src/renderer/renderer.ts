@@ -11787,16 +11787,20 @@ async function loadSavedPatterns(): Promise<void> {
 // re-applies it; the ▾ menu switches it. (Columns lens is still deferred —
 // Pattern Columns has no "apply" path yet.)
 type PatternLens = 'search' | 'highlight' | 'filter' | 'trend' | 'flips' | 'pin';
-const PATTERN_LENSES: Array<{ id: PatternLens; label: string }> = [
-  { id: 'search', label: 'Search config' },
-  { id: 'highlight', label: 'Highlight' },
-  { id: 'filter', label: 'Filter' },
-  { id: 'trend', label: 'Trend' },
-  { id: 'flips', label: 'Flips' },
-  { id: 'pin', label: 'Pin on timeline' },
+interface PatternLensMeta { id: PatternLens; label: string; icon: string; hint: string }
+const PATTERN_LENSES: PatternLensMeta[] = [
+  { id: 'search',    label: 'Search config',   icon: '🔍', hint: 'Add as a live search-config lane' },
+  { id: 'highlight', label: 'Highlight',       icon: '🖍', hint: 'Paint matches in place (keeps full file)' },
+  { id: 'filter',    label: 'Filter',          icon: '🔽', hint: 'Narrow the viewer to matching lines' },
+  { id: 'trend',     label: 'Trend',           icon: '📈', hint: 'Chart occurrences / captured value over time' },
+  { id: 'flips',     label: 'Flips',           icon: '🔀', hint: 'List every change of the matched value' },
+  { id: 'pin',       label: 'Pin on timeline', icon: '📌', hint: 'Pin first & last match on the overview strip' },
 ];
+function patternLensMeta(id: string): PatternLensMeta {
+  return PATTERN_LENSES.find(l => l.id === id) || PATTERN_LENSES[0];
+}
 function patternLensLabel(id: string): string {
-  return (PATTERN_LENSES.find(l => l.id === id) || PATTERN_LENSES[0]).label;
+  return patternLensMeta(id).label;
 }
 
 function renderPatternLibChips(): void {
@@ -11813,10 +11817,11 @@ function renderPatternLibChips(): void {
 
   for (const p of savedPatterns) {
     const lens = (p.defaultLens as PatternLens) || 'search';
+    const lensMeta = patternLensMeta(lens);
     const chip = document.createElement('span');
     chip.className = 'pattern-lib-chip';
     const flags = `${p.isRegex ? ' ·regex' : ''}${p.matchCase ? ' ·case' : ''}${p.wholeWord ? ' ·word' : ''}`;
-    chip.title = `${p.regex}${flags}\nClick to apply as ${patternLensLabel(lens)} · ▾ to change lens`;
+    chip.title = `${p.regex}${flags}\nClick to apply as ${lensMeta.label} — ${lensMeta.hint}\n▾ to change lens`;
 
     if (p.color) {
       const swatch = document.createElement('span');
@@ -11831,10 +11836,16 @@ function renderPatternLibChips(): void {
     name.addEventListener('click', () => { void applyPatternAsLens(p, lens); });
 
     // Lens switcher — pick how this pattern applies; the choice is remembered.
+    // The button carries the CURRENT lens icon so a plain chip-click's effect is
+    // legible at rest (no hover needed); the ▾ still opens the picker.
     const lensBtn = document.createElement('button');
     lensBtn.className = 'pattern-lib-chip-lens';
-    lensBtn.textContent = '▾';
-    lensBtn.title = `Apply as… (now: ${patternLensLabel(lens)})`;
+    const lensIco = document.createElement('span');
+    lensIco.className = 'pattern-lib-chip-lens-ico';
+    lensIco.textContent = lensMeta.icon;
+    lensBtn.appendChild(lensIco);
+    lensBtn.appendChild(document.createTextNode('▾'));
+    lensBtn.title = `Apply as… (now: ${lensMeta.label})`;
     lensBtn.addEventListener('click', (e) => { e.stopPropagation(); showPatternLensMenu(e as MouseEvent, p); });
 
     const del = document.createElement('button');
@@ -12029,8 +12040,10 @@ async function applyPatternAsLens(p: SavedPatternDef, lens: PatternLens): Promis
   }
 }
 
-// Small popup listing the lenses; the current default is check-marked. Mirrors
-// the notes/tab context-menu pattern (close on outside click, clamp on-screen).
+// Small popup listing the lenses; the current default is check-marked. Each row
+// shows the lens icon, name and a one-line hint so the six ways to apply a
+// pattern are self-explanatory. Mirrors the notes/tab context-menu pattern
+// (close on outside click, clamp on-screen).
 function showPatternLensMenu(e: MouseEvent, p: SavedPatternDef): void {
   document.querySelector('.pattern-lens-menu')?.remove();
   const current = (p.defaultLens as PatternLens) || 'search';
@@ -12038,8 +12051,26 @@ function showPatternLensMenu(e: MouseEvent, p: SavedPatternDef): void {
   menu.className = 'pattern-lens-menu';
   for (const l of PATTERN_LENSES) {
     const item = document.createElement('div');
-    item.className = 'pattern-lens-item';
-    item.textContent = `${l.id === current ? '✓ ' : '  '}${l.label}`;
+    item.className = 'pattern-lens-item' + (l.id === current ? ' pattern-lens-item-current' : '');
+
+    const top = document.createElement('div');
+    top.className = 'pattern-lens-item-top';
+    const check = document.createElement('span');
+    check.className = 'pattern-lens-check';
+    check.textContent = l.id === current ? '✓' : '';
+    const ico = document.createElement('span');
+    ico.className = 'pattern-lens-ico';
+    ico.textContent = l.icon;
+    const label = document.createElement('span');
+    label.className = 'pattern-lens-label';
+    label.textContent = l.label;
+    top.append(check, ico, label);
+
+    const hint = document.createElement('div');
+    hint.className = 'pattern-lens-hint';
+    hint.textContent = l.hint;
+
+    item.append(top, hint);
     item.addEventListener('click', () => { menu.remove(); void applyPatternAsLens(p, l.id); });
     menu.appendChild(item);
   }
