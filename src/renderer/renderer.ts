@@ -343,6 +343,10 @@ interface AppState {
   timeAlignMaxTime: number;
   // Search Configs overview strip: align lanes by wall-clock time (shared axis) vs. by line position
   scOverviewAlignByTime: boolean;
+  // Search Configs overview strip: collapse the per-pattern lanes into ONE lane
+  // where every matched line is drawn once (a line matched by 2+ patterns is a
+  // single grey mark) instead of repeating it across each pattern's lane.
+  scOverviewCombine: boolean;
 }
 
 const state: AppState = {
@@ -415,6 +419,8 @@ const state: AppState = {
   timeAlignMinTime: 0,
   timeAlignMaxTime: 0,
   scOverviewAlignByTime: localStorage.getItem('logan-sc-overview-time') === 'true',
+  // Default ON: each matched line shows once (opt out to the per-pattern lanes).
+  scOverviewCombine: localStorage.getItem('logan-sc-overview-combine') !== 'false',
 };
 
 // Constants
@@ -4515,6 +4521,20 @@ function mpOffsetOf(host: HTMLElement, node: Node, offset: number): number | nul
     n = walker.nextNode();
   }
   return null;
+}
+
+// Resolve the current window selection to char offsets into `host`'s text, but only
+// when the whole selection lies inside `host`. Shared by Make-Pattern and the
+// Pattern-Columns paint line (both render their sample verbatim as inline spans).
+function hostSelectionRange(host: HTMLElement): { start: number; end: number } | null {
+  const sel = window.getSelection();
+  if (!host || !sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+  const range = sel.getRangeAt(0);
+  if (!host.contains(range.startContainer) || !host.contains(range.endContainer)) return null;
+  const start = mpOffsetOf(host, range.startContainer, range.startOffset);
+  const end = mpOffsetOf(host, range.endContainer, range.endOffset);
+  if (start === null || end === null || end <= start) return null;
+  return { start, end };
 }
 
 function openMakePatternModal(sample: string): void {
@@ -12540,6 +12560,185 @@ function computeSubTimestampSpread(timed: Array<{ ln: number; ep: number }>): Ma
   return keyByLine;
 }
 
+// Colour for a line matched by 2+ patterns in combined mode — a light neutral so
+// co-occurrences read distinctly against the per-pattern hues on the dark strip.
+const SC_OV_MULTI_COLOR = '#eef1f7';
+
+interface ScOvCombinedPoint { key: number; epoch: number; pos: number; raw: number; colorIdx: number; cfgIds: number[]; }
+
+// Collapse every enabled config's matches into ONE list of DISTINCT lines. A line
+// matched by several patterns collapses to a single point (colorIdx = -1 → the
+// shared/multi colour); a line matched by exactly one keeps that config's index.
+// key/pos/epoch are resolved exactly like the per-lane path so x-positions match.
+function buildScOverviewCombinedPoints(
+  configs: SearchConfigDef[], useTime: boolean, timeKeyByLine: Map<number, number>
+): ScOvCombinedPoint[] {
+  const byLine = new Map<number, { raw: number; pos: number; epoch: number; key: number; cfgIds: number[] }>();
+  for (let ci = 0; ci < configs.length; ci++) {
+    for (const r of (state.searchConfigResults.get(configs[ci].id) || [])) {
+      const di = getFilteredDisplayIndex(r.lineNumber);
+      const pos = di >= 0 ? di : r.lineNumber;
+      let epoch: number, key: number;
+      if (useTime) {
+        const ep = scOverviewTsCache.get(r.lineNumber);
+        if (ep === undefined || Number.isNaN(ep)) continue; // no timestamp → omit from time view
+        epoch = ep;
+        const k = timeKeyByLine.get(r.lineNumber);
+        key = k !== undefined ? k : ep;
+      } else {
+        epoch = pos; key = pos;
+      }
+      let entry = byLine.get(r.lineNumber);
+      if (!entry) { entry = { raw: r.lineNumber, pos, epoch, key, cfgIds: [] }; byLine.set(r.lineNumber, entry); }
+      if (!entry.cfgIds.includes(ci)) entry.cfgIds.push(ci);
+    }
+  }
+  const pts = Array.from(byLine.values()).map(e => ({
+    key: e.key, epoch: e.epoch, pos: e.pos, raw: e.raw,
+    colorIdx: e.cfgIds.length === 1 ? e.cfgIds[0] : -1,
+    cfgIds: e.cfgIds,
+  }));
+  pts.sort((a, b) => a.key - b.key || a.raw - b.raw);
+  return pts;
+}
+
+// Render the single combined lane (each matched line once). Mirrors the per-lane
+// paint/hover/click, but colours each column by its pattern — or the shared colour
+// where a column mixes patterns / holds a multi-matched line.
+function renderScOverviewCombinedLane(
+  host: HTMLElement, configs: SearchConfigDef[],
+  p: { useTime: boolean; domainMin: number; domainSpan: number; timeKeyByLine: Map<number, number>; dpr: number; laneH: number; tip: HTMLElement }
+): void {
+  const { useTime, domainMin, domainSpan, timeKeyByLine, dpr, laneH, tip } = p;
+  const pts = buildScOverviewCombinedPoints(configs, useTime, timeKeyByLine);
+
+  const lane = document.createElement('div');
+  lane.className = 'sc-ov-lane';
+
+  // Legend: a swatch per pattern (+ a shared swatch if any line matched 2+),
+  // then the distinct-line count. No drag handle — there's only one lane.
+  const label = document.createElement('div');
+  label.className = 'sc-ov-label sc-ov-label-combined';
+  const swatches = document.createElement('span');
+  swatches.className = 'sc-ov-combined-swatches';
+  for (const c of configs) {
+    const s = document.createElement('span');
+    s.className = 'sc-ov-swatch';
+    s.style.backgroundColor = c.color;
+    s.title = c.pattern;
+    swatches.appendChild(s);
+  }
+  const multiCount = pts.reduce((n, pt) => n + (pt.colorIdx === -1 ? 1 : 0), 0);
+  if (multiCount > 0) {
+    const s = document.createElement('span');
+    s.className = 'sc-ov-swatch sc-ov-swatch-multi';
+    s.style.backgroundColor = SC_OV_MULTI_COLOR;
+    s.title = `${multiCount.toLocaleString()} line${multiCount !== 1 ? 's' : ''} matched by 2+ patterns`;
+    swatches.appendChild(s);
+  }
+  const txt = document.createElement('span');
+  txt.className = 'sc-ov-label-text';
+  txt.textContent = 'All matches';
+  const cnt = document.createElement('span');
+  cnt.className = 'sc-ov-label-count';
+  cnt.textContent = pts.length.toLocaleString();
+  label.title = `Every matched line shown once — ${pts.length.toLocaleString()} line${pts.length !== 1 ? 's' : ''}` +
+    (multiCount > 0 ? ` (${multiCount.toLocaleString()} matched by 2+ patterns, in grey)` : '');
+  label.appendChild(swatches);
+  label.appendChild(txt);
+  label.appendChild(cnt);
+
+  const canvasWrap = document.createElement('div');
+  canvasWrap.className = 'sc-ov-canvas-wrap';
+  const canvas = document.createElement('canvas');
+  canvas.className = 'sc-ov-canvas';
+  canvas.style.height = `${laneH}px`;
+  canvasWrap.appendChild(canvas);
+
+  lane.appendChild(label);
+  lane.appendChild(canvasWrap);
+  host.appendChild(lane);
+
+  const paint = () => {
+    const stripW = Math.max(40, Math.floor(canvas.clientWidth));
+    const cw = Math.max(1, Math.floor(stripW * dpr));
+    const ch = Math.max(1, Math.floor(laneH * dpr));
+    canvas.width = cw;
+    canvas.height = ch;
+
+    const counts = new Uint32Array(cw);
+    const colAt = new Int16Array(cw).fill(-2); // -2 empty, -1 mixed/multi, >=0 config idx
+    let maxCount = 1;
+    for (const pt of pts) {
+      const x = Math.min(cw - 1, Math.max(0, Math.floor(((pt.key - domainMin) / domainSpan) * cw)));
+      counts[x]++;
+      if (counts[x] > maxCount) maxCount = counts[x];
+      if (colAt[x] === -2) colAt[x] = pt.colorIdx;
+      else if (colAt[x] !== pt.colorIdx) colAt[x] = -1;
+    }
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.fillStyle = '#14141a';
+    ctx.fillRect(0, 0, cw, ch);
+    const minW = Math.max(1, Math.round(2 * dpr));
+    for (let x = 0; x < cw; x++) {
+      const n = counts[x];
+      if (n === 0) continue;
+      const a = 0.55 + 0.45 * (Math.log1p(n) / Math.log1p(maxCount));
+      const idx = colAt[x];
+      ctx.fillStyle = hexToRgba(idx >= 0 ? configs[idx].color : SC_OV_MULTI_COLOR, a);
+      const bx = Math.max(0, Math.min(cw - minW, x - (minW >> 1)));
+      ctx.fillRect(bx, 0, minW, ch);
+    }
+  };
+  requestAnimationFrame(paint);
+
+  const nearestAt = (frac: number): ScOvCombinedPoint | null => {
+    if (pts.length === 0) return null;
+    const target = domainMin + frac * domainSpan;
+    let lo = 0, hi = pts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (pts[mid].key < target) lo = mid + 1; else hi = mid;
+    }
+    let best = pts[lo];
+    if (lo > 0 && Math.abs(pts[lo - 1].key - target) < Math.abs(best.key - target)) best = pts[lo - 1];
+    return best;
+  };
+
+  canvas.style.cursor = 'pointer';
+  canvas.addEventListener('click', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0) return;
+    const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const hit = nearestAt(frac);
+    if (!hit) return;
+    goToLine(hit.pos, hit.raw);
+    renderVisibleLines();
+    highlightScResultRow(hit.raw, true);
+  });
+  canvas.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0) return;
+    const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const hit = nearestAt(frac);
+    if (!hit) { tip.style.display = 'none'; return; }
+    const names = hit.cfgIds.map(i => configs[i] && configs[i].pattern).filter(Boolean).join(', ');
+    const base = useTime ? `${formatTimestamp(hit.epoch)} · line ${hit.raw + 1}` : `line ${hit.raw + 1}`;
+    tip.textContent = `${base} · ${names}`;
+    tip.style.display = 'block';
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let left = e.clientX + 12;
+    if (left + tw > window.innerWidth - 4) left = e.clientX - tw - 12;
+    let top = e.clientY - th - 8;
+    if (top < 4) top = e.clientY + 18;
+    tip.style.left = `${Math.max(4, left)}px`;
+    tip.style.top = `${top}px`;
+  });
+  canvas.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+}
+
 async function renderSearchConfigsOverview(): Promise<void> {
   const host = elements.scOverview;
   if (!host) return;
@@ -12601,6 +12800,18 @@ async function renderSearchConfigsOverview(): Promise<void> {
     localStorage.setItem('logan-sc-overview-time', String(state.scOverviewAlignByTime));
     renderSearchConfigsOverview();
   });
+  // Combine toggle: one lane (each line once) vs. one lane per pattern.
+  const combineBtn = document.createElement('button');
+  combineBtn.className = 'sc-ov-mode-btn';
+  combineBtn.textContent = state.scOverviewCombine ? '◱ Combined' : '▤ Per pattern';
+  combineBtn.title = state.scOverviewCombine
+    ? 'Every matched line is shown once on a single lane (grey = matched by 2+ patterns). Click to split into one lane per pattern.'
+    : 'One lane per pattern — a line matching several patterns repeats in each lane. Click to combine into a single lane where every matched line shows once.';
+  combineBtn.addEventListener('click', () => {
+    state.scOverviewCombine = !state.scOverviewCombine;
+    localStorage.setItem('logan-sc-overview-combine', String(state.scOverviewCombine));
+    renderSearchConfigsOverview();
+  });
   const exportBtn = document.createElement('button');
   exportBtn.className = 'sc-ov-mode-btn';
   exportBtn.textContent = '⤓ PNG';
@@ -12608,6 +12819,7 @@ async function renderSearchConfigsOverview(): Promise<void> {
   exportBtn.addEventListener('click', () => { exportSearchConfigsOverviewImage(); });
   const actions = document.createElement('div');
   actions.className = 'sc-ov-actions';
+  actions.appendChild(combineBtn);
   actions.appendChild(toggle);
   actions.appendChild(exportBtn);
   // Readout for the pinned lane (first · last · span · count) — filled after the
@@ -12698,6 +12910,14 @@ async function renderSearchConfigsOverview(): Promise<void> {
   if (scOvPinnedConfigId && !configs.some(c => c.id === scOvPinnedConfigId)) {
     scOvPinnedConfigId = null;
   }
+
+  // Combined mode: one lane, every matched line drawn exactly once (no per-pattern
+  // repetition). Rendered here and we return before the per-lane loop below.
+  if (state.scOverviewCombine) {
+    renderScOverviewCombinedLane(host, configs, { useTime, domainMin, domainSpan, timeKeyByLine, dpr, laneH: LANE_H, tip });
+    return;
+  }
+
   // Extents of the pinned lane, captured during the loop, rendered into the header
   // readout afterwards (first/last epoch in time mode, raw line either way).
   let pinnedExtent: { config: SearchConfigDef; firstEpoch: number; lastEpoch: number;
@@ -12898,6 +13118,9 @@ async function renderSearchConfigsOverview(): Promise<void> {
       if (!hit) return;
       goToLine(hit.pos, hit.raw);
       renderVisibleLines();
+      // Also jump the found-lines list to this match so the click lands on the
+      // same row there, not just in the main viewer.
+      highlightScResultRow(hit.raw, true);
       // Pin this lane so its first & last extents show on the strip + header.
       // (Re-clicking the same lane just re-navigates — no unpin, no re-render.)
       if (scOvPinnedConfigId !== config.id) {
@@ -13027,7 +13250,8 @@ async function exportSearchConfigsOverviewImage(): Promise<void> {
   const subY = titleY + 17;
   const axisY = subY + 22;
   const lanesTop = axisY + 8;
-  const lanesH = configs.length * rowH;
+  const combineMode = state.scOverviewCombine;
+  const lanesH = (combineMode ? 1 : configs.length) * rowH;
   const footerY = lanesTop + lanesH + 16;
   const H = footerY + PAD - 8;
 
@@ -13086,7 +13310,55 @@ async function exportSearchConfigsOverviewImage(): Promise<void> {
   }
   ctx.textAlign = 'left';
 
-  configs.forEach((config, idx) => {
+  if (combineMode) {
+    // One lane: every matched line once. Colour each column by its pattern, or the
+    // shared colour where a column mixes patterns / holds a multi-matched line.
+    const pts = buildScOverviewCombinedPoints(configs, useTime, timeKeyByLine);
+    const y = lanesTop;
+    const sy = y + (rowH - stripH) / 2;
+    const cols = Math.max(1, Math.floor(stripW));
+    const counts = new Uint32Array(cols);
+    const colAt = new Int16Array(cols).fill(-2);
+    let maxCount = 1;
+    for (const pt of pts) {
+      const cx = Math.min(cols - 1, Math.max(0, Math.floor(((pt.key - domainMin) / domainSpan) * cols)));
+      counts[cx]++;
+      if (counts[cx] > maxCount) maxCount = counts[cx];
+      if (colAt[cx] === -2) colAt[cx] = pt.colorIdx;
+      else if (colAt[cx] !== pt.colorIdx) colAt[cx] = -1;
+    }
+
+    // Row swatches: pattern colours (+ a shared swatch if any line matched 2+).
+    let swx = PAD;
+    const swN = Math.min(configs.length, 6);
+    for (let i = 0; i < swN; i++) { ctx.fillStyle = configs[i].color; ctx.fillRect(swx, y + rowH / 2 - 4, 9, 9); swx += 12; }
+    const multiCount = pts.reduce((n, pt) => n + (pt.colorIdx === -1 ? 1 : 0), 0);
+    if (multiCount > 0) { ctx.fillStyle = SC_OV_MULTI_COLOR; ctx.fillRect(swx, y + rowH / 2 - 4, 9, 9); swx += 12; }
+
+    ctx.font = '11px ui-monospace, Menlo, monospace';
+    const countStr = pts.length.toLocaleString();
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#8a8a92';
+    ctx.fillText(countStr, PAD + labelW - 2, y + rowH / 2 + 4);
+    const countW = ctx.measureText(countStr).width;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#d4d4d8';
+    ctx.fillText(fitText('All matches', labelW - (swx - PAD) - countW - 10), swx + 2, y + rowH / 2 + 4);
+
+    ctx.fillStyle = '#14141a';
+    ctx.fillRect(stripX, sy, stripW, stripH);
+    const minW = 2;
+    for (let x = 0; x < cols; x++) {
+      const n = counts[x];
+      if (n === 0) continue;
+      const a = 0.55 + 0.45 * (Math.log1p(n) / Math.log1p(maxCount));
+      const idx = colAt[x];
+      ctx.fillStyle = hexToRgba(idx >= 0 ? configs[idx].color : SC_OV_MULTI_COLOR, a);
+      const bx = Math.max(0, Math.min(cols - minW, x - (minW >> 1)));
+      ctx.fillRect(stripX + bx, sy, minW, stripH);
+    }
+  }
+  if (!combineMode) configs.forEach((config, idx) => {
     const y = lanesTop + idx * rowH;
     const results = state.searchConfigResults.get(config.id) || [];
     const sy = y + (rowH - stripH) / 2;
@@ -13283,6 +13555,7 @@ async function renderSearchConfigsResults(): Promise<void> {
       const entry = displayResults[i];
       const item = document.createElement('div');
       item.className = 'sc-result-item';
+      item.dataset.line = String(entry.lineNumber); // lets a timeline click find this row
       if (entry.configIds.size > 1) item.classList.add('sc-result-multi');
 
       // One dot per distinct config that matched this line.
@@ -13312,12 +13585,37 @@ async function renderSearchConfigsResults(): Promise<void> {
         const scrollTarget = di >= 0 ? di : entry.lineNumber;
         goToLine(scrollTarget, entry.lineNumber);
         renderVisibleLines();
+        highlightScResultRow(entry.lineNumber, false); // mark active (already in view)
       });
       fragment.appendChild(item);
     }
 
     list.appendChild(fragment);
     if (chunkEnd < displayResults.length) await yieldToUI();
+  }
+}
+
+// Sync the found-lines results list to a line the user jumped to — from a direct
+// row click, or from clicking a point on the overview-strip timeline. Clears any
+// prior selection, marks the matching row active, and (when `scroll`) brings it
+// into view with a one-shot flash so the timeline→list link is obvious. No-op if
+// the line isn't in the (capped) list. Line numbers here are 0-based/raw, matching
+// the `data-line` written by renderSearchConfigsResults and `raw` from the strip.
+function highlightScResultRow(rawLine: number, scroll: boolean): void {
+  const list = elements.searchConfigsResults;
+  if (!list) return;
+  list.querySelectorAll('.sc-result-item.sc-result-active')
+    .forEach(el => el.classList.remove('sc-result-active', 'sc-result-flash'));
+  const row = list.querySelector(`.sc-result-item[data-line="${rawLine}"]`) as HTMLElement | null;
+  if (!row) return;
+  row.classList.add('sc-result-active');
+  if (scroll) {
+    row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    // Restart the flash animation even if this row was already active.
+    row.classList.remove('sc-result-flash');
+    void row.offsetWidth; // force reflow so the re-added class re-triggers the keyframes
+    row.classList.add('sc-result-flash');
+    row.addEventListener('animationend', () => row.classList.remove('sc-result-flash'), { once: true });
   }
 }
 
@@ -15269,9 +15567,13 @@ async function jumpToTimeSyncRow(fileIndex: number, ln: number): Promise<void> {
 // one named-capture regex and previews the extracted columns over this file.
 // No AI. Save a pattern to reuse it on any log.
 type PatcolMode = 'grok' | 'regex' | 'paint';
-interface PatcolToken { start: number; end: number; text: string; varName: string | null }
+// A painted column = a char range [start,end) into the sample. Ranges need NOT
+// align to whitespace tokens — the user drag-selects any part of the line and the
+// (main-process) compile engine turns each span into a capture group, so the
+// selection literally generates the regex.
+interface PatcolSpan { start: number; end: number; name: string }
 let patcolMode: PatcolMode = 'grok';
-let patcolTokens: PatcolToken[] = [];
+let patcolSpans: PatcolSpan[] = [];
 let patcolCompiled: { regex: string; flags: string; fields: string[]; named: boolean } | null = null;
 let patcolSaved: any[] = [];
 let patcolDebounce: number | null = null;
@@ -15290,7 +15592,7 @@ async function patcolPullSample(): Promise<void> {
   try {
     const r = await window.api.getLines(ln, 1);
     const text = r && r.success && r.lines && r.lines[0] ? r.lines[0].text : '';
-    if (text) { sampleInput.value = text; patcolTokenize(); patcolPreviewSoon(); }
+    if (text) { sampleInput.value = text; patcolRenderPaint(); patcolPreviewSoon(); }
   } catch { /* ignore */ }
 }
 
@@ -15303,71 +15605,154 @@ function patcolSetMode(mode: PatcolMode): void {
   show('patcol-grok-wrap', mode === 'grok');
   show('patcol-regex-wrap', mode === 'regex');
   show('patcol-paint-wrap', mode === 'paint');
-  if (mode === 'paint') patcolTokenize();
+  if (mode === 'paint') patcolRenderPaint();
   patcolPreviewSoon();
 }
 
-// Whitespace-tokenize the sample line, remembering each token's char offsets so
-// painted spans map straight onto the compile engine's span model.
-function patcolTokenize(): void {
-  const sampleInput = document.getElementById('patcol-sample-input') as HTMLInputElement | null;
-  const sample = sampleInput ? sampleInput.value : '';
-  const prevNames = new Map<string, string>();
-  for (const t of patcolTokens) { if (t.varName) prevNames.set(`${t.start}:${t.end}`, t.varName); }
-  patcolTokens = [];
-  const re = /\S+/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(sample)) !== null) {
-    const key = `${m.index}:${m.index + m[0].length}`;
-    patcolTokens.push({ start: m.index, end: m.index + m[0].length, text: m[0], varName: prevNames.get(key) ?? null });
-  }
-  patcolRenderTokens();
+function patcolSample(): string {
+  return (document.getElementById('patcol-sample-input') as HTMLInputElement | null)?.value || '';
 }
 
-function patcolRenderTokens(): void {
+// Merge overlapping spans, clamp to the sample, and keep them left-to-right so the
+// rendered line stays a verbatim copy of the sample (offsets align 1:1).
+function patcolNormalizeSpans(): void {
+  const sample = patcolSample();
+  const spans = patcolSpans
+    .filter(s => s.end > s.start && s.start >= 0 && s.end <= sample.length)
+    .sort((a, b) => a.start - b.start);
+  const merged: PatcolSpan[] = [];
+  for (const s of spans) {
+    const prev = merged[merged.length - 1];
+    if (prev && s.start <= prev.end) { prev.end = Math.max(prev.end, s.end); } // extend, keep name
+    else { merged.push({ ...s }); }
+  }
+  patcolSpans = merged;
+}
+
+// Next free colN name (never collides with an existing column).
+function patcolNextColName(): string {
+  const used = new Set(patcolSpans.map(s => s.name));
+  let n = 1;
+  while (used.has('col' + n)) n++;
+  return 'col' + n;
+}
+
+// Add a column from a char range (drag-selection or a clicked word). Whitespace at
+// the edges of the selection is trimmed so "  level " still yields a tight column.
+function patcolAddColumn(start: number, end: number): void {
+  const sample = patcolSample();
+  start = Math.max(0, start);
+  end = Math.min(sample.length, end);
+  while (start < end && /\s/.test(sample[start])) start++;
+  while (end > start && /\s/.test(sample[end - 1])) end--;
+  if (end <= start) return;
+  patcolSpans.push({ start, end, name: patcolNextColName() });
+  patcolNormalizeSpans();
+  patcolRenderPaint();
+  patcolPreviewSoon();
+}
+
+// Toggle a whole-word token: if a span already covers exactly this range, drop it;
+// otherwise mark it as a column. (Free drag-select handles sub-word ranges.)
+function patcolToggleWord(start: number, end: number): void {
+  const exact = patcolSpans.findIndex(s => s.start === start && s.end === end);
+  if (exact >= 0) {
+    patcolSpans.splice(exact, 1);
+    patcolRenderPaint();
+    patcolPreviewSoon();
+    return;
+  }
+  patcolAddColumn(start, end);
+}
+
+// Render the sample as ONE verbatim, selectable line: variable spans are
+// highlighted (click to remove), the glue between them is split into clickable
+// word tokens + literal whitespace. Because every character is emitted exactly
+// once, a drag-selection's DOM offsets map straight back onto the sample string.
+function patcolRenderPaint(): void {
   const wrap = document.getElementById('patcol-paint-tokens');
   const fieldsWrap = document.getElementById('patcol-paint-fields');
   if (!wrap) return;
-  if (patcolTokens.length === 0) {
-    wrap.innerHTML = '<span class="placeholder">Pull or paste a sample line above, then click its tokens.</span>';
+  const sample = patcolSample();
+  if (!sample) {
+    wrap.innerHTML = '<span class="placeholder">Pull or paste a sample line above, then drag-select any part of it (or click a word) to make a column.</span>';
     if (fieldsWrap) fieldsWrap.innerHTML = '';
     return;
   }
-  wrap.innerHTML = patcolTokens.map((t, i) =>
-    `<span class="patcol-token${t.varName ? ' var' : ''}" data-i="${i}" title="${t.varName ? 'Column: ' + escapeHtml(t.varName) : 'Click to make a column'}">${escapeHtml(t.text)}</span>`
-  ).join(' ');
-  wrap.querySelectorAll('.patcol-token').forEach((el) => el.addEventListener('click', (e) => {
-    const i = parseInt((e.currentTarget as HTMLElement).dataset.i || '-1', 10);
-    if (i < 0) return;
-    const t = patcolTokens[i];
-    if (t.varName) { t.varName = null; }
-    else { t.varName = 'col' + (patcolTokens.filter(x => x.varName).length + 1); }
-    patcolRenderTokens();
-    patcolPreviewSoon();
+  patcolNormalizeSpans();
+  const parts: string[] = [];
+  const renderGlue = (from: number, to: number) => {
+    const seg = sample.slice(from, to);
+    const re = /\s+|\S+/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(seg)) !== null) {
+      const s = from + m.index;
+      const e = s + m[0].length;
+      if (/^\s+$/.test(m[0])) parts.push(`<span class="patcol-lit-ws">${escapeHtml(m[0])}</span>`);
+      else parts.push(`<span class="patcol-token" data-start="${s}" data-end="${e}" title="Click to make a column — or drag-select any part of the line">${escapeHtml(m[0])}</span>`);
+    }
+  };
+  let cursor = 0;
+  patcolSpans.forEach((s, i) => {
+    if (s.start > cursor) renderGlue(cursor, s.start);
+    parts.push(`<span class="patcol-token var" data-idx="${i}" title="Column ${escapeHtml(s.name)} — click to remove">${escapeHtml(sample.slice(s.start, s.end))}</span>`);
+    cursor = s.end;
+  });
+  if (cursor < sample.length) renderGlue(cursor, sample.length);
+  wrap.innerHTML = parts.join('');
+
+  // Click a variable span → remove it (unless the click was really a drag-select).
+  wrap.querySelectorAll('.patcol-token.var').forEach((el) => el.addEventListener('click', (e) => {
+    const sel = window.getSelection();
+    if (sel && sel.toString().length > 0) return;
+    e.stopPropagation();
+    const idx = parseInt((e.currentTarget as HTMLElement).dataset.idx || '-1', 10);
+    if (idx >= 0 && patcolSpans[idx]) { patcolSpans.splice(idx, 1); patcolRenderPaint(); patcolPreviewSoon(); }
   }));
-  // Rename inputs for the marked tokens, in order.
+  // Click a plain word → toggle it as a column.
+  wrap.querySelectorAll('.patcol-token:not(.var)').forEach((el) => el.addEventListener('click', (e) => {
+    const sel = window.getSelection();
+    if (sel && sel.toString().length > 0) return;
+    e.stopPropagation();
+    const start = parseInt((e.currentTarget as HTMLElement).dataset.start || '-1', 10);
+    const end = parseInt((e.currentTarget as HTMLElement).dataset.end || '-1', 10);
+    if (start >= 0 && end > start) patcolToggleWord(start, end);
+  }));
+
+  // Rename inputs for each column, in order.
   if (fieldsWrap) {
-    const vars = patcolTokens.map((t, i) => ({ t, i })).filter(x => x.t.varName);
-    fieldsWrap.innerHTML = vars.map(x =>
-      `<label class="patcol-fieldname">col name <input type="text" data-i="${x.i}" value="${escapeHtml(x.t.varName || '')}" /></label>`
+    fieldsWrap.innerHTML = patcolSpans.map((s, i) =>
+      `<label class="patcol-fieldname">col name <input type="text" data-idx="${i}" value="${escapeHtml(s.name)}" /></label>`
     ).join('');
     fieldsWrap.querySelectorAll('input').forEach((inp) => inp.addEventListener('input', (e) => {
       const el = e.currentTarget as HTMLInputElement;
-      const i = parseInt(el.dataset.i || '-1', 10);
-      if (i >= 0 && patcolTokens[i]) { patcolTokens[i].varName = el.value; patcolPreviewSoon(); }
+      const idx = parseInt(el.dataset.idx || '-1', 10);
+      if (idx >= 0 && patcolSpans[idx]) { patcolSpans[idx].name = el.value; patcolPreviewSoon(); }
     }));
   }
 }
 
+// On mouseup inside the paint line, turn any drag-selection into a new column.
+function patcolAddSpanFromSelection(): void {
+  const wrap = document.getElementById('patcol-paint-tokens');
+  if (!wrap) return;
+  const range = hostSelectionRange(wrap);
+  if (!range) return;
+  patcolAddColumn(range.start, range.end);
+  window.getSelection()?.removeAllRanges();
+}
+
 function patcolBuildSpec(): any {
-  const sample = (document.getElementById('patcol-sample-input') as HTMLInputElement | null)?.value || '';
+  const sample = patcolSample();
   if (patcolMode === 'grok') {
     return { mode: 'grok', pattern: (document.getElementById('patcol-grok-input') as HTMLInputElement | null)?.value || '', sample };
   }
   if (patcolMode === 'regex') {
     return { mode: 'regex', pattern: (document.getElementById('patcol-regex-input') as HTMLInputElement | null)?.value || '', sample };
   }
-  const spans = patcolTokens.filter(t => t.varName).map(t => ({ start: t.start, end: t.end, name: t.varName as string }));
+  const spans = patcolSpans
+    .filter(s => s.end > s.start)
+    .map(s => ({ start: s.start, end: s.end, name: (s.name || '').trim() || 'col' }));
   return { mode: 'paint', sample, spans };
 }
 
@@ -15481,13 +15866,11 @@ function patcolLoadSaved(item: any): void {
     const inp = document.getElementById('patcol-regex-input') as HTMLInputElement | null;
     if (inp) inp.value = spec.pattern || '';
   } else if (spec.mode === 'paint') {
-    patcolTokenize();
-    // Re-mark tokens whose offsets match a saved span.
-    for (const sp of (spec.spans || [])) {
-      const t = patcolTokens.find(x => x.start === sp.start && x.end === sp.end);
-      if (t) t.varName = sp.name;
-    }
-    patcolRenderTokens();
+    // Saved spans are plain char ranges — they load 1:1 into the span model.
+    patcolSpans = (spec.spans || [])
+      .filter((sp: any) => sp && typeof sp.start === 'number' && typeof sp.end === 'number')
+      .map((sp: any, i: number) => ({ start: sp.start, end: sp.end, name: sp.name || ('col' + (i + 1)) }));
+    patcolRenderPaint();
   }
   patcolSetMode(spec.mode || 'grok');
 }
@@ -22296,9 +22679,11 @@ function init(): void {
   document.getElementById('btn-patcol-sample')?.addEventListener('click', patcolPullSample);
   document.getElementById('btn-patcol-copy')?.addEventListener('click', patcolCopyRegex);
   document.getElementById('btn-patcol-save')?.addEventListener('click', patcolSavePattern);
-  document.getElementById('patcol-sample-input')?.addEventListener('input', () => { if (patcolMode === 'paint') patcolTokenize(); patcolPreviewSoon(); });
+  document.getElementById('patcol-sample-input')?.addEventListener('input', () => { if (patcolMode === 'paint') patcolRenderPaint(); patcolPreviewSoon(); });
   document.getElementById('patcol-grok-input')?.addEventListener('input', patcolPreviewSoon);
   document.getElementById('patcol-regex-input')?.addEventListener('input', patcolPreviewSoon);
+  // Drag-select any part of the paint sample line → new column (regex generated for it).
+  document.getElementById('patcol-paint-tokens')?.addEventListener('mouseup', () => setTimeout(patcolAddSpanFromSelection, 0));
 
   // Long lines warning buttons
   elements.btnFormatWarning.addEventListener('click', formatAndLoadJson);
