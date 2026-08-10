@@ -6,6 +6,8 @@ const IPC = {
   OPEN_FILE_DIALOG: 'open-file-dialog',
   OPEN_FILE: 'open-file',
   GET_LINES: 'get-lines',
+  SEVERITY_INFO: 'severity-info',
+  SEVERITY_NEXT: 'severity-next',
   SEARCH: 'search',
   SEARCH_PROGRESS: 'search-progress',
   SEARCH_CANCEL: 'search-cancel',
@@ -142,6 +144,13 @@ const api = {
 
   getLines: (startLine: number, count: number): Promise<{ success: boolean; lines?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.GET_LINES, startLine, count),
+
+  // Severity index (background jump-to-problem): counts + minimap ticks, and
+  // O(log n) next/prev-problem navigation.
+  getSeverityInfo: (buckets: number): Promise<{ success: boolean; counts?: { fatal: number; error: number; warning: number }; ticks?: number[]; totalLines?: number; capped?: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.SEVERITY_INFO, buckets),
+  nextSeverityLine: (fromLine: number, dir: 1 | -1, levels: string[]): Promise<{ success: boolean; line?: number | null; error?: string }> =>
+    ipcRenderer.invoke(IPC.SEVERITY_NEXT, fromLine, dir, levels),
 
   // Folder operations
   openFolderDialog: (): Promise<string | null> =>

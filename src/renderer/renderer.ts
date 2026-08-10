@@ -16078,6 +16078,9 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       });
       renderMinimapCanvas();
 
+      // Kick off the background severity index (jump-to-problem via F8).
+      void prefetchSeverityIndex();
+
       // Auto-analyze if enabled in settings
       if (userSettings.autoAnalyze && !isMarkdownFile) {
         hideProgress();
@@ -17303,6 +17306,55 @@ function goToLine(displayIndex: number, originalLineNumber?: number): void {
   state.selectedLine = lineNumber;
   logViewerElement.scrollTop = Math.max(0, lineToScrollTop(displayIndex));
   updateCursorStatus(lineNumber);
+}
+
+// ── Severity jump (background ripgrep problem index → press F8) ──────────────
+// A single rg pass indexes every fatal/error/warning line; jumping is an O(log n)
+// binary search in the main process (see severityIndex.ts + SEVERITY_* IPC), so
+// "reach the next problem" is instant even at 50M lines instead of scrolling.
+let severityCounts: { fatal: number; error: number; warning: number } | null = null;
+let severitySeenForFile: string | null = null;
+
+// Modest minimap-tick resolution (also cheap to transfer over IPC).
+function severityBucketCount(): number {
+  const h = minimapCanvasElement?.height || 600;
+  return Math.max(100, Math.min(2000, Math.round(h)));
+}
+
+// Kick off the background problem-index build right after open and, once per file,
+// surface the counts so the jump feature is discoverable. Fire-and-forget.
+async function prefetchSeverityIndex(): Promise<void> {
+  severityCounts = null;
+  const forFile = state.filePath;
+  if (!forFile) return;
+  try {
+    const r = await window.api.getSeverityInfo(severityBucketCount());
+    if (!r || !r.success || state.filePath !== forFile) return;
+    severityCounts = r.counts || null;
+    const c = severityCounts;
+    const problems = c ? c.fatal + c.error + c.warning : 0;
+    if (problems > 0 && severitySeenForFile !== forFile) {
+      severitySeenForFile = forFile;
+      const bits: string[] = [];
+      if (c!.fatal) bits.push(`${c!.fatal.toLocaleString()} fatal`);
+      if (c!.error) bits.push(`${c!.error.toLocaleString()} error`);
+      if (c!.warning) bits.push(`${c!.warning.toLocaleString()} warning`);
+      showToast(`${bits.join(' · ')}${r.capped ? '+' : ''} — press F8 to jump to next problem`);
+    }
+  } catch { /* ignore — on-demand jump still works */ }
+}
+
+// Jump to the next (dir=1) / previous (dir=-1) problem line, all severities.
+async function jumpToNextSeverity(dir: 1 | -1): Promise<void> {
+  if (!state.filePath) return;
+  if (state.isFiltered) { showToast('Clear the filter to jump by severity'); return; }
+  const current = state.selectedLine != null ? state.selectedLine : (state.visibleStartLine ?? 0);
+  try {
+    const res = await window.api.nextSeverityLine(current, dir, ['fatal', 'error', 'warning']);
+    if (!res || !res.success) { showToast('Problem index unavailable'); return; }
+    if (res.line == null) { showToast(dir === 1 ? 'No more problems below' : 'No more problems above'); return; }
+    goToLine(res.line);
+  } catch { showToast('Problem index unavailable'); }
 }
 
 // Filter
@@ -21393,6 +21445,13 @@ function setupActivityBar(): void {
 
   // Keyboard shortcuts: Ctrl+1..5 sidebar panels, Ctrl+6..7 bottom tabs, Escape close
   document.addEventListener('keydown', (e) => {
+    // F8 / Shift+F8 — jump to next / previous problem (fatal/error/warning).
+    if (e.key === 'F8') {
+      e.preventDefault();
+      void jumpToNextSeverity(e.shiftKey ? -1 : 1);
+      return;
+    }
+
     // Ctrl+R — reload current file from disk
     if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === 'r') {
       if (state.filePath) { e.preventDefault(); reloadCurrentFile(); }

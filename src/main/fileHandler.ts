@@ -5,6 +5,10 @@ import { Worker } from 'worker_threads';
 import { FileInfo, LineData, SearchMatch, SearchOptions } from '../shared/types';
 import { getRipgrepPath } from './ripgrepPath';
 import { scanFileIndex, SplitMetadata, IndexResult } from './indexScan';
+import {
+  SeverityIndex, SeverityLevel, SeverityCounts, EMPTY_SEVERITY_INDEX, SEVERITY_RG_PATTERN,
+  keywordRank, buildSeverityIndexFromMap, nextSeverityLine, severityCounts, severityTicks,
+} from './severityIndex';
 
 // Re-export so existing importers of SplitMetadata from this module keep working.
 export type { SplitMetadata } from './indexScan';
@@ -128,6 +132,12 @@ export class FileHandler {
   private indexedSize: number = 0; // Bytes indexed so far (for incremental indexing)
   private indexedMtimeMs: number = 0; // mtime of the file when last indexed (for staleness checks)
   private _hasStandaloneCR: boolean = false; // Standalone \r found (not CRLF) — ripgrep can't handle these
+
+  // Background severity index (fatal/error/warning line numbers) — see severityIndex.ts.
+  // Built lazily on first request via one ripgrep pass; cached for the file's lifetime.
+  private severityIndexCache: SeverityIndex | null = null;
+  private severityIndexBuilding: Promise<SeverityIndex> | null = null;
+  private static readonly SEVERITY_MAX_LINES = 5_000_000; // safety cap on indexed problem lines
 
   // Append one line to the index, growing the typed arrays (capacity doubling) when full.
   // Used by incremental live-tail indexing; the bulk initial index comes from scanFileIndex.
@@ -333,6 +343,10 @@ export class FileHandler {
       this.fileInfo.totalLines = this.lineCount - this.headerLineCount;
     }
 
+    // New lines may carry new errors — drop the stale severity index so it
+    // rebuilds on next request (live-tail correctness).
+    if (newLineCount > 0) this.invalidateSeverityIndex();
+
     return newLineCount;
   }
 
@@ -347,33 +361,66 @@ export class FileHandler {
   // Max characters to read per line — prevents OOM on files with extremely long lines
   private static readonly MAX_LINE_READ = 10000;
 
+  // A whole viewport's worth of physically-contiguous lines is fetched in ONE
+  // positioned read, then sliced in memory (instead of one syscall per line). Bail
+  // to the per-line path when the byte span exceeds this ceiling so a run of
+  // pathological megabyte-long lines can never force an enormous allocation.
+  private static readonly MAX_BATCH_READ = 16 * 1024 * 1024; // 16 MB
+
+  // Slice one physical line [i] out of a buffer that starts at file offset
+  // `bufStartOffset`. Same MAX_LINE_READ cap / truncation marker / level as the
+  // per-line path \u2014 this is the shared core of every read below.
+  private lineFromBuffer(buffer: Buffer, bufStartOffset: number, i: number): LineData {
+    const length = this.lengths[i];
+    const readLength = Math.min(length, FileHandler.MAX_LINE_READ);
+    const rel = this.offsets[i] - bufStartOffset;
+    let text = (rel >= 0 && rel + readLength <= buffer.length)
+      ? buffer.toString('utf-8', rel, rel + readLength)
+      : '';
+    if (length > FileHandler.MAX_LINE_READ) {
+      text += ' \u2026 (truncated)';
+    }
+    return {
+      lineNumber: i - this.headerLineCount, // visible line number (without header offset)
+      text,
+      level: this.detectLevel(text),
+    };
+  }
+
+  // Byte span covering physical lines [start, end). end is exclusive.
+  private spanOf(start: number, end: number): { startOffset: number; span: number } {
+    const startOffset = this.offsets[start];
+    const last = end - 1;
+    const endOffset = this.offsets[last] + this.lengths[last];
+    return { startOffset, span: endOffset - startOffset };
+  }
+
   getLines(startLine: number, count: number): LineData[] {
     if (!this.fd || !this.filePath) return [];
 
-    const lines: LineData[] = [];
     // Offset by header lines to skip hidden metadata
     const actualStart = startLine + this.headerLineCount;
     const actualEnd = Math.min(actualStart + count, this.lineCount);
+    if (actualEnd <= actualStart) return [];
 
-    for (let i = actualStart; i < actualEnd; i++) {
-      const offset = this.offsets[i];
-      const length = this.lengths[i];
-      // Cap read size to prevent OOM on lines with millions of characters
-      const readLength = Math.min(length, FileHandler.MAX_LINE_READ);
-      const buffer = Buffer.alloc(readLength);
-      fs.readSync(this.fd, buffer, 0, readLength, offset);
-      let text = buffer.toString('utf-8');
-      if (length > FileHandler.MAX_LINE_READ) {
-        text += ' \u2026 (truncated)';
-      }
-      lines.push({
-        // Return visible line number (without header offset)
-        lineNumber: i - this.headerLineCount,
-        text,
-        level: this.detectLevel(text),
-      });
+    // Fast path: slurp the whole contiguous range in ONE read, then slice.
+    const { startOffset, span } = this.spanOf(actualStart, actualEnd);
+    if (span > 0 && span <= FileHandler.MAX_BATCH_READ) {
+      const buffer = Buffer.alloc(span);
+      fs.readSync(this.fd, buffer, 0, span, startOffset);
+      const lines: LineData[] = [];
+      for (let i = actualStart; i < actualEnd; i++) lines.push(this.lineFromBuffer(buffer, startOffset, i));
+      return lines;
     }
 
+    // Fallback: per-line reads (huge-line files \u2014 never over-allocate).
+    const lines: LineData[] = [];
+    for (let i = actualStart; i < actualEnd; i++) {
+      const readLength = Math.min(this.lengths[i], FileHandler.MAX_LINE_READ);
+      const buffer = Buffer.alloc(readLength);
+      fs.readSync(this.fd, buffer, 0, readLength, this.offsets[i]);
+      lines.push(this.lineFromBuffer(buffer, this.offsets[i], i));
+    }
     return lines;
   }
 
@@ -389,30 +436,76 @@ export class FileHandler {
     if (!this.fd || !this.filePath) return [];
     const fd = this.fd;
 
-    const lines: LineData[] = [];
     const actualStart = startLine + this.headerLineCount;
     const actualEnd = Math.min(actualStart + count, this.lineCount);
+    if (actualEnd <= actualStart) return [];
 
+    const { startOffset, span } = this.spanOf(actualStart, actualEnd);
+    if (span > 0 && span <= FileHandler.MAX_BATCH_READ) {
+      const buffer = Buffer.alloc(span);
+      await new Promise<void>((resolve, reject) => {
+        fs.read(fd, buffer, 0, span, startOffset, (err) => (err ? reject(err) : resolve()));
+      });
+      const lines: LineData[] = [];
+      for (let i = actualStart; i < actualEnd; i++) lines.push(this.lineFromBuffer(buffer, startOffset, i));
+      return lines;
+    }
+
+    // Fallback: per-line async reads for pathological huge-line ranges.
+    const lines: LineData[] = [];
     for (let i = actualStart; i < actualEnd; i++) {
-      const length = this.lengths[i];
-      const readLength = Math.min(length, FileHandler.MAX_LINE_READ);
+      const readLength = Math.min(this.lengths[i], FileHandler.MAX_LINE_READ);
       const buffer = Buffer.alloc(readLength);
       const offset = this.offsets[i];
       await new Promise<void>((resolve, reject) => {
         fs.read(fd, buffer, 0, readLength, offset, (err) => (err ? reject(err) : resolve()));
       });
-      let text = buffer.toString('utf-8');
-      if (length > FileHandler.MAX_LINE_READ) {
-        text += ' … (truncated)';
-      }
-      lines.push({
-        lineNumber: i - this.headerLineCount,
-        text,
-        level: this.detectLevel(text),
-      });
+      lines.push(this.lineFromBuffer(buffer, offset, i));
     }
-
     return lines;
+  }
+
+  // Fetch an arbitrary set of visible line numbers (e.g. a filtered viewport whose
+  // lines aren't contiguous) with as few syscalls as possible: sort, group
+  // physically-consecutive runs, and slurp each run in ONE read. Output preserves
+  // the caller's original order. Replaces per-line getLinesAsync(n,1) loops.
+  async getLinesByNumbers(lineNumbers: number[]): Promise<LineData[]> {
+    if (!this.fd || !this.filePath || lineNumbers.length === 0) return [];
+    const fd = this.fd;
+    const items = lineNumbers
+      .map((ln, pos) => ({ pos, phys: ln + this.headerLineCount }))
+      .filter(it => it.phys >= 0 && it.phys < this.lineCount);
+    const sorted = items.slice().sort((a, b) => a.phys - b.phys);
+    const out: (LineData | undefined)[] = new Array(lineNumbers.length);
+
+    let r = 0;
+    while (r < sorted.length) {
+      const runStart = r;
+      while (r + 1 < sorted.length && sorted[r + 1].phys === sorted[r].phys + 1) r++;
+      const firstPhys = sorted[runStart].phys;
+      const lastPhys = sorted[r].phys;
+      const { startOffset, span } = this.spanOf(firstPhys, lastPhys + 1);
+      if (span > 0 && span <= FileHandler.MAX_BATCH_READ) {
+        const buffer = Buffer.alloc(span);
+        await new Promise<void>((resolve, reject) => {
+          fs.read(fd, buffer, 0, span, startOffset, (err) => (err ? reject(err) : resolve()));
+        });
+        for (let k = runStart; k <= r; k++) out[sorted[k].pos] = this.lineFromBuffer(buffer, startOffset, sorted[k].phys);
+      } else {
+        // Pathological run of huge lines — read each individually.
+        for (let k = runStart; k <= r; k++) {
+          const phys = sorted[k].phys;
+          const readLength = Math.min(this.lengths[phys], FileHandler.MAX_LINE_READ);
+          const buffer = Buffer.alloc(readLength);
+          await new Promise<void>((resolve, reject) => {
+            fs.read(fd, buffer, 0, readLength, this.offsets[phys], (err) => (err ? reject(err) : resolve()));
+          });
+          out[sorted[k].pos] = this.lineFromBuffer(buffer, this.offsets[phys], phys);
+        }
+      }
+      r++;
+    }
+    return out.filter((l): l is LineData => l != null);
   }
 
   private detectLevel(text: string): LineData['level'] {
@@ -445,6 +538,91 @@ export class FileHandler {
     }
 
     return undefined;
+  }
+
+  // ── Severity index (background jump-to-problem) ────────────────────────────
+  // Build (once, cached) the fatal/error/warning line index via a single ripgrep
+  // pass. Concurrent callers share the in-flight promise.
+  async buildSeverityIndex(signal?: { cancelled: boolean }): Promise<SeverityIndex> {
+    if (this.severityIndexCache) return this.severityIndexCache;
+    if (this.severityIndexBuilding) return this.severityIndexBuilding;
+    this.severityIndexBuilding = this.runSeverityScan(signal)
+      .then((idx) => { this.severityIndexCache = idx; this.severityIndexBuilding = null; return idx; })
+      .catch(() => { this.severityIndexBuilding = null; return EMPTY_SEVERITY_INDEX; });
+    return this.severityIndexBuilding;
+  }
+
+  private invalidateSeverityIndex(): void {
+    this.severityIndexCache = null;
+    this.severityIndexBuilding = null;
+  }
+
+  private runSeverityScan(signal?: { cancelled: boolean }): Promise<SeverityIndex> {
+    const filePath = this.filePath;
+    if (!filePath) return Promise.resolve(EMPTY_SEVERITY_INDEX);
+    // CR-only files: ripgrep's line numbers don't match our indexer (same caveat as
+    // search) — skip rather than return wrong jump targets.
+    if (this._hasStandaloneCR) return Promise.resolve(EMPTY_SEVERITY_INDEX);
+
+    return new Promise((resolve) => {
+      const args = [
+        '--line-number', '--no-heading', '--no-filename', '--only-matching', '--ignore-case',
+        '--', SEVERITY_RG_PATTERN, filePath,
+      ];
+      let proc: ReturnType<typeof spawn>;
+      try { proc = spawn(getRipgrepPath(), args); }
+      catch { resolve(EMPTY_SEVERITY_INDEX); return; }
+
+      const rankByLine = new Map<number, number>();
+      let buffer = '';
+      let capped = false;
+
+      const parseLine = (line: string) => {
+        if (!line || capped) return;
+        const ci = line.indexOf(':');
+        if (ci === -1) return;
+        const rgLine = parseInt(line.substring(0, ci), 10);
+        if (!Number.isFinite(rgLine)) return;
+        const rank = keywordRank(line.substring(ci + 1));
+        if (rank === 0) return;
+        const visible = rgLine - 1 - this.headerLineCount; // rg is 1-based; strip hidden header
+        if (visible < 0) return;
+        const prev = rankByLine.get(visible) || 0;
+        if (rank > prev) rankByLine.set(visible, rank);
+        if (rankByLine.size >= FileHandler.SEVERITY_MAX_LINES) { capped = true; try { proc.kill(); } catch { /* ignore */ } }
+      };
+
+      proc.stdout?.on('data', (data: Buffer) => {
+        if (signal?.cancelled) { try { proc.kill(); } catch { /* ignore */ } return; }
+        buffer += data.toString();
+        const parts = buffer.split('\n');
+        buffer = parts.pop() || '';
+        for (const p of parts) parseLine(p);
+      });
+      proc.on('error', () => resolve(EMPTY_SEVERITY_INDEX));
+      proc.on('close', () => {
+        if (buffer) parseLine(buffer);
+        resolve(buildSeverityIndexFromMap(rankByLine));
+      });
+    });
+  }
+
+  // Ensure the index is built, then return counts + a downsampled minimap tick
+  // strip (highest rank 0..3 per bucket). `buckets` is the caller's tick resolution.
+  async getSeverityInfo(buckets: number): Promise<{ counts: SeverityCounts; ticks: number[]; totalLines: number; capped: boolean }> {
+    const idx = await this.buildSeverityIndex();
+    const total = this.lineCount - this.headerLineCount;
+    const counts = severityCounts(idx);
+    const ticks = Array.from(severityTicks(idx, Math.max(0, Math.floor(buckets)), total));
+    const capped = counts.fatal + counts.error + counts.warning >= FileHandler.SEVERITY_MAX_LINES;
+    return { counts, ticks, totalLines: total, capped };
+  }
+
+  // Next (dir=1) / previous (dir=-1) problem line beyond `fromLine`, across the
+  // requested levels. Returns null when there is none.
+  async getNextSeverityLine(fromLine: number, dir: 1 | -1, levels: SeverityLevel[]): Promise<number | null> {
+    const idx = await this.buildSeverityIndex();
+    return nextSeverityLine(idx, fromLine, dir, levels);
   }
 
   async search(
@@ -1084,5 +1262,6 @@ export class FileHandler {
     this.indexedSize = 0;
     this.indexedMtimeMs = 0;
     this._hasStandaloneCR = false;
+    this.invalidateSeverityIndex();
   }
 }
