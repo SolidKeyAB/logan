@@ -501,6 +501,8 @@ interface Api {
   openFileDialog: () => Promise<string | null>;
   openFile: (path: string) => Promise<{ success: boolean; info?: FileInfo; error?: string; splitFiles?: string[]; splitIndex?: number; bookmarks?: Bookmark[]; highlights?: HighlightConfig[]; hasLongLines?: boolean; maxLineLength?: number }>;
   getLines: (startLine: number, count: number) => Promise<{ success: boolean; lines?: LogLine[]; error?: string }>;
+  getSeverityInfo: (buckets: number) => Promise<{ success: boolean; counts?: { fatal: number; error: number; warning: number }; ticks?: number[]; totalLines?: number; capped?: boolean; error?: string }>;
+  nextSeverityLine: (fromLine: number, dir: 1 | -1, levels: string[]) => Promise<{ success: boolean; line?: number | null; error?: string }>;
   getFileInfo: () => Promise<{ success: boolean; info?: FileInfo; error?: string }>;
 
   // Folder operations

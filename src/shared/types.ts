@@ -337,6 +337,8 @@ export const IPC = {
   OPEN_FILE_DIALOG: 'open-file-dialog',
   OPEN_FILE: 'open-file',
   GET_LINES: 'get-lines',
+  SEVERITY_INFO: 'severity-info',
+  SEVERITY_NEXT: 'severity-next',
   SEARCH: 'search',
   SEARCH_PROGRESS: 'search-progress',
   SEARCH_CANCEL: 'search-cancel',
