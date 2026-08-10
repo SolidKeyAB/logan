@@ -6217,6 +6217,25 @@ kbd {
   cursor: grabbing;
 }
 
+/* Combined-mode legend: not draggable; shows a swatch per pattern (+ a shared
+   swatch), clipped if there are many, followed by the "All matches" label. */
+.sc-ov-label-combined {
+  cursor: default;
+}
+
+.sc-ov-combined-swatches {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  max-width: 56px;
+  overflow: hidden;
+}
+
+.sc-ov-swatch-multi {
+  border: 1px solid rgba(0, 0, 0, 0.35);
+}
+
 .sc-ov-swatch {
   width: 9px;
   height: 9px;
@@ -6380,6 +6399,23 @@ kbd {
 .sc-result-item.sc-result-multi {
   border-left: 2px solid var(--accent-color);
   padding-left: 10px;
+}
+
+/* The found-line the user jumped to — from a direct row click OR from clicking
+   a point on the overview-strip timeline. Persists until another row is picked;
+   a one-shot flash (added only on a timeline jump) makes the target obvious. */
+.sc-result-item.sc-result-active {
+  background-color: var(--bg-selected, rgba(90, 140, 255, 0.18));
+  box-shadow: inset 3px 0 0 var(--accent-color);
+}
+
+.sc-result-item.sc-result-flash {
+  animation: sc-result-flash 0.9s ease-out;
+}
+
+@keyframes sc-result-flash {
+  0%   { background-color: var(--accent-color); }
+  100% { background-color: var(--bg-selected, rgba(90, 140, 255, 0.18)); }
 }
 
 /* Dots container: one coloured dot per config that matched the line. */
@@ -9682,13 +9718,23 @@ kbd {
 .patcol-input:focus { outline: none; border-color: var(--accent-color); }
 .patcol-mode-panel { display: flex; flex-direction: column; gap: 4px; }
 .patcol-mode-panel.hidden { display: none; }
-.patcol-tokens { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 3px; min-height: 26px; }
-.patcol-token {
-  font-family: var(--font-mono); font-size: 12px; cursor: pointer;
-  background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 3px; padding: 1px 5px; white-space: pre;
+/* One continuous, selectable line — its text is a verbatim copy of the sample so a
+   drag-selection's DOM offsets map straight back onto the sample string. */
+.patcol-tokens {
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.7;
+  background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 3px;
+  padding: 6px 8px; min-height: 26px; max-height: 120px; overflow-y: auto;
+  white-space: pre-wrap; word-break: break-all; user-select: text; cursor: text;
 }
-.patcol-token:hover { border-color: var(--accent-color); }
-.patcol-token.var { background: var(--accent-color); color: #fff; border-color: var(--accent-hover); }
+.patcol-token { cursor: pointer; border-radius: 3px; padding: 1px 0; }
+.patcol-token:hover { background: var(--bg-hover-subtle); }
+.patcol-lit-ws { white-space: pre-wrap; }
+/* A char range currently marked as a column. */
+.patcol-token.var {
+  background: rgba(55, 148, 255, 0.28); outline: 1px solid rgba(55, 148, 255, 0.6);
+  border-radius: 3px; color: var(--text-primary); padding: 1px 0;
+}
+.patcol-token.var:hover { background: rgba(55, 148, 255, 0.4); }
 .patcol-fields { display: flex; flex-wrap: wrap; gap: 6px; }
 .patcol-fieldname { color: var(--text-muted); font-size: 11px; display: inline-flex; align-items: center; gap: 3px; }
 .patcol-fieldname input {
