@@ -428,7 +428,12 @@ const BASE_LINE_HEIGHT = 20;
 const BASE_FONT_SIZE = 13;
 const BUFFER_LINES = 50;
 const MAX_SCROLL_HEIGHT = 10000000; // 10 million pixels - safe for all browsers
-const CACHE_SIZE = 5000; // Max lines to keep in cache
+// LRU cap on cached lines. At ~250 lines/viewport the old 5000 churned fully every
+// ~0.4s during a fling, so nothing survived to the settle point or a direction reversal
+// (=> re-fetch + white flash on every reversal). 60k lines is ~10-20MB (LogLine is a few
+// hundred bytes) — cheap in Electron — and keeps tens of viewports resident so settle and
+// short reversals are cache hits.
+const CACHE_SIZE = 60000; // Max lines to keep in cache
 const SCROLL_DEBOUNCE_MS = 16; // ~60fps
 const PREFETCH_LINES = 100; // Lines to prefetch ahead of scroll direction
 
@@ -780,6 +785,12 @@ let scrollDirection: 'up' | 'down' = 'down';
 let scrollRAF: number | null = null;
 let isScrolling = false;
 let scrollEndTimer: ReturnType<typeof setTimeout> | null = null;
+// In-flight getLines requests, keyed "<filterTag>:<start>-<end>". Lets overlapping
+// loadVisibleLines() calls (per-frame load-RAF + the scroll-end safety net) SHARE one
+// fetch for an identical range instead of each firing its own — so the settle fetch is
+// never queued behind duplicate fling fetches, and stale frames don't pile on redundant
+// IPC. Cleared in a finally when the request resolves.
+const inFlightRanges = new Map<string, Promise<void>>();
 // Scroll slowness detection
 let slowScrollFrames = 0;
 let scrollSlownessWarningShown = false;
@@ -2556,23 +2567,42 @@ async function loadVisibleLines(): Promise<void> {
   }
 
   try {
-    // Load all gaps in parallel for faster loading
-    const loadPromises = gaps.map(async (gap) => {
-      const count = gap.end - gap.start + 1;
-      const result = await window.api.getLines(gap.start, count);
-      if (result.success && result.lines) {
-        // When filtering, cache by filtered position (gap.start + offset)
-        // When not filtering, cache by original line number
-        for (let idx = 0; idx < result.lines.length; idx++) {
-          const line = result.lines[idx];
-          const cacheKey = state.isFiltered ? gap.start + idx : line.lineNumber;
-          cachedLines.set(cacheKey, line);
-        }
+    const filterTag = state.isFiltered ? 'f' : 'o';
+    // Load all gaps in parallel — but SHARE an in-flight request for an identical range
+    // instead of firing a duplicate (dedup). Always fill the cache on completion.
+    const loadPromises = gaps.map((gap) => {
+      const key = `${filterTag}:${gap.start}-${gap.end}`;
+      let p = inFlightRanges.get(key);
+      if (!p) {
+        p = (async () => {
+          const count = gap.end - gap.start + 1;
+          const result = await window.api.getLines(gap.start, count);
+          if (result.success && result.lines) {
+            // When filtering, cache by filtered position (gap.start + offset)
+            // When not filtering, cache by original line number
+            for (let idx = 0; idx < result.lines.length; idx++) {
+              const line = result.lines[idx];
+              const cacheKey = state.isFiltered ? gap.start + idx : line.lineNumber;
+              cachedLines.set(cacheKey, line);
+            }
+          }
+        })().finally(() => { inFlightRanges.delete(key); });
+        inFlightRanges.set(key, p);
       }
+      return p;
     });
 
     await Promise.all(loadPromises);
-    renderVisibleLines();
+
+    // Only repaint if what we just loaded still intersects the current viewport. During a
+    // fast fling the view can move entirely past this range before the fetch lands — a
+    // newer loadVisibleLines() will paint the current range, so rendering stale data here
+    // would just thrash. The cache fill above is always kept (serves reversals/settle).
+    // At rest, start/end equal the current range, so this always renders => settle is
+    // guaranteed (the scroll-end safety net calls us once more at the resting range).
+    if (start <= state.visibleEndLine && end >= state.visibleStartLine) {
+      renderVisibleLines();
+    }
   } catch (error) {
     console.error('Failed to load lines:', error);
   }
