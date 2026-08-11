@@ -2528,6 +2528,20 @@ body.platform-darwin .titlebar {
   /* Add padding at bottom to ensure last lines are fully visible */
   padding-bottom: 40px;
   box-sizing: border-box;
+  /* Faint virtual-row striping painted onto the scroll layer itself. On very large
+     files (tens of millions of lines) fast scrolls / scrollbar-thumb teleports reveal
+     regions the compositor scrolls past before JS can render rows there; without this
+     they show as a flat white/blank block. The stripes (period = one line height) make
+     those regions read as faint empty log rows instead of "white gap". Mid-gray at very
+     low alpha adapts to both dark and paper themes and is imperceptible over real rows;
+     costs zero per-frame JS since it's a static paint on the layer. */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent var(--line-height, 20px),
+    rgba(128, 128, 128, 0.05) var(--line-height, 20px),
+    rgba(128, 128, 128, 0.05) calc(var(--line-height, 20px) * 2)
+  );
 }
 
 .log-line {
@@ -2543,6 +2557,14 @@ body.platform-darwin .titlebar {
   box-sizing: border-box;
   /* Prevent highlight flicker during scroll */
   -webkit-tap-highlight-color: transparent;
+}
+
+/* Not-yet-loaded (uncached) row shown while its data is in flight. A faint fill so a
+   viewport full of skeletons during a fast fling reads as "rows loading", never as a
+   blank/white block; it resolves to the real row the instant loadVisibleLines() fills
+   the cache. See createPlaceholderLinePooled(). */
+.placeholder-line {
+  background: rgba(128, 128, 128, 0.05);
 }
 
 /* Word wrap mode */
