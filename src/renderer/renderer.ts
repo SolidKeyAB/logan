@@ -2941,7 +2941,7 @@ function createPlaceholderLinePooled(displayIndex: number): HTMLDivElement {
   // Dim inline bar (currentColor adapts to the theme); width jittered by index so
   // the skeleton reads as text, not a solid block.
   const barWidth = 30 + (displayIndex % 7) * 8; // 30–78%
-  const bar = `<span style="display:inline-block;width:${barWidth}%;max-width:60ch;height:0.72em;background:currentColor;opacity:0.10;border-radius:2px;vertical-align:middle;"></span>`;
+  const bar = `<span style="display:inline-block;width:${barWidth}%;max-width:60ch;height:0.72em;background:currentColor;opacity:0.22;border-radius:2px;vertical-align:middle;"></span>`;
   div.innerHTML = numHtml + `<span class="line-content">${bar}</span>`;
   return div;
 }
