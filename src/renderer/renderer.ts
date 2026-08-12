@@ -17054,6 +17054,11 @@ async function performSearch(): Promise<void> {
     // main side) — discard this stale result so it can't clobber the newer one.
     if (myGen !== searchGeneration) return;
 
+    // Remember which engine ran + how long it took, for the in-app readout below.
+    lastSearchEngine = result.engine ?? null;
+    lastSearchMs = typeof result.searchMs === 'number' ? result.searchMs : null;
+    lastSearchReason = result.searchReason ?? null;
+
     if (result.success && result.matches) {
       // Preserve what the user is currently looking at: if they clicked/navigated to a
       // streamed match mid-search, keep it selected across the authoritative replace
@@ -17122,9 +17127,23 @@ async function performSearch(): Promise<void> {
     if (myGen === searchGeneration) {
       setButtonProgress(elements.btnSearch, null); // clear the Search button ring
       hideProgress();
+      // In-app search readout (no terminal needed): elapsed time + which engine ran.
+      // 'stream' is the slow JS fallback (e.g. for \r line-ending files) — flag it loudly.
+      if (lastSearchMs != null) {
+        const secs = (lastSearchMs / 1000).toFixed(lastSearchMs < 10000 ? 2 : 1);
+        const slow = lastSearchEngine === 'stream';
+        showToast(`Search: ${state.searchResults.length.toLocaleString()} matches · ${secs}s · ${lastSearchEngine ?? 'engine?'}${slow ? ` ⚠ SLOW${lastSearchReason ? ' — ' + lastSearchReason : ''}` : ''}`);
+      }
     }
   }
 }
+
+// Last search's engine + elapsed ms + fallback reason, as reported by the main process \u2014
+// surfaced in the count label (+ tooltip) and a completion toast so search timing is
+// visible without needing the launching terminal.
+let lastSearchEngine: 'ripgrep' | 'stream' | null = null;
+let lastSearchMs: number | null = null;
+let lastSearchReason: string | null = null;
 
 function updateSearchUI(): void {
   const count = state.searchResults.length;
@@ -17134,7 +17153,14 @@ function updateSearchUI(): void {
   if (count > 0 && startLineVal > 0) {
     label += ` ${arrow}Ln ${startLineVal}`;
   }
+  if (count > 0 && lastSearchMs != null) {
+    label += ` \u00b7 ${(lastSearchMs / 1000).toFixed(lastSearchMs < 10000 ? 2 : 1)}s`;
+  }
   elements.searchResultCount.textContent = label;
+  elements.searchResultCount.title = lastSearchMs != null
+    ? `Last search: ${lastSearchMs.toLocaleString()} ms via ${lastSearchEngine ?? 'unknown'} engine`
+      + (lastSearchEngine === 'stream' ? ` \u2014 SLOW JS fallback${lastSearchReason ? ': ' + lastSearchReason : ''}` : '')
+    : '';
   elements.btnPrevResult.disabled = count === 0;
   elements.btnNextResult.disabled = count === 0;
 }
