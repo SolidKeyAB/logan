@@ -518,7 +518,7 @@ interface Api {
   checkSearchEngine: () => Promise<{ engine: 'ripgrep' | 'stream'; version: string | null }>;
 
   // Search
-  search: (options: SearchOptions) => Promise<{ success: boolean; matches?: SearchResult[]; hiddenMatches?: Array<{ lineNumber: number; column: number; length: number; lineText: string }>; error?: string }>;
+  search: (options: SearchOptions) => Promise<{ success: boolean; matches?: SearchResult[]; hiddenMatches?: Array<{ lineNumber: number; column: number; length: number; lineText: string }>; error?: string; engine?: 'ripgrep' | 'stream'; searchReason?: string; searchMs?: number }>;
   cancelSearch: () => Promise<{ success: boolean }>;
 
   // Bookmarks
