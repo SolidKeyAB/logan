@@ -625,6 +625,11 @@ export class FileHandler {
     return nextSeverityLine(idx, fromLine, dir, levels);
   }
 
+  // Which engine the last search() call used — surfaced in the IPC result so the UI
+  // can show it (ripgrep = fast native scan; stream = the slow JS fallback).
+  lastSearchEngine: 'ripgrep' | 'stream' | null = null;
+  lastSearchReason: string | null = null;
+
   async search(
     options: SearchOptions,
     onProgress?: (percent: number, matchCount: number, deltaMatches?: SearchMatch[]) => void,
@@ -632,30 +637,36 @@ export class FileHandler {
   ): Promise<SearchMatch[]> {
     if (!this.filePath) return [];
 
-    // If column filtering is active, use stream search for accurate results
+    // Pick the engine, remembering WHY, then time the run and log it — so "search is
+    // slow" is diagnosable at a glance (esp. the CR-fallback, which silently drops the
+    // fast ripgrep path for a whole-file JS scan on files with \r line endings).
     const hasColumnFilter = options.columnConfig &&
       options.columnConfig.columns.some(c => !c.visible);
+    const hasRipgrep = !hasColumnFilter && !this._hasStandaloneCR && await checkRipgrep();
 
-    if (hasColumnFilter) {
-      // Stream search handles column filtering properly
-      return this.searchWithStream(options, onProgress, signal);
-    }
+    let engine: 'ripgrep' | 'stream';
+    let reason: string;
+    if (hasColumnFilter) { engine = 'stream'; reason = 'column filter active (ripgrep can\'t hide columns)'; }
+    else if (this._hasStandaloneCR) { engine = 'stream'; reason = 'file has standalone \\r line endings — ripgrep miscounts them'; }
+    else if (hasRipgrep) { engine = 'ripgrep'; reason = 'ok'; }
+    else { engine = 'stream'; reason = 'ripgrep binary unavailable'; }
+    this.lastSearchEngine = engine;
+    this.lastSearchReason = reason;
 
-    // Ripgrep doesn't recognize standalone \r as a line break, so line numbers
-    // would be wrong for files that use CR-only line endings (old Mac, serial logs,
-    // progress output). Fall back to stream search which matches our indexer.
-    if (this._hasStandaloneCR) {
-      return this.searchWithStream(options, onProgress, signal);
-    }
+    const t0 = Date.now();
+    const result = engine === 'ripgrep'
+      ? await this.searchWithRipgrep(options, onProgress, signal)
+      : await this.searchWithStream(options, onProgress, signal);
+    const ms = Date.now() - t0;
 
-    // Try ripgrep first for much faster search
-    const hasRipgrep = await checkRipgrep();
-    if (hasRipgrep) {
-      return this.searchWithRipgrep(options, onProgress, signal);
-    }
-
-    // Fall back to stream-based search
-    return this.searchWithStream(options, onProgress, signal);
+    const cap = options.maxMatches ?? DEFAULT_MAX_MATCHES;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[LOGAN search] engine=${engine} ms=${ms} matches=${result.length}${result.length >= cap ? `(capped@${cap})` : ''}` +
+      ` scanned=${this.lineCount} pattern=${JSON.stringify(options.pattern)}` +
+      (engine === 'stream' ? `  ← SLOW PATH: ${reason}` : ''),
+    );
+    return result;
   }
 
   // NOTE: searchWithRipgrep does NOT support column filtering.
