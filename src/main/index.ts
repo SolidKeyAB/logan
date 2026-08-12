@@ -2917,6 +2917,10 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
       sampleHits: matches.slice(0, 5).map(m => m.lineNumber + 1), ms: Date.now() - t0,
     });
 
+    // Engine + elapsed for the in-app search readout (ripgrep = fast native scan;
+    // stream = the slow JS fallback, e.g. for \r-line-ending files). See fileHandler.search().
+    const searchMeta = { engine: handler.lastSearchEngine ?? undefined, searchReason: handler.lastSearchReason ?? undefined, searchMs: Date.now() - t0 };
+
     // Check if filter is active for current file
     const filteredIndices = getFilteredLines();
 
@@ -2947,7 +2951,7 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
         }
       }
 
-      return { success: true, matches: filteredMatches, hiddenMatches };
+      return { success: true, matches: filteredMatches, hiddenMatches, ...searchMeta };
     }
 
     // Check for hidden column matches (matches in columns that are filtered out)
@@ -2968,12 +2972,12 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
             lineText: m.lineText,
           }));
         if (hiddenColumnMatches.length > 0) {
-          return { success: true, matches, hiddenColumnMatches };
+          return { success: true, matches, hiddenColumnMatches, ...searchMeta };
         }
       }
     }
 
-    return { success: true, matches };
+    return { success: true, matches, ...searchMeta };
   } catch (error) {
     // Record the FAILED pattern too — a silently-broken regex is exactly what the
     // flight recorder exists to surface.
