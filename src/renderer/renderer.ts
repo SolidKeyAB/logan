@@ -123,13 +123,15 @@ interface FilterConfig {
 }
 
 // Advanced Filter Types
-type FilterRuleType = 'contains' | 'not_contains' | 'level' | 'not_level' | 'regex' | 'not_regex';
+type FilterRuleType = 'contains' | 'not_contains' | 'level' | 'not_level' | 'regex' | 'not_regex' | 'column';
 
 interface FilterRule {
   id: string;
   type: FilterRuleType;
   value: string;
   caseSensitive?: boolean;
+  columnIndex?: number;                         // for type 'column': which column to test
+  columnOp?: 'equals' | 'contains' | 'regex';   // for type 'column': how to compare the cell
 }
 
 interface FilterGroup {
@@ -142,6 +144,7 @@ interface AdvancedFilterConfig {
   enabled: boolean;
   groups: FilterGroup[];
   contextLines?: number;
+  delimiter?: string;                           // column delimiter, so 'column' rules can split the line
 }
 
 interface Bookmark {
@@ -16552,10 +16555,11 @@ async function showColumnsModal(): Promise<void> {
 
       // Restore previous visibility if we have a config
       if (state.columnConfig && state.columnConfig.delimiter === delimiter) {
-        // Keep existing visibility settings
+        // Keep existing visibility + names
         for (let i = 0; i < columns.length; i++) {
           if (i < state.columnConfig.columns.length) {
             columns[i].visible = state.columnConfig.columns[i].visible;
+            (columns[i] as any).name = state.columnConfig.columns[i].name;
           }
         }
       }
@@ -16574,7 +16578,17 @@ async function showColumnsModal(): Promise<void> {
               <input type="checkbox" data-col-index="${idx}" ${col.visible ? 'checked' : ''}>
               <span class="column-index">${label}</span>
             </label>
+            <input type="text" class="column-name-input" data-col-index="${idx}" placeholder="name…" value="${escapeHtml(colName || '')}" title="Name this column">
             <div class="column-samples">${samples.map((s: string) => `<code>${escapeHtml(s)}</code>`).join(' ')}</div>
+            <div class="column-filter-row">
+              <span class="column-filter-label">filter rows:</span>
+              <select class="column-filter-op" data-col-index="${idx}">
+                <option value="contains">contains</option>
+                <option value="equals">equals</option>
+                <option value="regex">regex</option>
+              </select>
+              <input type="text" class="column-filter-input" data-col-index="${idx}" placeholder="value… (blank = off)" title="Keep only rows where this column matches">
+            </div>
           </div>
         `;
       }).join('');
@@ -16596,7 +16610,7 @@ function hideColumnsModal(): void {
   elements.columnsModal.classList.add('hidden');
 }
 
-function applyColumnsConfig(): void {
+async function applyColumnsConfig(): Promise<void> {
   const tempConfig = (elements.columnsModal as any)._tempConfig;
   if (!tempConfig) return;
 
@@ -16609,6 +16623,23 @@ function applyColumnsConfig(): void {
     }
   });
 
+  // Read per-column names
+  elements.columnsList.querySelectorAll<HTMLInputElement>('.column-name-input').forEach((inp) => {
+    const idx = parseInt(inp.dataset.colIndex || '0', 10);
+    if (idx < tempConfig.columns.length) tempConfig.columns[idx].name = inp.value.trim() || undefined;
+  });
+
+  // Build row-filter rules from any filled per-column filter inputs (blank = off).
+  const columnRules: FilterRule[] = [];
+  elements.columnsList.querySelectorAll<HTMLInputElement>('.column-filter-input').forEach((inp) => {
+    const value = inp.value.trim();
+    if (!value) return;
+    const idx = parseInt(inp.dataset.colIndex || '0', 10);
+    const opSel = elements.columnsList.querySelector<HTMLSelectElement>(`.column-filter-op[data-col-index="${idx}"]`);
+    const op = (opSel?.value as 'equals' | 'contains' | 'regex') || 'contains';
+    columnRules.push({ id: `col_${idx}_${op}`, type: 'column', value, columnIndex: idx, columnOp: op });
+  });
+
   const prevDelimiter = state.columnConfig?.delimiter ?? null;
   state.columnConfig = {
     delimiter: tempConfig.delimiter,
@@ -16617,6 +16648,7 @@ function applyColumnsConfig(): void {
       index: c.index,
       sample: c.sample,
       visible: c.visible,
+      name: c.name,
     })),
   };
 
@@ -16631,7 +16663,23 @@ function applyColumnsConfig(): void {
       logContentElement.innerHTML = '';
       lineElementPool.releaseAll();
     }
-    loadVisibleLines();
+    await loadVisibleLines();
+  }
+
+  // If the user filled any per-column row filters, apply them as an advanced filter
+  // (rows kept where ALL the column conditions hold). Column visibility above is separate.
+  if (columnRules.length > 0) {
+    await applyFilter({
+      levels: [],
+      includePatterns: [],
+      excludePatterns: [],
+      advancedFilter: {
+        enabled: true,
+        delimiter: state.columnConfig.delimiter,
+        groups: [{ id: 'colfilter', operator: 'AND', rules: columnRules }],
+      },
+    });
+    showToast(`Filtered rows by ${columnRules.length} column condition${columnRules.length > 1 ? 's' : ''}`);
   }
 }
 
