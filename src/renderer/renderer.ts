@@ -428,7 +428,12 @@ const BASE_LINE_HEIGHT = 20;
 const BASE_FONT_SIZE = 13;
 const BUFFER_LINES = 50;
 const MAX_SCROLL_HEIGHT = 10000000; // 10 million pixels - safe for all browsers
-const CACHE_SIZE = 5000; // Max lines to keep in cache
+// LRU cap on cached lines. At ~250 lines/viewport the old 5000 churned fully every
+// ~0.4s during a fling, so nothing survived to the settle point or a direction reversal
+// (=> re-fetch + white flash on every reversal). 60k lines is ~10-20MB (LogLine is a few
+// hundred bytes) — cheap in Electron — and keeps tens of viewports resident so settle and
+// short reversals are cache hits.
+const CACHE_SIZE = 60000; // Max lines to keep in cache
 const SCROLL_DEBOUNCE_MS = 16; // ~60fps
 const PREFETCH_LINES = 100; // Lines to prefetch ahead of scroll direction
 
@@ -780,6 +785,12 @@ let scrollDirection: 'up' | 'down' = 'down';
 let scrollRAF: number | null = null;
 let isScrolling = false;
 let scrollEndTimer: ReturnType<typeof setTimeout> | null = null;
+// In-flight getLines requests, keyed "<filterTag>:<start>-<end>". Lets overlapping
+// loadVisibleLines() calls (per-frame load-RAF + the scroll-end safety net) SHARE one
+// fetch for an identical range instead of each firing its own — so the settle fetch is
+// never queued behind duplicate fling fetches, and stale frames don't pile on redundant
+// IPC. Cleared in a finally when the request resolves.
+const inFlightRanges = new Map<string, Promise<void>>();
 // Scroll slowness detection
 let slowScrollFrames = 0;
 let scrollSlownessWarningShown = false;
@@ -2556,23 +2567,42 @@ async function loadVisibleLines(): Promise<void> {
   }
 
   try {
-    // Load all gaps in parallel for faster loading
-    const loadPromises = gaps.map(async (gap) => {
-      const count = gap.end - gap.start + 1;
-      const result = await window.api.getLines(gap.start, count);
-      if (result.success && result.lines) {
-        // When filtering, cache by filtered position (gap.start + offset)
-        // When not filtering, cache by original line number
-        for (let idx = 0; idx < result.lines.length; idx++) {
-          const line = result.lines[idx];
-          const cacheKey = state.isFiltered ? gap.start + idx : line.lineNumber;
-          cachedLines.set(cacheKey, line);
-        }
+    const filterTag = state.isFiltered ? 'f' : 'o';
+    // Load all gaps in parallel — but SHARE an in-flight request for an identical range
+    // instead of firing a duplicate (dedup). Always fill the cache on completion.
+    const loadPromises = gaps.map((gap) => {
+      const key = `${filterTag}:${gap.start}-${gap.end}`;
+      let p = inFlightRanges.get(key);
+      if (!p) {
+        p = (async () => {
+          const count = gap.end - gap.start + 1;
+          const result = await window.api.getLines(gap.start, count);
+          if (result.success && result.lines) {
+            // When filtering, cache by filtered position (gap.start + offset)
+            // When not filtering, cache by original line number
+            for (let idx = 0; idx < result.lines.length; idx++) {
+              const line = result.lines[idx];
+              const cacheKey = state.isFiltered ? gap.start + idx : line.lineNumber;
+              cachedLines.set(cacheKey, line);
+            }
+          }
+        })().finally(() => { inFlightRanges.delete(key); });
+        inFlightRanges.set(key, p);
       }
+      return p;
     });
 
     await Promise.all(loadPromises);
-    renderVisibleLines();
+
+    // Only repaint if what we just loaded still intersects the current viewport. During a
+    // fast fling the view can move entirely past this range before the fetch lands — a
+    // newer loadVisibleLines() will paint the current range, so rendering stale data here
+    // would just thrash. The cache fill above is always kept (serves reversals/settle).
+    // At rest, start/end equal the current range, so this always renders => settle is
+    // guaranteed (the scroll-end safety net calls us once more at the resting range).
+    if (start <= state.visibleEndLine && end >= state.visibleStartLine) {
+      renderVisibleLines();
+    }
   } catch (error) {
     console.error('Failed to load lines:', error);
   }
@@ -2941,7 +2971,7 @@ function createPlaceholderLinePooled(displayIndex: number): HTMLDivElement {
   // Dim inline bar (currentColor adapts to the theme); width jittered by index so
   // the skeleton reads as text, not a solid block.
   const barWidth = 30 + (displayIndex % 7) * 8; // 30–78%
-  const bar = `<span style="display:inline-block;width:${barWidth}%;max-width:60ch;height:0.72em;background:currentColor;opacity:0.10;border-radius:2px;vertical-align:middle;"></span>`;
+  const bar = `<span style="display:inline-block;width:${barWidth}%;max-width:60ch;height:0.72em;background:currentColor;opacity:0.22;border-radius:2px;vertical-align:middle;"></span>`;
   div.innerHTML = numHtml + `<span class="line-content">${bar}</span>`;
   return div;
 }
@@ -16078,6 +16108,9 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       });
       renderMinimapCanvas();
 
+      // Kick off the background severity index (jump-to-problem via F8).
+      void prefetchSeverityIndex();
+
       // Auto-analyze if enabled in settings
       if (userSettings.autoAnalyze && !isMarkdownFile) {
         hideProgress();
@@ -16134,10 +16167,14 @@ async function refreshActiveTab(): Promise<void> {
 // Analysis
 async function analyzeFile(): Promise<void> {
   if (!state.filePath) return;
+  // Single-flight + cancelable: while it runs, Analyze turns into a ✕ Cancel
+  // (abort via cancelAnalysis); a re-click can't launch a second analysis.
+  await runCancelable(elements.btnAnalyze, analyzeFileRun, () => { void window.api.cancelAnalysis(); });
+}
 
+async function analyzeFileRun(): Promise<void> {
   openBottomTab('analysis');
   showProgress('Analyzing...');
-  elements.btnAnalyze.disabled = true;
 
   const unsubscribe = window.api.onAnalyzeProgress((progress) => {
     const message = progress.message || progress.phase;
@@ -16163,7 +16200,6 @@ async function analyzeFile(): Promise<void> {
   } finally {
     unsubscribe();
     hideProgress();
-    elements.btnAnalyze.disabled = false;
   }
 }
 
@@ -17018,6 +17054,11 @@ async function performSearch(): Promise<void> {
     // main side) — discard this stale result so it can't clobber the newer one.
     if (myGen !== searchGeneration) return;
 
+    // Remember which engine ran + how long it took, for the in-app readout below.
+    lastSearchEngine = result.engine ?? null;
+    lastSearchMs = typeof result.searchMs === 'number' ? result.searchMs : null;
+    lastSearchReason = result.searchReason ?? null;
+
     if (result.success && result.matches) {
       // Preserve what the user is currently looking at: if they clicked/navigated to a
       // streamed match mid-search, keep it selected across the authoritative replace
@@ -17086,9 +17127,23 @@ async function performSearch(): Promise<void> {
     if (myGen === searchGeneration) {
       setButtonProgress(elements.btnSearch, null); // clear the Search button ring
       hideProgress();
+      // In-app search readout (no terminal needed): elapsed time + which engine ran.
+      // 'stream' is the slow JS fallback (e.g. for \r line-ending files) — flag it loudly.
+      if (lastSearchMs != null) {
+        const secs = (lastSearchMs / 1000).toFixed(lastSearchMs < 10000 ? 2 : 1);
+        const slow = lastSearchEngine === 'stream';
+        showToast(`Search: ${state.searchResults.length.toLocaleString()} matches · ${secs}s · ${lastSearchEngine ?? 'engine?'}${slow ? ` ⚠ SLOW${lastSearchReason ? ' — ' + lastSearchReason : ''}` : ''}`);
+      }
     }
   }
 }
+
+// Last search's engine + elapsed ms + fallback reason, as reported by the main process \u2014
+// surfaced in the count label (+ tooltip) and a completion toast so search timing is
+// visible without needing the launching terminal.
+let lastSearchEngine: 'ripgrep' | 'stream' | null = null;
+let lastSearchMs: number | null = null;
+let lastSearchReason: string | null = null;
 
 function updateSearchUI(): void {
   const count = state.searchResults.length;
@@ -17098,7 +17153,14 @@ function updateSearchUI(): void {
   if (count > 0 && startLineVal > 0) {
     label += ` ${arrow}Ln ${startLineVal}`;
   }
+  if (count > 0 && lastSearchMs != null) {
+    label += ` \u00b7 ${(lastSearchMs / 1000).toFixed(lastSearchMs < 10000 ? 2 : 1)}s`;
+  }
   elements.searchResultCount.textContent = label;
+  elements.searchResultCount.title = lastSearchMs != null
+    ? `Last search: ${lastSearchMs.toLocaleString()} ms via ${lastSearchEngine ?? 'unknown'} engine`
+      + (lastSearchEngine === 'stream' ? ` \u2014 SLOW JS fallback${lastSearchReason ? ': ' + lastSearchReason : ''}` : '')
+    : '';
   elements.btnPrevResult.disabled = count === 0;
   elements.btnNextResult.disabled = count === 0;
 }
@@ -17303,6 +17365,55 @@ function goToLine(displayIndex: number, originalLineNumber?: number): void {
   state.selectedLine = lineNumber;
   logViewerElement.scrollTop = Math.max(0, lineToScrollTop(displayIndex));
   updateCursorStatus(lineNumber);
+}
+
+// ── Severity jump (background ripgrep problem index → press F8) ──────────────
+// A single rg pass indexes every fatal/error/warning line; jumping is an O(log n)
+// binary search in the main process (see severityIndex.ts + SEVERITY_* IPC), so
+// "reach the next problem" is instant even at 50M lines instead of scrolling.
+let severityCounts: { fatal: number; error: number; warning: number } | null = null;
+let severitySeenForFile: string | null = null;
+
+// Modest minimap-tick resolution (also cheap to transfer over IPC).
+function severityBucketCount(): number {
+  const h = minimapCanvasElement?.height || 600;
+  return Math.max(100, Math.min(2000, Math.round(h)));
+}
+
+// Kick off the background problem-index build right after open and, once per file,
+// surface the counts so the jump feature is discoverable. Fire-and-forget.
+async function prefetchSeverityIndex(): Promise<void> {
+  severityCounts = null;
+  const forFile = state.filePath;
+  if (!forFile) return;
+  try {
+    const r = await window.api.getSeverityInfo(severityBucketCount());
+    if (!r || !r.success || state.filePath !== forFile) return;
+    severityCounts = r.counts || null;
+    const c = severityCounts;
+    const problems = c ? c.fatal + c.error + c.warning : 0;
+    if (problems > 0 && severitySeenForFile !== forFile) {
+      severitySeenForFile = forFile;
+      const bits: string[] = [];
+      if (c!.fatal) bits.push(`${c!.fatal.toLocaleString()} fatal`);
+      if (c!.error) bits.push(`${c!.error.toLocaleString()} error`);
+      if (c!.warning) bits.push(`${c!.warning.toLocaleString()} warning`);
+      showToast(`${bits.join(' · ')}${r.capped ? '+' : ''} — press F8 to jump to next problem`);
+    }
+  } catch { /* ignore — on-demand jump still works */ }
+}
+
+// Jump to the next (dir=1) / previous (dir=-1) problem line, all severities.
+async function jumpToNextSeverity(dir: 1 | -1): Promise<void> {
+  if (!state.filePath) return;
+  if (state.isFiltered) { showToast('Clear the filter to jump by severity'); return; }
+  const current = state.selectedLine != null ? state.selectedLine : (state.visibleStartLine ?? 0);
+  try {
+    const res = await window.api.nextSeverityLine(current, dir, ['fatal', 'error', 'warning']);
+    if (!res || !res.success) { showToast('Problem index unavailable'); return; }
+    if (res.line == null) { showToast(dir === 1 ? 'No more problems below' : 'No more problems above'); return; }
+    goToLine(res.line);
+  } catch { showToast('Problem index unavailable'); }
 }
 
 // Filter
@@ -20441,10 +20552,95 @@ function setButtonProgress(btn: HTMLElement | null | undefined, percent: number 
   btn.classList.add('btn-progress');
   btn.style.setProperty('--btn-p', String(Math.max(0, Math.min(100, Math.round(percent)))));
 }
-async function withButtonBusy<T>(btn: HTMLElement | null | undefined, fn: () => Promise<T>): Promise<T> {
-  setButtonBusy(btn, true);
-  try { return await fn(); }
-  finally { setButtonBusy(btn, false); }
+// Buttons whose action is currently in flight. A second activation while one is
+// running is ignored — one click = one process, so an eager double-click (or a
+// click while a slow op is still going) can't spawn a duplicate/concurrent run.
+const runningButtons = new WeakSet<HTMLElement>();
+
+// Put a button into an unmistakable "running" state: disabled (so the browser
+// itself drops further clicks) + an inline spinner prepended to its label +
+// dimmed. The feedback lives IN the button, where the user is already looking —
+// not in a 2px ring outside it that's easy to miss. Returns a restore() that
+// puts the button back exactly as it was (label, disabled state, aria).
+function enterButtonRunning(btn: HTMLElement): () => void {
+  btn.classList.add('is-running');
+  btn.setAttribute('aria-busy', 'true');
+  const spinner = document.createElement('span');
+  spinner.className = 'btn-spinner';
+  spinner.setAttribute('aria-hidden', 'true');
+  btn.insertBefore(spinner, btn.firstChild); // firstChild null → appends
+  const isFormControl = 'disabled' in btn;
+  const wasDisabled = isFormControl && (btn as HTMLButtonElement).disabled;
+  if (isFormControl) (btn as HTMLButtonElement).disabled = true;
+  return () => {
+    spinner.remove();
+    btn.classList.remove('is-running');
+    btn.removeAttribute('aria-busy');
+    if (isFormControl) (btn as HTMLButtonElement).disabled = wasDisabled;
+  };
+}
+
+// Run an async action tied to a button as SINGLE-FLIGHT: while it runs the button
+// shows a visible running state and any re-click is swallowed; the state is
+// restored and the lock released when the action settles (success OR error).
+// Returns undefined without running fn when the button is already busy.
+async function withButtonBusy<T>(btn: HTMLElement | null | undefined, fn: () => Promise<T>): Promise<T | undefined> {
+  if (btn && runningButtons.has(btn)) return undefined; // already running — ignore the re-click
+  let restore: (() => void) | null = null;
+  if (btn) { runningButtons.add(btn); restore = enterButtonRunning(btn); }
+  try {
+    return await fn();
+  } finally {
+    if (btn) { runningButtons.delete(btn); restore?.(); }
+  }
+}
+
+// ── Cancelable running state: the button becomes a ✕ Cancel while the op runs ──
+// For long ops the BACKEND can abort (search, analysis, filter — cancel-*
+// IPCs exist), the action button itself turns into a red Cancel control: it's
+// single-flight (can't double-fire), obviously running, and one click aborts it.
+// cancelHandlers holds the live abort fn per running button so the button's own
+// click (routed through onCancelableClick) can trigger it.
+const cancelHandlers = new WeakMap<HTMLElement, () => void>();
+
+// Run `op` as a single-flight, cancelable action bound to `btn`: while it runs the
+// button shows `runningHtml` (a ✕ Cancel), is marked busy, and its abort fn is
+// registered; state is restored when the op settles (success, error, OR cancel).
+async function runCancelable(
+  btn: HTMLButtonElement,
+  op: () => Promise<unknown>,
+  cancel: () => void,
+  runningHtml = '<span class="btn-cancel-x" aria-hidden="true">✕</span>',
+): Promise<void> {
+  if (runningButtons.has(btn)) return; // already running — one op per button
+  runningButtons.add(btn);
+  cancelHandlers.set(btn, cancel);
+  const prevHtml = btn.innerHTML;
+  const prevTitle = btn.getAttribute('title');
+  btn.classList.add('is-cancelable');
+  btn.setAttribute('aria-busy', 'true');
+  btn.setAttribute('title', 'Cancel — click to stop');
+  btn.innerHTML = runningHtml;
+  try {
+    await op();
+  } finally {
+    runningButtons.delete(btn);
+    cancelHandlers.delete(btn);
+    btn.classList.remove('is-cancelable');
+    btn.removeAttribute('aria-busy');
+    if (prevTitle === null) btn.removeAttribute('title'); else btn.setAttribute('title', prevTitle);
+    btn.innerHTML = prevHtml;
+  }
+}
+
+// Wire a button's click so that — if an op is already running on it — the click
+// ABORTS that op (via its registered cancel fn); otherwise it starts `action`.
+function onCancelableClick(btn: HTMLElement, action: () => void): void {
+  btn.addEventListener('click', () => {
+    const cancel = cancelHandlers.get(btn);
+    if (cancel) { cancel(); return; }
+    action();
+  });
 }
 
 function showToast(message: string): void {
@@ -21393,6 +21589,13 @@ function setupActivityBar(): void {
 
   // Keyboard shortcuts: Ctrl+1..5 sidebar panels, Ctrl+6..7 bottom tabs, Escape close
   document.addEventListener('keydown', (e) => {
+    // F8 / Shift+F8 — jump to next / previous problem (fatal/error/warning).
+    if (e.key === 'F8') {
+      e.preventDefault();
+      void jumpToNextSeverity(e.shiftKey ? -1 : 1);
+      return;
+    }
+
     // Ctrl+R — reload current file from disk
     if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === 'r') {
       if (state.filePath) { e.preventDefault(); reloadCurrentFile(); }
@@ -22499,7 +22702,12 @@ function init(): void {
   });
 
   // Search
-  elements.btnSearch.addEventListener('click', performSearch);
+  // Search runs single-flight + cancelable: the 🔍 button becomes ✕ while scanning;
+  // clicking it aborts (cancelSearch). (Pressing Enter still restarts a search — the
+  // generation guard cancels the prior one — so no concurrent scans either way.)
+  onCancelableClick(elements.btnSearch, () => {
+    void runCancelable(elements.btnSearch, () => performSearch(), () => { void window.api.cancelSearch(); });
+  });
   elements.btnPrevResult.addEventListener('click', () => navigateSearchPrev());
   elements.btnNextResult.addEventListener('click', () => navigateSearchNext());
 
@@ -22565,7 +22773,10 @@ function init(): void {
 
   // Filter
   elements.btnFilter.addEventListener('click', showFilterModal);
-  elements.btnApplyFilter.addEventListener('click', () => withButtonBusy(elements.btnApplyFilter, () => applyFilter()));
+  // Apply Filter runs single-flight + cancelable (cancelFilter aborts the scan).
+  onCancelableClick(elements.btnApplyFilter, () => {
+    void runCancelable(elements.btnApplyFilter, () => applyFilter(), () => { void window.api.cancelFilter(); }, '&#10005; Cancel');
+  });
   elements.btnClearFilter.addEventListener('click', clearFilter);
   elements.btnExtractFilter?.addEventListener('click', () => extractFilterToFile());
   // Badge body click = toggle suspend/resume; × button = permanent clear
@@ -22640,7 +22851,7 @@ function init(): void {
   elements.btnNextGap.addEventListener('click', () => navigateGap('next'));
 
   // Analysis
-  elements.btnAnalyze.addEventListener('click', analyzeFile);
+  onCancelableClick(elements.btnAnalyze, () => { void analyzeFile(); });
   document.getElementById('btn-run-analysis')?.addEventListener('click', analyzeFile);
   elements.btnBrief?.addEventListener('click', showBrief);
 
@@ -22651,7 +22862,7 @@ function init(): void {
 
   // Split
   elements.btnSplit.addEventListener('click', showSplitModal);
-  elements.btnDoSplit.addEventListener('click', doSplit);
+  elements.btnDoSplit.addEventListener('click', () => withButtonBusy(elements.btnDoSplit, () => doSplit()));
   elements.btnCancelSplit.addEventListener('click', hideSplitModal);
 
   // Columns
@@ -22667,7 +22878,7 @@ function init(): void {
   // JSON formatting toggle
   elements.btnJsonFormat.addEventListener('click', formatAndLoadJson);
   elements.btnEsotraceDecode.addEventListener('click', decodeEsotraceAndLoad);
-  document.getElementById('btn-time-sync-merge')?.addEventListener('click', runTimeSyncMerge);
+  document.getElementById('btn-time-sync-merge')?.addEventListener('click', (e) => withButtonBusy(e.currentTarget as HTMLElement, () => runTimeSyncMerge()));
   document.getElementById('btn-time-sync-add')?.addEventListener('click', addTimeSyncFile);
   document.getElementById('btn-time-sync-export')?.addEventListener('click', exportMergedFile);
 
