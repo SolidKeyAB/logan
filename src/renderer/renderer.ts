@@ -16869,6 +16869,57 @@ function applyColumnPattern(
   showToast(`Applied ${fields.length}-column pattern to the viewer`);
 }
 
+// Popup picker of saved constants ("tags"): drop a saved value into Search or the Filter's
+// include list. onPick(value, name) fires on choose; each row has a × to delete.
+async function showConstantsPickerMenu(anchor: HTMLElement, onPick: (value: string, name: string) => void): Promise<void> {
+  document.getElementById('constants-picker-menu')?.remove();
+  let entries: Array<{ name: string; value: string }> = [];
+  try {
+    const res = await window.api.getConstants();
+    entries = (res && res.entries) || [];
+  } catch { entries = []; }
+
+  const menu = document.createElement('div');
+  menu.id = 'constants-picker-menu';
+  menu.className = 'context-menu constants-picker-menu';
+  menu.innerHTML = entries.length === 0
+    ? '<div class="context-menu-item disabled">No constants yet — right-click a selection → “🔤 Save as constant”.</div>'
+    : entries.map(e =>
+        `<div class="context-menu-item constant-row" data-value="${escapeHtml(e.value)}" data-name="${escapeHtml(e.name)}">` +
+        `<span class="constant-name">${escapeHtml(e.name)}</span>` +
+        `<span class="constant-value">${escapeHtml(e.value.length > 40 ? e.value.slice(0, 37) + '…' : e.value)}</span>` +
+        `<button class="constant-del" data-name="${escapeHtml(e.name)}" title="Delete constant">×</button></div>`
+      ).join('');
+  document.body.appendChild(menu);
+
+  const rect = anchor.getBoundingClientRect();
+  menu.style.position = 'fixed';
+  menu.style.left = `${Math.max(4, Math.min(rect.left, window.innerWidth - 300))}px`;
+  menu.style.top = `${rect.bottom + 4}px`;
+  menu.style.zIndex = '10000';
+
+  const close = () => { menu.remove(); document.removeEventListener('click', onDocClick, true); };
+  const onDocClick = (e: MouseEvent) => { if (!menu.contains(e.target as Node) && e.target !== anchor) close(); };
+
+  menu.querySelectorAll<HTMLElement>('.constant-row').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).classList.contains('constant-del')) return;
+      onPick(row.dataset.value || '', row.dataset.name || '');
+      close();
+    });
+  });
+  menu.querySelectorAll<HTMLElement>('.constant-del').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const name = btn.dataset.name || '';
+      await window.api.deleteConstant(name);
+      close();
+      showToast(`Deleted constant “${name}”`);
+    });
+  });
+  setTimeout(() => document.addEventListener('click', onDocClick, true), 0);
+}
+
 function setAllColumnsVisibility(visible: boolean): void {
   const checkboxes = elements.columnsList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
   checkboxes.forEach((cb) => {
@@ -22993,6 +23044,9 @@ function init(): void {
   onCancelableClick(elements.btnSearch, () => {
     void runCancelable(elements.btnSearch, () => performSearch(), () => { void window.api.cancelSearch(); });
   });
+  document.getElementById('btn-search-constants')?.addEventListener('click', (e) => {
+    void showConstantsPickerMenu(e.currentTarget as HTMLElement, (value) => { elements.searchInput.value = value; void performSearch(); });
+  });
   elements.btnPrevResult.addEventListener('click', () => navigateSearchPrev());
   elements.btnNextResult.addEventListener('click', () => navigateSearchNext());
 
@@ -23089,6 +23143,9 @@ function init(): void {
   });
 
   elements.btnAddIncludePattern.addEventListener('click', () => addIncludePatternRow());
+  document.getElementById('btn-filter-constants')?.addEventListener('click', (e) => {
+    void showConstantsPickerMenu(e.currentTarget as HTMLElement, (value) => { addIncludePatternRow(value); showToast('Added constant as an include pattern'); });
+  });
 
   elements.btnSaveFilterPreset?.addEventListener('click', async () => {
     const name = await showInputPrompt('Preset name:');

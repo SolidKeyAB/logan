@@ -4207,6 +4207,14 @@ kbd {
 .column-layouts-title { color: var(--text-secondary); font-size: 12px; }
 .column-layouts-empty { color: var(--text-secondary); font-size: 11px; font-style: italic; }
 
+/* Constants ("tags") picker popup — reuse .context-menu base */
+.constants-picker-menu { min-width: 220px; max-width: 320px; max-height: 320px; overflow-y: auto; }
+.constants-picker-menu .constant-row { display: flex; align-items: center; gap: 8px; }
+.constant-name { font-weight: 600; }
+.constant-value { color: var(--text-secondary); font-size: 11px; font-family: var(--font-mono); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.constant-del { margin-left: auto; background: transparent; border: none; color: var(--text-secondary); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
+.constant-del:hover { color: var(--error-color, #e5484d); }
+
 /* Terminal Overlay (Quake-style drop-down) */
 .terminal-overlay {
   position: absolute;
