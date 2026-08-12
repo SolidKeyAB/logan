@@ -2822,19 +2822,42 @@ ipcMain.handle(IPC.GET_LINES, async (_, startLine: number, count: number) => {
     const endIdx = Math.min(startLine + count, filteredIndices.length);
     const lineNumbers = filteredIndices.slice(startLine, endIdx);
 
-    // Fetch actual lines by their real line numbers. Async reads so the main
-    // thread stays free for an in-flight search (see getLinesAsync).
-    const lines = [];
-    for (const lineNum of lineNumbers) {
-      const [line] = await handler.getLinesAsync(lineNum, 1);
-      if (line) lines.push(line);
-    }
+    // Fetch by real line numbers, coalescing physically-consecutive runs into
+    // single reads (one syscall per run, not per line — see getLinesByNumbers).
+    const lines = await handler.getLinesByNumbers(lineNumbers);
     return { success: true, lines };
   }
 
   // No filter - normal operation (async so rendering doesn't starve a search)
   const lines = await handler.getLinesAsync(startLine, count);
   return { success: true, lines };
+});
+
+// === Severity index (background jump-to-problem) ===
+
+ipcMain.handle(IPC.SEVERITY_INFO, async (_, buckets: number) => {
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+  try {
+    const info = await handler.getSeverityInfo(typeof buckets === 'number' ? buckets : 0);
+    return { success: true, ...info };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+});
+
+ipcMain.handle(IPC.SEVERITY_NEXT, async (_, fromLine: number, dir: 1 | -1, levels: string[]) => {
+  const handler = getFileHandler();
+  if (!handler) return { success: false, error: 'No file open' };
+  const allowed = (Array.isArray(levels) ? levels : [])
+    .filter((l): l is 'fatal' | 'error' | 'warning' => l === 'fatal' || l === 'error' || l === 'warning');
+  const wanted = allowed.length ? allowed : (['fatal', 'error', 'warning'] as const).slice();
+  try {
+    const line = await handler.getNextSeverityLine(fromLine, dir === -1 ? -1 : 1, wanted);
+    return { success: true, line };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
 });
 
 // === Search ===
@@ -2894,6 +2917,10 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
       sampleHits: matches.slice(0, 5).map(m => m.lineNumber + 1), ms: Date.now() - t0,
     });
 
+    // Engine + elapsed for the in-app search readout (ripgrep = fast native scan;
+    // stream = the slow JS fallback, e.g. for \r-line-ending files). See fileHandler.search().
+    const searchMeta = { engine: handler.lastSearchEngine ?? undefined, searchReason: handler.lastSearchReason ?? undefined, searchMs: Date.now() - t0 };
+
     // Check if filter is active for current file
     const filteredIndices = getFilteredLines();
 
@@ -2924,7 +2951,7 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
         }
       }
 
-      return { success: true, matches: filteredMatches, hiddenMatches };
+      return { success: true, matches: filteredMatches, hiddenMatches, ...searchMeta };
     }
 
     // Check for hidden column matches (matches in columns that are filtered out)
@@ -2945,12 +2972,12 @@ ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
             lineText: m.lineText,
           }));
         if (hiddenColumnMatches.length > 0) {
-          return { success: true, matches, hiddenColumnMatches };
+          return { success: true, matches, hiddenColumnMatches, ...searchMeta };
         }
       }
     }
 
-    return { success: true, matches };
+    return { success: true, matches, ...searchMeta };
   } catch (error) {
     // Record the FAILED pattern too — a silently-broken regex is exactly what the
     // flight recorder exists to surface.
@@ -2978,11 +3005,7 @@ ipcMain.handle(IPC.GET_LINES_FOR_FILE, async (_, filePath: string, startLine: nu
   if (filteredIndices) {
     const endIdx = Math.min(startLine + count, filteredIndices.length);
     const lineNumbers = filteredIndices.slice(startLine, endIdx);
-    const lines = [];
-    for (const lineNum of lineNumbers) {
-      const [line] = await handler.getLinesAsync(lineNum, 1);
-      if (line) lines.push(line);
-    }
+    const lines = await handler.getLinesByNumbers(lineNumbers);
     return { success: true, lines };
   }
 
