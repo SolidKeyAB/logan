@@ -296,6 +296,7 @@
                 <input type="checkbox" id="search-whole-word"> <span>ab</span>
               </label>
               <button id="btn-search" class="search-panel-btn" title="Search" aria-label="Search">&#128269;</button>
+              <button id="btn-search-constants" class="search-panel-btn" title="Search by a saved constant / tag" aria-label="Constants">&#128288;</button>
               <button id="btn-prev-result" class="search-panel-btn" title="Previous result" aria-label="Previous result" disabled>&lt;</button>
               <span id="search-result-count" class="search-panel-count" aria-live="polite" aria-atomic="true"></span>
               <button id="btn-next-result" class="search-panel-btn" title="Next result" aria-label="Next result" disabled>&gt;</button>
@@ -979,6 +980,7 @@
             <label>Include Patterns</label>
             <div id="include-patterns-container" class="include-patterns-container"></div>
             <button id="btn-add-include-pattern" class="secondary-btn small" style="margin-top:4px">+ Add pattern</button>
+            <button id="btn-filter-constants" class="secondary-btn small" style="margin-top:4px" title="Add a saved constant / tag as an include pattern">&#128288; Constant…</button>
             <div class="context-lines-row">
               <label for="basic-context-lines">Context lines around matches:</label>
               <input type="number" id="basic-context-lines" class="context-lines-input" value="0" min="0" max="50">
