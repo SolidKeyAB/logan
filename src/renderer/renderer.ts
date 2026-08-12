@@ -16167,10 +16167,14 @@ async function refreshActiveTab(): Promise<void> {
 // Analysis
 async function analyzeFile(): Promise<void> {
   if (!state.filePath) return;
+  // Single-flight + cancelable: while it runs, Analyze turns into a ✕ Cancel
+  // (abort via cancelAnalysis); a re-click can't launch a second analysis.
+  await runCancelable(elements.btnAnalyze, analyzeFileRun, () => { void window.api.cancelAnalysis(); });
+}
 
+async function analyzeFileRun(): Promise<void> {
   openBottomTab('analysis');
   showProgress('Analyzing...');
-  elements.btnAnalyze.disabled = true;
 
   const unsubscribe = window.api.onAnalyzeProgress((progress) => {
     const message = progress.message || progress.phase;
@@ -16196,7 +16200,6 @@ async function analyzeFile(): Promise<void> {
   } finally {
     unsubscribe();
     hideProgress();
-    elements.btnAnalyze.disabled = false;
   }
 }
 
@@ -20523,10 +20526,95 @@ function setButtonProgress(btn: HTMLElement | null | undefined, percent: number 
   btn.classList.add('btn-progress');
   btn.style.setProperty('--btn-p', String(Math.max(0, Math.min(100, Math.round(percent)))));
 }
-async function withButtonBusy<T>(btn: HTMLElement | null | undefined, fn: () => Promise<T>): Promise<T> {
-  setButtonBusy(btn, true);
-  try { return await fn(); }
-  finally { setButtonBusy(btn, false); }
+// Buttons whose action is currently in flight. A second activation while one is
+// running is ignored — one click = one process, so an eager double-click (or a
+// click while a slow op is still going) can't spawn a duplicate/concurrent run.
+const runningButtons = new WeakSet<HTMLElement>();
+
+// Put a button into an unmistakable "running" state: disabled (so the browser
+// itself drops further clicks) + an inline spinner prepended to its label +
+// dimmed. The feedback lives IN the button, where the user is already looking —
+// not in a 2px ring outside it that's easy to miss. Returns a restore() that
+// puts the button back exactly as it was (label, disabled state, aria).
+function enterButtonRunning(btn: HTMLElement): () => void {
+  btn.classList.add('is-running');
+  btn.setAttribute('aria-busy', 'true');
+  const spinner = document.createElement('span');
+  spinner.className = 'btn-spinner';
+  spinner.setAttribute('aria-hidden', 'true');
+  btn.insertBefore(spinner, btn.firstChild); // firstChild null → appends
+  const isFormControl = 'disabled' in btn;
+  const wasDisabled = isFormControl && (btn as HTMLButtonElement).disabled;
+  if (isFormControl) (btn as HTMLButtonElement).disabled = true;
+  return () => {
+    spinner.remove();
+    btn.classList.remove('is-running');
+    btn.removeAttribute('aria-busy');
+    if (isFormControl) (btn as HTMLButtonElement).disabled = wasDisabled;
+  };
+}
+
+// Run an async action tied to a button as SINGLE-FLIGHT: while it runs the button
+// shows a visible running state and any re-click is swallowed; the state is
+// restored and the lock released when the action settles (success OR error).
+// Returns undefined without running fn when the button is already busy.
+async function withButtonBusy<T>(btn: HTMLElement | null | undefined, fn: () => Promise<T>): Promise<T | undefined> {
+  if (btn && runningButtons.has(btn)) return undefined; // already running — ignore the re-click
+  let restore: (() => void) | null = null;
+  if (btn) { runningButtons.add(btn); restore = enterButtonRunning(btn); }
+  try {
+    return await fn();
+  } finally {
+    if (btn) { runningButtons.delete(btn); restore?.(); }
+  }
+}
+
+// ── Cancelable running state: the button becomes a ✕ Cancel while the op runs ──
+// For long ops the BACKEND can abort (search, analysis, filter — cancel-*
+// IPCs exist), the action button itself turns into a red Cancel control: it's
+// single-flight (can't double-fire), obviously running, and one click aborts it.
+// cancelHandlers holds the live abort fn per running button so the button's own
+// click (routed through onCancelableClick) can trigger it.
+const cancelHandlers = new WeakMap<HTMLElement, () => void>();
+
+// Run `op` as a single-flight, cancelable action bound to `btn`: while it runs the
+// button shows `runningHtml` (a ✕ Cancel), is marked busy, and its abort fn is
+// registered; state is restored when the op settles (success, error, OR cancel).
+async function runCancelable(
+  btn: HTMLButtonElement,
+  op: () => Promise<unknown>,
+  cancel: () => void,
+  runningHtml = '<span class="btn-cancel-x" aria-hidden="true">✕</span>',
+): Promise<void> {
+  if (runningButtons.has(btn)) return; // already running — one op per button
+  runningButtons.add(btn);
+  cancelHandlers.set(btn, cancel);
+  const prevHtml = btn.innerHTML;
+  const prevTitle = btn.getAttribute('title');
+  btn.classList.add('is-cancelable');
+  btn.setAttribute('aria-busy', 'true');
+  btn.setAttribute('title', 'Cancel — click to stop');
+  btn.innerHTML = runningHtml;
+  try {
+    await op();
+  } finally {
+    runningButtons.delete(btn);
+    cancelHandlers.delete(btn);
+    btn.classList.remove('is-cancelable');
+    btn.removeAttribute('aria-busy');
+    if (prevTitle === null) btn.removeAttribute('title'); else btn.setAttribute('title', prevTitle);
+    btn.innerHTML = prevHtml;
+  }
+}
+
+// Wire a button's click so that — if an op is already running on it — the click
+// ABORTS that op (via its registered cancel fn); otherwise it starts `action`.
+function onCancelableClick(btn: HTMLElement, action: () => void): void {
+  btn.addEventListener('click', () => {
+    const cancel = cancelHandlers.get(btn);
+    if (cancel) { cancel(); return; }
+    action();
+  });
 }
 
 function showToast(message: string): void {
@@ -22588,7 +22676,12 @@ function init(): void {
   });
 
   // Search
-  elements.btnSearch.addEventListener('click', performSearch);
+  // Search runs single-flight + cancelable: the 🔍 button becomes ✕ while scanning;
+  // clicking it aborts (cancelSearch). (Pressing Enter still restarts a search — the
+  // generation guard cancels the prior one — so no concurrent scans either way.)
+  onCancelableClick(elements.btnSearch, () => {
+    void runCancelable(elements.btnSearch, () => performSearch(), () => { void window.api.cancelSearch(); });
+  });
   elements.btnPrevResult.addEventListener('click', () => navigateSearchPrev());
   elements.btnNextResult.addEventListener('click', () => navigateSearchNext());
 
@@ -22654,7 +22747,10 @@ function init(): void {
 
   // Filter
   elements.btnFilter.addEventListener('click', showFilterModal);
-  elements.btnApplyFilter.addEventListener('click', () => withButtonBusy(elements.btnApplyFilter, () => applyFilter()));
+  // Apply Filter runs single-flight + cancelable (cancelFilter aborts the scan).
+  onCancelableClick(elements.btnApplyFilter, () => {
+    void runCancelable(elements.btnApplyFilter, () => applyFilter(), () => { void window.api.cancelFilter(); }, '&#10005; Cancel');
+  });
   elements.btnClearFilter.addEventListener('click', clearFilter);
   elements.btnExtractFilter?.addEventListener('click', () => extractFilterToFile());
   // Badge body click = toggle suspend/resume; × button = permanent clear
@@ -22729,7 +22825,7 @@ function init(): void {
   elements.btnNextGap.addEventListener('click', () => navigateGap('next'));
 
   // Analysis
-  elements.btnAnalyze.addEventListener('click', analyzeFile);
+  onCancelableClick(elements.btnAnalyze, () => { void analyzeFile(); });
   document.getElementById('btn-run-analysis')?.addEventListener('click', analyzeFile);
   elements.btnBrief?.addEventListener('click', showBrief);
 
@@ -22740,7 +22836,7 @@ function init(): void {
 
   // Split
   elements.btnSplit.addEventListener('click', showSplitModal);
-  elements.btnDoSplit.addEventListener('click', doSplit);
+  elements.btnDoSplit.addEventListener('click', () => withButtonBusy(elements.btnDoSplit, () => doSplit()));
   elements.btnCancelSplit.addEventListener('click', hideSplitModal);
 
   // Columns
@@ -22756,7 +22852,7 @@ function init(): void {
   // JSON formatting toggle
   elements.btnJsonFormat.addEventListener('click', formatAndLoadJson);
   elements.btnEsotraceDecode.addEventListener('click', decodeEsotraceAndLoad);
-  document.getElementById('btn-time-sync-merge')?.addEventListener('click', runTimeSyncMerge);
+  document.getElementById('btn-time-sync-merge')?.addEventListener('click', (e) => withButtonBusy(e.currentTarget as HTMLElement, () => runTimeSyncMerge()));
   document.getElementById('btn-time-sync-add')?.addEventListener('click', addTimeSyncFile);
   document.getElementById('btn-time-sync-export')?.addEventListener('click', exportMergedFile);
 
