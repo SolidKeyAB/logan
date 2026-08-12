@@ -4,6 +4,7 @@ import { spawn } from 'child_process';
 import { Worker } from 'worker_threads';
 import { FileInfo, LineData, SearchMatch, SearchOptions } from '../shared/types';
 import { getRipgrepPath } from './ripgrepPath';
+import { byteOffsetToLineIndex } from './byteOffset';
 import { scanFileIndex, SplitMetadata, IndexResult } from './indexScan';
 import {
   SeverityIndex, SeverityLevel, SeverityCounts, EMPTY_SEVERITY_INDEX, SEVERITY_RG_PATTERN,
@@ -642,21 +643,28 @@ export class FileHandler {
     // fast ripgrep path for a whole-file JS scan on files with \r line endings).
     const hasColumnFilter = options.columnConfig &&
       options.columnConfig.columns.some(c => !c.visible);
-    const hasRipgrep = !hasColumnFilter && !this._hasStandaloneCR && await checkRipgrep();
+    const rgAvailable = !hasColumnFilter && await checkRipgrep();
 
+    // \r-line-ending files: ripgrep still SCANS correctly and its byte offsets are exact —
+    // only its LINE NUMBERS are wrong (it treats \r as within-line). So instead of the slow
+    // JS stream fallback, run ripgrep with --byte-offset and remap each hit to the right
+    // logical line via our own \r-aware offset index. Full ripgrep speed, correct lines.
     let engine: 'ripgrep' | 'stream';
     let reason: string;
+    let useByteOffset = false;
     if (hasColumnFilter) { engine = 'stream'; reason = 'column filter active (ripgrep can\'t hide columns)'; }
-    else if (this._hasStandaloneCR) { engine = 'stream'; reason = 'file has standalone \\r line endings — ripgrep miscounts them'; }
-    else if (hasRipgrep) { engine = 'ripgrep'; reason = 'ok'; }
-    else { engine = 'stream'; reason = 'ripgrep binary unavailable'; }
+    else if (!rgAvailable) { engine = 'stream'; reason = 'ripgrep binary unavailable'; }
+    else if (this._hasStandaloneCR) { engine = 'ripgrep'; reason = 'ok (\\r-aware byte-offset remap)'; useByteOffset = true; }
+    else { engine = 'ripgrep'; reason = 'ok'; }
     this.lastSearchEngine = engine;
     this.lastSearchReason = reason;
 
     const t0 = Date.now();
-    const result = engine === 'ripgrep'
-      ? await this.searchWithRipgrep(options, onProgress, signal)
-      : await this.searchWithStream(options, onProgress, signal);
+    const result = engine === 'stream'
+      ? await this.searchWithStream(options, onProgress, signal)
+      : useByteOffset
+        ? await this.searchWithRipgrepByteOffset(options, onProgress, signal)
+        : await this.searchWithRipgrep(options, onProgress, signal);
     const ms = Date.now() - t0;
 
     const cap = options.maxMatches ?? DEFAULT_MAX_MATCHES;
@@ -667,6 +675,123 @@ export class FileHandler {
       (engine === 'stream' ? `  ← SLOW PATH: ${reason}` : ''),
     );
     return result;
+  }
+
+  // \r-aware ripgrep search. Ripgrep scans at native speed and, with --byte-offset
+  // --only-matching, reports the exact BYTE offset of every match — which is correct even
+  // on files it can't line-count (standalone \r). We remap each byte offset to the right
+  // logical line via our own \r-aware index (byteOffsetToLineIndex over this.offsets), so
+  // line numbers, column and the previewed line text are all correct. Only used when
+  // _hasStandaloneCR — the whole reason search() used to fall back to the slow JS scan.
+  private async searchWithRipgrepByteOffset(
+    options: SearchOptions,
+    onProgress?: (percent: number, matchCount: number, deltaMatches?: SearchMatch[]) => void,
+    signal?: { cancelled: boolean }
+  ): Promise<SearchMatch[]> {
+    if (!this.filePath || this.fd === null) return [];
+
+    const matches: SearchMatch[] = [];
+    const MAX_MATCHES = options.maxMatches ?? DEFAULT_MAX_MATCHES;
+    // Full logical-line preview costs one positioned read per match; bound it so a
+    // match-dense pattern can't stall the main thread. Matches past the cap still return
+    // (correct line + the matched text) — only their panel preview is the match, not the line.
+    const LINE_TEXT_CAP = 5000;
+
+    const useRegexMode = options.isRegex || options.isWildcard;
+    let rgPattern = options.pattern;
+    if (options.isWildcard) rgPattern = wildcardToRegex(options.pattern);
+
+    const args: string[] = ['--only-matching', '--byte-offset', '--no-heading', '--no-filename'];
+    if (!options.matchCase) args.push('--ignore-case');
+    if (options.wholeWord) args.push('--word-regexp');
+    if (!useRegexMode) args.push('--fixed-strings');
+    // Deliberately NO --max-count: on a \r-only file the whole thing can be one \n-line,
+    // so rg's per-LINE cap wouldn't bound the match COUNT. We cap ourselves and kill rg.
+    args.push('--', rgPattern, this.filePath);
+
+    const fd = this.fd;
+    const lineBuf = Buffer.allocUnsafe(FileHandler.MAX_LINE_READ);
+    let fileSize = 0;
+    try { fileSize = fs.statSync(this.filePath).size; } catch { /* progress falls back to count */ }
+
+    return new Promise((resolve) => {
+      const proc = spawn(getRipgrepPath(), args);
+      let buffer = '';
+      let lastProgressUpdate = Date.now();
+      let lastByteOffset = 0;
+      let lastEmittedIndex = 0;
+      const STREAM_MATCH_CAP = 2000;
+      const STREAM_TEXT_MAX = 1000;
+      const takeStreamDelta = (): SearchMatch[] | undefined => {
+        if (lastEmittedIndex >= STREAM_MATCH_CAP) return undefined;
+        const upto = Math.min(matches.length, STREAM_MATCH_CAP);
+        if (upto <= lastEmittedIndex) return undefined;
+        const slice = matches.slice(lastEmittedIndex, upto);
+        lastEmittedIndex = upto;
+        return slice.map(m => m.lineText.length > STREAM_TEXT_MAX
+          ? { ...m, lineText: m.lineText.slice(0, STREAM_TEXT_MAX) } : m);
+      };
+
+      // Parse one rg -o -b output line ("<byteOffset>:<matchText>"). Returns false when the
+      // caller should stop (match cap reached).
+      const handleOutputLine = (out: string): boolean => {
+        const ci = out.indexOf(':');
+        if (ci === -1) return true;
+        const byteOffset = parseInt(out.slice(0, ci), 10);
+        if (!Number.isFinite(byteOffset)) return true;
+        const matchText = out.slice(ci + 1);
+        const lineIdx = byteOffsetToLineIndex(this.offsets, this.lineCount, byteOffset);
+        const visibleLine = lineIdx - this.headerLineCount;
+        if (visibleLine < 0) return true;
+        lastByteOffset = byteOffset;
+
+        const lineStart = this.offsets[lineIdx];
+        let lineText = matchText;
+        let column = Math.max(0, byteOffset - lineStart); // byte column fallback
+        if (matches.length < LINE_TEXT_CAP) {
+          try {
+            const readLen = Math.min(this.lengths[lineIdx], FileHandler.MAX_LINE_READ);
+            const n = fs.readSync(fd, lineBuf, 0, readLen, lineStart);
+            lineText = lineBuf.toString('utf8', 0, n);
+            const byteInLine = Math.max(0, Math.min(n, byteOffset - lineStart));
+            column = lineBuf.toString('utf8', 0, byteInLine).length; // exact char column
+            if (this.lengths[lineIdx] > FileHandler.MAX_LINE_READ) lineText += ' … (truncated)';
+          } catch { /* keep matchText + byte column */ }
+        }
+        matches.push({ lineNumber: visibleLine, column, length: matchText.length, lineText });
+        return matches.length < MAX_MATCHES;
+      };
+
+      proc.stdout.on('data', (data: Buffer) => {
+        if (signal?.cancelled) { try { proc.kill(); } catch { /* ignore */ } return; }
+        buffer += data.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const out of lines) {
+          if (!out) continue;
+          if (!handleOutputLine(out)) { try { proc.kill(); } catch { /* ignore */ } break; }
+        }
+        const now = Date.now();
+        if (onProgress && now - lastProgressUpdate > 100) {
+          lastProgressUpdate = now;
+          const pct = fileSize > 0 ? Math.min(99, (lastByteOffset / fileSize) * 100) : Math.min(90, matches.length / 100);
+          onProgress(pct, matches.length, takeStreamDelta());
+        }
+      });
+      proc.on('error', () => resolve(matches));
+      proc.on('close', () => {
+        if (buffer) handleOutputLine(buffer);
+        onProgress?.(100, matches.length, takeStreamDelta());
+        resolve(matches);
+      });
+
+      if (signal) {
+        const checkCancel = setInterval(() => {
+          if (signal.cancelled) { try { proc.kill(); } catch { /* ignore */ } clearInterval(checkCancel); }
+        }, 100);
+        proc.on('close', () => clearInterval(checkCancel));
+      }
+    });
   }
 
   // NOTE: searchWithRipgrep does NOT support column filtering.
