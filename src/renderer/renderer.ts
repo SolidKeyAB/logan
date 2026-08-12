@@ -6801,7 +6801,7 @@ async function loadInvestigationTemplates(): Promise<void> {
 }
 
 async function saveCurrentInvestigation(): Promise<void> {
-  const name = (prompt('Name this investigation pattern (the steps taken so far):') || '').trim();
+  const name = ((await showInputPrompt('Name this investigation pattern (the steps taken so far):')) || '').trim();
   if (!name) return;
   const res = await window.api.saveInvestigation(name);
   if (!res.success) { showToast(res.error || 'Nothing to save yet — run an investigation first'); return; }
@@ -10900,7 +10900,7 @@ async function _openSshFolderLegacy(): Promise<void> {
   }
   if (!sshConn) return;
 
-  const remotePath = prompt('Enter remote directory path:', '/var/log');
+  const remotePath = await showInputPrompt('Enter remote directory path:', '/var/log');
   if (!remotePath) return;
 
   try {
@@ -15845,7 +15845,7 @@ function patcolCopyRegex(): void {
 
 async function patcolSavePattern(): Promise<void> {
   if (!patcolCompiled) { showToast('Author a valid pattern first'); return; }
-  const name = window.prompt('Name this pattern (e.g. "http-access", "sensor-line"):', '');
+  const name = await showInputPrompt('Name this pattern (e.g. "http-access", "sensor-line"):', '');
   if (!name || !name.trim()) return;
   const id = 'cp_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 1e6).toString(36);
   const item = { id, name: name.trim(), spec: patcolBuildSpec(), regex: patcolCompiled.regex, flags: patcolCompiled.flags, fields: patcolCompiled.fields };
@@ -19669,7 +19669,7 @@ async function removeBookmarkById(id: string): Promise<void> {
 async function saveBookmarkSet(): Promise<void> {
   if (state.bookmarks.length === 0) return;
 
-  const name = prompt('Enter a name for this bookmark set:');
+  const name = await showInputPrompt('Enter a name for this bookmark set:');
   if (!name) return;
 
   const set = {
@@ -22807,7 +22807,7 @@ function init(): void {
   elements.btnAddIncludePattern.addEventListener('click', () => addIncludePatternRow());
 
   elements.btnSaveFilterPreset?.addEventListener('click', async () => {
-    const name = prompt('Preset name:');
+    const name = await showInputPrompt('Preset name:');
     if (!name?.trim()) return;
     const levelCheckboxes = document.querySelectorAll<HTMLInputElement>('input[name="level"]:checked');
     const preset: FilterPreset = {
