@@ -3888,9 +3888,10 @@ ipcMain.handle('column-pattern-delete', async (_, id: string) => {
 interface ColumnLayoutSaved {
   id: string;
   name: string;
-  method: 'delimiter';
-  delimiter: string;
+  method: 'delimiter' | 'pattern';
+  delimiter?: string;
   delimiterName?: string;
+  pattern?: { regex: string; flags: string; fields: string[] };
   columns: Array<{ index: number; name?: string; visible: boolean }>;
 }
 
