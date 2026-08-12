@@ -193,6 +193,7 @@ interface ColumnConfig {
     index: number;
     sample: string[];
     visible: boolean;
+    name?: string; // user-assigned column name (Columns panel) — drives labels, save/template, filter
   }>;
 }
 
