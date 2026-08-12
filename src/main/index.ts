@@ -5152,13 +5152,15 @@ ipcMain.handle(IPC.BASELINE_COMPARE, async (_, baselineId: string) => {
 // === Filter ===
 
 // Advanced Filter Types
-type FilterRuleType = 'contains' | 'not_contains' | 'level' | 'not_level' | 'regex' | 'not_regex';
+type FilterRuleType = 'contains' | 'not_contains' | 'level' | 'not_level' | 'regex' | 'not_regex' | 'column';
 
 interface FilterRule {
   id: string;
   type: FilterRuleType;
   value: string;
   caseSensitive?: boolean;
+  columnIndex?: number;                         // for type 'column': which column to test
+  columnOp?: 'equals' | 'contains' | 'regex';   // for type 'column': how to compare the cell
 }
 
 interface FilterGroup {
@@ -5171,6 +5173,7 @@ interface AdvancedFilterConfig {
   enabled: boolean;
   groups: FilterGroup[];
   contextLines?: number;
+  delimiter?: string;                           // column delimiter, so 'column' rules can split the line
 }
 
 interface FilterConfig {
@@ -5218,6 +5221,25 @@ function compileAdvancedFilter(config: AdvancedFilterConfig): CompiledMatcher {
           return (_text: string, level: string) => level.toLowerCase() === rule.value.toLowerCase();
         case 'not_level':
           return (_text: string, level: string) => level.toLowerCase() !== rule.value.toLowerCase();
+        case 'column': {
+          // Filter ROWS by a single column's value: split the line with the same
+          // canonical splitter the viewer uses, take column[columnIndex], compare.
+          const delim = config.delimiter ?? ' ';
+          const colIdx = rule.columnIndex ?? 0;
+          const op = rule.columnOp ?? 'contains';
+          if (op === 'regex') {
+            let re: RegExp | null = null;
+            try { re = new RegExp(rule.value, rule.caseSensitive ? '' : 'i'); } catch { re = null; }
+            return (text: string, _level: string) =>
+              re ? re.test(splitLineIntoColumns(text, delim)[colIdx] ?? '') : false;
+          }
+          const target = rule.caseSensitive ? rule.value : rule.value.toLowerCase();
+          return (text: string, _level: string) => {
+            const cell = splitLineIntoColumns(text, delim)[colIdx] ?? '';
+            const c = rule.caseSensitive ? cell : cell.toLowerCase();
+            return op === 'equals' ? c === target : c.includes(target);
+          };
+        }
         default:
           return (_text: string, _level: string) => true;
       }
