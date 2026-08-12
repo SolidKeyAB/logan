@@ -16598,6 +16598,9 @@ async function showColumnsModal(): Promise<void> {
 
       elements.columnsLoading.style.display = 'none';
       elements.columnsContent.style.display = 'block';
+
+      // Template-driven: show saved layouts to apply, and enable "Save as layout".
+      void loadColumnLayouts();
     } else {
       elements.columnsLoading.textContent = result.error || 'Failed to analyze columns';
     }
@@ -16681,6 +16684,94 @@ async function applyColumnsConfig(): Promise<void> {
     });
     showToast(`Filtered rows by ${columnRules.length} column condition${columnRules.length > 1 ? 's' : ''}`);
   }
+}
+
+// ── Column Layouts (Phase 1): saved column setups (names + visibility), applied in the
+// Columns visibility window. Global store via columnLayout* IPC; chips render in the modal.
+let columnLayouts: any[] = [];
+
+async function loadColumnLayouts(): Promise<void> {
+  try {
+    const res = await (window.api as any).columnLayoutList();
+    columnLayouts = (res && res.layouts) || [];
+  } catch { columnLayouts = []; }
+  renderColumnLayoutChips();
+}
+
+function renderColumnLayoutChips(): void {
+  const el = document.getElementById('column-layouts-chips');
+  if (!el) return;
+  if (columnLayouts.length === 0) {
+    el.innerHTML = '<span class="column-layouts-empty">none yet — set names/visibility below, then “Save as layout…”</span>';
+    return;
+  }
+  el.innerHTML = columnLayouts.map((l: any) =>
+    `<span class="patcol-chip" data-id="${escapeHtml(l.id)}"><span class="patcol-chip-name" title="${escapeHtml(l.delimiterName || l.delimiter || '')} · ${(l.columns || []).length} cols">${escapeHtml(l.name)}</span><button class="patcol-chip-x" data-id="${escapeHtml(l.id)}" title="Delete layout">×</button></span>`
+  ).join('');
+  el.querySelectorAll('.patcol-chip-name').forEach((b) => b.addEventListener('click', (e) => {
+    const id = ((e.currentTarget as HTMLElement).closest('.patcol-chip') as HTMLElement)?.dataset.id;
+    const layout = columnLayouts.find((l: any) => l.id === id);
+    if (layout) applyColumnLayoutToModal(layout);
+  }));
+  el.querySelectorAll('.patcol-chip-x').forEach((b) => b.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const id = (e.currentTarget as HTMLElement).dataset.id;
+    if (!id) return;
+    const res = await (window.api as any).columnLayoutDelete(id);
+    columnLayouts = (res && res.layouts) || columnLayouts.filter((l: any) => l.id !== id);
+    renderColumnLayoutChips();
+  }));
+}
+
+// Load a saved layout into the modal form (checkboxes + name inputs), by column index; the
+// user then clicks Apply to commit. Indices map positionally even if the delimiter differs.
+function applyColumnLayoutToModal(layout: any): void {
+  const tempConfig = (elements.columnsModal as any)._tempConfig;
+  if (!tempConfig) return;
+  const byIndex = new Map<number, any>((layout.columns || []).map((c: any) => [c.index, c]));
+  elements.columnsList.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-col-index]').forEach((cb) => {
+    const lc = byIndex.get(parseInt(cb.dataset.colIndex || '0', 10));
+    if (lc) cb.checked = lc.visible !== false;
+  });
+  elements.columnsList.querySelectorAll<HTMLInputElement>('.column-name-input').forEach((inp) => {
+    const lc = byIndex.get(parseInt(inp.dataset.colIndex || '0', 10));
+    if (lc && typeof lc.name === 'string') inp.value = lc.name;
+  });
+  const mismatch = tempConfig.delimiter && layout.delimiter && tempConfig.delimiter !== layout.delimiter;
+  showToast(`Loaded layout “${layout.name}”${mismatch ? ' (different delimiter — mapped by position)' : ''} — click Apply`);
+}
+
+async function saveCurrentColumnLayout(): Promise<void> {
+  const tempConfig = (elements.columnsModal as any)._tempConfig;
+  if (!tempConfig) { showToast('Open a delimited file first'); return; }
+  const visById = new Map<number, boolean>();
+  elements.columnsList.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-col-index]').forEach((cb) => {
+    visById.set(parseInt(cb.dataset.colIndex || '0', 10), cb.checked);
+  });
+  const nameById = new Map<number, string>();
+  elements.columnsList.querySelectorAll<HTMLInputElement>('.column-name-input').forEach((inp) => {
+    const v = inp.value.trim();
+    if (v) nameById.set(parseInt(inp.dataset.colIndex || '0', 10), v);
+  });
+  const name = await showInputPrompt('Name this column layout (e.g. "access-log", "sensor"):');
+  if (!name) return;
+  const layout = {
+    id: 'cl_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 1e6).toString(36),
+    name,
+    method: 'delimiter',
+    delimiter: tempConfig.delimiter,
+    delimiterName: tempConfig.delimiterName,
+    columns: (tempConfig.columns || []).map((c: any) => ({
+      index: c.index,
+      name: nameById.get(c.index),
+      visible: visById.has(c.index) ? visById.get(c.index)! : (c.visible !== false),
+    })),
+  };
+  const res = await (window.api as any).columnLayoutSave(layout);
+  if (!res || !res.success) { showToast(res?.error || 'Save failed'); return; }
+  columnLayouts = res.layouts || columnLayouts;
+  renderColumnLayoutChips();
+  showToast(`Saved layout “${name}”`);
 }
 
 function setAllColumnsVisibility(visible: boolean): void {
@@ -22918,6 +23009,7 @@ function init(): void {
   elements.btnColumns.addEventListener('click', showColumnsModal);
   elements.btnColumnsApply.addEventListener('click', applyColumnsConfig);
   elements.btnColumnsCancel.addEventListener('click', hideColumnsModal);
+  document.getElementById('btn-save-column-layout')?.addEventListener('click', () => { void saveCurrentColumnLayout(); });
   elements.btnColumnsAll.addEventListener('click', () => setAllColumnsVisibility(true));
   elements.btnColumnsNone.addEventListener('click', () => setAllColumnsVisibility(false));
 

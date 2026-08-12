@@ -4203,6 +4203,9 @@ kbd {
   border-radius: 3px;
   color: var(--text-primary);
 }
+.column-layouts-picker { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.column-layouts-title { color: var(--text-secondary); font-size: 12px; }
+.column-layouts-empty { color: var(--text-secondary); font-size: 11px; font-style: italic; }
 
 /* Terminal Overlay (Quake-style drop-down) */
 .terminal-overlay {

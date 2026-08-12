@@ -3881,6 +3881,65 @@ ipcMain.handle('column-pattern-delete', async (_, id: string) => {
   return { success: true, patterns: items };
 });
 
+// ── Column Layouts (Phase 1: delimiter layouts) ───────────────────────────────
+// A named, saved definition of a file's columns — delimiter + per-column {index, name,
+// visible}. The Columns visibility window applies these (template-driven). Global store,
+// mirrors column-patterns; per-file layouts (sidecar) are a later slice.
+interface ColumnLayoutSaved {
+  id: string;
+  name: string;
+  method: 'delimiter';
+  delimiter: string;
+  delimiterName?: string;
+  columns: Array<{ index: number; name?: string; visible: boolean }>;
+}
+
+const getColumnLayoutsPath = () => path.join(getConfigDir(), 'column-layouts.json');
+
+function loadColumnLayoutsStore(): ColumnLayoutSaved[] {
+  try {
+    ensureConfigDir();
+    const p = getColumnLayoutsPath();
+    if (fs.existsSync(p)) {
+      const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'));
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (error) {
+    console.error('Failed to load column layouts:', error);
+  }
+  return [];
+}
+
+function saveColumnLayoutsStore(items: ColumnLayoutSaved[]): void {
+  try {
+    ensureConfigDir();
+    fs.writeFileSync(getColumnLayoutsPath(), JSON.stringify(items, null, 2), 'utf-8');
+  } catch (error) {
+    console.error('Failed to save column layouts:', error);
+  }
+}
+
+ipcMain.handle('column-layout-list', async () => {
+  return { success: true, layouts: loadColumnLayoutsStore() };
+});
+
+ipcMain.handle('column-layout-save', async (_, layout: ColumnLayoutSaved) => {
+  if (!layout || !layout.id || !layout.name || !Array.isArray(layout.columns)) {
+    return { success: false, error: 'Invalid column layout' };
+  }
+  const items = loadColumnLayoutsStore();
+  const idx = items.findIndex(l => l.id === layout.id);
+  if (idx >= 0) items[idx] = layout; else items.push(layout);
+  saveColumnLayoutsStore(items);
+  return { success: true, layouts: items };
+});
+
+ipcMain.handle('column-layout-delete', async (_, id: string) => {
+  const items = loadColumnLayoutsStore().filter(l => l.id !== id);
+  saveColumnLayoutsStore(items);
+  return { success: true, layouts: items };
+});
+
 // === Search Config Sessions ===
 
 const getSearchConfigSessionsPath = () => path.join(getConfigDir(), 'search-config-sessions.json');
