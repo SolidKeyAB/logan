@@ -865,7 +865,8 @@ export function startApiServer(ctx: ApiContext): void {
           const name = String(body.name || '').trim();
           const value = String(body.value ?? '');
           if (!name || !value) { sendJson(res, { success: false, error: 'name and value are required' }); return; }
-          saveConstant(name, value);
+          const description = typeof body.description === 'string' ? body.description : undefined;
+          saveConstant(name, value, undefined, description);
           sendJson(res, { success: true, entries: getConstants() });
           return;
         }
@@ -910,6 +911,7 @@ export function startApiServer(ctx: ApiContext): void {
             label: body.label || '',
             color: body.color || '#ffff00',
             lineText: body.lineText,
+            ...(typeof body.description === 'string' ? { description: body.description } : {}),
           };
           const result = ctx.addBookmark(bookmark);
           sendJson(res, result);
@@ -927,6 +929,7 @@ export function startApiServer(ctx: ApiContext): void {
             includeWhitespace: body.includeWhitespace ?? false,
             highlightAll: body.highlightAll ?? true,
             isGlobal: body.isGlobal ?? false,
+            ...(typeof body.description === 'string' ? { description: body.description } : {}),
           };
           const result = ctx.addHighlight(highlight);
           sendJson(res, result);
@@ -948,6 +951,7 @@ export function startApiServer(ctx: ApiContext): void {
             ...existing,
             label: body.label ?? existing.label,
             color: body.color ?? existing.color,
+            description: body.description !== undefined ? body.description : existing.description,
           };
           const result = ctx.updateBookmark(updated);
           sendJson(res, result);
@@ -976,6 +980,7 @@ export function startApiServer(ctx: ApiContext): void {
             pattern: body.pattern ?? existing.pattern,
             backgroundColor: body.backgroundColor ?? existing.backgroundColor,
             textColor: body.textColor !== undefined ? body.textColor : existing.textColor,
+            description: body.description !== undefined ? body.description : existing.description,
           };
           const result = ctx.updateHighlight(updated);
           sendJson(res, result);

@@ -67,6 +67,28 @@ Closed by the `feat/columns-panel` parity work (2026-08-13):
 | Constants / tags (save/list/delete) | 🔤 Save as constant + picker | `logan_constants` (`/api/constants-*`) | ✅ shared `constantsStore` |
 | Column Layouts (save/list/delete) | Column Layouts builder / Columns window | `logan_column_layouts` (`/api/column-layout-*`) | ✅ shared `columnLayoutsStore` |
 
+Uniform entity `description` (2026-08-13) — every saveable "basic entity" gained an
+optional `description?: string` so both operators can record an entity's purpose/why
+(naming matches the existing `BaselineRecord.description` / `InvestigationTemplate.description`;
+findings already carry `detail`). Human editing = a shared `editEntityDescription()` helper
+(prefilled modal; blank clears) reached by right-click on the entity's chip/row, plus a `📝`
+marker + the note in the hover tooltip. Agent editing = a `description` param on the entities
+that have an MCP create/save tool. ONE field name, both operators (rule 5).
+
+| Entity | Human sets it | AI sets it | Status |
+|--------|---------------|-----------|--------|
+| Constant / tag | Right-click in the constants picker | `logan_constants` `description` (`/api/constants-save`) | ✅ both |
+| Bookmark | Right-click a bookmark row | `logan_add_bookmark` `description` (`/api/bookmark`, `-update`) | ✅ both |
+| Highlight | Right-click a highlight row | `logan_highlight` `description` (`/api/highlight`, `-update`) | ✅ both |
+| Column Layout | Right-click a layout chip | `logan_column_layouts` layout.`description` (`/api/column-layout-save`) | ✅ both |
+| Search config | Chip context menu → "Edit description" | — (no MCP create tool) | ✅ human · field carried for AI |
+| Search config session | Chip context menu → "Edit description" | — (no MCP create tool) | ✅ human · field carried for AI |
+| Pattern property (trend) | Right-click a property chip | — (no MCP create tool) | ✅ human · field carried for AI |
+
+(Search configs / sessions / pattern-properties have no MCP *create* tool today — a
+pre-existing human-only exemption — so their `description` is human-set; the field is
+carried on the type so an AI tool added later inherits it for free.)
+
 Still human-only — deliberate backlog (add a counterpart or a written exemption
 when each is next touched):
 

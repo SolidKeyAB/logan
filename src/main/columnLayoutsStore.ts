@@ -14,6 +14,7 @@ export interface ColumnLayoutSaved {
   delimiterName?: string;
   pattern?: { regex: string; flags: string; fields: string[] };
   columns: Array<{ index: number; name?: string; visible: boolean }>;
+  description?: string; // optional human/AI note: what this is for / why it was added
 }
 
 const LAYOUTS_PATH = (): string => path.join(os.homedir(), '.logan', 'column-layouts.json');

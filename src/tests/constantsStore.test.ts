@@ -67,6 +67,32 @@ describe('ConstantsStore', () => {
     });
   });
 
+  describe('description (optional human/AI note)', () => {
+    it('stores a description when provided', () => {
+      store.save('sessionId', 'abc-123', undefined, 'the auth session token seen at the crash');
+      expect(store.getAll()[0].description).toBe('the auth session token seen at the crash');
+    });
+
+    it('leaves description undefined when not provided', () => {
+      store.save('deviceId', 'dev-9');
+      expect(store.getAll()[0].description).toBeUndefined();
+    });
+
+    it('can set/replace the description on upsert without dropping it', () => {
+      store.save('k', 'v1');
+      store.save('k', 'v2', undefined, 'why this matters');
+      expect(store.getAll()[0].value).toBe('v2');
+      expect(store.getAll()[0].description).toBe('why this matters');
+    });
+
+    it('round-trips the description through disk', () => {
+      store.save('k', 'v', undefined, 'purpose note');
+      store.flush();
+      const reloaded = new ConstantsStoreImpl(filePath);
+      expect(reloaded.getAll()[0].description).toBe('purpose note');
+    });
+  });
+
   describe('getAll()', () => {
     it('returns constants sorted by name ascending', () => {
       store.save('zeta', '1');

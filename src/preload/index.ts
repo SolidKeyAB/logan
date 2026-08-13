@@ -971,8 +971,8 @@ const api = {
     ipcRenderer.invoke(IPC.COMPILE_PATTERN, input),
 
   // Named constants (captured from a selection via "Save as constant…")
-  saveConstant: (name: string, value: string): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke(IPC.CONSTANTS_SAVE, name, value),
+  saveConstant: (name: string, value: string, description?: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.CONSTANTS_SAVE, name, value, description),
   getConstants: (): Promise<{ success: boolean; entries?: any[] }> =>
     ipcRenderer.invoke(IPC.CONSTANTS_GET),
   deleteConstant: (name: string): Promise<{ success: boolean; removed?: boolean }> =>
