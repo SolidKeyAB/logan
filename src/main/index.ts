@@ -2318,6 +2318,14 @@ const FOLDER_SCAN_MAX_DEPTH = 3;
 const FOLDER_SCAN_SKIP = new Set(['node_modules', '__pycache__', '.git', 'build', 'dist', '.next', 'target']);
 const FOLDER_SCAN_PARALLEL = 16; // concurrent file sniff operations
 
+// Binary formats the app has a SourceAdapter for (see sourceAdapter.ts). Arbitrary
+// binaries are hidden from the folder tree, but these are first-class OPENABLE
+// files (they decode to text on open), so the tree must show them by extension —
+// sniffFileType() only sees NUL bytes and would otherwise class them 'binary'.
+// Keep this in sync with the binary adapters' detect() extensions
+// (VtraceAdapter → .esotrace, Mf4Adapter → .mf4/.mdf).
+const BINARY_OPENABLE_EXTENSIONS = new Set(['.esotrace', '.mf4', '.mdf']);
+
 async function scanFolder(folderPath: string, depth: number): Promise<FolderEntry[]> {
   const dirEntries = await fs.promises.readdir(folderPath, { withFileTypes: true });
   const results: FolderEntry[] = [];
@@ -2348,7 +2356,11 @@ async function scanFolder(folderPath: string, depth: number): Promise<FolderEntr
           fs.promises.stat(fullPath),
           sniffFileType(fullPath),
         ]);
-        if (fileType === 'binary') return null;
+        // Hide arbitrary binaries, but keep formats we can decode (.esotrace/.mf4).
+        // Dropping these also pruned any subfolder that held only such files, via
+        // scanFolder's `children.length > 0` gate — so a folder of .esotrace
+        // captures disappeared from the tree entirely.
+        if (fileType === 'binary' && !BINARY_OPENABLE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) return null;
         return { name: entry.name, path: fullPath, isDirectory: false, size: stat.size, fileType } as FolderEntry;
       } catch { return null; }
     }));
