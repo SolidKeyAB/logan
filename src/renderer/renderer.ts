@@ -14479,8 +14479,12 @@ async function saveCurrentAsSearchConfigSession(): Promise<void> {
   const name = await showTextInputModal('Save Search Session', 'Session Name', 'e.g., Error investigation, Auth flow...');
   if (!name) return;
 
-  // Default: global if all configs are global, local otherwise
-  const allGlobal = state.searchConfigs.every(c => c.isGlobal);
+  // Scope: default REUSABLE (global → the session appears on and applies to ANY log file).
+  // Cancel = save it only for this file. (Was: global only if every config was already global,
+  // which meant sessions were usually stuck per-file and not reusable.)
+  const makeGlobal = window.confirm(
+    'Save this Search Session as REUSABLE on ALL log files?\n\nOK = reusable (all files)\nCancel = only this file',
+  );
 
   const session: SearchConfigSessionDef = {
     id: `scs-${Date.now()}`,
@@ -14489,7 +14493,7 @@ async function saveCurrentAsSearchConfigSession(): Promise<void> {
       const { ...def } = c;
       return def;
     }),
-    isGlobal: allGlobal,
+    isGlobal: makeGlobal,
     createdAt: Date.now(),
   };
 
