@@ -340,6 +340,7 @@ interface AppState {
   // "Mute" patterns: rows whose text contains any of these are dimmed IN PLACE
   // (kept for context, not removed) via a render-time class. Persisted globally.
   mutePatterns: string[];
+  mutedSize: 'normal' | 'small' | 'tiny'; // opt-in smaller font for muted lines (mute menu)
   // Traceback
   tracebackResult: any | null;
   tracebackSort: 'time' | 'score';
@@ -419,6 +420,7 @@ const state: AppState = {
   hiddenLevels: new Set<string>(JSON.parse(localStorage.getItem('logan-hidden-levels') || '[]')),
   levelBarFilterActive: false,
   mutePatterns: JSON.parse(localStorage.getItem('logan-mute-patterns') || '[]'),
+  mutedSize: (localStorage.getItem('logan-muted-size') as 'normal' | 'small' | 'tiny') || 'normal',
   tracebackResult: null,
   tracebackSort: 'time' as 'time' | 'score',
   tracebackFilterCat: 'all',
@@ -2876,6 +2878,18 @@ function clearMutePatterns(): void {
   renderVisibleLines();
 }
 
+// Opt-in smaller font for muted lines (default 'normal' = as is). Applied via a body class
+// so it works for already- and later-rendered rows without a re-render. Persisted.
+function applyMutedSize(): void {
+  document.body.classList.toggle('muted-size-small', state.mutedSize === 'small');
+  document.body.classList.toggle('muted-size-tiny', state.mutedSize === 'tiny');
+}
+function setMutedSize(size: 'normal' | 'small' | 'tiny'): void {
+  state.mutedSize = size;
+  localStorage.setItem('logan-muted-size', size);
+  applyMutedSize();
+}
+
 function createLineElementPooled(line: LogLine): HTMLDivElement {
   const div = lineElementPool.acquire();
   div.dataset.lineNumber = String(line.lineNumber);
@@ -4740,6 +4754,12 @@ function handleContextMenu(event: MouseEvent): void {
       menu.remove();
     });
     menu.appendChild(clearMutes);
+    // Muted line SIZE — opt-in smaller font so noise recedes (default As is). ✓ marks current.
+    for (const [label, val] of [['As is', 'normal'], ['Small', 'small'], ['Tiny', 'tiny']] as const) {
+      const it = menuItem(state.mutedSize === val ? '✓' : ' ', `Muted size: ${label}`);
+      it.addEventListener('click', () => { setMutedSize(val); menu.remove(); });
+      menu.appendChild(it);
+    }
     menu.appendChild(menuSeparator());
   }
 
@@ -5687,6 +5707,44 @@ function findSubfolder(entries: LocalFolderFile[], subdirPath: string): LocalFol
     }
   }
   return null;
+}
+
+// Reveal the active file in the folder tree: expand the folder + the ancestor subdirs on
+// its path, re-render, then scroll it into view + flash it. The active row already carries
+// the `.active` class (see renderFolderEntries); this just makes it visible + findable.
+function revealActiveFileInTree(): void {
+  if (!state.filePath) { showToast('No active file to reveal'); return; }
+  const target = state.filePath;
+  let matched = false;
+  for (const folder of state.folders) {
+    const base = folder.path.replace(/[\\/]+$/, '');
+    if (target !== base && !target.startsWith(base + '/') && !target.startsWith(base + '\\')) continue;
+    matched = true;
+    folder.collapsed = false;
+    // Un-collapse each ancestor directory of the file (those present in the loaded tree).
+    const rel = target.slice(base.length).replace(/^[\\/]+/, '');
+    const parts = rel.split(/[\\/]/);
+    parts.pop(); // drop the filename
+    let acc = base;
+    for (const part of parts) {
+      acc = acc + '/' + part;
+      const sub = findSubfolder(folder.files, acc) || findSubfolder(folder.files, acc.replace(/\//g, '\\'));
+      if (sub) sub.collapsed = false;
+    }
+    break;
+  }
+  if (!matched) { showToast('Active file isn’t under a folder in the tree — add its folder first'); return; }
+  renderFolderTree();
+  requestAnimationFrame(() => {
+    const el = elements.foldersList.querySelector('.folder-file.active') as HTMLElement | null;
+    if (el) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      el.classList.add('reveal-flash');
+      setTimeout(() => el.classList.remove('reveal-flash'), 1400);
+    } else {
+      showToast('Located its folder, but the file row isn’t loaded yet — expand that folder');
+    }
+  });
 }
 
 function renderFolderTree(): void {
@@ -22586,6 +22644,7 @@ function setupHelpTooltips(): void {
 function init(): void {
   // Detect platform and setup window controls
   setupWindowControls();
+  applyMutedSize(); // restore the saved muted-line size (default: as is)
 
   // Load user settings from localStorage
   loadSettings();
@@ -23050,6 +23109,7 @@ function init(): void {
   elements.btnLiveSshRefresh.addEventListener('click', () => refreshSshHosts());
   elements.btnLiveSshManage.addEventListener('click', () => showSshProfileManager());
   elements.btnOpenSshFolder.addEventListener('click', () => openSshFolder());
+  document.getElementById('btn-reveal-active-file')?.addEventListener('click', () => revealActiveFileInTree());
 
   // Unified live connection event listeners (register once)
   setupLiveEventListeners();
