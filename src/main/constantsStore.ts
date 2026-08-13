@@ -13,6 +13,7 @@ export interface ConstantEntry {
   value: string;
   createdAt: string; // ISO 8601
   updatedAt: string; // ISO 8601
+  description?: string; // optional human/AI note: what this is for / why it was added
 }
 
 export interface ConstantsStore {
@@ -84,7 +85,7 @@ export class ConstantsStoreImpl {
   }
 
   /** Upsert a named constant. Empty name/value is a no-op. Debounced write. */
-  save(name: string, value: string, at: number = Date.now()): void {
+  save(name: string, value: string, at: number = Date.now(), description?: string): void {
     try {
       const trimmedName = (name || '').trim();
       if (!trimmedName || !value) return;
@@ -94,8 +95,12 @@ export class ConstantsStoreImpl {
       if (existing) {
         existing.value = value;
         existing.updatedAt = iso;
+        if (description !== undefined) existing.description = description;
       } else {
-        store.entries[trimmedName] = { name: trimmedName, value, createdAt: iso, updatedAt: iso };
+        store.entries[trimmedName] = {
+          name: trimmedName, value, createdAt: iso, updatedAt: iso,
+          ...(description !== undefined ? { description } : {}),
+        };
       }
       store.updatedAt = iso;
       this.scheduleWrite();
@@ -150,8 +155,8 @@ function store(): ConstantsStoreImpl {
   return instance;
 }
 
-export function saveConstant(name: string, value: string, at?: number): void {
-  store().save(name, value, at);
+export function saveConstant(name: string, value: string, at?: number, description?: string): void {
+  store().save(name, value, at, description);
 }
 
 export function getConstants(): ConstantEntry[] {
