@@ -343,10 +343,62 @@ server.tool(
     includePatterns: z.array(z.string()).optional().describe('Regex patterns — line must match at least one'),
     excludePatterns: z.array(z.string()).optional().describe('Regex patterns — matching lines are excluded'),
     matchCase: z.boolean().default(false).describe('Case-sensitive pattern matching'),
+    columnFilters: z.array(z.object({
+      columnIndex: z.number().describe('0-based column index (line split by `delimiter`)'),
+      op: z.enum(['contains', 'equals', 'regex']).default('contains'),
+      value: z.string(),
+      caseSensitive: z.boolean().optional(),
+    })).optional().describe('Keep only rows where the given COLUMN matches (AND across entries) — the agent counterpart of the Columns window row-filter'),
+    delimiter: z.string().optional().describe("Column delimiter for columnFilters: ' ' whitespace, '\\t' tab, or a char like ','. Default ' '."),
   },
-  async ({ levels, includePatterns, excludePatterns, matchCase }) => {
+  async ({ levels, includePatterns, excludePatterns, matchCase, columnFilters, delimiter }) => {
     try {
-      const result = await apiCall('POST', '/api/filter', { levels, includePatterns, excludePatterns, matchCase });
+      const result = await apiCall('POST', '/api/filter', { levels, includePatterns, excludePatterns, matchCase, columnFilters, delimiter });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_constants ===
+server.tool(
+  'logan_constants',
+  'Manage reusable named constants ("tags") — the same ones a human saves via "🔤 Save as constant". Save a value under a name, list them, or delete one; then use a value in logan_search / logan_filter. Metadata only (name→value).',
+  {
+    action: z.enum(['list', 'save', 'delete']).describe('list all · save one · delete one'),
+    name: z.string().optional().describe('constant name (required for save/delete)'),
+    value: z.string().optional().describe('constant value (required for save)'),
+  },
+  async ({ action, name, value }) => {
+    try {
+      const path = action === 'save' ? '/api/constants-save'
+        : action === 'delete' ? '/api/constants-delete'
+        : '/api/constants-list';
+      const result = await apiCall('POST', path, { name, value });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_column_layouts ===
+server.tool(
+  'logan_column_layouts',
+  'Manage saved Column Layouts (named column definitions — delimiter OR regex/paint pattern + per-column name/visibility) — the same store the human Column Layouts builder / Columns window uses. list · save · delete. (Applying a layout to the human viewer is human-only.)',
+  {
+    action: z.enum(['list', 'save', 'delete']).describe('list all · save one · delete one'),
+    layout: z.any().optional().describe('layout object for save: {id, name, method:"delimiter"|"pattern", delimiter?/pattern?, columns:[{index,name?,visible}]}'),
+    id: z.string().optional().describe('layout id (required for delete)'),
+  },
+  async ({ action, layout, id }) => {
+    try {
+      const path = action === 'save' ? '/api/column-layout-save'
+        : action === 'delete' ? '/api/column-layout-delete'
+        : '/api/column-layout-list';
+      const body = action === 'save' ? { layout } : action === 'delete' ? { id } : {};
+      const result = await apiCall('POST', path, body);
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err: any) {
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };

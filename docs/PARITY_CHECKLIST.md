@@ -59,22 +59,23 @@ Closed by the tool-grammar parity work:
 | Extract filter → file | ⬇ Extract to file | `logan_extract` (`/api/extract`) | ✅ shared `runFilteredExtract` |
 | Compile pattern | Make pattern… | `logan_compile_pattern` (`/api/compile-pattern`) | ✅ shared `compilePattern` + Pattern Log |
 
+Closed by the `feat/columns-panel` parity work (2026-08-13):
+
+| Verb | Human | AI | Status |
+|------|-------|----|--------|
+| Filter rows by column value | Columns window row-filter | `logan_filter` `columnFilters` (`/api/filter`) | ✅ shared `compileAdvancedFilter` |
+| Constants / tags (save/list/delete) | 🔤 Save as constant + picker | `logan_constants` (`/api/constants-*`) | ✅ shared `constantsStore` |
+| Column Layouts (save/list/delete) | Column Layouts builder / Columns window | `logan_column_layouts` (`/api/column-layout-*`) | ✅ shared `columnLayoutsStore` |
+
 Still human-only — deliberate backlog (add a counterpart or a written exemption
 when each is next touched):
 
 - **MUTE** (dim rows in place) — renderer-only viewport effect.
-- **Column Layouts** (renamed from Pattern Columns; `feat/columns-panel`, 2026-08-13) —
-  save/apply a named column layout (delimiter OR regex/paint pattern), show/hide columns,
-  **and filter rows by a column value** (the `column` advanced-filter rule). Shipped
-  human-only — **known parity debt, no exemption** (row-filter + column projection are real
-  verbs, not viewport-only). Owe: `/api/column-layout-{list,save,delete}` + a
-  `logan_column_layouts` tool (list + apply), and extend `logan_filter` to pass
-  `advancedFilter`/column rules through to the **same** `compileAdvancedFilter`. Share the
-  `loadColumnLayoutsStore`/`saveColumnLayoutsStore` fns — one implementation, two operators.
-- **Constants / tags** (`feat/columns-panel`, 2026-08-13) — "🔤 Save as constant" (name→value)
-  + using a constant in Search/Filter. Shipped human-only — **known parity debt**. Owe:
-  `/api/constants-{save,list,delete}` + a `logan_constants` tool, sharing `constantsStore`
-  (lets the AI tag a value it finds and reuse it in search/filter, like a human).
+- **Column Layouts — APPLY / show-hide to the viewer** — the layout CRUD (save/list/delete)
+  and filter-rows-by-column are now at parity (see the closed table above). *Applying* a
+  layout to the human's viewer (render columns + CSS-hide a column) is a **viewport concern
+  → human-only by written exemption**: the AI reads raw lines via `logan_get_lines` and
+  doesn't need to change what the human sees. Column *visibility* is likewise viewport-only.
 - **Cadence** (missing-sequence) analysis — native panel; no MCP tool yet.
 - **Time Sync** and **merge-to-file** — the latter *is* the L2 "merge-timeline"
   verb and should get an `/api/merge-timeline` + MCP tool.

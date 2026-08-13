@@ -9,6 +9,8 @@ import { type BaselineStore, buildFingerprint } from './baselineStore';
 import { AnalysisResult } from './analyzers/types';
 import { JournalEntry, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps } from './investigationStore';
 import { bumpUsage, enterAiContext, exitAiContext } from './usageStore';
+import { saveConstant, getConstants, deleteConstant } from './constantsStore';
+import { loadColumnLayouts, upsertColumnLayout, deleteColumnLayout } from './columnLayoutsStore';
 import { canonicalizeAiVerb } from '../shared/verbRegistry';
 import { compilePattern, CompileInput } from './compilePattern';
 import { logPattern } from './patternLog';
@@ -815,12 +817,33 @@ export function startApiServer(ctx: ApiContext): void {
         }
 
         if (url === '/api/filter') {
-          const config = {
+          const config: any = {
             levels: body.levels || [],
             includePatterns: body.includePatterns || [],
             excludePatterns: body.excludePatterns || [],
             matchCase: body.matchCase ?? false,
           };
+          // Parity for the human "filter rows by a column value": accept columnFilters and
+          // translate them into the SAME advanced-filter `column` rule the UI builds, so both
+          // operators hit one `compileAdvancedFilter` implementation.
+          if (Array.isArray(body.columnFilters) && body.columnFilters.length) {
+            config.advancedFilter = {
+              enabled: true,
+              delimiter: body.delimiter || ' ',
+              groups: [{
+                id: 'ai-colfilter',
+                operator: 'AND',
+                rules: body.columnFilters.map((c: any, i: number) => ({
+                  id: `col_${i}`,
+                  type: 'column',
+                  columnIndex: c.columnIndex ?? c.column ?? 0,
+                  columnOp: c.op || c.columnOp || 'contains',
+                  value: String(c.value ?? ''),
+                  caseSensitive: !!c.caseSensitive,
+                })),
+              }],
+            };
+          }
           const result = await ctx.applyFilter(config);
           sendJson(res, result);
           return;
@@ -829,6 +852,47 @@ export function startApiServer(ctx: ApiContext): void {
         if (url === '/api/clear-filter') {
           const result = ctx.clearFilter();
           sendJson(res, result);
+          return;
+        }
+
+        // Constants ("tags") — parity with the human "🔤 Save as constant" + picker. Global,
+        // shared constantsStore (one implementation, two operators). Metadata, not log content.
+        if (url === '/api/constants-list') {
+          sendJson(res, { success: true, entries: getConstants() });
+          return;
+        }
+        if (url === '/api/constants-save') {
+          const name = String(body.name || '').trim();
+          const value = String(body.value ?? '');
+          if (!name || !value) { sendJson(res, { success: false, error: 'name and value are required' }); return; }
+          saveConstant(name, value);
+          sendJson(res, { success: true, entries: getConstants() });
+          return;
+        }
+        if (url === '/api/constants-delete') {
+          const removed = deleteConstant(String(body.name || ''));
+          sendJson(res, { success: true, removed, entries: getConstants() });
+          return;
+        }
+
+        // Column Layouts — parity with the human Columns window / Column Layouts builder.
+        // list/save/delete of the shared layout store. (Applying a layout to the VIEWER is a
+        // viewport concern — human-only by exemption; see docs/PARITY_CHECKLIST.md.)
+        if (url === '/api/column-layout-list') {
+          sendJson(res, { success: true, layouts: loadColumnLayouts() });
+          return;
+        }
+        if (url === '/api/column-layout-save') {
+          const layout = body.layout || body;
+          if (!layout || !layout.id || !layout.name || !Array.isArray(layout.columns)) {
+            sendJson(res, { success: false, error: 'Invalid column layout (need id, name, columns[])' });
+            return;
+          }
+          sendJson(res, { success: true, layouts: upsertColumnLayout(layout) });
+          return;
+        }
+        if (url === '/api/column-layout-delete') {
+          sendJson(res, { success: true, layouts: deleteColumnLayout(String(body.id || '')) });
           return;
         }
 
