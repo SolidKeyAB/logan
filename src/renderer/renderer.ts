@@ -7305,11 +7305,20 @@ function renderTrendPropChips(): void {
   for (const prop of trendPatternProperties) {
     const chip = document.createElement('span');
     chip.className = 'trend-prop-chip';
-    chip.title = `/${prop.pattern}/${prop.patternFlags || ''}  — click to chart with the selected cell type`;
+    chip.title = `/${prop.pattern}/${prop.patternFlags || ''}  — click to chart with the selected cell type` + descTitleSuffix(prop.description);
+    // Right-click → add/edit its description (purpose/why).
+    chip.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      void editEntityDescription(prop.description, async (d) => {
+        prop.description = d || undefined;
+        await window.api.patternPropSave(prop);
+        renderTrendPropChips();
+      });
+    });
 
     const name = document.createElement('button');
     name.className = 'trend-prop-name';
-    name.textContent = prop.name;
+    name.textContent = prop.description ? `📝 ${prop.name}` : prop.name;
     name.addEventListener('click', () => applyTrendProperty(prop));
 
     const del = document.createElement('button');
@@ -12521,7 +12530,8 @@ function renderSearchConfigsChips(): void {
     const patternText = document.createElement('span');
     patternText.className = 'sc-chip-pattern';
     patternText.textContent = config.pattern;
-    patternText.title = config.pattern;
+    patternText.title = config.pattern + descTitleSuffix(config.description);
+    if (config.description) patternText.textContent = `📝 ${config.pattern}`;
 
     const count = document.createElement('span');
     count.className = 'sc-chip-count';
@@ -13775,6 +13785,18 @@ function showSearchConfigContextMenu(e: MouseEvent, config: SearchConfigDef): vo
     showSearchConfigForm(config.id);
   });
 
+  const descItem = document.createElement('button');
+  descItem.className = 'sc-context-menu-item';
+  descItem.textContent = config.description ? 'Edit description…' : 'Add description…';
+  descItem.addEventListener('click', () => {
+    menu.remove();
+    void editEntityDescription(config.description, async (d) => {
+      config.description = d || undefined;
+      await window.api.searchConfigSave(config);
+      renderSearchConfigsChips();
+    });
+  });
+
   const exportItem = document.createElement('button');
   exportItem.className = 'sc-context-menu-item';
   exportItem.textContent = 'Export Results';
@@ -13798,6 +13820,7 @@ function showSearchConfigContextMenu(e: MouseEvent, config: SearchConfigDef): vo
   });
 
   menu.appendChild(editItem);
+  menu.appendChild(descItem);
   menu.appendChild(exportItem);
   menu.appendChild(deleteItem);
   document.body.appendChild(menu);
@@ -14552,13 +14575,14 @@ function renderSearchConfigSessionsUI(): void {
     chip.className = `sc-session-chip${isActive ? ' active' : ''}`;
     chip.dataset.id = session.id;
     const scopeTag = session.isGlobal ? ' [Global]' : ' [Local]';
-    chip.title = isActive
+    chip.title = (isActive
       ? `${escapeHtml(session.name)} — applied. Click to deselect (clear its search configs).`
-      : `${escapeHtml(session.name)} (${session.configs.length} configs)${scopeTag} — click to apply`;
+      : `${escapeHtml(session.name)} (${session.configs.length} configs)${scopeTag} — click to apply`)
+      + descTitleSuffix(session.description);
 
     const nameSpan = document.createElement('span');
     nameSpan.className = 'sc-session-chip-name';
-    nameSpan.textContent = session.name;
+    nameSpan.textContent = session.description ? `📝 ${session.name}` : session.name;
 
     const badge = document.createElement('span');
     badge.className = 'sc-session-chip-badge';
@@ -14709,6 +14733,18 @@ function showSearchConfigSessionContextMenu(e: MouseEvent, session: SearchConfig
     }
   });
 
+  const descItem = document.createElement('button');
+  descItem.className = 'sc-context-menu-item';
+  descItem.textContent = session.description ? 'Edit description…' : 'Add description…';
+  descItem.addEventListener('click', () => {
+    menu.remove();
+    void editEntityDescription(session.description, async (d) => {
+      session.description = d || undefined;
+      await window.api.searchConfigSessionSave(session);
+      renderSearchConfigSessionsUI();
+    });
+  });
+
   // Promote/demote scope so an existing session can be made reusable across files
   // (or pinned back to this file) without re-saving.
   const scopeItem = document.createElement('button');
@@ -14723,6 +14759,7 @@ function showSearchConfigSessionContextMenu(e: MouseEvent, session: SearchConfig
   });
 
   menu.appendChild(renameItem);
+  menu.appendChild(descItem);
   menu.appendChild(scopeItem);
   menu.appendChild(deleteItem);
   document.body.appendChild(menu);
@@ -16968,12 +17005,24 @@ function renderColumnLayoutChips(): void {
     return;
   }
   el.innerHTML = columnLayouts.map((l: any) =>
-    `<span class="patcol-chip" data-id="${escapeHtml(l.id)}"><span class="patcol-chip-name" title="${escapeHtml(l.delimiterName || l.delimiter || '')} · ${(l.columns || []).length} cols">${escapeHtml(l.name)}</span><button class="patcol-chip-x" data-id="${escapeHtml(l.id)}" title="Delete layout">×</button></span>`
+    `<span class="patcol-chip" data-id="${escapeHtml(l.id)}"><span class="patcol-chip-name" title="${escapeHtml(l.delimiterName || l.delimiter || '')} · ${(l.columns || []).length} cols${l.description ? '\n📝 ' + escapeHtml(l.description) : ''}">${l.description ? '📝 ' : ''}${escapeHtml(l.name)}</span><button class="patcol-chip-x" data-id="${escapeHtml(l.id)}" title="Delete layout">×</button></span>`
   ).join('');
   el.querySelectorAll('.patcol-chip-name').forEach((b) => b.addEventListener('click', (e) => {
     const id = ((e.currentTarget as HTMLElement).closest('.patcol-chip') as HTMLElement)?.dataset.id;
     const layout = columnLayouts.find((l: any) => l.id === id);
     if (layout) applyColumnLayoutToModal(layout);
+  }));
+  // Right-click a layout chip → add/edit its description (purpose/why).
+  el.querySelectorAll('.patcol-chip').forEach((chip) => chip.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const id = (chip as HTMLElement).dataset.id;
+    const layout = columnLayouts.find((l: any) => l.id === id);
+    if (!layout) return;
+    void editEntityDescription(layout.description, async (d) => {
+      layout.description = d || undefined;
+      await (window.api as any).columnLayoutSave(layout);
+      renderColumnLayoutChips();
+    });
   }));
   el.querySelectorAll('.patcol-chip-x').forEach((b) => b.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -17069,7 +17118,7 @@ function applyColumnPattern(
 // include list. onPick(value, name) fires on choose; each row has a × to delete.
 async function showConstantsPickerMenu(anchor: HTMLElement, onPick: (value: string, name: string) => void): Promise<void> {
   document.getElementById('constants-picker-menu')?.remove();
-  let entries: Array<{ name: string; value: string }> = [];
+  let entries: Array<{ name: string; value: string; description?: string }> = [];
   try {
     const res = await window.api.getConstants();
     entries = (res && res.entries) || [];
@@ -17081,8 +17130,8 @@ async function showConstantsPickerMenu(anchor: HTMLElement, onPick: (value: stri
   menu.innerHTML = entries.length === 0
     ? '<div class="context-menu-item disabled">No constants yet — right-click a selection → “🔤 Save as constant”.</div>'
     : entries.map(e =>
-        `<div class="context-menu-item constant-row" data-value="${escapeHtml(e.value)}" data-name="${escapeHtml(e.name)}">` +
-        `<span class="constant-name">${escapeHtml(e.name)}</span>` +
+        `<div class="context-menu-item constant-row" data-value="${escapeHtml(e.value)}" data-name="${escapeHtml(e.name)}" title="${escapeHtml((e.description ? '📝 ' + e.description + '\n' : '') + 'click to use · right-click to edit description')}">` +
+        `<span class="constant-name">${e.description ? '📝 ' : ''}${escapeHtml(e.name)}</span>` +
         `<span class="constant-value">${escapeHtml(e.value.length > 40 ? e.value.slice(0, 37) + '…' : e.value)}</span>` +
         `<button class="constant-del" data-name="${escapeHtml(e.name)}" title="Delete constant">×</button></div>`
       ).join('');
@@ -17102,6 +17151,17 @@ async function showConstantsPickerMenu(anchor: HTMLElement, onPick: (value: stri
       if ((e.target as HTMLElement).classList.contains('constant-del')) return;
       onPick(row.dataset.value || '', row.dataset.name || '');
       close();
+    });
+    // Right-click → add/edit this constant's description (purpose/why).
+    row.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const name = row.dataset.name || '';
+      const value = row.dataset.value || '';
+      const current = entries.find(en => en.name === name)?.description;
+      close();
+      void editEntityDescription(current, async (d) => {
+        await window.api.saveConstant(name, value, d);
+      });
     });
   });
   menu.querySelectorAll<HTMLElement>('.constant-del').forEach(btn => {
@@ -20147,7 +20207,7 @@ function updateBookmarksUI(): void {
           ? `<span class="bookmark-color-dot" style="background:${b.color}"></span>`
           : '';
         return `
-      <div class="bookmark-item" data-id="${b.id}" data-line="${b.lineNumber}" title="${b.lineText ? escapeHtml(b.lineText) : (b.label ? escapeHtml(b.label) : 'Click to go to line, double-click to edit')}">
+      <div class="bookmark-item" data-id="${b.id}" data-line="${b.lineNumber}" title="${(b.lineText ? escapeHtml(b.lineText) : (b.label ? escapeHtml(b.label) : 'Click to go to line, double-click to edit')) + escapeHtml(descTitleSuffix(b.description))}">
         <div class="bookmark-info">
           ${colorDot}<span class="bookmark-line">Line ${b.lineNumber + 1}</span>
           ${b.lineText ? `<span class="bookmark-text">${escapeHtml(b.lineText.substring(0, 120))}</span>` : ''}
@@ -20183,6 +20243,19 @@ function updateBookmarksUI(): void {
     item.addEventListener('dblclick', () => {
       const id = (item as HTMLElement).dataset.id!;
       editBookmarkComment(id);
+    });
+
+    // Right-click → add/edit its description (purpose/why), distinct from the label.
+    item.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const id = (item as HTMLElement).dataset.id!;
+      const bm = state.bookmarks.find((b) => b.id === id);
+      if (!bm) return;
+      void editEntityDescription(bm.description, async (d) => {
+        bm.description = d || undefined;
+        await window.api.updateBookmark(bm);
+        updateBookmarksUI();
+      });
     });
   });
 }
@@ -20375,11 +20448,11 @@ function updateHighlightsUI(): void {
         const total = matches?.length ?? 0;
         const posText = total > 0 ? `${currentIdx + 1}/${total}` : '0/0';
         return `
-      <div class="highlight-item" data-id="${h.id}" title="${h.isGlobal ? 'Global - applies to all files' : 'Local - applies to this file only'}">
+      <div class="highlight-item" data-id="${h.id}" title="${(h.isGlobal ? 'Global - applies to all files' : 'Local - applies to this file only') + escapeHtml(descTitleSuffix(h.description))}">
         <div class="highlight-row">
           <span class="highlight-color" data-id="${h.id}" style="background-color: ${h.backgroundColor}" title="Click to change color"></span>
           <input type="color" class="highlight-color-picker" data-id="${h.id}" value="${h.backgroundColor}" style="display:none">
-          <span class="highlight-pattern">${escapeHtml(h.pattern)}</span>
+          <span class="highlight-pattern">${h.description ? '📝 ' : ''}${escapeHtml(h.pattern)}</span>
           <span class="highlight-scope ${h.isGlobal ? 'global' : 'local'}">${h.isGlobal ? 'G' : 'L'}</span>
           <div class="highlight-actions">
             <button class="highlight-toggle-global" data-id="${h.id}" title="${h.isGlobal ? 'Make local (this file only)' : 'Make global (all files)'}">${h.isGlobal ? '🌐' : '📄'}</button>
@@ -20413,6 +20486,21 @@ function updateHighlightsUI(): void {
         updateHighlightsUI();
         renderVisibleLines();
       }
+    });
+  });
+
+  // Right-click a highlight row → add/edit its description (purpose/why).
+  elements.highlightsList.querySelectorAll('.highlight-item').forEach((item) => {
+    item.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      const id = (item as HTMLElement).dataset.id!;
+      const hl = state.highlights.find((h) => h.id === id);
+      if (!hl) return;
+      void editEntityDescription(hl.description, async (d) => {
+        hl.description = d || undefined;
+        await window.api.updateHighlight(hl);
+        updateHighlightsUI();
+      });
     });
   });
 
@@ -23806,6 +23894,59 @@ async function applyHighlightGroup(groupId: string): Promise<void> {
   updateHighlightGroupsUI();
   updateHighlightsUI();
   renderVisibleLines();
+}
+
+// ── Uniform "description" editor for saveable entities ─────────────────────────
+// Every saveable entity (tag/constant, search pattern, session, column layout,
+// bookmark, highlight, trend property) carries an optional `description`. This modal
+// PREFILLS the current text (unlike showTextInputModal's placeholder-only input) and
+// lets you save an empty string to CLEAR it. Returns the new text, or null if cancelled.
+function showDescriptionModal(current: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal';
+    overlay.style.cssText = 'display:flex;align-items:center;justify-content:center;';
+    overlay.innerHTML = `
+      <div class="modal-content" style="width:440px;">
+        <div class="modal-header"><h3>Edit description</h3></div>
+        <div class="modal-body">
+          <div class="filter-group">
+            <label>Purpose / why (optional — blank clears it). ⌘/Ctrl+Enter to save.</label>
+            <textarea class="modal-input" rows="3" style="resize:vertical;width:100%;"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="secondary-btn" data-action="cancel">Cancel</button>
+          <button class="primary-btn" data-action="save">Save</button>
+        </div>
+      </div>`;
+    const input = overlay.querySelector('textarea') as HTMLTextAreaElement;
+    input.value = current;
+    const close = (v: string | null) => { overlay.remove(); resolve(v); };
+    (overlay.querySelector('[data-action="save"]') as HTMLButtonElement).addEventListener('click', () => close(input.value.trim()));
+    (overlay.querySelector('[data-action="cancel"]') as HTMLButtonElement).addEventListener('click', () => close(null));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) close(input.value.trim());
+      else if (e.key === 'Escape') close(null);
+    });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(null); });
+    document.body.appendChild(overlay);
+    input.focus();
+    input.select();
+  });
+}
+
+// Prompt for a new description and persist via `save` (which receives '' to clear).
+async function editEntityDescription(current: string | undefined, save: (desc: string) => void | Promise<void>): Promise<void> {
+  const next = await showDescriptionModal(current || '');
+  if (next === null) return; // cancelled
+  await save(next);
+  showToast(next ? 'Description saved' : 'Description cleared');
+}
+
+// Tooltip suffix: append an entity's description to a title string when present.
+function descTitleSuffix(description?: string): string {
+  return description ? `\n📝 ${description}` : '';
 }
 
 function showTextInputModal(title: string, label: string, placeholder: string): Promise<string | null> {
