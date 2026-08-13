@@ -5434,11 +5434,12 @@ function mapFolderEntries(entries: any[]): LocalFolderFile[] {
 
 // Add a folder to the folders panel by path (reused by the open dialog and the
 // `logan <folder>` CLI launch path). Reveals the folders panel when done.
-async function addFolderByPath(folderPath: string): Promise<void> {
-  if (!folderPath) return;
+async function addFolderByPath(folderPath: string, opts?: { revealPanel?: boolean }): Promise<boolean> {
+  const revealPanel = opts?.revealPanel !== false; // default: bring the Folders panel forward
+  if (!folderPath) return false;
   if (state.folders.some((f) => f.path === folderPath)) {
-    if (activePanel !== 'folders') openPanel('folders');
-    return;
+    if (revealPanel && activePanel !== 'folders') openPanel('folders');
+    return true;
   }
   const result = await window.api.readFolder(folderPath);
   if (result.success && result.files) {
@@ -5451,8 +5452,10 @@ async function addFolderByPath(folderPath: string): Promise<void> {
     });
     renderFolderTree();
     updateFolderSearchState();
-    if (activePanel !== 'folders') openPanel('folders');
+    if (revealPanel && activePanel !== 'folders') openPanel('folders');
+    return true;
   }
+  return false;
 }
 
 async function openFolder(): Promise<void> {
@@ -5712,36 +5715,71 @@ function findSubfolder(entries: LocalFolderFile[], subdirPath: string): LocalFol
 // Reveal the active file in the folder tree: expand the folder + the ancestor subdirs on
 // its path, re-render, then scroll it into view + flash it. The active row already carries
 // the `.active` class (see renderFolderEntries); this just makes it visible + findable.
-function revealActiveFileInTree(): void {
-  if (!state.filePath) { showToast('No active file to reveal'); return; }
-  const target = state.filePath;
-  let matched = false;
+// The open folder root that contains `target` (path-prefix match), or null.
+function findHostFolder(target: string): FolderState | null {
   for (const folder of state.folders) {
     const base = folder.path.replace(/[\\/]+$/, '');
-    if (target !== base && !target.startsWith(base + '/') && !target.startsWith(base + '\\')) continue;
-    matched = true;
-    folder.collapsed = false;
-    // Un-collapse each ancestor directory of the file (those present in the loaded tree).
-    const rel = target.slice(base.length).replace(/^[\\/]+/, '');
-    const parts = rel.split(/[\\/]/);
-    parts.pop(); // drop the filename
-    let acc = base;
-    for (const part of parts) {
-      acc = acc + '/' + part;
-      const sub = findSubfolder(folder.files, acc) || findSubfolder(folder.files, acc.replace(/\//g, '\\'));
-      if (sub) sub.collapsed = false;
-    }
-    break;
+    if (target === base || target.startsWith(base + '/') || target.startsWith(base + '\\')) return folder;
   }
-  if (!matched) { showToast('Active file isn’t under a folder in the tree — add its folder first'); return; }
+  return null;
+}
+
+// Parent directory of a file path (separator-agnostic).
+function parentDirOf(p: string): string {
+  const norm = p.replace(/[\\/]+$/, '');
+  const i = Math.max(norm.lastIndexOf('/'), norm.lastIndexOf('\\'));
+  return i > 0 ? norm.slice(0, i) : norm;
+}
+
+// Reveal the active file in the folder tree. If its folder isn't open yet, add the
+// file's parent directory as a root so there's always something to reveal.
+//   opts.auto  — fired automatically (tab switch / file open): quiet (no toasts), and
+//                only scrolls/opens the panel when the Folders panel is already visible.
+async function revealActiveFileInTree(opts?: { auto?: boolean }): Promise<void> {
+  const auto = !!opts?.auto;
+  const target = state.filePath;
+  if (!target) { if (!auto) showToast('No active file to reveal'); return; }
+
+  // 1. Find an already-open folder root that contains the file.
+  let host = findHostFolder(target);
+
+  // 2. Not under any open folder → add the file's parent directory as a root.
+  //    On auto we add it quietly (don't steal the panel); the explicit button surfaces it.
+  if (!host) {
+    const parent = parentDirOf(target);
+    if (parent && parent !== target) {
+      await addFolderByPath(parent, { revealPanel: !auto });
+      host = findHostFolder(target);
+    }
+    if (!host) { if (!auto) showToast('Could not locate the file’s folder'); return; }
+  }
+
+  // 3. Expand the host root + every ancestor directory down to the file.
+  host.collapsed = false;
+  const base = host.path.replace(/[\\/]+$/, '');
+  const rel = target.slice(base.length).replace(/^[\\/]+/, '');
+  const parts = rel.split(/[\\/]/);
+  parts.pop(); // drop the filename
+  let acc = base;
+  for (const part of parts) {
+    acc = acc + '/' + part;
+    const sub = findSubfolder(host.files, acc) || findSubfolder(host.files, acc.replace(/\//g, '\\'));
+    if (sub) sub.collapsed = false;
+  }
   renderFolderTree();
+
+  // 4. Bring the Folders panel forward on an explicit reveal; on auto, only act if
+  //    it's already the active panel (don't hijack whatever the user is looking at).
+  if (!auto && activePanel !== 'folders') openPanel('folders');
+  if (activePanel !== 'folders') return;
+
   requestAnimationFrame(() => {
     const el = elements.foldersList.querySelector('.folder-file.active') as HTMLElement | null;
     if (el) {
       el.scrollIntoView({ block: 'center', behavior: 'smooth' });
       el.classList.add('reveal-flash');
       setTimeout(() => el.classList.remove('reveal-flash'), 1400);
-    } else {
+    } else if (!auto) {
       showToast('Located its folder, but the file row isn’t loaded yet — expand that folder');
     }
   });
@@ -16172,6 +16210,8 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
 
       renderTabBar();
       renderFolderTree(); // Update active file highlight
+      // Reveal the opened file in the folder tree (adds its parent folder if absent).
+      void revealActiveFileInTree({ auto: true });
 
       // Auto-cd terminal to file's directory
       terminalCdToFile(filePath);
@@ -23109,7 +23149,7 @@ function init(): void {
   elements.btnLiveSshRefresh.addEventListener('click', () => refreshSshHosts());
   elements.btnLiveSshManage.addEventListener('click', () => showSshProfileManager());
   elements.btnOpenSshFolder.addEventListener('click', () => openSshFolder());
-  document.getElementById('btn-reveal-active-file')?.addEventListener('click', () => revealActiveFileInTree());
+  document.getElementById('btn-reveal-active-file')?.addEventListener('click', () => void revealActiveFileInTree());
 
   // Unified live connection event listeners (register once)
   setupLiveEventListeners();
@@ -24063,6 +24103,8 @@ async function switchToTab(tabId: string): Promise<void> {
   }
 
   renderTabBar();
+  // Reveal the newly-active file in the folder tree (auto: quiet, panel-aware).
+  void revealActiveFileInTree({ auto: true });
 }
 
 function closeTab(tabId: string): void {
