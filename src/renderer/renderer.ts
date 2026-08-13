@@ -14479,8 +14479,12 @@ async function saveCurrentAsSearchConfigSession(): Promise<void> {
   const name = await showTextInputModal('Save Search Session', 'Session Name', 'e.g., Error investigation, Auth flow...');
   if (!name) return;
 
-  // Default: global if all configs are global, local otherwise
-  const allGlobal = state.searchConfigs.every(c => c.isGlobal);
+  // Scope: default REUSABLE (global → the session appears on and applies to ANY log file).
+  // Cancel = save it only for this file. (Was: global only if every config was already global,
+  // which meant sessions were usually stuck per-file and not reusable.)
+  const makeGlobal = window.confirm(
+    'Save this Search Session as REUSABLE on ALL log files?\n\nOK = reusable (all files)\nCancel = only this file',
+  );
 
   const session: SearchConfigSessionDef = {
     id: `scs-${Date.now()}`,
@@ -14489,7 +14493,7 @@ async function saveCurrentAsSearchConfigSession(): Promise<void> {
       const { ...def } = c;
       return def;
     }),
-    isGlobal: allGlobal,
+    isGlobal: makeGlobal,
     createdAt: Date.now(),
   };
 
@@ -14567,7 +14571,21 @@ function showSearchConfigSessionContextMenu(e: MouseEvent, session: SearchConfig
     }
   });
 
+  // Promote/demote scope so an existing session can be made reusable across files
+  // (or pinned back to this file) without re-saving.
+  const scopeItem = document.createElement('button');
+  scopeItem.className = 'sc-context-menu-item';
+  scopeItem.textContent = session.isGlobal ? 'Make file-only' : 'Make reusable (all files)';
+  scopeItem.addEventListener('click', async () => {
+    menu.remove();
+    await window.api.searchConfigSessionDelete(session.id, session.isGlobal); // remove from current store
+    session.isGlobal = !session.isGlobal;
+    const result = await window.api.searchConfigSessionSave(session);         // save into the other store
+    if (result.success) await loadSearchConfigSessions();
+  });
+
   menu.appendChild(renameItem);
+  menu.appendChild(scopeItem);
   menu.appendChild(deleteItem);
   document.body.appendChild(menu);
 
