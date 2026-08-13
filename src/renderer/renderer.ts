@@ -12819,7 +12819,7 @@ async function renderSearchConfigsOverview(): Promise<void> {
 
   const totalLines = Math.max(1, getTotalLines());
   const dpr = window.devicePixelRatio || 1;
-  const LANE_H = 12;
+  const LANE_H = 20; // taller lane = a bigger click target so a single point is easy to hit
 
   // ── Header: title + line/time alignment toggle ──
   const header = document.createElement('div');
