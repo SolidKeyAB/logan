@@ -2668,9 +2668,17 @@ button.is-cancelable:hover, .btn.is-cancelable:hover { filter: brightness(1.12);
   color: var(--text-muted);
   text-align: right;
   padding-right: 15px;
+  -webkit-user-select: none;
   user-select: none;
   border-right: 1px solid var(--border-color);
   margin-right: 10px;
+}
+
+/* Show the number as CSS-generated content (data-lineno) rather than real text, so
+   selecting/copying a section of the log NEVER includes the line numbers. Uses ::after
+   so it doesn't collide with the diff view's ::before +/-/~ gutter markers below. */
+.line-number::after {
+  content: attr(data-lineno);
 }
 
 .line-content {
