@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { compileColumnPattern, makeColumnExtractor, refinePaintPattern, ColumnPatternSpec } from '../main/columnPattern';
+import { compileColumnPattern, makeColumnExtractor, refinePaintPattern, autoDetectSpans, ColumnPatternSpec } from '../main/columnPattern';
 
 function extract(spec: ColumnPatternSpec, line: string): string[] | null {
   return makeColumnExtractor(compileColumnPattern(spec))(line);
@@ -140,5 +140,29 @@ describe('refinePaintPattern — refine from data (peel constant wrappers)', () 
     const c = refinePaintPattern({ mode: 'paint', sample, spans }, [['adb  ->', 'xyz  ->', 'foo  ->']]);
     expect(makeColumnExtractor(c)('xyz  -> ok')).toEqual(['xyz']);  // value = just "xyz"
     expect(makeColumnExtractor(c)('foo -> ok')).toEqual(['foo']);   // 1 space also matches (\\s+)
+  });
+});
+
+describe('autoDetectSpans — tokenise a line into column spans', () => {
+  const toks = (line: string) => autoDetectSpans(line).map(s => line.slice(s.start, s.end));
+
+  it('splits on whitespace and keeps [..] and quotes whole', () => {
+    expect(toks('2024-01-02 INFO [Auth Service] user=bob'))
+      .toEqual(['2024-01-02', 'INFO', '[Auth Service]', 'user=bob']);
+    expect(toks('a "hello world" b')).toEqual(['a', '"hello world"', 'b']);
+  });
+
+  it('names columns col1..colN and the spans feed compilePaint (typed)', () => {
+    const line = '2024-01-02 42';
+    const spans = autoDetectSpans(line);
+    expect(spans.map(s => s.name)).toEqual(['col1', 'col2']);
+    const c = compileColumnPattern({ mode: 'paint', sample: line, spans });
+    expect(c.regex).toContain('\\d{4}-\\d{2}-\\d{2}'); // date typed
+    expect(c.regex).toContain('-?\\d+');               // int typed
+  });
+
+  it('handles empty / whitespace-only lines', () => {
+    expect(autoDetectSpans('')).toEqual([]);
+    expect(autoDetectSpans('   ')).toEqual([]);
   });
 });
