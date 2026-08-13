@@ -1635,7 +1635,7 @@ function secondaryRenderVisibleLines(sv: SecondaryViewerInstance): void {
       div.className = className;
       div.dataset.lineNumber = String(line.lineNumber);
 
-      const lineNumHtml = `<span class="line-number">${line.lineNumber + 1}</span>`;
+      const lineNumHtml = `<span class="line-number" data-lineno="${line.lineNumber + 1}"></span>`;
       const contentHtml = `<span class="line-content">${escapeHtml(line.text)}</span>`;
       div.innerHTML = lineNumHtml + contentHtml;
 
@@ -2927,7 +2927,7 @@ function createLineElementPooled(line: LogLine): HTMLDivElement {
   if (isLineMuted(line.text)) div.classList.add('muted');
 
   // Create content using innerHTML for speed (single parse)
-  const lineNumHtml = `<span class="line-number">${line.lineNumber + 1}</span>`;
+  const lineNumHtml = `<span class="line-number" data-lineno="${line.lineNumber + 1}"></span>`;
   let displayText = applyColumnFilter(line.text);
 
   // Truncate very long lines to prevent DOM/rendering slowness
@@ -2994,7 +2994,7 @@ function createPlaceholderLinePooled(displayIndex: number): HTMLDivElement {
   div.dataset.lineNumber = '';
   const numHtml = state.isFiltered
     ? '<span class="line-number"></span>'
-    : `<span class="line-number">${displayIndex + 1}</span>`;
+    : `<span class="line-number" data-lineno="${displayIndex + 1}"></span>`;
   // Dim inline bar (currentColor adapts to the theme); width jittered by index so
   // the skeleton reads as text, not a solid block.
   const barWidth = 30 + (displayIndex % 7) * 8; // 30–78%
@@ -3032,7 +3032,9 @@ function createLineElement(line: LogLine): HTMLDivElement {
 
   const lineNumSpan = document.createElement('span');
   lineNumSpan.className = 'line-number';
-  lineNumSpan.textContent = String(line.lineNumber + 1);
+  // Render the number via CSS ::before (data-lineno) so it's NOT real DOM text and can't
+  // be selected/copied — copying a section yields the log text only, no line numbers.
+  lineNumSpan.setAttribute('data-lineno', String(line.lineNumber + 1));
 
   const contentSpan = document.createElement('span');
   contentSpan.className = 'line-content';
