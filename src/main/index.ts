@@ -34,6 +34,7 @@ import { BaselineStore, buildFingerprint } from './baselineStore';
 import { bumpUsage, getUsage, clearUsage, flushUsage, isAiContext } from './usageStore';
 import { canonicalizeHumanVerb, aggregateUsageByFeature } from '../shared/verbRegistry';
 import { saveConstant, getConstants, deleteConstant, flushConstants } from './constantsStore';
+import { loadColumnLayouts, upsertColumnLayout, deleteColumnLayout, ColumnLayoutSaved } from './columnLayoutsStore';
 import { getPatternLog, clearPatternLog, logPattern, PatternLogEntry, flushPatternLog } from './patternLog';
 import { compilePattern, CompileInput } from './compilePattern';
 import { parseTimestampFast } from './timestampParse';
@@ -3881,64 +3882,21 @@ ipcMain.handle('column-pattern-delete', async (_, id: string) => {
   return { success: true, patterns: items };
 });
 
-// ── Column Layouts (Phase 1: delimiter layouts) ───────────────────────────────
-// A named, saved definition of a file's columns — delimiter + per-column {index, name,
-// visible}. The Columns visibility window applies these (template-driven). Global store,
-// mirrors column-patterns; per-file layouts (sidecar) are a later slice.
-interface ColumnLayoutSaved {
-  id: string;
-  name: string;
-  method: 'delimiter' | 'pattern';
-  delimiter?: string;
-  delimiterName?: string;
-  pattern?: { regex: string; flags: string; fields: string[] };
-  columns: Array<{ index: number; name?: string; visible: boolean }>;
-}
-
-const getColumnLayoutsPath = () => path.join(getConfigDir(), 'column-layouts.json');
-
-function loadColumnLayoutsStore(): ColumnLayoutSaved[] {
-  try {
-    ensureConfigDir();
-    const p = getColumnLayoutsPath();
-    if (fs.existsSync(p)) {
-      const parsed = JSON.parse(fs.readFileSync(p, 'utf-8'));
-      if (Array.isArray(parsed)) return parsed;
-    }
-  } catch (error) {
-    console.error('Failed to load column layouts:', error);
-  }
-  return [];
-}
-
-function saveColumnLayoutsStore(items: ColumnLayoutSaved[]): void {
-  try {
-    ensureConfigDir();
-    fs.writeFileSync(getColumnLayoutsPath(), JSON.stringify(items, null, 2), 'utf-8');
-  } catch (error) {
-    console.error('Failed to save column layouts:', error);
-  }
-}
-
+// ── Column Layouts (delimiter + pattern) ──────────────────────────────────────
+// Store lives in ./columnLayoutsStore, SHARED with the AI /api path (parity — one impl).
 ipcMain.handle('column-layout-list', async () => {
-  return { success: true, layouts: loadColumnLayoutsStore() };
+  return { success: true, layouts: loadColumnLayouts() };
 });
 
 ipcMain.handle('column-layout-save', async (_, layout: ColumnLayoutSaved) => {
   if (!layout || !layout.id || !layout.name || !Array.isArray(layout.columns)) {
     return { success: false, error: 'Invalid column layout' };
   }
-  const items = loadColumnLayoutsStore();
-  const idx = items.findIndex(l => l.id === layout.id);
-  if (idx >= 0) items[idx] = layout; else items.push(layout);
-  saveColumnLayoutsStore(items);
-  return { success: true, layouts: items };
+  return { success: true, layouts: upsertColumnLayout(layout) };
 });
 
 ipcMain.handle('column-layout-delete', async (_, id: string) => {
-  const items = loadColumnLayoutsStore().filter(l => l.id !== id);
-  saveColumnLayoutsStore(items);
-  return { success: true, layouts: items };
+  return { success: true, layouts: deleteColumnLayout(id) };
 });
 
 // === Search Config Sessions ===
