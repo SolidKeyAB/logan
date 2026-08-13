@@ -15818,7 +15818,7 @@ async function patcolPreview(): Promise<void> {
     patcolCompiled = { regex: res.regex, flags: res.flags || '', fields: res.fields || [], named: !!res.named };
     if (out) out.textContent = res.regex || '—';
     const rate = res.scanned ? Math.round((res.matched / res.scanned) * 100) : 0;
-    if (status) status.textContent = `${res.fields.length} cols · matched ${(res.matched || 0).toLocaleString()}/${(res.scanned || 0).toLocaleString()} (${rate}%)`;
+    if (status) status.textContent = `${res.fields.length} cols · matched ${(res.matched || 0).toLocaleString()}/${(res.scanned || 0).toLocaleString()} (${rate}%)${res.refined ? ' · ✨ refined from data' : ''}`;
     patcolRenderPreview(res);
   } catch (e) {
     if (status) status.textContent = 'Failed';

@@ -39,7 +39,7 @@ import { getPatternLog, clearPatternLog, logPattern, PatternLogEntry, flushPatte
 import { compilePattern, CompileInput } from './compilePattern';
 import { parseTimestampFast } from './timestampParse';
 import { carryForwardTimestamps, buildOriginTags, formatWallClock } from './mergeTimeline';
-import { compileColumnPattern, makeColumnExtractor, ColumnPatternSpec } from './columnPattern';
+import { compileColumnPattern, makeColumnExtractor, refinePaintPattern, CompiledColumnPattern, ColumnPatternSpec } from './columnPattern';
 import { parseVtraceToFile } from './vtraceParse';
 import { runTrendJob } from './trendWorkerClient';
 import { resolveScope, isWholeFile, scopeInfo, forEachScopeLine, ScopeResolverContext } from './scope';
@@ -3822,34 +3822,51 @@ function saveColumnPatternsStore(items: ColumnPatternSaved[]): void {
 
 ipcMain.handle('column-pattern-preview', async (_, spec: ColumnPatternSpec, opts?: { sampleLines?: number }) => {
   try {
-    const compiled = compileColumnPattern(spec);
-    const extractor = makeColumnExtractor(compiled);
     const N = Math.max(1, Math.min(500, opts?.sampleLines ?? 200));
-    const rows: string[][] = [];
-    let matched = 0;
-    let scanned = 0;
-    const pushLine = (text: string) => {
-      scanned++;
-      const vals = extractor(text);
-      if (vals) { matched++; if (rows.length < N) rows.push(vals); }
-    };
-    // Always test the user's own sample line first (they author against it).
-    if (spec.sample && spec.sample.trim()) pushLine(spec.sample);
+    // Gather the candidate lines once (the user's sample first, then the file head).
+    const sampleLines: string[] = [];
+    if (spec.sample && spec.sample.trim()) sampleLines.push(spec.sample);
     const handler = getFileHandler();
     if (handler) {
-      const total = handler.getTotalLines();
-      const scanTo = Math.min(total, N * 4);
-      const batch = handler.getLines(0, scanTo);
-      for (const line of batch) {
-        if (rows.length >= N) break;
-        if (!line.text.trim()) continue;
-        pushLine(line.text);
+      const scanTo = Math.min(handler.getTotalLines(), N * 4);
+      for (const line of handler.getLines(0, scanTo)) {
+        if (line.text.trim()) sampleLines.push(line.text);
       }
     }
+    const collect = (compiled: CompiledColumnPattern) => {
+      const extractor = makeColumnExtractor(compiled);
+      const rows: string[][] = [];
+      let matched = 0;
+      let scanned = 0;
+      for (const text of sampleLines) {
+        scanned++;
+        const vals = extractor(text);
+        if (vals) { matched++; if (rows.length < N) rows.push(vals); }
+      }
+      return { rows, matched, scanned };
+    };
+
+    let compiled = compileColumnPattern(spec);
+    let { rows, matched, scanned } = collect(compiled);
+
+    // ✨ Refine from data (paint mode): use the extracted column values to peel each column's
+    // constant WRAPPER (/…/, xx…xx, …blah…) and re-compile, then re-extract with the smarter
+    // pattern. No-op when no wrapper is shared across values.
+    let refined = false;
+    if (spec.mode === 'paint' && rows.length >= 2 && compiled.fields.length > 0) {
+      const fieldSamples = compiled.fields.map((_f, ci) => rows.map(r => r[ci]).filter(Boolean));
+      const refinedCompiled = refinePaintPattern(spec, fieldSamples);
+      if (refinedCompiled.regex !== compiled.regex) {
+        compiled = refinedCompiled;
+        ({ rows, matched, scanned } = collect(compiled));
+        refined = true;
+      }
+    }
+
     return {
       success: true,
       regex: compiled.regex, flags: compiled.flags, fields: compiled.fields, named: compiled.named,
-      rows, matched, scanned,
+      rows, matched, scanned, refined,
     };
   } catch (e) {
     return { success: false, error: String(e instanceof Error ? e.message : e) };

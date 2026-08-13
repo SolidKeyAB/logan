@@ -67,12 +67,42 @@ function classifyToken(s: string, isLast: boolean): string {
 // Split a painted chunk into { pre, body, post }: leading/trailing bracket/quote borders
 // kept LITERAL, the middle generalised to its format class via classifyToken().
 const PAINT_BORDER = '[\\[\\](){}<>"\'`]';
-function inferPaintField(chunk: string, isLast: boolean): { pre: string; body: string; post: string } {
+// Longest common prefix (fromEnd=false) or suffix (fromEnd=true) across the strings —
+// used to peel a column's CONSTANT WRAPPER (/…/, xx…xx, …blah…) detected from many samples.
+function commonAffix(strings: string[], fromEnd: boolean): string {
+  const vals = strings.filter(s => s.length > 0);
+  if (vals.length < 2) return '';
+  const ref = vals[0];
+  let len = ref.length;
+  for (let i = 1; i < vals.length && len > 0; i++) {
+    const s = vals[i];
+    let k = 0;
+    const max = Math.min(len, s.length);
+    while (k < max && (fromEnd ? ref[ref.length - 1 - k] === s[s.length - 1 - k] : ref[k] === s[k])) k++;
+    len = k;
+  }
+  return fromEnd ? ref.slice(ref.length - len) : ref.slice(0, len);
+}
+
+// Turn a painted chunk into { pre, body, post }: an outer DATA-DRIVEN wrapper (constant
+// prefix/suffix shared across `samples` — the column's values on other lines) is kept
+// literal, then the single-sample bracket/quote borders, then the value's format class.
+// Arbitrary wrappers (/…/, xx…xx) need `samples`; brackets are guessable from one line.
+function inferPaintField(chunk: string, isLast: boolean, samples?: string[]): { pre: string; body: string; post: string } {
   let core = chunk, pre = '', post = '';
+  if (samples && samples.length >= 2) {
+    const withChunk = [chunk, ...samples];
+    let cp = commonAffix(withChunk, false);
+    if (cp.length >= core.length) cp = '';
+    if (cp) { pre = staticToRegex(cp); core = core.slice(cp.length); }   // staticToRegex → \s+ so
+    let cs = commonAffix(withChunk, true);                               // a "  ->" border matches
+    if (cs.length >= core.length) cs = '';                              // any whitespace + "->".
+    if (cs) { post = staticToRegex(cs); core = core.slice(0, core.length - cs.length); }
+  }
   const lead = core.match(new RegExp(`^(?:${PAINT_BORDER})+`));
-  if (lead && lead[0].length < core.length) { pre = escapeRegex(lead[0]); core = core.slice(lead[0].length); }
+  if (lead && lead[0].length < core.length) { pre += escapeRegex(lead[0]); core = core.slice(lead[0].length); }
   const trail = core.match(new RegExp(`(?:${PAINT_BORDER})+$`));
-  if (trail && trail[0].length < core.length) { post = escapeRegex(trail[0]); core = core.slice(0, core.length - trail[0].length); }
+  if (trail && trail[0].length < core.length) { post = escapeRegex(trail[0]) + post; core = core.slice(0, core.length - trail[0].length); }
   return { pre, body: classifyToken(core, isLast), post };
 }
 
@@ -134,7 +164,9 @@ function compileGrok(pattern: string, flags: string): CompiledColumnPattern {
   return { regex: parts.map(p => p.body).join(''), flags, fields, named: true };
 }
 
-function compilePaint(sample: string, spans: PaintSpan[], flags: string): CompiledColumnPattern {
+// fieldSamples (optional) = the values each column takes across sample lines, in span order —
+// passed by the "refine from data" step so inferPaintField can peel constant wrappers.
+function compilePaint(sample: string, spans: PaintSpan[], flags: string, fieldSamples?: string[][]): CompiledColumnPattern {
   const clean = (spans || [])
     .filter(s => s && s.end > s.start && s.start >= 0 && s.end <= sample.length)
     .sort((a, b) => a.start - b.start);
@@ -142,6 +174,7 @@ function compilePaint(sample: string, spans: PaintSpan[], flags: string): Compil
   const fields: string[] = [];
   let out = '';
   let cursor = 0;
+  let fieldIdx = 0;
   for (let i = 0; i < clean.length; i++) {
     const sp = clean[i];
     if (sp.start < cursor) continue; // skip overlaps
@@ -150,13 +183,24 @@ function compilePaint(sample: string, spans: PaintSpan[], flags: string): Compil
     fields.push(name);
     const chunk = sample.slice(sp.start, sp.end);
     const isLast = i === clean.length - 1 && sp.end >= sample.length;
-    // Format-aware: infer the token's shape (date/int/word…), keep bracket/quote borders literal.
-    const { pre, body, post } = inferPaintField(chunk, isLast);
+    // Format-aware: infer the token's shape (date/int/word…), keep bracket/quote borders literal,
+    // and — when we have sample values for this column — peel its constant data-driven wrapper.
+    const { pre, body, post } = inferPaintField(chunk, isLast, fieldSamples ? fieldSamples[fieldIdx] : undefined);
     out += pre + `(?<${name}>${body})` + post;
     cursor = sp.end;
+    fieldIdx++;
   }
   out += staticToRegex(sample.slice(cursor));
   return { regex: out, flags, fields, named: true };
+}
+
+/** Re-compile a paint spec using per-field sample values (the values each column takes across
+ * lines, in span order) so constant wrappers are peeled off — the "refine from data" step. */
+export function refinePaintPattern(spec: ColumnPatternSpec, fieldSamples: string[][]): CompiledColumnPattern {
+  if (spec.mode !== 'paint' || !spec.sample || !spec.spans || spec.spans.length === 0) {
+    return compileColumnPattern(spec);
+  }
+  return compilePaint(spec.sample, spec.spans, spec.flags || '', fieldSamples);
 }
 
 function compileRawRegex(pattern: string, flags: string): CompiledColumnPattern {
