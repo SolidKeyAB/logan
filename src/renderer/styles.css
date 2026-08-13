@@ -2643,17 +2643,19 @@ button.is-cancelable:hover, .btn.is-cancelable:hover { filter: brightness(1.12);
    to bring it back to full opacity so it's still readable on demand. */
 .log-line.muted {
   opacity: 0.28;
-  /* Smaller text so muted "noise" lines read as lighter/shorter. The ROW height stays
-     var(--line-height) — the virtual scroller needs a uniform per-line height — so this
-     shrinks the text within the row, not the row itself. Full size + opacity on hover. */
-  font-size: 0.78em;
   transition: opacity 0.12s ease, font-size 0.1s ease;
 }
-.log-line.muted .line-number { font-size: 0.85em; }
 .log-line.muted:hover {
   opacity: 1;
   font-size: 1em;
 }
+/* Opt-in muted-line SIZE (mute menu → "Muted size"). Default = As is (no class on body).
+   Shrinks the text within the fixed 20px row (the virtual scroller needs a uniform row
+   height, so this does NOT reduce the row height). Full size on hover regardless. */
+.muted-size-small .log-line.muted { font-size: 0.82em; }
+.muted-size-small .log-line.muted .line-number { font-size: 0.88em; }
+.muted-size-tiny .log-line.muted { font-size: 0.66em; }
+.muted-size-tiny .log-line.muted .line-number { font-size: 0.78em; }
 
 .line-number {
   min-width: 60px;
