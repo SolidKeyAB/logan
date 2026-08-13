@@ -15652,6 +15652,44 @@ async function patcolPullSample(): Promise<void> {
   } catch { /* ignore */ }
 }
 
+// MIRROR of autoDetectSpans() in src/main/columnPattern.ts (tested there) — keep in sync.
+function autoDetectSpansLocal(line: string): PatcolSpan[] {
+  const spans: PatcolSpan[] = [];
+  const closerFor: Record<string, string> = { '[': ']', '(': ')', '{': '}', '<': '>' };
+  let start = -1, quote = '';
+  const stack: string[] = [];
+  const flush = (i: number) => { if (start >= 0) { spans.push({ start, end: i, name: `col${spans.length + 1}` }); start = -1; } };
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote) { if (ch === quote) quote = ''; continue; }
+    if (ch === '"' || ch === "'") { if (start < 0) start = i; quote = ch; continue; }
+    if (closerFor[ch]) { if (start < 0) start = i; stack.push(closerFor[ch]); continue; }
+    if (stack.length && ch === stack[stack.length - 1]) { if (start < 0) start = i; stack.pop(); continue; }
+    if (/\s/.test(ch) && stack.length === 0) { flush(i); continue; }
+    if (start < 0) start = i;
+  }
+  flush(line.length);
+  return spans;
+}
+
+// "🔍 Auto-detect columns": analyse a sample line → paint spans (one per token), which the
+// tested compilePaint then TYPES (date/int/word…). The draft lands in the panel to name/tweak.
+async function patcolAutoDetect(): Promise<void> {
+  const sampleInput = document.getElementById('patcol-sample-input') as HTMLInputElement | null;
+  if (!sampleInput || !state.filePath) return;
+  if (!sampleInput.value.trim()) {
+    const ln = state.selectedLine != null ? state.selectedLine : (state.visibleStartLine ?? 0);
+    try { const r = await window.api.getLines(ln, 1); const t = r?.lines?.[0]?.text || ''; if (t) sampleInput.value = t; } catch { /* ignore */ }
+  }
+  const line = sampleInput.value;
+  if (!line.trim()) { showToast('No sample line to analyze — put the cursor on a line first'); return; }
+  patcolSetMode('paint');
+  patcolSpans = autoDetectSpansLocal(line);
+  patcolRenderPaint();
+  patcolPreviewSoon();
+  showToast(`Auto-detected ${patcolSpans.length} columns — rename/adjust, then Use as columns`);
+}
+
 function patcolSetMode(mode: PatcolMode): void {
   patcolMode = mode;
   document.querySelectorAll('.patcol-mode-btn').forEach((b) => {
@@ -23249,6 +23287,7 @@ function init(): void {
     if (mode) patcolSetMode(mode);
   }));
   document.getElementById('btn-patcol-sample')?.addEventListener('click', patcolPullSample);
+  document.getElementById('btn-patcol-autodetect')?.addEventListener('click', () => { void patcolAutoDetect(); });
   document.getElementById('btn-patcol-copy')?.addEventListener('click', patcolCopyRegex);
   document.getElementById('btn-patcol-save')?.addEventListener('click', patcolSavePattern);
   document.getElementById('btn-patcol-apply')?.addEventListener('click', () => patcolUseAsColumns());
