@@ -94,10 +94,10 @@ function inferPaintField(chunk: string, isLast: boolean, samples?: string[]): { 
     const withChunk = [chunk, ...samples];
     let cp = commonAffix(withChunk, false);
     if (cp.length >= core.length) cp = '';
-    if (cp) { pre = escapeRegex(cp); core = core.slice(cp.length); }
-    let cs = commonAffix(withChunk, true);
-    if (cs.length >= core.length) cs = '';
-    if (cs) { post = escapeRegex(cs); core = core.slice(0, core.length - cs.length); }
+    if (cp) { pre = staticToRegex(cp); core = core.slice(cp.length); }   // staticToRegex → \s+ so
+    let cs = commonAffix(withChunk, true);                               // a "  ->" border matches
+    if (cs.length >= core.length) cs = '';                              // any whitespace + "->".
+    if (cs) { post = staticToRegex(cs); core = core.slice(0, core.length - cs.length); }
   }
   const lead = core.match(new RegExp(`^(?:${PAINT_BORDER})+`));
   if (lead && lead[0].length < core.length) { pre += escapeRegex(lead[0]); core = core.slice(lead[0].length); }
