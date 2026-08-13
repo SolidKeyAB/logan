@@ -47,6 +47,41 @@ describe('compileColumnPattern — paint mode', () => {
     expect(extract(spec, 'POST /users 404')).toEqual(['POST', '/users', '404']);
   });
 
+  it('generalises a painted date to a date-format regex (not a literal / blanket \\S+?)', () => {
+    const sample = '2024-01-02 boot ok';
+    const spans = [{ start: 0, end: 10, name: 'date' }];
+    const c = compileColumnPattern({ mode: 'paint', sample, spans });
+    expect(c.regex).toContain('\\d{4}-\\d{2}-\\d{2}');
+    expect(c.regex).not.toContain('\\S+'); // the whole point: not a blanket token
+    expect(extract({ mode: 'paint', sample, spans }, '2025-12-31 boot ok')).toEqual(['2025-12-31']);
+  });
+
+  it('types integers and keeps bracket borders literal (capturing the value inside)', () => {
+    const sample = '[ERROR] code 42';
+    const spans = [
+      { start: 0, end: 7, name: 'level' },  // "[ERROR]"
+      { start: 13, end: 15, name: 'code' }, // "42"
+    ];
+    const spec: ColumnPatternSpec = { mode: 'paint', sample, spans };
+    const c = compileColumnPattern(spec);
+    expect(c.regex).toContain('\\w+');    // ERROR → word class
+    expect(c.regex).toContain('-?\\d+');  // 42 → integer class
+    expect(extract(spec, '[WARN] code 7')).toEqual(['WARN', '7']); // borders literal; value excludes []
+  });
+
+  it('keeps ( ), <> and other enclosing delimiters literal, generalising the value inside', () => {
+    const sample = 'req (200) from <alice>';
+    const spans = [
+      { start: 4, end: 9, name: 'status' },  // "(200)"
+      { start: 15, end: 22, name: 'user' },  // "<alice>"
+    ];
+    const spec: ColumnPatternSpec = { mode: 'paint', sample, spans };
+    const c = compileColumnPattern(spec);
+    expect(c.regex).toContain('\\(');  // paren kept literal
+    expect(c.regex).toContain('<');    // angle kept literal
+    expect(extract(spec, 'req (404) from <bob>')).toEqual(['404', 'bob']); // values generalise
+  });
+
   it('requires at least one span', () => {
     expect(() => compileColumnPattern({ mode: 'paint', sample: 'abc', spans: [] })).toThrow();
   });
