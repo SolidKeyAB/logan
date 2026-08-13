@@ -340,6 +340,7 @@ interface AppState {
   // "Mute" patterns: rows whose text contains any of these are dimmed IN PLACE
   // (kept for context, not removed) via a render-time class. Persisted globally.
   mutePatterns: string[];
+  mutedSize: 'normal' | 'small' | 'tiny'; // opt-in smaller font for muted lines (mute menu)
   // Traceback
   tracebackResult: any | null;
   tracebackSort: 'time' | 'score';
@@ -419,6 +420,7 @@ const state: AppState = {
   hiddenLevels: new Set<string>(JSON.parse(localStorage.getItem('logan-hidden-levels') || '[]')),
   levelBarFilterActive: false,
   mutePatterns: JSON.parse(localStorage.getItem('logan-mute-patterns') || '[]'),
+  mutedSize: (localStorage.getItem('logan-muted-size') as 'normal' | 'small' | 'tiny') || 'normal',
   tracebackResult: null,
   tracebackSort: 'time' as 'time' | 'score',
   tracebackFilterCat: 'all',
@@ -2876,6 +2878,18 @@ function clearMutePatterns(): void {
   renderVisibleLines();
 }
 
+// Opt-in smaller font for muted lines (default 'normal' = as is). Applied via a body class
+// so it works for already- and later-rendered rows without a re-render. Persisted.
+function applyMutedSize(): void {
+  document.body.classList.toggle('muted-size-small', state.mutedSize === 'small');
+  document.body.classList.toggle('muted-size-tiny', state.mutedSize === 'tiny');
+}
+function setMutedSize(size: 'normal' | 'small' | 'tiny'): void {
+  state.mutedSize = size;
+  localStorage.setItem('logan-muted-size', size);
+  applyMutedSize();
+}
+
 function createLineElementPooled(line: LogLine): HTMLDivElement {
   const div = lineElementPool.acquire();
   div.dataset.lineNumber = String(line.lineNumber);
@@ -4740,6 +4754,12 @@ function handleContextMenu(event: MouseEvent): void {
       menu.remove();
     });
     menu.appendChild(clearMutes);
+    // Muted line SIZE — opt-in smaller font so noise recedes (default As is). ✓ marks current.
+    for (const [label, val] of [['As is', 'normal'], ['Small', 'small'], ['Tiny', 'tiny']] as const) {
+      const it = menuItem(state.mutedSize === val ? '✓' : ' ', `Muted size: ${label}`);
+      it.addEventListener('click', () => { setMutedSize(val); menu.remove(); });
+      menu.appendChild(it);
+    }
     menu.appendChild(menuSeparator());
   }
 
@@ -22586,6 +22606,7 @@ function setupHelpTooltips(): void {
 function init(): void {
   // Detect platform and setup window controls
   setupWindowControls();
+  applyMutedSize(); // restore the saved muted-line size (default: as is)
 
   // Load user settings from localStorage
   loadSettings();
