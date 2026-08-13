@@ -14500,10 +14500,14 @@ function renderSearchConfigSessionsUI(): void {
   fragment.appendChild(saveBtn);
 
   for (const session of searchConfigSessions) {
+    const isActive = session.id === activeSessionId;
     const chip = document.createElement('span');
-    chip.className = `sc-session-chip${session.id === activeSessionId ? ' active' : ''}`;
+    chip.className = `sc-session-chip${isActive ? ' active' : ''}`;
     chip.dataset.id = session.id;
-    chip.title = `${escapeHtml(session.name)} (${session.configs.length} configs)${session.isGlobal ? ' [Global]' : ' [Local]'}`;
+    const scopeTag = session.isGlobal ? ' [Global]' : ' [Local]';
+    chip.title = isActive
+      ? `${escapeHtml(session.name)} — applied. Click to deselect (clear its search configs).`
+      : `${escapeHtml(session.name)} (${session.configs.length} configs)${scopeTag} — click to apply`;
 
     const nameSpan = document.createElement('span');
     nameSpan.className = 'sc-session-chip-name';
@@ -14511,12 +14515,13 @@ function renderSearchConfigSessionsUI(): void {
 
     const badge = document.createElement('span');
     badge.className = 'sc-session-chip-badge';
-    badge.textContent = String(session.configs.length);
+    // Active chip shows a ✕ hint that clicking again deselects; otherwise the config count.
+    badge.textContent = isActive ? '✕' : String(session.configs.length);
 
     chip.appendChild(nameSpan);
     chip.appendChild(badge);
 
-    chip.addEventListener('click', () => applySearchConfigSession(session.id));
+    chip.addEventListener('click', () => toggleSearchConfigSession(session.id));
     chip.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       showSearchConfigSessionContextMenu(e as MouseEvent, session);
@@ -14561,6 +14566,29 @@ async function saveCurrentAsSearchConfigSession(): Promise<void> {
     activeSessionId = session.id;
     renderSearchConfigSessionsUI();
   }
+}
+
+// Clicking a session chip toggles it: apply if it isn't the active one, deselect if it is.
+async function toggleSearchConfigSession(sessionId: string): Promise<void> {
+  if (activeSessionId === sessionId) {
+    await deselectSearchConfigSession();
+  } else {
+    await applySearchConfigSession(sessionId);
+  }
+}
+
+// Deselect the active session: remove its loaded search configs and clear their results.
+async function deselectSearchConfigSession(): Promise<void> {
+  for (const config of [...state.searchConfigs]) {
+    await window.api.searchConfigDelete(config.id);
+  }
+  state.searchConfigs = [];
+  state.searchConfigResults.clear();
+  activeSessionId = null;
+  renderSearchConfigsChips();
+  renderSearchConfigSessionsUI();
+  // Zero enabled configs → runSearchConfigsBatchOnce clears the results overview + repaints.
+  await runSearchConfigsBatch(true);
 }
 
 async function applySearchConfigSession(sessionId: string): Promise<void> {
