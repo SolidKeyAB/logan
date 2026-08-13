@@ -63,7 +63,18 @@ Still human-only — deliberate backlog (add a counterpart or a written exemptio
 when each is next touched):
 
 - **MUTE** (dim rows in place) — renderer-only viewport effect.
-- **Column hide / Pattern Columns** — viewport/column-projection concerns.
+- **Column Layouts** (renamed from Pattern Columns; `feat/columns-panel`, 2026-08-13) —
+  save/apply a named column layout (delimiter OR regex/paint pattern), show/hide columns,
+  **and filter rows by a column value** (the `column` advanced-filter rule). Shipped
+  human-only — **known parity debt, no exemption** (row-filter + column projection are real
+  verbs, not viewport-only). Owe: `/api/column-layout-{list,save,delete}` + a
+  `logan_column_layouts` tool (list + apply), and extend `logan_filter` to pass
+  `advancedFilter`/column rules through to the **same** `compileAdvancedFilter`. Share the
+  `loadColumnLayoutsStore`/`saveColumnLayoutsStore` fns — one implementation, two operators.
+- **Constants / tags** (`feat/columns-panel`, 2026-08-13) — "🔤 Save as constant" (name→value)
+  + using a constant in Search/Filter. Shipped human-only — **known parity debt**. Owe:
+  `/api/constants-{save,list,delete}` + a `logan_constants` tool, sharing `constantsStore`
+  (lets the AI tag a value it finds and reuse it in search/filter, like a human).
 - **Cadence** (missing-sequence) analysis — native panel; no MCP tool yet.
 - **Time Sync** and **merge-to-file** — the latter *is* the L2 "merge-timeline"
   verb and should get an `/api/merge-timeline` + MCP tool.
