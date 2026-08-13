@@ -217,6 +217,32 @@ function compileRawRegex(pattern: string, flags: string): CompiledColumnPattern 
   return { regex: pattern, flags, fields: ['match'], named: false };
 }
 
+export interface DetectedSpan { start: number; end: number; name: string }
+
+// Auto-detect column spans in a sample line: split on whitespace at bracket/quote depth 0,
+// keeping [..], (..), {..}, <..>, "..", '..' groups whole. Each token becomes a column
+// (col1, col2…). Simple + solid — the caller feeds these to compilePaint, which TYPES each
+// token (date/int/word…); the user then names/tweaks in the Column Layout panel.
+export function autoDetectSpans(line: string): DetectedSpan[] {
+  const spans: DetectedSpan[] = [];
+  const closerFor: Record<string, string> = { '[': ']', '(': ')', '{': '}', '<': '>' };
+  let start = -1;
+  let quote = '';
+  const stack: string[] = [];
+  const flush = (i: number) => { if (start >= 0) { spans.push({ start, end: i, name: `col${spans.length + 1}` }); start = -1; } };
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote) { if (ch === quote) quote = ''; continue; }              // inside a quote → keep going
+    if (ch === '"' || ch === "'") { if (start < 0) start = i; quote = ch; continue; }
+    if (closerFor[ch]) { if (start < 0) start = i; stack.push(closerFor[ch]); continue; }
+    if (stack.length && ch === stack[stack.length - 1]) { if (start < 0) start = i; stack.pop(); continue; }
+    if (/\s/.test(ch) && stack.length === 0) { flush(i); continue; }    // whitespace at depth 0 → split
+    if (start < 0) start = i;
+  }
+  flush(line.length);
+  return spans;
+}
+
 /** Compile any spec to a single named/numbered-capture regex + ordered fields. */
 export function compileColumnPattern(spec: ColumnPatternSpec): CompiledColumnPattern {
   const flags = spec.flags || '';
