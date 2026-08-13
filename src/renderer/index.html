@@ -296,6 +296,7 @@
                 <input type="checkbox" id="search-whole-word"> <span>ab</span>
               </label>
               <button id="btn-search" class="search-panel-btn" title="Search" aria-label="Search">&#128269;</button>
+              <button id="btn-search-constants" class="search-panel-btn" title="Search by a saved constant / tag" aria-label="Constants">&#128288;</button>
               <button id="btn-prev-result" class="search-panel-btn" title="Previous result" aria-label="Previous result" disabled>&lt;</button>
               <span id="search-result-count" class="search-panel-count" aria-live="polite" aria-atomic="true"></span>
               <button id="btn-next-result" class="search-panel-btn" title="Next result" aria-label="Next result" disabled>&gt;</button>
@@ -402,7 +403,7 @@
           <button class="bottom-tab-btn" data-bottom-tab="live" data-help="Connect to live log sources: Serial ports, ADB logcat, or SSH.&#10;Up to 4 parallel connections with real-time streaming.">Live</button>
           <button class="bottom-tab-btn" data-bottom-tab="time-align" data-help="Visually align search config results by timestamp.&#10;Each enabled config becomes a draggable timeline lane.&#10;Drag lanes left/right to apply time offsets and correlate events.">Time Align</button>
           <button class="bottom-tab-btn" data-bottom-tab="time-sync" data-help="Merge MULTIPLE log files onto one shared wall-clock timeline.&#10;LOGAN reads each file's timestamps (no AI) and interleaves every line in time order, colour-tagged by file.&#10;Click any row to jump to that exact line in its file.">Time Sync</button>
-          <button class="bottom-tab-btn" data-bottom-tab="pattern-columns" data-help="Turn a log line's shape into named COLUMNS — no delimiter needed.&#10;Type a %{name} pattern, paint a sample line's fields, or paste a regex; LOGAN compiles it to a named-capture regex and previews the extracted columns over this file. No AI.">Pattern Columns</button>
+          <button class="bottom-tab-btn" data-bottom-tab="pattern-columns" data-help="Turn a log line's shape into named COLUMNS — no delimiter needed.&#10;Type a %{name} pattern, paint a sample line's fields, or paste a regex; LOGAN compiles it to a named-capture regex and previews the extracted columns over this file. No AI.">Column Layouts</button>
           <button class="bottom-tab-btn" data-bottom-tab="traceback" data-help="Reverse timeline from any error line.&#10;Right-click a line → Traceback from here.&#10;Shows what led to the error: same component, warnings, escalations.">Traceback</button>
           <button class="bottom-tab-btn" data-bottom-tab="chat" data-help="Chat with an AI agent connected via MCP or HTTP API.&#10;The agent can search, navigate, analyze, and bookmark for you.">Agent Chat</button>
           <button class="bottom-tab-btn" data-bottom-tab="notes" data-help="Freeform notes saved per file as .logan/filename.notes.txt.&#10;Use Save Snippet to append selected log lines to notes.">Notes</button>
@@ -487,6 +488,8 @@
             <button id="btn-patcol-sample" class="secondary-btn small" title="Pull the current / selected line as the sample">↻ Sample</button>
             <button id="btn-patcol-copy" class="secondary-btn small" title="Copy the compiled regex to the clipboard">⧉ Copy regex</button>
             <button id="btn-patcol-save" class="secondary-btn small" title="Save this pattern for reuse across files">💾 Save…</button>
+            <button id="btn-patcol-apply" class="secondary-btn small" title="Render these columns in the viewer, and open them in the Columns window for show/hide">▸ Use as columns</button>
+            <button id="btn-patcol-save-layout" class="secondary-btn small" title="Save these columns as a reusable layout you can apply from the Columns window">💾 Save as layout…</button>
             <span id="patcol-status" class="conclusion-status"></span>
           </div>
           <div id="patcol-saved" class="patcol-saved"></div>
@@ -977,6 +980,7 @@
             <label>Include Patterns</label>
             <div id="include-patterns-container" class="include-patterns-container"></div>
             <button id="btn-add-include-pattern" class="secondary-btn small" style="margin-top:4px">+ Add pattern</button>
+            <button id="btn-filter-constants" class="secondary-btn small" style="margin-top:4px" title="Add a saved constant / tag as an include pattern">&#128288; Constant…</button>
             <div class="context-lines-row">
               <label for="basic-context-lines">Context lines around matches:</label>
               <input type="number" id="basic-context-lines" class="context-lines-input" value="0" min="0" max="50">
@@ -1353,6 +1357,12 @@
                   <button id="btn-columns-all" class="secondary-btn small">All</button>
                   <button id="btn-columns-none" class="secondary-btn small">None</button>
                 </div>
+              </div>
+            </div>
+            <div class="filter-group" id="column-layouts-bar">
+              <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">
+                <div class="column-layouts-picker"><span class="column-layouts-title">Layouts:</span> <span id="column-layouts-chips" class="patcol-saved"></span></div>
+                <button id="btn-save-column-layout" class="secondary-btn small" title="Save these columns (names + which are hidden) as a reusable layout">💾 Save as layout…</button>
               </div>
             </div>
             <div id="columns-list" class="columns-list"></div>

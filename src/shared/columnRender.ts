@@ -82,3 +82,50 @@ export function computeColumnSegments(text: string, delimiter: string): ColumnSe
   segs.push({ col, start, end: text.length });
   return segs;
 }
+
+// Segment a line by a COMPILED PATTERN's capture groups (pattern-mode Column Layouts:
+// grok / regex / paint identify columns that aren't a simple delimiter split).
+//
+// Same invariants as computeColumnSegments so the two render paths are interchangeable:
+//  • segments TILE [0, text.length) in order — concatenating text.slice(start,end) is
+//    byte-identical to the original line (nothing added or lost on screen);
+//  • each column carries the "glue" text that FOLLOWS it (up to the next column), so hiding
+//    a column also hides its trailing glue — no doubled/dangling separators;
+//  • column index = capture-group number − 1 (so it lines up with the layout's columns).
+//
+// `regex` MUST be compiled with the 'd' flag (hasIndices) so per-group [start,end) is known.
+// Non-matching lines (or a regex without indices) return ONE segment at col -1, which the
+// hide rule never targets — so an un-columned line is rendered whole and is never hidden.
+export function computeColumnSegmentsByPattern(
+  text: string,
+  regex: RegExp,
+  fieldCount: number,
+): ColumnSegment[] {
+  if (text.length === 0) return [{ col: 0, start: 0, end: 0 }];
+
+  let m: RegExpExecArray | null = null;
+  try { regex.lastIndex = 0; m = regex.exec(text); } catch { m = null; }
+  const indices = m ? (m as unknown as { indices?: Array<[number, number] | undefined> }).indices : undefined;
+  if (!m || !indices) return [{ col: -1, start: 0, end: text.length }];
+
+  // Collect the [start,end) of each PRESENT capture group (skip unmatched optionals).
+  const groups: Array<{ col: number; start: number }> = [];
+  for (let g = 1; g <= fieldCount; g++) {
+    const gi = indices[g];
+    if (gi) groups.push({ col: g - 1, start: gi[0] });
+  }
+  if (groups.length === 0) return [{ col: -1, start: 0, end: text.length }];
+
+  // Order by position (paint/grok usually already ordered; be safe).
+  groups.sort((a, b) => a.start - b.start);
+
+  // First column's segment starts at 0 (carries any leading glue); each column runs to the
+  // NEXT column's start; the last runs to end-of-line.
+  const segs: ColumnSegment[] = [];
+  for (let i = 0; i < groups.length; i++) {
+    const start = i === 0 ? 0 : groups[i].start;
+    const end = i === groups.length - 1 ? text.length : groups[i + 1].start;
+    if (end > start) segs.push({ col: groups[i].col, start, end });
+  }
+  return segs.length ? segs : [{ col: -1, start: 0, end: text.length }];
+}

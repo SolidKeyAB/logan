@@ -428,6 +428,12 @@ const api = {
     ipcRenderer.invoke('column-pattern-save', pattern),
   columnPatternDelete: (id: string): Promise<{ success: boolean; patterns?: any[] }> =>
     ipcRenderer.invoke('column-pattern-delete', id),
+  columnLayoutList: (): Promise<{ success: boolean; layouts?: any[] }> =>
+    ipcRenderer.invoke('column-layout-list'),
+  columnLayoutSave: (layout: any): Promise<{ success: boolean; layouts?: any[]; error?: string }> =>
+    ipcRenderer.invoke('column-layout-save', layout),
+  columnLayoutDelete: (id: string): Promise<{ success: boolean; layouts?: any[] }> =>
+    ipcRenderer.invoke('column-layout-delete', id),
 
   // Datadog
   datadogLoadConfig: (): Promise<{ success: boolean; config?: { site: string; hasApiKey: boolean; hasAppKey: boolean } | null }> =>
