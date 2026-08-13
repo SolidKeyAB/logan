@@ -369,13 +369,14 @@ server.tool(
     action: z.enum(['list', 'save', 'delete']).describe('list all · save one · delete one'),
     name: z.string().optional().describe('constant name (required for save/delete)'),
     value: z.string().optional().describe('constant value (required for save)'),
+    description: z.string().optional().describe('optional note on what this constant is for / why (shown to the human too)'),
   },
-  async ({ action, name, value }) => {
+  async ({ action, name, value, description }) => {
     try {
       const path = action === 'save' ? '/api/constants-save'
         : action === 'delete' ? '/api/constants-delete'
         : '/api/constants-list';
-      const result = await apiCall('POST', path, { name, value });
+      const result = await apiCall('POST', path, { name, value, description });
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err: any) {
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -389,7 +390,7 @@ server.tool(
   'Manage saved Column Layouts (named column definitions — delimiter OR regex/paint pattern + per-column name/visibility) — the same store the human Column Layouts builder / Columns window uses. list · save · delete. (Applying a layout to the human viewer is human-only.)',
   {
     action: z.enum(['list', 'save', 'delete']).describe('list all · save one · delete one'),
-    layout: z.any().optional().describe('layout object for save: {id, name, method:"delimiter"|"pattern", delimiter?/pattern?, columns:[{index,name?,visible}]}'),
+    layout: z.any().optional().describe('layout object for save: {id, name, method:"delimiter"|"pattern", delimiter?/pattern?, columns:[{index,name?,visible}], description?}. Include an optional `description` note on what the layout is for.'),
     id: z.string().optional().describe('layout id (required for delete)'),
   },
   async ({ action, layout, id }) => {
@@ -429,10 +430,11 @@ server.tool(
     lineNumber: z.number().int().min(0).describe('0-based line number to bookmark'),
     label: z.string().default('').describe('Optional label/note for the bookmark'),
     color: z.string().default('#ffff00').describe('Bookmark color (hex)'),
+    description: z.string().optional().describe('optional note on why this line matters / what to check (shown to the human too)'),
   },
-  async ({ lineNumber, label, color }) => {
+  async ({ lineNumber, label, color, description }) => {
     try {
-      const result = await apiCall('POST', '/api/bookmark', { lineNumber, label, color });
+      const result = await apiCall('POST', '/api/bookmark', { lineNumber, label, color, description });
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err: any) {
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -468,10 +470,11 @@ server.tool(
     matchCase: z.boolean().default(false).describe('Case-sensitive matching'),
     backgroundColor: z.string().default('#ffff00').describe('Highlight background color (hex)'),
     isGlobal: z.boolean().default(false).describe('Apply to all files (true) or current file only (false)'),
+    description: z.string().optional().describe('optional note on what this highlight is for / why (shown to the human too)'),
   },
-  async ({ pattern, isRegex, matchCase, backgroundColor, isGlobal }) => {
+  async ({ pattern, isRegex, matchCase, backgroundColor, isGlobal, description }) => {
     try {
-      const result = await apiCall('POST', '/api/highlight', { pattern, isRegex, matchCase, backgroundColor, isGlobal });
+      const result = await apiCall('POST', '/api/highlight', { pattern, isRegex, matchCase, backgroundColor, isGlobal, description });
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err: any) {
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
