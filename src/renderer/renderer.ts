@@ -14571,7 +14571,21 @@ function showSearchConfigSessionContextMenu(e: MouseEvent, session: SearchConfig
     }
   });
 
+  // Promote/demote scope so an existing session can be made reusable across files
+  // (or pinned back to this file) without re-saving.
+  const scopeItem = document.createElement('button');
+  scopeItem.className = 'sc-context-menu-item';
+  scopeItem.textContent = session.isGlobal ? 'Make file-only' : 'Make reusable (all files)';
+  scopeItem.addEventListener('click', async () => {
+    menu.remove();
+    await window.api.searchConfigSessionDelete(session.id, session.isGlobal); // remove from current store
+    session.isGlobal = !session.isGlobal;
+    const result = await window.api.searchConfigSessionSave(session);         // save into the other store
+    if (result.success) await loadSearchConfigSessions();
+  });
+
   menu.appendChild(renameItem);
+  menu.appendChild(scopeItem);
   menu.appendChild(deleteItem);
   document.body.appendChild(menu);
 
