@@ -5709,6 +5709,44 @@ function findSubfolder(entries: LocalFolderFile[], subdirPath: string): LocalFol
   return null;
 }
 
+// Reveal the active file in the folder tree: expand the folder + the ancestor subdirs on
+// its path, re-render, then scroll it into view + flash it. The active row already carries
+// the `.active` class (see renderFolderEntries); this just makes it visible + findable.
+function revealActiveFileInTree(): void {
+  if (!state.filePath) { showToast('No active file to reveal'); return; }
+  const target = state.filePath;
+  let matched = false;
+  for (const folder of state.folders) {
+    const base = folder.path.replace(/[\\/]+$/, '');
+    if (target !== base && !target.startsWith(base + '/') && !target.startsWith(base + '\\')) continue;
+    matched = true;
+    folder.collapsed = false;
+    // Un-collapse each ancestor directory of the file (those present in the loaded tree).
+    const rel = target.slice(base.length).replace(/^[\\/]+/, '');
+    const parts = rel.split(/[\\/]/);
+    parts.pop(); // drop the filename
+    let acc = base;
+    for (const part of parts) {
+      acc = acc + '/' + part;
+      const sub = findSubfolder(folder.files, acc) || findSubfolder(folder.files, acc.replace(/\//g, '\\'));
+      if (sub) sub.collapsed = false;
+    }
+    break;
+  }
+  if (!matched) { showToast('Active file isn’t under a folder in the tree — add its folder first'); return; }
+  renderFolderTree();
+  requestAnimationFrame(() => {
+    const el = elements.foldersList.querySelector('.folder-file.active') as HTMLElement | null;
+    if (el) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      el.classList.add('reveal-flash');
+      setTimeout(() => el.classList.remove('reveal-flash'), 1400);
+    } else {
+      showToast('Located its folder, but the file row isn’t loaded yet — expand that folder');
+    }
+  });
+}
+
 function renderFolderTree(): void {
   if (state.folders.length === 0) {
     elements.foldersList.innerHTML = '<p class="placeholder">No folders open</p>';
@@ -23071,6 +23109,7 @@ function init(): void {
   elements.btnLiveSshRefresh.addEventListener('click', () => refreshSshHosts());
   elements.btnLiveSshManage.addEventListener('click', () => showSshProfileManager());
   elements.btnOpenSshFolder.addEventListener('click', () => openSshFolder());
+  document.getElementById('btn-reveal-active-file')?.addEventListener('click', () => revealActiveFileInTree());
 
   // Unified live connection event listeners (register once)
   setupLiveEventListeners();
