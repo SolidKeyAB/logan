@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { compileColumnPattern, makeColumnExtractor, ColumnPatternSpec } from '../main/columnPattern';
+import { compileColumnPattern, makeColumnExtractor, refinePaintPattern, ColumnPatternSpec } from '../main/columnPattern';
 
 function extract(spec: ColumnPatternSpec, line: string): string[] | null {
   return makeColumnExtractor(compileColumnPattern(spec))(line);
@@ -107,5 +107,30 @@ describe('compileColumnPattern — raw regex mode', () => {
   it('returns null on no match, and throws on an invalid regex', () => {
     expect(extract({ mode: 'regex', pattern: 'zzz(?<n>\\d+)' }, 'no digits here')).toBeNull();
     expect(() => compileColumnPattern({ mode: 'regex', pattern: '(' })).toThrow();
+  });
+});
+
+describe('refinePaintPattern — refine from data (peel constant wrappers)', () => {
+  it('peels a /…/ wrapper detected across the column values', () => {
+    const sample = 'GET /abc/ 200';
+    const spans = [{ start: 4, end: 9, name: 'id' }]; // "/abc/"
+    const c = refinePaintPattern({ mode: 'paint', sample, spans }, [['/abc/', '/xyz/', '/12/']]);
+    expect(c.regex).toContain('/');                 // slash kept literal
+    expect(makeColumnExtractor(c)('GET /q9/ 200')).toEqual(['q9']); // value inside generalises
+  });
+
+  it('peels an xx…xx wrapper (arbitrary constant affix, not a bracket)', () => {
+    const sample = 'u=xxfooxx end';
+    const spans = [{ start: 2, end: 9, name: 'v' }]; // "xxfooxx"
+    const c = refinePaintPattern({ mode: 'paint', sample, spans }, [['xxfooxx', 'xxbarxx', 'xxbazxx']]);
+    expect(c.regex).toContain('xx');
+    expect(makeColumnExtractor(c)('u=xxwowxx end')).toEqual(['wow']);
+  });
+
+  it('adds no wrapper when the sample values do not share one', () => {
+    const sample = 'a foo b';
+    const spans = [{ start: 2, end: 5, name: 'w' }]; // "foo"
+    const c = refinePaintPattern({ mode: 'paint', sample, spans }, [['foo', 'bar', 'baz']]);
+    expect(makeColumnExtractor(c)('a zzz b')).toEqual(['zzz']);
   });
 });
