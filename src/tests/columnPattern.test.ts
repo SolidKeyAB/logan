@@ -133,4 +133,12 @@ describe('refinePaintPattern — refine from data (peel constant wrappers)', () 
     const c = refinePaintPattern({ mode: 'paint', sample, spans }, [['foo', 'bar', 'baz']]);
     expect(makeColumnExtractor(c)('a zzz b')).toEqual(['zzz']);
   });
+
+  it('peels a multi-char trailing border like "  ->" (whitespace-flexible)', () => {
+    const sample = 'adb  -> ok';
+    const spans = [{ start: 0, end: 7, name: 'cmd' }]; // "adb  ->"
+    const c = refinePaintPattern({ mode: 'paint', sample, spans }, [['adb  ->', 'xyz  ->', 'foo  ->']]);
+    expect(makeColumnExtractor(c)('xyz  -> ok')).toEqual(['xyz']);  // value = just "xyz"
+    expect(makeColumnExtractor(c)('foo -> ok')).toEqual(['foo']);   // 1 space also matches (\\s+)
+  });
 });
