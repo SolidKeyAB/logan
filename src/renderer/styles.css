@@ -2643,10 +2643,16 @@ button.is-cancelable:hover, .btn.is-cancelable:hover { filter: brightness(1.12);
    to bring it back to full opacity so it's still readable on demand. */
 .log-line.muted {
   opacity: 0.28;
-  transition: opacity 0.12s ease;
+  /* Smaller text so muted "noise" lines read as lighter/shorter. The ROW height stays
+     var(--line-height) — the virtual scroller needs a uniform per-line height — so this
+     shrinks the text within the row, not the row itself. Full size + opacity on hover. */
+  font-size: 0.78em;
+  transition: opacity 0.12s ease, font-size 0.1s ease;
 }
+.log-line.muted .line-number { font-size: 0.85em; }
 .log-line.muted:hover {
   opacity: 1;
+  font-size: 1em;
 }
 
 .line-number {
