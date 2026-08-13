@@ -69,6 +69,19 @@ describe('compileColumnPattern — paint mode', () => {
     expect(extract(spec, '[WARN] code 7')).toEqual(['WARN', '7']); // borders literal; value excludes []
   });
 
+  it('keeps ( ), <> and other enclosing delimiters literal, generalising the value inside', () => {
+    const sample = 'req (200) from <alice>';
+    const spans = [
+      { start: 4, end: 9, name: 'status' },  // "(200)"
+      { start: 15, end: 22, name: 'user' },  // "<alice>"
+    ];
+    const spec: ColumnPatternSpec = { mode: 'paint', sample, spans };
+    const c = compileColumnPattern(spec);
+    expect(c.regex).toContain('\\(');  // paren kept literal
+    expect(c.regex).toContain('<');    // angle kept literal
+    expect(extract(spec, 'req (404) from <bob>')).toEqual(['404', 'bob']); // values generalise
+  });
+
   it('requires at least one span', () => {
     expect(() => compileColumnPattern({ mode: 'paint', sample: 'abc', spans: [] })).toThrow();
   });
