@@ -44,6 +44,7 @@ export interface Bookmark {
   label: string;
   color: string;
   lineText?: string;
+  description?: string; // optional human/AI note: what this is for / why it was added
 }
 
 export interface Annotation {
@@ -74,6 +75,7 @@ export interface Highlight {
   includeWhitespace: boolean;
   highlightAll: boolean; // true = all occurrences, false = first only per line
   isGlobal?: boolean; // true = applies to all files, false = file-specific
+  description?: string; // optional human/AI note: what this is for / why it was added
 }
 
 export interface HighlightGroup {
@@ -160,6 +162,7 @@ export interface SearchConfig {
   enabled: boolean;
   isGlobal: boolean;
   createdAt: number;
+  description?: string; // optional human/AI note: what this is for / why it was added
 }
 
 // A reusable, named pattern-property: a regex whose 1st capture group (or the
@@ -171,6 +174,7 @@ export interface PatternProperty {
   patternFlags?: string;
   unit?: string;
   createdAt: number;
+  description?: string; // optional human/AI note: what this is for / why it was added
 }
 
 // A reusable, named search/regex pattern in the Pattern Library. Written once,
@@ -308,6 +312,7 @@ export interface SearchConfigSession {
   configs: SearchConfig[];
   isGlobal: boolean;
   createdAt: number;
+  description?: string; // optional human/AI note: what this is for / why it was added
 }
 
 // Live connection info returned to renderer

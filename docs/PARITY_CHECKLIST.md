@@ -67,6 +67,21 @@ Closed by the `feat/columns-panel` parity work (2026-08-13):
 | Constants / tags (save/list/delete) | 🔤 Save as constant + picker | `logan_constants` (`/api/constants-*`) | ✅ shared `constantsStore` |
 | Column Layouts (save/list/delete) | Column Layouts builder / Columns window | `logan_column_layouts` (`/api/column-layout-*`) | ✅ shared `columnLayoutsStore` |
 
+Uniform entity `description` (2026-08-13) — every saveable "basic entity" gained an
+optional `description?: string` so both operators can record an entity's purpose/why
+(naming matches the existing `BaselineRecord.description` / `InvestigationTemplate.description`;
+findings already carry `detail`). Agent side is wired for the entities that already have an
+MCP create/save tool; the human *editing* UI (uniform tooltip + right-click "Edit description")
+is the immediate follow-up (PR-2) — tracked, not exempted.
+
+| Entity | Human sets it | AI sets it | Status |
+|--------|---------------|-----------|--------|
+| Constant / tag | Edit description (PR-2) | `logan_constants` `description` (`/api/constants-save`) | ✅ AI done · human UI next |
+| Bookmark | Edit description (PR-2) | `logan_add_bookmark` `description` (`/api/bookmark`, `-update`) | ✅ AI done · human UI next |
+| Highlight | Edit description (PR-2) | `logan_highlight` `description` (`/api/highlight`, `-update`) | ✅ AI done · human UI next |
+| Column Layout | Edit description (PR-2) | `logan_column_layouts` layout.`description` (`/api/column-layout-save`) | ✅ AI done · human UI next |
+| Search config / session / pattern-property | Edit description (PR-2) | — (no MCP create tool today) | field carried; creation stays human-only (pre-existing exemption) |
+
 Still human-only — deliberate backlog (add a counterpart or a written exemption
 when each is next touched):
 
