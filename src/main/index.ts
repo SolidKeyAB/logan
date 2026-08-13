@@ -7806,8 +7806,8 @@ ipcMain.handle(IPC.COMPILE_PATTERN, (_, input: CompileInput) => {
 // ── Named constants IPC ────────────────────────────────────────────────
 // Captured from a selection via the log viewer's "Save as constant…" gesture.
 // Persistence-only this brick; a viewer/consumer brick lands later.
-ipcMain.handle(IPC.CONSTANTS_SAVE, (_, name: string, value: string) => {
-  saveConstant(name, value);
+ipcMain.handle(IPC.CONSTANTS_SAVE, (_, name: string, value: string, description?: string) => {
+  saveConstant(name, value, undefined, description);
   return { success: true };
 });
 
