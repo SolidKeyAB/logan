@@ -123,6 +123,7 @@ interface Bookmark {
   color?: string;
   lineText?: string;
   createdAt: number;
+  description?: string; // optional human/AI note: what this is for / why it was added
 }
 
 interface HighlightConfig {
@@ -136,6 +137,7 @@ interface HighlightConfig {
   includeWhitespace: boolean;
   highlightAll: boolean; // true = all occurrences, false = first only per line
   isGlobal?: boolean; // true = applies to all files, false = file-specific
+  description?: string; // optional human/AI note: what this is for / why it was added
 }
 
 interface FolderFile {
@@ -204,6 +206,7 @@ interface SearchConfigDef {
   enabled: boolean;
   isGlobal: boolean;
   createdAt: number;
+  description?: string; // optional human/AI note: what this is for / why it was added
 }
 
 // A reusable, named pattern-property: a regex whose 1st capture group (or whole
@@ -216,6 +219,7 @@ interface PatternPropertyDef {
   patternFlags?: string;
   unit?: string;
   createdAt: number;
+  description?: string; // optional human/AI note: what this is for / why it was added
 }
 
 // A reusable, named search/regex pattern in the Pattern Library. Written once,
@@ -270,6 +274,7 @@ interface SearchConfigSessionDef {
   configs: SearchConfigDef[];
   isGlobal: boolean;
   createdAt: number;
+  description?: string; // optional human/AI note: what this is for / why it was added
 }
 
 interface BaselineRecord {
@@ -816,8 +821,8 @@ interface Api {
   compilePattern: (input: { mode: 'plain' | 'grok' | 'paint' | 'regex'; text?: string; sample?: string; spans?: Array<{ start: number; end: number; name: string }>; flags?: string; matchCase?: boolean; wholeWord?: boolean; invert?: boolean }) => Promise<{ ok: boolean; source: string; flags: string; error?: string; warnings: string[]; mode: string }>;
 
   // Named constants (captured from a selection via "Save as constant…")
-  saveConstant: (name: string, value: string) => Promise<{ success: boolean; error?: string }>;
-  getConstants: () => Promise<{ success: boolean; entries?: Array<{ name: string; value: string; createdAt: string; updatedAt: string }> }>;
+  saveConstant: (name: string, value: string, description?: string) => Promise<{ success: boolean; error?: string }>;
+  getConstants: () => Promise<{ success: boolean; entries?: Array<{ name: string; value: string; createdAt: string; updatedAt: string; description?: string }> }>;
   deleteConstant: (name: string) => Promise<{ success: boolean; removed?: boolean }>;
 
   // Active scope ("Use filter/search/selection as scope" + breadcrumb)
