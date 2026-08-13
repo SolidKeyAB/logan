@@ -123,13 +123,15 @@ interface FilterConfig {
 }
 
 // Advanced Filter Types
-type FilterRuleType = 'contains' | 'not_contains' | 'level' | 'not_level' | 'regex' | 'not_regex';
+type FilterRuleType = 'contains' | 'not_contains' | 'level' | 'not_level' | 'regex' | 'not_regex' | 'column';
 
 interface FilterRule {
   id: string;
   type: FilterRuleType;
   value: string;
   caseSensitive?: boolean;
+  columnIndex?: number;                         // for type 'column': which column to test
+  columnOp?: 'equals' | 'contains' | 'regex';   // for type 'column': how to compare the cell
 }
 
 interface FilterGroup {
@@ -142,6 +144,7 @@ interface AdvancedFilterConfig {
   enabled: boolean;
   groups: FilterGroup[];
   contextLines?: number;
+  delimiter?: string;                           // column delimiter, so 'column' rules can split the line
 }
 
 interface Bookmark {
@@ -193,7 +196,12 @@ interface ColumnConfig {
     index: number;
     sample: string[];
     visible: boolean;
+    name?: string; // user-assigned column name (Columns panel) — drives labels, save/template, filter
   }>;
+  // Pattern mode (Phase 2): columns come from a regex/grok/paint pattern's capture groups
+  // instead of a delimiter. When set, the viewer segments lines by the pattern; `columns[].index`
+  // = capture-group index. `delimiter` is unused/marker in this mode.
+  pattern?: { regex: string; flags: string; fields: string[] };
 }
 
 // Tab State - stores per-file state for inactive tabs
@@ -5087,7 +5095,7 @@ async function saveSelectedLinesToFile(): Promise<void> {
     return;
   }
 
-  const colConfig = state.columnConfig && state.columnConfig.columns.some(c => !c.visible)
+  const colConfig = state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible)
     ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible })) }
     : undefined;
   const result = await window.api.saveSelectedLines(state.selectionStart, state.selectionEnd, colConfig);
@@ -5188,7 +5196,7 @@ async function saveToNotesWithRange(startLine: number, endLine: number): Promise
   const modalResult = await showNotesModal(startLine, endLine);
   if (modalResult === null) return; // User cancelled
 
-  const colConfig = state.columnConfig && state.columnConfig.columns.some(c => !c.visible)
+  const colConfig = state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible)
     ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible })) }
     : undefined;
   const result = await window.api.saveToNotes(
@@ -15855,6 +15863,31 @@ async function patcolSavePattern(): Promise<void> {
   showToast(`Saved pattern "${name.trim()}"`);
 }
 
+// "Use as columns": apply the authored pattern as the viewer's live column model (Phase 2).
+function patcolUseAsColumns(): void {
+  if (!patcolCompiled) { showToast('Author a valid pattern first'); return; }
+  applyColumnPattern(patcolCompiled.regex, patcolCompiled.flags, patcolCompiled.fields);
+}
+
+// "Save as layout": persist the pattern as a reusable Column Layout (method:'pattern') so it
+// shows up in the Columns window's layout chips and can be applied on any file.
+async function patcolSaveAsLayout(): Promise<void> {
+  if (!patcolCompiled) { showToast('Author a valid pattern first'); return; }
+  const name = await showInputPrompt('Name this column layout (e.g. "access-log", "sensor"):');
+  if (!name) return;
+  const fields: string[] = patcolCompiled.fields;
+  const layout = {
+    id: 'cl_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 1e6).toString(36),
+    name,
+    method: 'pattern',
+    pattern: { regex: patcolCompiled.regex, flags: patcolCompiled.flags, fields },
+    columns: fields.map((f: string, i: number) => ({ index: i, name: f, visible: true })),
+  };
+  const res = await (window.api as any).columnLayoutSave(layout);
+  if (!res || !res.success) { showToast(res?.error || 'Save failed'); return; }
+  showToast(`Saved layout “${name}” — apply it from the Columns window`);
+}
+
 async function patcolRefreshSaved(): Promise<void> {
   try {
     const res = await (window.api as any).columnPatternList();
@@ -16543,6 +16576,9 @@ async function showColumnsModal(): Promise<void> {
   elements.columnsLoading.style.display = 'block';
   elements.columnsContent.style.display = 'none';
 
+  // Pattern-mode: columns come from an applied pattern layout, not the delimiter split.
+  if (state.columnConfig?.pattern) { renderPatternColumnsModal(state.columnConfig); return; }
+
   try {
     const result = await window.api.analyzeColumns();
 
@@ -16551,10 +16587,11 @@ async function showColumnsModal(): Promise<void> {
 
       // Restore previous visibility if we have a config
       if (state.columnConfig && state.columnConfig.delimiter === delimiter) {
-        // Keep existing visibility settings
+        // Keep existing visibility + names
         for (let i = 0; i < columns.length; i++) {
           if (i < state.columnConfig.columns.length) {
             columns[i].visible = state.columnConfig.columns[i].visible;
+            (columns[i] as any).name = state.columnConfig.columns[i].name;
           }
         }
       }
@@ -16573,7 +16610,17 @@ async function showColumnsModal(): Promise<void> {
               <input type="checkbox" data-col-index="${idx}" ${col.visible ? 'checked' : ''}>
               <span class="column-index">${label}</span>
             </label>
+            <input type="text" class="column-name-input" data-col-index="${idx}" placeholder="name…" value="${escapeHtml(colName || '')}" title="Name this column">
             <div class="column-samples">${samples.map((s: string) => `<code>${escapeHtml(s)}</code>`).join(' ')}</div>
+            <div class="column-filter-row">
+              <span class="column-filter-label">filter rows:</span>
+              <select class="column-filter-op" data-col-index="${idx}">
+                <option value="contains">contains</option>
+                <option value="equals">equals</option>
+                <option value="regex">regex</option>
+              </select>
+              <input type="text" class="column-filter-input" data-col-index="${idx}" placeholder="value… (blank = off)" title="Keep only rows where this column matches">
+            </div>
           </div>
         `;
       }).join('');
@@ -16583,6 +16630,9 @@ async function showColumnsModal(): Promise<void> {
 
       elements.columnsLoading.style.display = 'none';
       elements.columnsContent.style.display = 'block';
+
+      // Template-driven: show saved layouts to apply, and enable "Save as layout".
+      void loadColumnLayouts();
     } else {
       elements.columnsLoading.textContent = result.error || 'Failed to analyze columns';
     }
@@ -16595,9 +16645,43 @@ function hideColumnsModal(): void {
   elements.columnsModal.classList.add('hidden');
 }
 
-function applyColumnsConfig(): void {
+// Render the Columns window for a PATTERN-mode config: list the pattern's named columns with
+// visibility checkboxes (no delimiter analysis / row-filter — those are delimiter-only).
+function renderPatternColumnsModal(cfg: ColumnConfig): void {
+  const delimEl = document.getElementById('columns-delimiter');
+  if (delimEl) delimEl.textContent = `pattern — ${cfg.pattern!.fields.length} columns`;
+  elements.columnsList.innerHTML = cfg.columns.map((col, idx) => {
+    const label = col.name ? `Col ${idx + 1} (${escapeHtml(col.name)})` : `Col ${idx + 1}`;
+    return `
+      <div class="column-item">
+        <label class="checkbox-label">
+          <input type="checkbox" data-col-index="${col.index}" ${col.visible ? 'checked' : ''}>
+          <span class="column-index">${label}</span>
+        </label>
+      </div>`;
+  }).join('');
+  (elements.columnsModal as any)._tempConfig = { pattern: true };
+  elements.columnsLoading.style.display = 'none';
+  elements.columnsContent.style.display = 'block';
+  void loadColumnLayouts();
+}
+
+async function applyColumnsConfig(): Promise<void> {
   const tempConfig = (elements.columnsModal as any)._tempConfig;
   if (!tempConfig) return;
+
+  // Pattern mode: visibility-only. Spans are already rendered per capture group, so hiding
+  // is one instant CSS rule — no re-render, no delimiter logic.
+  if (tempConfig.pattern && state.columnConfig?.pattern) {
+    elements.columnsList.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-col-index]').forEach((cb) => {
+      const idx = parseInt(cb.dataset.colIndex || '0', 10);
+      const col = state.columnConfig!.columns.find(c => c.index === idx);
+      if (col) col.visible = cb.checked;
+    });
+    updateColumnHideStyle();
+    hideColumnsModal();
+    return;
+  }
 
   // Read checkbox states
   const checkboxes = elements.columnsList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
@@ -16608,6 +16692,23 @@ function applyColumnsConfig(): void {
     }
   });
 
+  // Read per-column names
+  elements.columnsList.querySelectorAll<HTMLInputElement>('.column-name-input').forEach((inp) => {
+    const idx = parseInt(inp.dataset.colIndex || '0', 10);
+    if (idx < tempConfig.columns.length) tempConfig.columns[idx].name = inp.value.trim() || undefined;
+  });
+
+  // Build row-filter rules from any filled per-column filter inputs (blank = off).
+  const columnRules: FilterRule[] = [];
+  elements.columnsList.querySelectorAll<HTMLInputElement>('.column-filter-input').forEach((inp) => {
+    const value = inp.value.trim();
+    if (!value) return;
+    const idx = parseInt(inp.dataset.colIndex || '0', 10);
+    const opSel = elements.columnsList.querySelector<HTMLSelectElement>(`.column-filter-op[data-col-index="${idx}"]`);
+    const op = (opSel?.value as 'equals' | 'contains' | 'regex') || 'contains';
+    columnRules.push({ id: `col_${idx}_${op}`, type: 'column', value, columnIndex: idx, columnOp: op });
+  });
+
   const prevDelimiter = state.columnConfig?.delimiter ?? null;
   state.columnConfig = {
     delimiter: tempConfig.delimiter,
@@ -16616,6 +16717,7 @@ function applyColumnsConfig(): void {
       index: c.index,
       sample: c.sample,
       visible: c.visible,
+      name: c.name,
     })),
   };
 
@@ -16630,8 +16732,192 @@ function applyColumnsConfig(): void {
       logContentElement.innerHTML = '';
       lineElementPool.releaseAll();
     }
-    loadVisibleLines();
+    await loadVisibleLines();
   }
+
+  // If the user filled any per-column row filters, apply them as an advanced filter
+  // (rows kept where ALL the column conditions hold). Column visibility above is separate.
+  if (columnRules.length > 0) {
+    await applyFilter({
+      levels: [],
+      includePatterns: [],
+      excludePatterns: [],
+      advancedFilter: {
+        enabled: true,
+        delimiter: state.columnConfig.delimiter,
+        groups: [{ id: 'colfilter', operator: 'AND', rules: columnRules }],
+      },
+    });
+    showToast(`Filtered rows by ${columnRules.length} column condition${columnRules.length > 1 ? 's' : ''}`);
+  }
+}
+
+// ── Column Layouts (Phase 1): saved column setups (names + visibility), applied in the
+// Columns visibility window. Global store via columnLayout* IPC; chips render in the modal.
+let columnLayouts: any[] = [];
+
+async function loadColumnLayouts(): Promise<void> {
+  try {
+    const res = await (window.api as any).columnLayoutList();
+    columnLayouts = (res && res.layouts) || [];
+  } catch { columnLayouts = []; }
+  renderColumnLayoutChips();
+}
+
+function renderColumnLayoutChips(): void {
+  const el = document.getElementById('column-layouts-chips');
+  if (!el) return;
+  if (columnLayouts.length === 0) {
+    el.innerHTML = '<span class="column-layouts-empty">none yet — set names/visibility below, then “Save as layout…”</span>';
+    return;
+  }
+  el.innerHTML = columnLayouts.map((l: any) =>
+    `<span class="patcol-chip" data-id="${escapeHtml(l.id)}"><span class="patcol-chip-name" title="${escapeHtml(l.delimiterName || l.delimiter || '')} · ${(l.columns || []).length} cols">${escapeHtml(l.name)}</span><button class="patcol-chip-x" data-id="${escapeHtml(l.id)}" title="Delete layout">×</button></span>`
+  ).join('');
+  el.querySelectorAll('.patcol-chip-name').forEach((b) => b.addEventListener('click', (e) => {
+    const id = ((e.currentTarget as HTMLElement).closest('.patcol-chip') as HTMLElement)?.dataset.id;
+    const layout = columnLayouts.find((l: any) => l.id === id);
+    if (layout) applyColumnLayoutToModal(layout);
+  }));
+  el.querySelectorAll('.patcol-chip-x').forEach((b) => b.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const id = (e.currentTarget as HTMLElement).dataset.id;
+    if (!id) return;
+    const res = await (window.api as any).columnLayoutDelete(id);
+    columnLayouts = (res && res.layouts) || columnLayouts.filter((l: any) => l.id !== id);
+    renderColumnLayoutChips();
+  }));
+}
+
+// Load a saved layout into the modal form (checkboxes + name inputs), by column index; the
+// user then clicks Apply to commit. Indices map positionally even if the delimiter differs.
+function applyColumnLayoutToModal(layout: any): void {
+  // Pattern layout → apply straight to the viewer (its columns are regex groups, not the
+  // file's delimiter split), then close. The Columns window will reopen in pattern mode.
+  if (layout.method === 'pattern' && layout.pattern && Array.isArray(layout.pattern.fields)) {
+    applyColumnPattern(layout.pattern.regex, layout.pattern.flags, layout.pattern.fields, layout.columns);
+    hideColumnsModal();
+    return;
+  }
+  const tempConfig = (elements.columnsModal as any)._tempConfig;
+  if (!tempConfig) return;
+  const byIndex = new Map<number, any>((layout.columns || []).map((c: any) => [c.index, c]));
+  elements.columnsList.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-col-index]').forEach((cb) => {
+    const lc = byIndex.get(parseInt(cb.dataset.colIndex || '0', 10));
+    if (lc) cb.checked = lc.visible !== false;
+  });
+  elements.columnsList.querySelectorAll<HTMLInputElement>('.column-name-input').forEach((inp) => {
+    const lc = byIndex.get(parseInt(inp.dataset.colIndex || '0', 10));
+    if (lc && typeof lc.name === 'string') inp.value = lc.name;
+  });
+  const mismatch = tempConfig.delimiter && layout.delimiter && tempConfig.delimiter !== layout.delimiter;
+  showToast(`Loaded layout “${layout.name}”${mismatch ? ' (different delimiter — mapped by position)' : ''} — click Apply`);
+}
+
+async function saveCurrentColumnLayout(): Promise<void> {
+  const tempConfig = (elements.columnsModal as any)._tempConfig;
+  if (!tempConfig) { showToast('Open a delimited file first'); return; }
+  const visById = new Map<number, boolean>();
+  elements.columnsList.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-col-index]').forEach((cb) => {
+    visById.set(parseInt(cb.dataset.colIndex || '0', 10), cb.checked);
+  });
+  const nameById = new Map<number, string>();
+  elements.columnsList.querySelectorAll<HTMLInputElement>('.column-name-input').forEach((inp) => {
+    const v = inp.value.trim();
+    if (v) nameById.set(parseInt(inp.dataset.colIndex || '0', 10), v);
+  });
+  const name = await showInputPrompt('Name this column layout (e.g. "access-log", "sensor"):');
+  if (!name) return;
+  const layout = {
+    id: 'cl_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 1e6).toString(36),
+    name,
+    method: 'delimiter',
+    delimiter: tempConfig.delimiter,
+    delimiterName: tempConfig.delimiterName,
+    columns: (tempConfig.columns || []).map((c: any) => ({
+      index: c.index,
+      name: nameById.get(c.index),
+      visible: visById.has(c.index) ? visById.get(c.index)! : (c.visible !== false),
+    })),
+  };
+  const res = await (window.api as any).columnLayoutSave(layout);
+  if (!res || !res.success) { showToast(res?.error || 'Save failed'); return; }
+  columnLayouts = res.layouts || columnLayouts;
+  renderColumnLayoutChips();
+  showToast(`Saved layout “${name}”`);
+}
+
+// Apply a pattern (regex/grok/paint) as the active column model: the viewer renders columns
+// by the pattern's capture groups, and the Columns window lists them for show/hide. `columns`
+// carries saved names+visibility when applying a saved pattern layout; else all visible.
+function applyColumnPattern(
+  regex: string,
+  flags: string,
+  fields: string[],
+  columns?: Array<{ index: number; name?: string; visible: boolean }>,
+): void {
+  if (!fields.length) { showToast('Pattern has no columns'); return; }
+  const cols = (columns && columns.length)
+    ? columns.map(c => ({ index: c.index, sample: [] as string[], visible: c.visible !== false, name: c.name }))
+    : fields.map((f, i) => ({ index: i, sample: [] as string[], visible: true, name: f }));
+  state.columnConfig = { delimiter: '', delimiterName: 'pattern', pattern: { regex, flags, fields }, columns: cols };
+  activeColumnPatternSig = null; // force recompile of the viewport regex
+  updateColumnHideStyle();
+  // Segmentation changed → rebuild the rendered rows.
+  if (logContentElement) { logContentElement.innerHTML = ''; lineElementPool.releaseAll(); }
+  void loadVisibleLines();
+  showToast(`Applied ${fields.length}-column pattern to the viewer`);
+}
+
+// Popup picker of saved constants ("tags"): drop a saved value into Search or the Filter's
+// include list. onPick(value, name) fires on choose; each row has a × to delete.
+async function showConstantsPickerMenu(anchor: HTMLElement, onPick: (value: string, name: string) => void): Promise<void> {
+  document.getElementById('constants-picker-menu')?.remove();
+  let entries: Array<{ name: string; value: string }> = [];
+  try {
+    const res = await window.api.getConstants();
+    entries = (res && res.entries) || [];
+  } catch { entries = []; }
+
+  const menu = document.createElement('div');
+  menu.id = 'constants-picker-menu';
+  menu.className = 'context-menu constants-picker-menu';
+  menu.innerHTML = entries.length === 0
+    ? '<div class="context-menu-item disabled">No constants yet — right-click a selection → “🔤 Save as constant”.</div>'
+    : entries.map(e =>
+        `<div class="context-menu-item constant-row" data-value="${escapeHtml(e.value)}" data-name="${escapeHtml(e.name)}">` +
+        `<span class="constant-name">${escapeHtml(e.name)}</span>` +
+        `<span class="constant-value">${escapeHtml(e.value.length > 40 ? e.value.slice(0, 37) + '…' : e.value)}</span>` +
+        `<button class="constant-del" data-name="${escapeHtml(e.name)}" title="Delete constant">×</button></div>`
+      ).join('');
+  document.body.appendChild(menu);
+
+  const rect = anchor.getBoundingClientRect();
+  menu.style.position = 'fixed';
+  menu.style.left = `${Math.max(4, Math.min(rect.left, window.innerWidth - 300))}px`;
+  menu.style.top = `${rect.bottom + 4}px`;
+  menu.style.zIndex = '10000';
+
+  const close = () => { menu.remove(); document.removeEventListener('click', onDocClick, true); };
+  const onDocClick = (e: MouseEvent) => { if (!menu.contains(e.target as Node) && e.target !== anchor) close(); };
+
+  menu.querySelectorAll<HTMLElement>('.constant-row').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).classList.contains('constant-del')) return;
+      onPick(row.dataset.value || '', row.dataset.name || '');
+      close();
+    });
+  });
+  menu.querySelectorAll<HTMLElement>('.constant-del').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const name = btn.dataset.name || '';
+      await window.api.deleteConstant(name);
+      close();
+      showToast(`Deleted constant “${name}”`);
+    });
+  });
+  setTimeout(() => document.addEventListener('click', onDocClick, true), 0);
 }
 
 function setAllColumnsVisibility(visible: boolean): void {
@@ -16757,6 +17043,49 @@ function computeColumnSegments(text: string, delimiter: string): ColumnSegment[]
   return segs;
 }
 
+// MIRROR of computeColumnSegmentsByPattern() in src/shared/columnRender.ts (tested there) —
+// keep in sync. Segments a line by a compiled pattern's capture groups (pattern-mode layouts);
+// same tiling/byte-identity invariants as the delimiter path. regex needs the 'd' flag.
+function computeColumnSegmentsByPattern(text: string, regex: RegExp, fieldCount: number): ColumnSegment[] {
+  if (text.length === 0) return [{ col: 0, start: 0, end: 0 }];
+  let m: RegExpExecArray | null = null;
+  try { regex.lastIndex = 0; m = regex.exec(text); } catch { m = null; }
+  const indices = m ? (m as unknown as { indices?: Array<[number, number] | undefined> }).indices : undefined;
+  if (!m || !indices) return [{ col: -1, start: 0, end: text.length }];
+  const groups: Array<{ col: number; start: number }> = [];
+  for (let g = 1; g <= fieldCount; g++) {
+    const gi = indices[g];
+    if (gi) groups.push({ col: g - 1, start: gi[0] });
+  }
+  if (groups.length === 0) return [{ col: -1, start: 0, end: text.length }];
+  groups.sort((a, b) => a.start - b.start);
+  const segs: ColumnSegment[] = [];
+  for (let i = 0; i < groups.length; i++) {
+    const start = i === 0 ? 0 : groups[i].start;
+    const end = i === groups.length - 1 ? text.length : groups[i + 1].start;
+    if (end > start) segs.push({ col: groups[i].col, start, end });
+  }
+  return segs.length ? segs : [{ col: -1, start: 0, end: text.length }];
+}
+
+// Compiled regex for the active pattern-mode column config — compiled once (with the 'd'
+// flag for group indices) and reused across the viewport; re-derived when the pattern changes.
+let activeColumnPatternRe: RegExp | null = null;
+let activeColumnPatternSig: string | null = null;
+function getActiveColumnPatternRe(cfg: ColumnConfig): RegExp | null {
+  if (!cfg.pattern) return null;
+  const sig = cfg.pattern.flags + ' ' + cfg.pattern.regex;
+  if (activeColumnPatternSig === sig) return activeColumnPatternRe;
+  activeColumnPatternSig = sig;
+  try {
+    const flags = cfg.pattern.flags.includes('d') ? cfg.pattern.flags : cfg.pattern.flags + 'd';
+    activeColumnPatternRe = new RegExp(cfg.pattern.regex, flags);
+  } catch {
+    activeColumnPatternRe = null;
+  }
+  return activeColumnPatternRe;
+}
+
 // Build a line's content as per-column spans, each column highlighted independently
 // (the highlight fns re-exec their regexes on the text they're given, so running
 // them per-column keeps search/manual/config highlights correct within a column).
@@ -16765,7 +17094,14 @@ function renderColumnAwareContent(text: string, lineNumber: number): string {
   if (!cfg) {
     return applyHighlightsWithSearch(text, applySearchHighlightsRaw(text, lineNumber).searchRanges);
   }
-  const segments = computeColumnSegments(text, cfg.delimiter);
+  let segments: ColumnSegment[];
+  if (cfg.pattern) {
+    const re = getActiveColumnPatternRe(cfg);
+    if (!re) return applyHighlightsWithSearch(text, applySearchHighlightsRaw(text, lineNumber).searchRanges);
+    segments = computeColumnSegmentsByPattern(text, re, cfg.pattern.fields.length);
+  } else {
+    segments = computeColumnSegments(text, cfg.delimiter);
+  }
   if (segments.length === 0) {
     return applyHighlightsWithSearch(text, applySearchHighlightsRaw(text, lineNumber).searchRanges);
   }
@@ -16929,7 +17265,7 @@ let timeGapEndHistory: InputHistory | null = null;
 // filter both change what matches, so they're part of the key; start line and
 // direction only affect which match is selected, so they're deliberately excluded.
 function findSignature(pattern: string): string {
-  const colSig = (state.columnConfig && state.columnConfig.columns.some(c => !c.visible))
+  const colSig = (state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible))
     ? `${state.columnConfig.delimiter}:${state.columnConfig.columns.map(c => (c.visible ? '1' : '0')).join('')}`
     : '';
   return [
@@ -17041,7 +17377,7 @@ async function performSearch(): Promise<void> {
     };
 
     // Add column config if columns are filtered
-    if (state.columnConfig && state.columnConfig.columns.some(c => !c.visible)) {
+    if (state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible)) {
       searchOptions.columnConfig = {
         delimiter: state.columnConfig.delimiter,
         columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible })),
@@ -17553,7 +17889,7 @@ async function extractFilterToFile(): Promise<void> {
     showToast('Apply a filter first, then Extract to file.');
     return;
   }
-  const colConfig = state.columnConfig && state.columnConfig.columns.some(c => !c.visible)
+  const colConfig = state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible)
     ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible })) }
     : undefined;
   // Keep the modal open with the button's busy ring spinning while it writes,
@@ -22708,6 +23044,9 @@ function init(): void {
   onCancelableClick(elements.btnSearch, () => {
     void runCancelable(elements.btnSearch, () => performSearch(), () => { void window.api.cancelSearch(); });
   });
+  document.getElementById('btn-search-constants')?.addEventListener('click', (e) => {
+    void showConstantsPickerMenu(e.currentTarget as HTMLElement, (value) => { elements.searchInput.value = value; void performSearch(); });
+  });
   elements.btnPrevResult.addEventListener('click', () => navigateSearchPrev());
   elements.btnNextResult.addEventListener('click', () => navigateSearchNext());
 
@@ -22804,6 +23143,9 @@ function init(): void {
   });
 
   elements.btnAddIncludePattern.addEventListener('click', () => addIncludePatternRow());
+  document.getElementById('btn-filter-constants')?.addEventListener('click', (e) => {
+    void showConstantsPickerMenu(e.currentTarget as HTMLElement, (value) => { addIncludePatternRow(value); showToast('Added constant as an include pattern'); });
+  });
 
   elements.btnSaveFilterPreset?.addEventListener('click', async () => {
     const name = await showInputPrompt('Preset name:');
@@ -22869,6 +23211,7 @@ function init(): void {
   elements.btnColumns.addEventListener('click', showColumnsModal);
   elements.btnColumnsApply.addEventListener('click', applyColumnsConfig);
   elements.btnColumnsCancel.addEventListener('click', hideColumnsModal);
+  document.getElementById('btn-save-column-layout')?.addEventListener('click', () => { void saveCurrentColumnLayout(); });
   elements.btnColumnsAll.addEventListener('click', () => setAllColumnsVisibility(true));
   elements.btnColumnsNone.addEventListener('click', () => setAllColumnsVisibility(false));
 
@@ -22890,6 +23233,8 @@ function init(): void {
   document.getElementById('btn-patcol-sample')?.addEventListener('click', patcolPullSample);
   document.getElementById('btn-patcol-copy')?.addEventListener('click', patcolCopyRegex);
   document.getElementById('btn-patcol-save')?.addEventListener('click', patcolSavePattern);
+  document.getElementById('btn-patcol-apply')?.addEventListener('click', () => patcolUseAsColumns());
+  document.getElementById('btn-patcol-save-layout')?.addEventListener('click', () => { void patcolSaveAsLayout(); });
   document.getElementById('patcol-sample-input')?.addEventListener('input', () => { if (patcolMode === 'paint') patcolRenderPaint(); patcolPreviewSoon(); });
   document.getElementById('patcol-grok-input')?.addEventListener('input', patcolPreviewSoon);
   document.getElementById('patcol-regex-input')?.addEventListener('input', patcolPreviewSoon);
