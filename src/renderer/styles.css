@@ -5465,6 +5465,12 @@ kbd {
 .sc-session-chip.active .sc-session-chip-badge {
   background: rgba(255, 255, 255, 0.25);
   color: #ffffff;
+  font-weight: 700;
+}
+
+/* Active chip's ✕ badge = deselect affordance; brighten it on hover. */
+.sc-session-chip.active:hover .sc-session-chip-badge {
+  background: rgba(255, 255, 255, 0.45);
 }
 
 /* ─── Search Configs content (inside bottom panel tab) ─── */
