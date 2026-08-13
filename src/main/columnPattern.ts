@@ -40,6 +40,42 @@ function staticToRegex(s: string): string {
   return s.replace(/\s+|[^\s]+/g, (chunk) => (/^\s+$/.test(chunk) ? '\\s+' : escapeRegex(chunk)));
 }
 
+// ── Paint format inference ────────────────────────────────────────────────────
+// A painted span shouldn't become a literal or a blanket \S+? — it should match the
+// token's FORMAT so the pattern generalises across lines. Classify the sample text
+// (datetime / date / time / ipv4 / uuid / hex / int / float / word …) and emit a regex
+// for that shape; fall back to \S+? (or .+? if it contains spaces). Leading/trailing
+// bracket/quote BORDERS are kept literal, so only the value inside is generalised.
+function classifyToken(s: string, isLast: boolean): string {
+  if (!s) return isLast ? '.+' : '.+?';
+  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/.test(s))
+    return '\\d{4}-\\d{2}-\\d{2}[T ]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return '\\d{4}-\\d{2}-\\d{2}';
+  if (/^\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(s)) return '\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?';
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(s)) return '\\d{1,3}(?:\\.\\d{1,3}){3}';                    // IPv4
+  if (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(s))
+    return '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}';         // UUID
+  if (/^0x[0-9a-fA-F]+$/.test(s)) return '0x[0-9a-fA-F]+';
+  if (/^-?\d+$/.test(s)) return '-?\\d+';                                                         // integer
+  if (/^-?\d+\.\d+$/.test(s)) return '-?\\d+\\.\\d+';                                             // float
+  if (/^[0-9a-fA-F]+$/.test(s) && s.length >= 6 && /[a-fA-F]/.test(s)) return '[0-9a-fA-F]+';     // hex-ish
+  if (/^\w+$/.test(s)) return '\\w+';                                                             // alphanumeric word
+  if (/\s/.test(s)) return isLast ? '.+' : '.+?';                                                // contains spaces
+  return isLast ? '\\S+' : '\\S+?';                                                               // fallback
+}
+
+// Split a painted chunk into { pre, body, post }: leading/trailing bracket/quote borders
+// kept LITERAL, the middle generalised to its format class via classifyToken().
+const PAINT_BORDER = '[\\[\\](){}<>"\'`]';
+function inferPaintField(chunk: string, isLast: boolean): { pre: string; body: string; post: string } {
+  let core = chunk, pre = '', post = '';
+  const lead = core.match(new RegExp(`^(?:${PAINT_BORDER})+`));
+  if (lead && lead[0].length < core.length) { pre = escapeRegex(lead[0]); core = core.slice(lead[0].length); }
+  const trail = core.match(new RegExp(`(?:${PAINT_BORDER})+$`));
+  if (trail && trail[0].length < core.length) { post = escapeRegex(trail[0]); core = core.slice(0, core.length - trail[0].length); }
+  return { pre, body: classifyToken(core, isLast), post };
+}
+
 // Coerce an arbitrary field label into a valid, unique JS regex group name.
 function sanitizeName(raw: string, used: Set<string>): string {
   let name = (raw || '').trim().replace(/[^A-Za-z0-9_]/g, '_');
@@ -114,9 +150,9 @@ function compilePaint(sample: string, spans: PaintSpan[], flags: string): Compil
     fields.push(name);
     const chunk = sample.slice(sp.start, sp.end);
     const isLast = i === clean.length - 1 && sp.end >= sample.length;
-    const hasWs = /\s/.test(chunk);
-    const body = hasWs ? (isLast ? '.+' : '.+?') : (isLast ? '\\S+' : '\\S+?');
-    out += `(?<${name}>${body})`;
+    // Format-aware: infer the token's shape (date/int/word…), keep bracket/quote borders literal.
+    const { pre, body, post } = inferPaintField(chunk, isLast);
+    out += pre + `(?<${name}>${body})` + post;
     cursor = sp.end;
   }
   out += staticToRegex(sample.slice(cursor));
