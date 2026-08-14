@@ -1,9 +1,14 @@
 name: Benchmark
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:
+  # Manual-only: SolidKeyAB free GitHub Actions minutes are exhausted — run on request
+  # (Actions tab -> Run workflow, or `gh workflow run <name>`), not automatically on
+  # push/PR/schedule/release. Original triggers preserved below (commented) to restore.
+  workflow_dispatch: {}
+# on:
+#   push:
+#     branches: [main]
+#   workflow_dispatch:
 
 jobs:
   benchmark:
