@@ -9,6 +9,7 @@ import { type BaselineStore, buildFingerprint } from './baselineStore';
 import { AnalysisResult } from './analyzers/types';
 import { JournalEntry, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps } from './investigationStore';
 import { evaluateRequirements, suggestRequirements, mergeRequirements, RequirementCheckContext, EntityRef } from './investigationRequirements';
+import { EntityDescriptor, toDescriptors } from './entityRegistry';
 import { pickAdapter } from './sourceAdapter';
 import { bumpUsage, enterAiContext, exitAiContext } from './usageStore';
 import { saveConstant, getConstants, deleteConstant } from './constantsStore';
@@ -359,6 +360,9 @@ export interface ApiContext {
   // bookmark/columnLayout/columnPattern/session/constant/trendProperty/pattern). Returns
   // null when the kind can't be resolved (→ reported 'unverified', never a false negative).
   resolveSavedEntity(ref: { kind: string; id?: string; name?: string }): { present: boolean; applied?: boolean } | null;
+  // The Entity Registry read model: a uniform catalog of every saved/reusable entity this
+  // process owns (all kinds except investigations, which /api/entities appends itself).
+  listSavedEntities(kind?: string): EntityDescriptor[];
   investigateCrashes(options: { contextLines?: number; maxCrashes?: number; autoBookmark?: boolean; autoHighlight?: boolean }): Promise<any>;
   investigateComponent(options: { component: string; maxSamplesPerLevel?: number; includeErrorContext?: boolean; contextLines?: number }): Promise<any>;
   investigateTimerange(options: { startTime: string; endTime: string; maxSamples?: number }): Promise<any>;
@@ -841,6 +845,17 @@ export function startApiServer(ctx: ApiContext): void {
           if (!tpl) return sendError(res, `No saved investigation named "${body.name || body.slug}"`);
           const requirements = evaluateRequirements(tpl.requirements, buildRequirementContext(ctx));
           sendJson(res, { success: true, name: tpl.name, manifest: tpl.requirements || null, requirements });
+          return;
+        }
+        if (url === '/api/entities') {
+          // Entity Registry read model: one catalog of every saved/reusable entity. index.ts
+          // owns most stores (via ctx.listSavedEntities); investigations are appended here.
+          const kind = body.kind || undefined;
+          const entities: EntityDescriptor[] = ctx.listSavedEntities(kind);
+          if (!kind || kind === 'investigation') {
+            entities.push(...toDescriptors('investigation', listTemplates()));
+          }
+          sendJson(res, { success: true, count: entities.length, entities });
           return;
         }
         if (url === '/api/investigation-suggest-requirements') {
