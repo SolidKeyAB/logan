@@ -23336,11 +23336,12 @@ function init(): void {
     });
   }
 
-  // Bottom panel tab bar click delegation
+  // Bottom panel tab bar click delegation. Clicking a tab opens/switches to it; clicking
+  // the already-active tab is a no-op (does NOT close the panel — use the × to close).
   document.querySelectorAll('.bottom-tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const tabId = (btn as HTMLElement).dataset.bottomTab;
-      if (tabId) toggleBottomTab(tabId);
+      if (tabId && tabId !== state.activeBottomTab) openBottomTab(tabId);
     });
   });
 
