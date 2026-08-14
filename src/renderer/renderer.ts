@@ -5952,15 +5952,23 @@ function renderFolderTree(): void {
 
 // === Folder Search ===
 
+// When a search is scoped to ONE folder (via the folder right-click menu) this holds
+// its display name for the results header; empty means "all open folders".
+let folderSearchScopeLabel = '';
+
 function updateFolderSearchState(): void {
   const hasFolders = state.folders.length > 0;
   elements.folderSearchInput.disabled = !hasFolders;
   elements.btnFolderSearch.disabled = !hasFolders;
 }
 
-async function performFolderSearch(): Promise<void> {
+// Search for the folder-search box's pattern. With no scopePaths it searches ALL open
+// folders (the box's default); scopePaths + scopeLabel scope it to one folder (right-click).
+async function performFolderSearch(scopePaths?: string[], scopeLabel?: string): Promise<void> {
   const pattern = elements.folderSearchInput.value.trim();
-  if (!pattern || state.folders.length === 0) return;
+  const folderPaths = (scopePaths && scopePaths.length) ? scopePaths : state.folders.map(f => f.path);
+  if (!pattern || folderPaths.length === 0) return;
+  folderSearchScopeLabel = scopeLabel || '';
   folderSearchHistory?.add(pattern);
 
   state.isFolderSearching = true;
@@ -5978,7 +5986,6 @@ async function performFolderSearch(): Promise<void> {
   });
 
   try {
-    const folderPaths = state.folders.map(f => f.path);
     const result = await window.api.folderSearch(folderPaths, pattern, { isRegex: false, matchCase: false });
 
     if (result.success && result.matches) {
@@ -6007,6 +6014,18 @@ function cancelFolderSearch(): void {
   }
 }
 
+// Right-click "Search in this folder…": prompt for a pattern, reveal the Folders panel,
+// and run the existing folder search scoped to just this one folder.
+async function searchInFolder(folderPath: string): Promise<void> {
+  const name = folderPath.split(/[\\/]/).filter(Boolean).pop() || folderPath;
+  const pattern = ((await showInputPrompt(`Search in “${name}” for:`, elements.folderSearchInput.value.trim())) || '').trim();
+  if (!pattern) return;
+  if (activePanel !== 'folders') openPanel('folders');
+  elements.folderSearchInput.disabled = false;
+  elements.folderSearchInput.value = pattern;
+  await performFolderSearch([folderPath], name);
+}
+
 function closeFolderSearchResults(): void {
   state.folderSearchResults = [];
   elements.folderSearchResults.classList.add('hidden');
@@ -6030,9 +6049,10 @@ function renderFolderSearchResults(pattern: string, cancelled?: boolean): void {
     return;
   }
 
+  const scope = folderSearchScopeLabel ? ` in “${escapeHtml(folderSearchScopeLabel)}”` : '';
   const header = `
     <div class="folder-search-header">
-      <span>${matches.length}${cancelled ? '+' : ''} match${matches.length !== 1 ? 'es' : ''}</span>
+      <span>${matches.length}${cancelled ? '+' : ''} match${matches.length !== 1 ? 'es' : ''}${scope}</span>
       <button class="folder-search-close" title="Close">&times;</button>
     </div>
   `;
@@ -23188,7 +23208,7 @@ function init(): void {
   elements.btnRefreshFolders?.addEventListener('click', refreshFolders);
 
   // Folder search
-  elements.btnFolderSearch.addEventListener('click', performFolderSearch);
+  elements.btnFolderSearch.addEventListener('click', () => { void performFolderSearch(); });
   elements.btnFolderSearchCancel.addEventListener('click', cancelFolderSearch);
   elements.btnFolderSearchClear.addEventListener('click', closeFolderSearchResults);
   folderSearchHistory = createInputHistory(elements.folderSearchInput, HK_FOLDER_SEARCH);
@@ -24684,12 +24704,18 @@ function showFolderContextMenu(e: MouseEvent, folderPath: string): void {
   document.querySelector('.tab-context-menu')?.remove();
   const menu = document.createElement('div');
   menu.className = 'tab-context-menu';
-  menu.innerHTML = `<div class="tab-context-item" data-action="open-terminal">Open Terminal Here</div>`
+  menu.innerHTML = `<div class="tab-context-item" data-action="search-folder">Search in this folder…</div>`
+    + `<div class="tab-context-separator"></div>`
+    + `<div class="tab-context-item" data-action="open-terminal">Open Terminal Here</div>`
     + `<div class="tab-context-item" data-action="decode-esotrace-folder">Decode esotrace files here</div>`
     + `<div class="tab-context-separator"></div>`
     + `<div class="tab-context-item" data-action="copy-path">Copy Path</div>`;
   menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;`;
   document.body.appendChild(menu);
+  menu.querySelector('[data-action="search-folder"]')?.addEventListener('click', () => {
+    menu.remove();
+    void searchInFolder(folderPath);
+  });
   menu.querySelector('[data-action="open-terminal"]')?.addEventListener('click', () => {
     menu.remove();
     void openTerminalAtFolder(folderPath);
