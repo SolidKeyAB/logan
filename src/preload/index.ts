@@ -54,6 +54,9 @@ const IPC = {
   INVESTIGATION_SAVE: 'investigation-save',
   INVESTIGATION_RUN: 'investigation-run',
   INVESTIGATION_DELETE: 'investigation-delete',
+  INVESTIGATION_CHECK: 'investigation-check',
+  INVESTIGATION_SET_REQS: 'investigation-set-requirements',
+  INVESTIGATION_SUGGEST_REQS: 'investigation-suggest-requirements',
   SERIAL_LIST_PORTS: 'serial-list-ports',
   LOGCAT_LIST_DEVICES: 'logcat-list-devices',
   SSH_PARSE_CONFIG: 'ssh-parse-config',
@@ -734,12 +737,18 @@ const api = {
   // Investigation templates
   listInvestigations: (): Promise<{ success: boolean; templates?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.INVESTIGATION_LIST),
-  saveInvestigation: (name: string, description?: string): Promise<{ success: boolean; template?: any; error?: string }> =>
-    ipcRenderer.invoke(IPC.INVESTIGATION_SAVE, name, description),
-  runInvestigation: (name: string, params?: Record<string, any>): Promise<{ success: boolean; ran?: string; steps?: any[]; error?: string }> =>
-    ipcRenderer.invoke(IPC.INVESTIGATION_RUN, name, params),
+  saveInvestigation: (name: string, description?: string, requirements?: any, autoDetect?: boolean): Promise<{ success: boolean; template?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.INVESTIGATION_SAVE, name, description, requirements, autoDetect),
+  runInvestigation: (name: string, params?: Record<string, any>, force?: boolean): Promise<{ success: boolean; ran?: string; steps?: any[]; blocked?: boolean; requirements?: any; message?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.INVESTIGATION_RUN, name, params, force),
   deleteInvestigation: (name: string): Promise<{ success: boolean }> =>
     ipcRenderer.invoke(IPC.INVESTIGATION_DELETE, name),
+  checkInvestigation: (name: string): Promise<{ success: boolean; name?: string; manifest?: any; requirements?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.INVESTIGATION_CHECK, name),
+  setInvestigationRequirements: (name: string, requirements: any): Promise<{ success: boolean; template?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.INVESTIGATION_SET_REQS, name, requirements),
+  suggestInvestigationRequirements: (): Promise<{ success: boolean; requirements?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.INVESTIGATION_SUGGEST_REQS),
   onInvestigationTemplatesChanged: (callback: () => void): (() => void) => {
     const handler = () => callback();
     ipcRenderer.on('investigation-templates-changed', handler);
