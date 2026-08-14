@@ -397,6 +397,8 @@ export const IPC = {
   INVESTIGATION_CHECK: 'investigation-check',                          // preflight requirements vs open log
   INVESTIGATION_SET_REQS: 'investigation-set-requirements',           // attach/replace requirements manifest
   INVESTIGATION_SUGGEST_REQS: 'investigation-suggest-requirements',   // suggest a starter manifest from open file
+  // Entity Registry — one browse catalog over every saved entity
+  ENTITIES_LIST: 'entities-list',
   // Device discovery (kept per-source)
   SERIAL_LIST_PORTS: 'serial-list-ports',
   LOGCAT_LIST_DEVICES: 'logcat-list-devices',

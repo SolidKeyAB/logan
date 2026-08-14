@@ -22004,6 +22004,7 @@ const PANEL_NAMES: Record<string, string> = {
   'stats': 'Stats',
   'history': 'History',
   'annotations': 'AI Annotations',
+  'saved': 'Saved',
 };
 
 const BOTTOM_TAB_IDS = ['analysis', 'time-gaps', 'search-results', 'search-configs', 'video', 'live', 'notes'];
@@ -22058,6 +22059,11 @@ function openPanel(panelId: string): void {
     renderAnnotationsPanel();
   }
 
+  // Load the saved-entities catalog on open
+  if (panelId === 'saved') {
+    void loadSavedEntitiesPanel();
+  }
+
   savePanelState();
 }
 
@@ -22082,6 +22088,70 @@ function togglePanelVisibility(): void {
   } else {
     openPanel('folders');
   }
+}
+
+// ─── Saved Entities panel (Entity Registry browser — step 2, read-only) ──────
+const SAVED_KIND_LABELS: Record<string, string> = {
+  search: 'Searches', session: 'Search sessions', filter: 'Filter presets',
+  highlightGroup: 'Highlight groups', bookmarkSet: 'Bookmark sets',
+  columnLayout: 'Column layouts', columnPattern: 'Column patterns',
+  constant: 'Constants', trendProperty: 'Trend properties', pattern: 'Saved patterns',
+  contextDef: 'Context definitions', baseline: 'Baselines', investigation: 'Investigations',
+};
+const SAVED_KIND_ORDER = ['search', 'session', 'filter', 'highlightGroup', 'bookmarkSet', 'columnLayout', 'columnPattern', 'constant', 'trendProperty', 'pattern', 'contextDef', 'baseline', 'investigation'];
+let savedEntitiesCache: any[] = [];
+let savedPanelInited = false;
+
+async function loadSavedEntitiesPanel(): Promise<void> {
+  if (!savedPanelInited) {
+    savedPanelInited = true;
+    const filterInput = document.getElementById('saved-filter') as HTMLInputElement | null;
+    filterInput?.addEventListener('input', () => renderSavedEntities(filterInput.value));
+    document.getElementById('btn-saved-refresh')?.addEventListener('click', () => { void loadSavedEntitiesPanel(); });
+    // Click an item → copy its name (handy for pasting into search / requirements),
+    // and record which kinds get reached for (instrumentation for step 3).
+    document.getElementById('saved-list')?.addEventListener('click', (e) => {
+      const row = (e.target as HTMLElement).closest('.saved-item') as HTMLElement | null;
+      if (!row) return;
+      const name = row.dataset.name || '';
+      const kind = row.dataset.kind || '';
+      trackUsage(`saved:copy:${kind}`);
+      if (name) { void navigator.clipboard?.writeText(name); showToast(`Copied “${name}”`); }
+    });
+  }
+  const res = await window.api.listEntities();
+  savedEntitiesCache = (res.success && res.entities) ? res.entities : [];
+  const filterInput = document.getElementById('saved-filter') as HTMLInputElement | null;
+  renderSavedEntities(filterInput?.value || '');
+}
+
+function renderSavedEntities(filter: string): void {
+  const list = document.getElementById('saved-list');
+  if (!list) return;
+  if (savedEntitiesCache.length === 0) { list.innerHTML = '<p class="placeholder">Nothing saved yet.</p>'; return; }
+  const q = filter.trim().toLowerCase();
+  const items = q
+    ? savedEntitiesCache.filter(e => `${e.name} ${e.summary || ''} ${e.description || ''} ${e.kind}`.toLowerCase().includes(q))
+    : savedEntitiesCache;
+  if (items.length === 0) { list.innerHTML = '<p class="placeholder">No matches.</p>'; return; }
+  const byKind: Record<string, any[]> = {};
+  for (const e of items) (byKind[e.kind] = byKind[e.kind] || []).push(e);
+  let html = '';
+  for (const kind of SAVED_KIND_ORDER) {
+    const group = byKind[kind];
+    if (!group || !group.length) continue;
+    html += `<div class="saved-group"><div class="saved-group-header">${escapeHtml(SAVED_KIND_LABELS[kind] || kind)}<span class="saved-group-count">${group.length}</span></div>`;
+    for (const e of group) {
+      const scope = e.scope ? `<span class="saved-scope saved-scope-${escapeHtml(e.scope)}">${escapeHtml(e.scope)}</span>` : '';
+      const desc = e.description ? `<span class="saved-desc-icon" title="${escapeHtml(e.description)}">📝</span>` : '';
+      html += `<div class="saved-item" data-kind="${escapeHtml(e.kind)}" data-name="${escapeHtml(e.name)}" title="click to copy name">`
+        + `<div class="saved-item-main"><span class="saved-item-name">${escapeHtml(e.name)}</span>${scope}${desc}</div>`
+        + (e.summary ? `<div class="saved-item-sum">${escapeHtml(e.summary)}</div>` : '')
+        + `</div>`;
+    }
+    html += '</div>';
+  }
+  list.innerHTML = html;
 }
 
 function savePanelState(): void {
