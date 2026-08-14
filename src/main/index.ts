@@ -35,6 +35,7 @@ import { bumpUsage, getUsage, clearUsage, flushUsage, isAiContext } from './usag
 import { canonicalizeHumanVerb, aggregateUsageByFeature } from '../shared/verbRegistry';
 import { saveConstant, getConstants, deleteConstant, flushConstants } from './constantsStore';
 import { loadColumnLayouts, upsertColumnLayout, deleteColumnLayout, ColumnLayoutSaved } from './columnLayoutsStore';
+import { EntityDescriptor, EntityKind, toDescriptors } from './entityRegistry';
 import { getPatternLog, clearPatternLog, logPattern, PatternLogEntry, flushPatternLog } from './patternLog';
 import { compilePattern, CompileInput } from './compilePattern';
 import { parseTimestampFast } from './timestampParse';
@@ -1284,6 +1285,30 @@ app.whenReady().then(() => {
       } catch {
         return null;
       }
+    },
+    listSavedEntities: (kind?: string): EntityDescriptor[] => {
+      // Aggregate every global/reusable saved entity this process owns into the uniform
+      // registry shape. Investigations are appended by the /api/entities handler (api-server
+      // owns that store). Per-file individual marks are working state — excluded by design.
+      const out: EntityDescriptor[] = [];
+      const add = (k: EntityKind, rows: any[]) => { if (!kind || kind === k) out.push(...toDescriptors(k, rows)); };
+      try {
+        add('search', loadSearchConfigsStore()['_global'] || []);
+        add('session', loadGlobalSearchConfigSessions());
+        add('filter', loadFilterPresets());
+        add('highlightGroup', loadHighlightGroups());
+        add('bookmarkSet', loadBookmarkSets());
+        add('columnLayout', loadColumnLayouts());
+        add('columnPattern', loadColumnPatternsStore());
+        add('constant', getConstants());
+        add('trendProperty', loadPatternPropertiesStore());
+        add('pattern', loadPatternLibraryStore());
+        add('contextDef', loadContextDefinitionsStore()[GLOBAL_CONTEXT_KEY] || []);
+        add('baseline', baselineStore.list());
+      } catch (e) {
+        console.error('listSavedEntities failed:', e);
+      }
+      return out;
     },
     investigateCrashes: async (options) => {
       const handler = getFileHandler();

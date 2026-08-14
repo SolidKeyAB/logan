@@ -807,6 +807,23 @@ server.tool(
   }
 );
 
+// === Tool: logan_entities ===
+server.tool(
+  'logan_entities',
+  "List every saved/reusable entity in LOGAN as ONE catalog — searches, search sessions, filter presets, highlight groups, bookmark sets, column layouts, column patterns, constants, trend properties, saved patterns, context definitions, baselines, and investigations. Each item is {kind, id, name, description, scope, summary, count}. Use it to recall what the user has already saved (so you can reference or reuse it — e.g. pick an entity for an investigation's requirements) instead of re-deriving things. Optionally filter by `kind`.",
+  {
+    kind: z.enum(['search', 'session', 'filter', 'highlightGroup', 'bookmarkSet', 'columnLayout', 'columnPattern', 'constant', 'trendProperty', 'pattern', 'contextDef', 'baseline', 'investigation']).optional().describe('Only list this kind (omit for the whole catalog)'),
+  },
+  async ({ kind }) => {
+    try {
+      const result = await apiCall('POST', '/api/entities', { kind });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_navigate ===
 server.tool(
   'logan_navigate',
