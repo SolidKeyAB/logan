@@ -6890,11 +6890,22 @@ async function loadInvestigationTemplates(): Promise<void> {
     chip.className = 'investigate-pattern-chip';
     const stepCount = (t.steps || []).length;
     const stepsPreview = (t.steps || []).map((s: any) => s.label).join(' → ');
-    chip.title = `${stepCount} steps: ${stepsPreview}`;
+    chip.title = `${stepCount} steps: ${stepsPreview}\nRight-click to edit requirements`;
     const run = document.createElement('button');
     run.className = 'investigate-pattern-run';
     run.innerHTML = `▶ ${escapeHtml(t.name)} <span class="investigate-pattern-count">${stepCount}</span>`;
     run.addEventListener('click', () => { void runInvestigationTemplate(t.name); });
+    chip.appendChild(run);
+    // Preflight badge — only for patterns that declare a requirements manifest. Shows
+    // whether THIS open log satisfies the pattern's required template (✓ / ✗ blocked).
+    if (t.requirements && (t.requirements.fileTemplate || (t.requirements.entities || []).length)) {
+      const badge = document.createElement('span');
+      badge.className = 'investigation-req-badge checking';
+      badge.textContent = '…';
+      badge.title = 'Checking requirements against the open log…';
+      chip.appendChild(badge);
+      void refreshInvestigationBadge(t.name, badge);
+    }
     const del = document.createElement('button');
     del.className = 'investigate-pattern-del';
     del.textContent = '×';
@@ -6904,9 +6915,30 @@ async function loadInvestigationTemplates(): Promise<void> {
       await window.api.deleteInvestigation(t.name);
       void loadInvestigationTemplates();
     });
-    chip.appendChild(run);
     chip.appendChild(del);
+    chip.addEventListener('contextmenu', (e) => { e.preventDefault(); showInvestigationContextMenu(e, t); });
     list.appendChild(chip);
+  }
+}
+
+// Fetch the requirements preflight for one pattern and paint its badge ✓/✗.
+async function refreshInvestigationBadge(name: string, badge: HTMLElement): Promise<void> {
+  try {
+    const res = await window.api.checkInvestigation(name);
+    const report = res.requirements;
+    if (!res.success || !report) { badge.className = 'investigation-req-badge'; badge.textContent = ''; return; }
+    if (report.blocked) {
+      badge.className = 'investigation-req-badge blocked';
+      badge.textContent = '✗';
+    } else {
+      badge.className = 'investigation-req-badge ok';
+      badge.textContent = '✓';
+    }
+    const lines = (report.checks || []).map((c: any) => `${c.status === 'satisfied' ? '✓' : c.status === 'unsatisfied' ? '✗' : '?'} ${c.label} — ${c.detail}`);
+    badge.title = `${report.summary}${lines.length ? '\n' + lines.join('\n') : ''}`;
+  } catch {
+    badge.className = 'investigation-req-badge';
+    badge.textContent = '';
   }
 }
 
@@ -6919,18 +6951,174 @@ async function saveCurrentInvestigation(): Promise<void> {
   void loadInvestigationTemplates();
 }
 
-async function runInvestigationTemplate(name: string): Promise<void> {
+async function runInvestigationTemplate(name: string, force = false): Promise<void> {
   if (!state.filePath) { showToast('Open a log file first'); return; }
   const container = document.getElementById('investigate-results');
   if (container) container.innerHTML = `<p class="placeholder">Replaying “${escapeHtml(name)}”…</p>`;
-  const res = await window.api.runInvestigation(name);
+  const res = await window.api.runInvestigation(name, undefined, force);
   if (!res.success) { if (container) container.innerHTML = `<p class="placeholder">${escapeHtml(res.error || 'Replay failed')}</p>`; return; }
+  // Blocked by requirements: show the report + a one-click "Run anyway" override.
+  if (res.blocked) {
+    if (container) {
+      container.innerHTML = `<div class="investigate-replay"><div class="investigate-replay-title">“${escapeHtml(name)}” doesn't match this log</div>${renderRequirementChecks(res.requirements)}<div class="investigate-req-actions"><button class="secondary-btn small" id="btn-inv-force">Run anyway</button></div></div>`;
+      document.getElementById('btn-inv-force')?.addEventListener('click', () => { void runInvestigationTemplate(name, true); });
+    }
+    return;
+  }
   if (container) {
     const rows = (res.steps || []).map((s: any) =>
       `<div class="investigate-replay-row"><span class="investigate-replay-ok">${s.ok ? '✓' : '✗'}</span><span class="investigate-replay-step">${escapeHtml(s.step)}</span><span class="investigate-replay-sum">${escapeHtml(s.summary || '')}</span></div>`
     ).join('');
-    container.innerHTML = `<div class="investigate-replay"><div class="investigate-replay-title">Replayed “${escapeHtml(name)}” — ${(res.steps || []).length} steps</div>${rows}</div>`;
+    const reqNote = (res.requirements && (res.requirements.checks || []).length)
+      ? `<div class="investigate-req-note" title="${escapeHtml((res.requirements.checks || []).map((c: any) => `${c.label}: ${c.detail}`).join('\n'))}">requirements: ${escapeHtml(res.requirements.summary || '')}</div>`
+      : '';
+    container.innerHTML = `<div class="investigate-replay"><div class="investigate-replay-title">Replayed “${escapeHtml(name)}” — ${(res.steps || []).length} steps</div>${reqNote}${rows}</div>`;
   }
+}
+
+// Render a requirements report (array of checks) as a compact ✓/✗ list.
+function renderRequirementChecks(report: any): string {
+  if (!report || !(report.checks || []).length) return '<p class="placeholder">No requirement details.</p>';
+  const icon = (s: string) => s === 'satisfied' ? '✓' : s === 'unsatisfied' ? '✗' : '?';
+  const cls = (s: string) => s === 'satisfied' ? 'sev-info' : s === 'unsatisfied' ? 'sev-error' : 'sev-warning';
+  const rows = report.checks.map((c: any) =>
+    `<div class="investigate-replay-row ${cls(c.status)}"><span class="investigate-replay-ok">${icon(c.status)}</span><span class="investigate-replay-step">${escapeHtml(c.label)}</span><span class="investigate-replay-sum">${escapeHtml(c.detail)}</span></div>`
+  ).join('');
+  return `<div class="investigate-req-summary">${escapeHtml(report.summary || '')}</div>${rows}`;
+}
+
+// Right-click menu on a saved-pattern chip: edit / suggest / check / delete requirements.
+function showInvestigationContextMenu(e: MouseEvent, t: any): void {
+  document.querySelectorAll('.sc-context-menu').forEach(el => el.remove());
+  const menu = document.createElement('div');
+  menu.className = 'sc-context-menu';
+  menu.style.left = `${e.clientX}px`;
+  menu.style.top = `${e.clientY}px`;
+  const hasReqs = !!(t.requirements && (t.requirements.fileTemplate || (t.requirements.entities || []).length));
+  const item = (label: string, fn: () => void) => {
+    const b = document.createElement('button');
+    b.className = 'sc-context-menu-item';
+    b.textContent = label;
+    b.addEventListener('click', () => { menu.remove(); fn(); });
+    menu.appendChild(b);
+  };
+  item(hasReqs ? 'Edit requirements…' : 'Add requirements…', () => { void editInvestigationRequirements(t); });
+  item('Requirements from current file…', () => { void editInvestigationRequirements(t, true); });
+  item('Check against this log', () => { void checkInvestigationAgainstLog(t.name); });
+  if (hasReqs) item('Clear requirements', async () => {
+    await window.api.setInvestigationRequirements(t.name, null);
+    showToast('Requirements cleared');
+    void loadInvestigationTemplates();
+  });
+  document.body.appendChild(menu);
+  const closeMenu = (ev: MouseEvent) => {
+    if (!menu.contains(ev.target as Node)) { menu.remove(); document.removeEventListener('click', closeMenu); }
+  };
+  setTimeout(() => document.addEventListener('click', closeMenu), 0);
+}
+
+// Preflight one pattern against the open log and show the report in the results pane.
+async function checkInvestigationAgainstLog(name: string): Promise<void> {
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  const container = document.getElementById('investigate-results');
+  const res = await window.api.checkInvestigation(name);
+  if (!res.success) { if (container) container.innerHTML = `<p class="placeholder">${escapeHtml(res.error || 'Check failed')}</p>`; return; }
+  if (container) container.innerHTML = `<div class="investigate-replay"><div class="investigate-replay-title">Would “${escapeHtml(name)}” apply to this log?</div>${renderRequirementChecks(res.requirements)}</div>`;
+}
+
+// Open the requirements editor for a pattern; when `fromFile` is true, prefill the
+// file-template fields by suggesting from the currently open log.
+async function editInvestigationRequirements(t: any, fromFile = false): Promise<void> {
+  let manifest: any = t.requirements ? JSON.parse(JSON.stringify(t.requirements)) : {};
+  if (fromFile) {
+    const sug = await window.api.suggestInvestigationRequirements();
+    if (sug.success && sug.requirements) {
+      manifest.fileTemplate = { ...(sug.requirements.fileTemplate || {}), ...(manifest.fileTemplate || {}) };
+    }
+  }
+  const next = await showRequirementsModal(t.name, manifest);
+  if (next === null) return; // cancelled
+  const res = await window.api.setInvestigationRequirements(t.name, next);
+  if (!res.success) { showToast((res as any).error || 'Failed to save requirements'); return; }
+  showToast('Requirements saved');
+  void loadInvestigationTemplates();
+}
+
+// Multi-field editor for a requirements manifest. Returns the manifest (or {} to clear),
+// or null if cancelled. Focuses the file-template gate (the human-authored precondition).
+function showRequirementsModal(patternName: string, current: any): Promise<any | null> {
+  return new Promise((resolve) => {
+    const ft = (current && current.fileTemplate) || {};
+    const cp = ft.columnPattern || {};
+    const sig = ft.signature || {};
+    const overlay = document.createElement('div');
+    overlay.className = 'modal';
+    overlay.style.cssText = 'display:flex;align-items:center;justify-content:center;';
+    overlay.innerHTML = `
+      <div class="modal-content" style="width:520px;">
+        <div class="modal-header"><h3>Requirements — ${escapeHtml(patternName)}</h3></div>
+        <div class="modal-body">
+          <p class="req-modal-hint">The open log must match these for the pattern to replay (a mismatch blocks it — you can still “Run anyway”). Leave a field blank to drop that check.</p>
+          <div class="filter-group"><label>Format adapter <span class="req-hint">(vtrace / jsonl / mf4 / text)</span></label><input type="text" class="modal-input" data-req="adapterId" placeholder="e.g. vtrace"></div>
+          <div class="filter-group"><label>Filename glob</label><input type="text" class="modal-input" data-req="filenameGlob" placeholder="e.g. *.esotrace"></div>
+          <div class="filter-group"><label>Column layout name <span class="req-hint">(a saved Column Layout the log must match)</span></label><input type="text" class="modal-input" data-req="cpName" placeholder="e.g. syslog-cols"></div>
+          <div class="filter-group"><label>Min match % <span class="req-hint">(for the column layout, default 60)</span></label><input type="number" class="modal-input" data-req="cpRatio" min="0" max="100" placeholder="60"></div>
+          <div class="filter-group"><label>Signature regex <span class="req-hint">(must appear near the top of the file)</span></label><input type="text" class="modal-input" data-req="sigRegex" placeholder="e.g. ^VTRACE v\\d"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="secondary-btn" data-action="suggest" title="Fill the format + filename from the open log">Suggest from file</button>
+          <span style="flex:1"></span>
+          <button class="secondary-btn" data-action="cancel">Cancel</button>
+          <button class="primary-btn" data-action="save">Save</button>
+        </div>
+      </div>`;
+    const q = (sel: string) => overlay.querySelector(sel) as HTMLInputElement;
+    q('[data-req="adapterId"]').value = ft.adapterId || '';
+    q('[data-req="filenameGlob"]').value = ft.filenameGlob || '';
+    q('[data-req="cpName"]').value = cp.name || '';
+    q('[data-req="cpRatio"]').value = cp.minMatchRatio != null ? String(Math.round(cp.minMatchRatio * 100)) : '';
+    q('[data-req="sigRegex"]').value = sig.regex || '';
+
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') close(null); };
+    const close = (value: any | null) => { document.removeEventListener('keydown', onKey); overlay.remove(); resolve(value); };
+    const build = (): any => {
+      const fileTemplate: any = {};
+      const adapterId = q('[data-req="adapterId"]').value.trim();
+      const filenameGlob = q('[data-req="filenameGlob"]').value.trim();
+      const cpName = q('[data-req="cpName"]').value.trim();
+      const cpRatioRaw = q('[data-req="cpRatio"]').value.trim();
+      const sigRegex = q('[data-req="sigRegex"]').value.trim();
+      if (adapterId) fileTemplate.adapterId = adapterId;
+      if (filenameGlob) fileTemplate.filenameGlob = filenameGlob;
+      if (cpName) {
+        fileTemplate.columnPattern = { name: cpName };
+        const r = parseInt(cpRatioRaw, 10);
+        if (!isNaN(r) && r > 0) fileTemplate.columnPattern.minMatchRatio = Math.min(1, r / 100);
+      }
+      if (sigRegex) fileTemplate.signature = { regex: sigRegex };
+      const out: any = { ...(current || {}) };
+      // Preserve any agent-authored entities/notes; replace the human-edited fileTemplate.
+      if (Object.keys(fileTemplate).length) out.fileTemplate = fileTemplate; else delete out.fileTemplate;
+      return out;
+    };
+    overlay.querySelector('[data-action="save"]')!.addEventListener('click', () => close(build()));
+    overlay.querySelector('[data-action="cancel"]')!.addEventListener('click', () => close(null));
+    overlay.querySelector('[data-action="suggest"]')!.addEventListener('click', async () => {
+      const sug = await window.api.suggestInvestigationRequirements();
+      if (sug.success && sug.requirements && sug.requirements.fileTemplate) {
+        const s = sug.requirements.fileTemplate;
+        if (s.adapterId) q('[data-req="adapterId"]').value = s.adapterId;
+        if (s.filenameGlob) q('[data-req="filenameGlob"]').value = s.filenameGlob;
+        showToast('Filled from the open log');
+      } else {
+        showToast('Nothing to suggest (plain-text log, no extension)');
+      }
+    });
+    overlay.addEventListener('mousedown', (ev) => { if (ev.target === overlay) close(null); });
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(overlay);
+    q('[data-req="adapterId"]').focus();
+  });
 }
 
 async function runInvestigateRecipe(symptom: string, opts: { field?: string; component?: string; expect?: string } = {}): Promise<void> {

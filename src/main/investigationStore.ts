@@ -6,6 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { RequirementsManifest } from './investigationRequirements';
 
 // One recorded investigative tool call.
 export interface JournalEntry {
@@ -36,6 +37,7 @@ export interface InvestigationTemplate {
   description?: string;
   steps: TemplateStep[];
   params: ParamDef[];           // promoted fill-ins (component/field/pattern/event/…)
+  requirements?: RequirementsManifest; // preconditions: file-template + expected saved entities
 }
 
 // Body keys worth exposing as fill-in parameters when replaying on a new log.
@@ -52,7 +54,7 @@ function ensureDir(): void {
 }
 
 // Turn a recorded journal into a parameterised template.
-export function buildTemplate(name: string, journal: JournalEntry[], sourceFile?: string, description?: string): InvestigationTemplate {
+export function buildTemplate(name: string, journal: JournalEntry[], sourceFile?: string, description?: string, requirements?: RequirementsManifest): InvestigationTemplate {
   const steps: TemplateStep[] = journal.map(e => ({ path: e.path, body: { ...e.body }, label: e.label }));
   const params: ParamDef[] = [];
   steps.forEach((step, i) => {
@@ -63,7 +65,7 @@ export function buildTemplate(name: string, journal: JournalEntry[], sourceFile?
       }
     }
   });
-  return { name, slug: slugify(name), createdAt: Date.now(), sourceFile, description, steps, params };
+  return { name, slug: slugify(name), createdAt: Date.now(), sourceFile, description, steps, params, requirements };
 }
 
 function stepLabel(step: TemplateStep): string {
