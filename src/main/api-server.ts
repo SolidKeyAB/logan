@@ -8,6 +8,8 @@ import { FileHandler } from './fileHandler';
 import { type BaselineStore, buildFingerprint } from './baselineStore';
 import { AnalysisResult } from './analyzers/types';
 import { JournalEntry, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps } from './investigationStore';
+import { evaluateRequirements, suggestRequirements, mergeRequirements, RequirementCheckContext, EntityRef } from './investigationRequirements';
+import { pickAdapter } from './sourceAdapter';
 import { bumpUsage, enterAiContext, exitAiContext } from './usageStore';
 import { saveConstant, getConstants, deleteConstant } from './constantsStore';
 import { loadColumnLayouts, upsertColumnLayout, deleteColumnLayout } from './columnLayoutsStore';
@@ -42,6 +44,7 @@ const USAGE_SKIP_PATHS = new Set<string>([
   '/api/user-message', '/api/events', '/api/messages', '/api/shutdown',
   '/api/agent-memory', '/api/agent-memory-clear',
   '/api/investigation-log', '/api/investigation-clear',
+  '/api/investigation-check', '/api/investigation-suggest-requirements', '/api/investigation-set-requirements',
 ]);
 
 function journalLabel(p: string, body: Record<string, any>): string {
@@ -91,6 +94,45 @@ function summarizeReplay(p: string, r: any): string {
   if (p === '/api/time-gaps') return `${r.gaps?.length ?? 0} gaps`;
   if (p.startsWith('/api/trend')) return `${r.totalPoints ?? r.fields?.length ?? r.transitions?.length ?? 0} points/items`;
   return 'ok';
+}
+
+// Build the live-file context an investigation's requirements are evaluated against:
+// the current file path, its format adapter id, a sample of its lines, and resolvers
+// that look saved entities (column layouts) up on disk. Kept here (not in the pure
+// evaluator module) because it reaches into Electron/API state.
+function buildRequirementContext(ctx: ApiContext, sampleCount = 200): RequirementCheckContext {
+  const filePath = ctx.getCurrentFilePath();
+  let adapterId: string | null = null;
+  if (filePath) {
+    try { adapterId = pickAdapter(filePath).id; } catch { adapterId = null; }
+  }
+  let sampleLines: string[] = [];
+  try {
+    const raw = ctx.getLinesRaw(0, sampleCount);
+    if (raw && Array.isArray(raw.lines)) {
+      sampleLines = raw.lines.map((l: any) => (typeof l?.text === 'string' ? l.text : String(l ?? '')));
+    }
+  } catch { /* no file open / read error → empty samples (checks report unsatisfied) */ }
+  return {
+    filePath,
+    adapterId,
+    sampleLines,
+    resolveColumnPattern: (ref) => {
+      const hit = loadColumnLayouts().find(l => (ref.id && l.id === ref.id) || (ref.name && l.name === ref.name));
+      if (hit && hit.pattern && hit.pattern.regex) {
+        return {
+          regex: hit.pattern.regex,
+          flags: hit.pattern.flags || '',
+          fields: hit.pattern.fields || [],
+          named: /\(\?<[A-Za-z_]/.test(hit.pattern.regex),
+        };
+      }
+      return null;
+    },
+    // Entity existence is delegated to index.ts (it holds every saved-entity store);
+    // unresolvable kinds come back null → reported 'unverified' (never a false negative).
+    resolveEntity: (ref: EntityRef) => ctx.resolveSavedEntity(ref),
+  };
 }
 
 // --- Chat message queue & SSE ---
@@ -313,6 +355,10 @@ export interface ApiContext {
   getBaselineStore(): BaselineStore;
   getAnalysisResult(): AnalysisResult | null;
   getLinesRaw(startLine: number, count: number): any;
+  // Best-effort existence check for a referenced saved entity (search/filter/highlight/
+  // bookmark/columnLayout/columnPattern/session/constant/trendProperty/pattern). Returns
+  // null when the kind can't be resolved (→ reported 'unverified', never a false negative).
+  resolveSavedEntity(ref: { kind: string; id?: string; name?: string }): { present: boolean; applied?: boolean } | null;
   investigateCrashes(options: { contextLines?: number; maxCrashes?: number; autoBookmark?: boolean; autoHighlight?: boolean }): Promise<any>;
   investigateComponent(options: { component: string; maxSamplesPerLevel?: number; includeErrorContext?: boolean; contextLines?: number }): Promise<any>;
   investigateTimerange(options: { startTime: string; endTime: string; maxSamples?: number }): Promise<any>;
@@ -740,7 +786,13 @@ export function startApiServer(ctx: ApiContext): void {
         if (url === '/api/investigation-save') {
           if (!body.name) return sendError(res, 'name required');
           if (agentJournal.length === 0) return sendError(res, 'Nothing to save — the agent has not run any investigative steps yet.');
-          const tpl = buildTemplate(body.name, agentJournal, ctx.getCurrentFilePath() || undefined, body.description);
+          let requirements = body.requirements;
+          if (body.autoDetect) {
+            const fp = ctx.getCurrentFilePath();
+            const suggested = suggestRequirements({ filePath: fp, adapterId: fp ? pickAdapter(fp).id : null });
+            requirements = mergeRequirements(requirements, suggested);
+          }
+          const tpl = buildTemplate(body.name, agentJournal, ctx.getCurrentFilePath() || undefined, body.description, requirements);
           saveTemplate(tpl);
           // Notify the renderer so the Investigate panel can refresh its list.
           const win = ctx.getMainWindow();
@@ -762,13 +814,52 @@ export function startApiServer(ctx: ApiContext): void {
         if (url === '/api/investigation-run') {
           const tpl = getTemplate(body.name || body.slug || '');
           if (!tpl) return sendError(res, `No saved investigation named "${body.name || body.slug}"`);
+          // Preflight: does the CURRENT log satisfy this investigation's requirements
+          // (e.g. must be in a given column template / format)? A file-template mismatch
+          // blocks the replay unless the caller passes force:true.
+          const requirements = evaluateRequirements(tpl.requirements, buildRequirementContext(ctx));
+          if (requirements.blocked && !body.force) {
+            sendJson(res, {
+              success: true, ran: null, blocked: true, requirements,
+              message: `Replay blocked: this log does not match "${tpl.name}"'s required template. ${requirements.summary} Pass force:true to run anyway.`,
+            });
+            return;
+          }
           const steps = resolveSteps(tpl, body.params || {});
           const results: any[] = [];
           for (const step of steps) {
             const r = await replayStep(step);
             results.push({ step: step.label, path: step.path, ok: r?.success !== false, summary: summarizeReplay(step.path, r) });
           }
-          sendJson(res, { success: true, ran: tpl.name, steps: results });
+          sendJson(res, { success: true, ran: tpl.name, steps: results, requirements });
+          return;
+        }
+        if (url === '/api/investigation-check') {
+          // Dry-run the requirements preflight without replaying — lets a caller (or the
+          // UI) ask "would this investigation apply to the open log?".
+          const tpl = getTemplate(body.name || body.slug || '');
+          if (!tpl) return sendError(res, `No saved investigation named "${body.name || body.slug}"`);
+          const requirements = evaluateRequirements(tpl.requirements, buildRequirementContext(ctx));
+          sendJson(res, { success: true, name: tpl.name, manifest: tpl.requirements || null, requirements });
+          return;
+        }
+        if (url === '/api/investigation-suggest-requirements') {
+          // Suggest a starter manifest from the open file (adapter + filename glob).
+          const fp = ctx.getCurrentFilePath();
+          const suggested = suggestRequirements({ filePath: fp, adapterId: fp ? pickAdapter(fp).id : null });
+          sendJson(res, { success: true, requirements: suggested });
+          return;
+        }
+        if (url === '/api/investigation-set-requirements') {
+          // Attach/replace the requirements manifest on an existing saved investigation
+          // (edit path — does not touch the recorded steps). Pass requirements:null to clear.
+          const tpl = getTemplate(body.name || body.slug || '');
+          if (!tpl) return sendError(res, `No saved investigation named "${body.name || body.slug}"`);
+          tpl.requirements = body.requirements || undefined;
+          saveTemplate(tpl);
+          const win = ctx.getMainWindow();
+          if (win && !win.isDestroyed()) win.webContents.send('investigation-templates-changed');
+          sendJson(res, { success: true, template: tpl });
           return;
         }
 

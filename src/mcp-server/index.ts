@@ -681,14 +681,74 @@ server.tool(
 // === Tool: logan_save_investigation ===
 server.tool(
   'logan_save_investigation',
-  'Save the investigative steps recorded so far as a NAMED, re-runnable template (an "investigate pattern"). Values like component/field/pattern/event become fill-in parameters so the template can be replayed on a different log. Call this after you have investigated a ticket and the user wants to reuse the approach.',
+  'Save the investigative steps recorded so far as a NAMED, re-runnable template (an "investigate pattern"). Values like component/field/pattern/event become fill-in parameters so the template can be replayed on a different log. Optionally attach `requirements` — the preconditions the log must meet for this investigation to apply (e.g. the file must match a saved column template / format), plus the saved entities (searches, filters, highlights, column layouts…) it expects. On replay, LOGAN preflights these and blocks a mismatched log. Call this after investigating a ticket when the user wants to reuse the approach.',
   {
     name: z.string().describe('Template name, e.g. "Auth token-expiry investigation"'),
     description: z.string().optional().describe('Optional note on what this pattern is for / when to use it'),
+    requirements: z.object({
+      fileTemplate: z.object({
+        columnPattern: z.object({
+          id: z.string().optional(),
+          name: z.string().optional().describe('Name of a saved Column Layout the log must match'),
+          minMatchRatio: z.number().optional().describe('Fraction of sampled lines that must match (0..1, default 0.6)'),
+        }).optional().describe('Require the log to match a saved column layout/pattern'),
+        adapterId: z.string().optional().describe("Required format adapter id: 'vtrace' | 'jsonl' | 'mf4' | 'text'"),
+        signature: z.object({
+          regex: z.string(),
+          flags: z.string().optional(),
+          scanLines: z.number().optional(),
+        }).optional().describe('A regex that must appear in the first N lines'),
+        filenameGlob: z.string().optional().describe("Filename hint, e.g. '*.esotrace'"),
+        note: z.string().optional(),
+      }).optional().describe('The HARD gate: how the log file must look (mismatch blocks replay)'),
+      entities: z.array(z.object({
+        kind: z.enum(['search', 'session', 'filter', 'highlight', 'bookmark', 'columnLayout', 'columnPattern', 'constant', 'trendProperty', 'pattern']),
+        id: z.string().optional(),
+        name: z.string().optional(),
+        autoApply: z.boolean().optional(),
+        note: z.string().optional(),
+      })).optional().describe('Saved entities this investigation expects to exist (informational)'),
+      notes: z.array(z.string()).optional().describe('Free-text preconditions to confirm'),
+    }).optional().describe('Preconditions carried with the saved investigation'),
+    autoDetect: z.boolean().optional().describe("Auto-attach a starter file-template from the open log (format adapter + filename glob), merged UNDER any explicit requirements"),
   },
-  async ({ name, description }) => {
+  async ({ name, description, requirements, autoDetect }) => {
     try {
-      const result = await apiCall('POST', '/api/investigation-save', { name, description });
+      const result = await apiCall('POST', '/api/investigation-save', { name, description, requirements, autoDetect });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_set_investigation_requirements ===
+server.tool(
+  'logan_set_investigation_requirements',
+  "Attach or replace the requirements manifest on an EXISTING saved investigation (does not touch its recorded steps). Use to add a file-template gate or expected-entity refs after the fact. Pass requirements:null to clear.",
+  {
+    name: z.string().describe('Saved template name (or slug)'),
+    requirements: z.object({
+      fileTemplate: z.object({
+        columnPattern: z.object({ id: z.string().optional(), name: z.string().optional(), minMatchRatio: z.number().optional() }).optional(),
+        adapterId: z.string().optional(),
+        signature: z.object({ regex: z.string(), flags: z.string().optional(), scanLines: z.number().optional() }).optional(),
+        filenameGlob: z.string().optional(),
+        note: z.string().optional(),
+      }).optional(),
+      entities: z.array(z.object({
+        kind: z.enum(['search', 'session', 'filter', 'highlight', 'bookmark', 'columnLayout', 'columnPattern', 'constant', 'trendProperty', 'pattern']),
+        id: z.string().optional(),
+        name: z.string().optional(),
+        autoApply: z.boolean().optional(),
+        note: z.string().optional(),
+      })).optional(),
+      notes: z.array(z.string()).optional(),
+    }).nullable().optional().describe('The manifest to set, or null to clear'),
+  },
+  async ({ name, requirements }) => {
+    try {
+      const result = await apiCall('POST', '/api/investigation-set-requirements', { name, requirements });
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err: any) {
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
@@ -714,14 +774,32 @@ server.tool(
 // === Tool: logan_run_investigation ===
 server.tool(
   'logan_run_investigation',
-  'Replay a saved investigation template by name on the CURRENT log, re-running its recorded steps in order. Pass `params` to override the captured fill-ins (e.g. a different component/field). Returns a per-step result summary.',
+  'Replay a saved investigation template by name on the CURRENT log, re-running its recorded steps in order. First runs a REQUIREMENTS PREFLIGHT: if the investigation declares a file-template (column layout / format the log must match) and the open log does not match, the replay is BLOCKED and a `requirements` report is returned instead of running — pass `force:true` to override. Pass `params` to override the captured fill-ins. Returns a per-step result summary plus the requirements report.',
   {
     name: z.string().describe('Saved template name (or slug) from logan_list_investigations'),
     params: z.record(z.string(), z.any()).optional().describe('Override fill-in params, e.g. { "component": "auth", "field": "isTokenExpired" }'),
+    force: z.boolean().optional().describe('Run even if the log fails the file-template requirements'),
   },
-  async ({ name, params }) => {
+  async ({ name, params, force }) => {
     try {
-      const result = await apiCall('POST', '/api/investigation-run', { name, params: params || {} });
+      const result = await apiCall('POST', '/api/investigation-run', { name, params: params || {}, force: force || false });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_check_investigation ===
+server.tool(
+  'logan_check_investigation',
+  "Preflight a saved investigation's requirements against the CURRENTLY open log WITHOUT running it — answers \"would this investigation apply to this file?\". Returns per-requirement checks (file-template match, referenced entities) and whether a replay would be blocked. Use before logan_run_investigation, or to pick the right saved pattern for a log.",
+  {
+    name: z.string().describe('Saved template name (or slug) from logan_list_investigations'),
+  },
+  async ({ name }) => {
+    try {
+      const result = await apiCall('POST', '/api/investigation-check', { name });
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err: any) {
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
