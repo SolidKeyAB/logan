@@ -1260,6 +1260,31 @@ app.whenReady().then(() => {
       const lines = handler.getLines(startLine, count);
       return { success: true, lines };
     },
+    resolveSavedEntity: (ref: { kind: string; id?: string; name?: string }) => {
+      // Present if any saved item of this kind matches by id or by a name-ish field.
+      const has = (arr: any[], nameFields: string[]): { present: boolean } => ({
+        present: Array.isArray(arr) && arr.some((x: any) =>
+          (ref.id != null && x && x.id === ref.id) ||
+          (ref.name != null && x && nameFields.some(f => x[f] === ref.name))),
+      });
+      try {
+        switch (ref.kind) {
+          case 'search':        return has(Object.values(loadSearchConfigsStore()).flat() as any[], ['pattern', 'description']);
+          case 'session':       return has(loadGlobalSearchConfigSessions(), ['name']);
+          case 'filter':        return has(loadFilterPresets(), ['name']);
+          case 'highlight':     return has(loadHighlightGroups(), ['name']);
+          case 'bookmark':      return has(loadBookmarkSets(), ['name']);
+          case 'columnLayout':  return has(loadColumnLayouts(), ['name']);
+          case 'columnPattern': return has(loadColumnPatternsStore(), ['name']);
+          case 'constant':      return has(getConstants(), ['name']);
+          case 'trendProperty': return has(loadPatternPropertiesStore(), ['name']);
+          case 'pattern':       return has(loadPatternLibraryStore(), ['label', 'id']);
+          default:              return null;
+        }
+      } catch {
+        return null;
+      }
+    },
     investigateCrashes: async (options) => {
       const handler = getFileHandler();
       if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
@@ -7542,9 +7567,12 @@ function callApiServer(apiPath: string, body: any): Promise<any> {
 }
 
 ipcMain.handle(IPC.INVESTIGATION_LIST, async () => callApiServer('/api/investigations', {}));
-ipcMain.handle(IPC.INVESTIGATION_SAVE, async (_e, name: string, description?: string) => callApiServer('/api/investigation-save', { name, description }));
-ipcMain.handle(IPC.INVESTIGATION_RUN, async (_e, name: string, params?: Record<string, any>) => callApiServer('/api/investigation-run', { name, params: params || {} }));
+ipcMain.handle(IPC.INVESTIGATION_SAVE, async (_e, name: string, description?: string, requirements?: any, autoDetect?: boolean) => callApiServer('/api/investigation-save', { name, description, requirements, autoDetect }));
+ipcMain.handle(IPC.INVESTIGATION_RUN, async (_e, name: string, params?: Record<string, any>, force?: boolean) => callApiServer('/api/investigation-run', { name, params: params || {}, force: force || false }));
 ipcMain.handle(IPC.INVESTIGATION_DELETE, async (_e, name: string) => callApiServer('/api/investigation-delete', { name }));
+ipcMain.handle(IPC.INVESTIGATION_CHECK, async (_e, name: string) => callApiServer('/api/investigation-check', { name }));
+ipcMain.handle(IPC.INVESTIGATION_SET_REQS, async (_e, name: string, requirements: any) => callApiServer('/api/investigation-set-requirements', { name, requirements }));
+ipcMain.handle(IPC.INVESTIGATION_SUGGEST_REQS, async () => callApiServer('/api/investigation-suggest-requirements', {}));
 
 // --- Agent Setup Wizard ---
 
