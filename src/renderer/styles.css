@@ -9192,6 +9192,59 @@ kbd {
 .investigate-req-actions { margin-top: 8px; }
 .req-modal-hint { font-size: 11px; color: var(--text-muted); margin: 0 0 10px; line-height: 1.4; }
 .req-hint { color: var(--text-muted); font-weight: 400; font-size: 10px; }
+/* Saved Entities panel (Entity Registry browser) */
+.saved-filter-input {
+  flex: 1;
+  background: var(--bg-input, var(--bg-secondary));
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: 4px;
+  padding: 3px 7px;
+  font-size: 12px;
+}
+.saved-content { overflow-y: auto; padding: 4px 0 8px; }
+.saved-group { margin-bottom: 6px; }
+.saved-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 4px 10px 2px;
+  position: sticky;
+  top: 0;
+  background: var(--bg-primary);
+}
+.saved-group-count {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  border-radius: 7px;
+  padding: 0 5px;
+  font-size: 9px;
+}
+.saved-item {
+  padding: 3px 10px 4px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.saved-item:hover { background: var(--bg-hover); border-left-color: var(--accent-color); }
+.saved-item-main { display: flex; align-items: center; gap: 6px; }
+.saved-item-name { font-size: 12px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.saved-item-sum { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.saved-desc-icon { font-size: 10px; opacity: 0.75; }
+.saved-scope {
+  font-size: 8px;
+  text-transform: uppercase;
+  border-radius: 6px;
+  padding: 0 5px;
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+}
+.saved-scope-global { color: var(--accent-hover); border-color: var(--accent-hover); }
+.saved-scope-file { color: var(--text-muted); }
+.saved-scope-ticket { color: #d19a66; border-color: #d19a66; }
 /* Replay result list */
 .investigate-replay-title {
   font-size: 12px;

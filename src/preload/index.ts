@@ -57,6 +57,7 @@ const IPC = {
   INVESTIGATION_CHECK: 'investigation-check',
   INVESTIGATION_SET_REQS: 'investigation-set-requirements',
   INVESTIGATION_SUGGEST_REQS: 'investigation-suggest-requirements',
+  ENTITIES_LIST: 'entities-list',
   SERIAL_LIST_PORTS: 'serial-list-ports',
   LOGCAT_LIST_DEVICES: 'logcat-list-devices',
   SSH_PARSE_CONFIG: 'ssh-parse-config',
@@ -749,6 +750,10 @@ const api = {
     ipcRenderer.invoke(IPC.INVESTIGATION_SET_REQS, name, requirements),
   suggestInvestigationRequirements: (): Promise<{ success: boolean; requirements?: any; error?: string }> =>
     ipcRenderer.invoke(IPC.INVESTIGATION_SUGGEST_REQS),
+
+  // Entity Registry — the saved-entities browse catalog
+  listEntities: (kind?: string): Promise<{ success: boolean; count?: number; entities?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.ENTITIES_LIST, kind),
   onInvestigationTemplatesChanged: (callback: () => void): (() => void) => {
     const handler = () => callback();
     ipcRenderer.on('investigation-templates-changed', handler);
