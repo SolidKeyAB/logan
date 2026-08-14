@@ -703,6 +703,7 @@ interface Api {
   checkInvestigation: (name: string) => Promise<{ success: boolean; name?: string; manifest?: any; requirements?: any; error?: string }>;
   setInvestigationRequirements: (name: string, requirements: any) => Promise<{ success: boolean; template?: any; error?: string }>;
   suggestInvestigationRequirements: () => Promise<{ success: boolean; requirements?: any; error?: string }>;
+  listEntities: (kind?: string) => Promise<{ success: boolean; count?: number; entities?: any[]; error?: string }>;
   onInvestigationTemplatesChanged: (callback: () => void) => () => void;
   getAgentRunning: () => Promise<{ running: boolean }>;
   detectAgentEnvironment: () => Promise<{
