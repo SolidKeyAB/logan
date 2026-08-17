@@ -20,11 +20,12 @@ if (process.platform !== 'linux') {
   console.warn('node-pty not available on Linux — using child_process fallback for terminal');
 }
 import { FileHandler, filterLineToVisibleColumns, splitLineIntoColumns, ColumnConfig } from './fileHandler';
+import { CompositeFileHandler, CompositeMemberHandler, CompositeBoundary } from './compositeFileHandler';
 import { getRipgrepPath } from './ripgrepPath';
 import { openWithAdapter, NormalizedSource } from './sourceAdapter';
 import { resolveFileHandlers, runFileHandler, FileHandlerQuery } from './fileHandlers';
 import { extractBodyLine, extractHeaderLine } from '../shared/extractFormat';
-import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation, PatternProperty, SavedPattern, ScopeDescriptor, ResolvedScope } from '../shared/types';
+import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation, PatternProperty, SavedPattern, ScopeDescriptor, ResolvedScope, FileInfo } from '../shared/types';
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
@@ -83,6 +84,16 @@ let mainWindow: BrowserWindow | null = null;
 let searchSignal: { cancelled: boolean } = { cancelled: false };
 let diffSignal: { cancelled: boolean } = { cancelled: false };
 let currentFilePath: string | null = null;
+
+// "Single session" — N already-open files presented as ONE continuous read-only view
+// (see compositeFileHandler.ts). Kept as a dedicated ref rather than in fileHandlerCache
+// because CompositeFileHandler is NOT a FileHandler: it shares only the read+search
+// method shapes. When active, currentFilePath is the synthetic activeCompositeId and the
+// read/search paths route through getReadHandler(); FileHandler-only features (severity
+// index, filter, split) see "no file" and stay disabled instead of crashing.
+let activeComposite: CompositeFileHandler | null = null;
+let activeCompositeId: string | null = null;
+const COMPOSITE_ID = 'composite://single-session';
 // Set in app.whenReady(); reused by top-level IPC handlers that need the same
 // in-process bridge the API server uses (e.g. the native "📋 Brief" evidence pack).
 let apiContext: ApiContext | null = null;
@@ -252,6 +263,42 @@ function getFileHandler(): FileHandler | null {
     fileHandlerCache.set(currentFilePath, handler);
   }
   return handler || null;
+}
+
+// Read/search handler for the current view. Returns the active "single session"
+// composite when one is open (it shares FileHandler's getLinesAsync/getLinesByNumbers/
+// search/getTotalLines/getFileInfo/lastSearch* shape), otherwise the current file's real
+// FileHandler. Only the read/search paths (GET_LINES, SEARCH, api getLines/search/status)
+// use this; everything else keeps calling getFileHandler() and is a no-op in composite mode.
+function getReadHandler(): FileHandler | CompositeFileHandler | null {
+  if (activeComposite && currentFilePath === activeCompositeId) return activeComposite;
+  return getFileHandler();
+}
+
+// Open each path (reusing the FileHandler cache) and wrap them in a CompositeFileHandler.
+// The member handlers stay owned by fileHandlerCache — we deliberately do NOT close them
+// when a composite is replaced (that would invalidate the cached, possibly still-open
+// files). Only one composite is active at a time.
+async function buildComposite(
+  filePaths: string[],
+  label?: string,
+): Promise<{ id: string; info: FileInfo; boundaries: CompositeBoundary[] }> {
+  const members: CompositeMemberHandler[] = [];
+  for (const fp of filePaths) {
+    let h = fileHandlerCache.get(fp);
+    if (h && h.isStale()) { evictFromCache(fp); h = undefined; }
+    if (!h) {
+      h = new FileHandler();
+      const opened = await openWithAdapter(h, fp, () => {});
+      sourceRegistry.set(fp, opened.source);
+      addToCache(fp, h);
+    }
+    members.push({ filePath: fp, handler: h });
+  }
+  const name = label || `Single session (${filePaths.length} files)`;
+  activeComposite = new CompositeFileHandler(members, name);
+  activeCompositeId = COMPOSITE_ID;
+  return { id: activeCompositeId, info: activeComposite.getFileInfo(), boundaries: activeComposite.boundaries() };
 }
 
 function addToCache(filePath: string, handler: FileHandler): void {
@@ -951,6 +998,7 @@ app.whenReady().then(() => {
     getMainWindow: () => mainWindow,
     getCurrentFilePath: () => currentFilePath,
     getFileHandler: () => getFileHandler(),
+    getReadHandler: () => getReadHandler(),
     getFileHandlerForPath: (fp: string) => fileHandlerCache.get(fp) || null,
     getFilteredLines: () => getFilteredLines(),
     resolveScope: (scope?: ScopeDescriptor) => resolveCurrentScope(scope),
@@ -992,7 +1040,7 @@ app.whenReady().then(() => {
       return { success: true, info };
     },
     getLines: (startLine: number, count: number) => {
-      const handler = getFileHandler();
+      const handler = getReadHandler();
       if (!handler) return { success: false, error: 'No file open' };
       const filteredIndices = getFilteredLines();
       if (filteredIndices) {
@@ -1009,7 +1057,7 @@ app.whenReady().then(() => {
       return { success: true, lines };
     },
     search: async (options: SearchOptions & { scope?: ScopeDescriptor }) => {
-      const handler = getFileHandler();
+      const handler = getReadHandler();
       if (!handler) return { success: false, error: 'No file open' };
       searchSignal = { cancelled: false };
       const t0 = Date.now();
@@ -2707,6 +2755,22 @@ ipcMain.handle('analyze-columns', async () => {
 
 ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
   try {
+    // "Single session" re-entry: the renderer opens the composite through this same path
+    // (via its synthetic id) so it reuses all of loadFile()'s viewer setup. The composite
+    // was already built by CREATE_COMPOSITE — just make it current and return its info.
+    if (activeComposite && filePath === activeCompositeId) {
+      currentFilePath = filePath;
+      mainWindow?.webContents.send('indexing-progress', 100);
+      return {
+        success: true,
+        info: activeComposite.getFileInfo(),
+        compositeBoundaries: activeComposite.boundaries(),
+      };
+    }
+    // Opening any real file exits composite mode.
+    activeComposite = null;
+    activeCompositeId = null;
+
     // Check if file is already cached
     let fileHandler = fileHandlerCache.get(filePath);
     let info;
@@ -2831,6 +2895,22 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
   }
 });
 
+// Build a "single session" composite from an ordered list of files. The renderer then
+// opens the returned synthetic id through the normal OPEN_FILE path.
+ipcMain.handle(IPC.CREATE_COMPOSITE, async (_, filePaths: string[], label?: string) => {
+  try {
+    if (!Array.isArray(filePaths) || filePaths.length < 2) {
+      return { success: false, error: 'Pick at least 2 files for a single session' };
+    }
+    const built = await buildComposite(filePaths, label);
+    return { success: true, id: built.id, info: built.info, boundaries: built.boundaries };
+  } catch (error) {
+    activeComposite = null;
+    activeCompositeId = null;
+    return { success: false, error: String(error) };
+  }
+});
+
 // Detect if a file is part of a split set and find all related parts
 function detectSplitFiles(filePath: string): string[] | undefined {
   const fileName = path.basename(filePath);
@@ -2875,7 +2955,7 @@ function escapeRegex(str: string): string {
 }
 
 ipcMain.handle(IPC.GET_LINES, async (_, startLine: number, count: number) => {
-  const handler = getFileHandler();
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
   const filteredIndices = getFilteredLines();
@@ -2926,7 +3006,7 @@ ipcMain.handle(IPC.SEVERITY_NEXT, async (_, fromLine: number, dir: 1 | -1, level
 // === Search ===
 
 ipcMain.handle(IPC.SEARCH, async (_, options: SearchOptions) => {
-  const handler = getFileHandler();
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
   // Silent searches (e.g. the Make-pattern live match-count preview) must not
