@@ -327,6 +327,10 @@ export interface ApiContext {
   getMainWindow(): BrowserWindow | null;
   getCurrentFilePath(): string | null;
   getFileHandler(): FileHandler | null;
+  // The current view's read/search handler — the active "single session" composite when
+  // one is open, else the current file's FileHandler. Only read-shape methods are
+  // guaranteed (getLines/getLinesAsync/getLinesByNumbers/search/getTotalLines/getFileInfo).
+  getReadHandler(): Pick<FileHandler, 'getLines' | 'getLinesAsync' | 'getLinesByNumbers' | 'search' | 'getTotalLines' | 'getFileInfo' | 'getMaxLineLength'> | null;
   getFileHandlerForPath(filePath: string): FileHandler | null;
   getFilteredLines(): number[] | null;
   resolveScope(scope?: ScopeDescriptor): ResolvedScope;
@@ -639,7 +643,7 @@ export function startApiServer(ctx: ApiContext): void {
 
         if (url === '/api/status') {
           const filePath = ctx.getCurrentFilePath();
-          const handler = ctx.getFileHandler();
+          const handler = ctx.getReadHandler();
           const info = handler?.getFileInfo();
           const filteredLines = ctx.getFilteredLines();
           const bookmarkCount = ctx.getBookmarks().size;

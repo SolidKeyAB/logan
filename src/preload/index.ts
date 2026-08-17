@@ -5,6 +5,7 @@ import type { ScopeDescriptor, ScopeInfo } from '../shared/types';
 const IPC = {
   OPEN_FILE_DIALOG: 'open-file-dialog',
   OPEN_FILE: 'open-file',
+  CREATE_COMPOSITE: 'create-composite',
   GET_LINES: 'get-lines',
   SEVERITY_INFO: 'severity-info',
   SEVERITY_NEXT: 'severity-next',
@@ -145,6 +146,11 @@ const api = {
 
   openFile: (path: string): Promise<{ success: boolean; info?: any; error?: string }> =>
     ipcRenderer.invoke(IPC.OPEN_FILE, path),
+
+  // "Single session": concatenate N already-open files into one continuous read-only
+  // view (no on-disk merge). Returns a synthetic `composite://…` id to open like a file.
+  createComposite: (filePaths: string[], label?: string): Promise<{ success: boolean; id?: string; info?: any; boundaries?: Array<{ filePath: string; startLine: number; lineCount: number }>; error?: string }> =>
+    ipcRenderer.invoke(IPC.CREATE_COMPOSITE, filePaths, label),
 
   getLines: (startLine: number, count: number): Promise<{ success: boolean; lines?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.GET_LINES, startLine, count),
