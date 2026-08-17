@@ -12147,7 +12147,12 @@ function showSearchConfigForm(configId?: string): void {
     elements.scRegex.checked = false;
     elements.scMatchCase.checked = false;
     elements.scWholeWord.checked = false;
-    elements.scGlobal.checked = false;
+    // Default new patterns to GLOBAL so they follow you across files (the "working
+    // set" model): file-local configs silently drop out of view on a file switch,
+    // which reads as "my patterns disappeared". Global configs persist across every
+    // file. Uncheck to scope a pattern to just this file. (File-specific bundling is
+    // a future higher-level entity — a ticket / file profile.)
+    elements.scGlobal.checked = true;
     elements.scColorInput.value = getNextSearchConfigColor();
   }
 
@@ -12720,6 +12725,20 @@ async function runSearchConfigsBatchOnce(showUiProgress = false): Promise<void> 
   invalidateTimeAlignTimestamps();
 }
 
+// A search-config chip is "saved" once it lives inside a named session (a reusable
+// entity). Loose patterns the user just added are the UNSAVED working set — shown
+// with a distinct dashed look so the user can decide to save them as a new session
+// or add them to an existing one. Matched by value (pattern + flags), not id, so a
+// pattern counts as saved even after a reload minted it a fresh id.
+function isSearchConfigSaved(c: SearchConfigDef): boolean {
+  return searchConfigSessions.some(s =>
+    s.configs.some(sc =>
+      sc.pattern === c.pattern &&
+      !!sc.isRegex === !!c.isRegex &&
+      !!sc.matchCase === !!c.matchCase &&
+      !!sc.wholeWord === !!c.wholeWord));
+}
+
 function renderSearchConfigsChips(): void {
   const container = elements.searchConfigsChips;
   // Keep the add button, remove existing chips
@@ -12729,8 +12748,9 @@ function renderSearchConfigsChips(): void {
   const fragment = document.createDocumentFragment();
 
   for (const config of state.searchConfigs) {
+    const saved = isSearchConfigSaved(config);
     const chip = document.createElement('div');
-    chip.className = `search-config-chip${config.enabled ? '' : ' disabled'}`;
+    chip.className = `search-config-chip${config.enabled ? '' : ' disabled'}${saved ? '' : ' unsaved'}`;
     chip.dataset.configId = config.id;
 
     const swatch = document.createElement('span');
@@ -12740,7 +12760,8 @@ function renderSearchConfigsChips(): void {
     const patternText = document.createElement('span');
     patternText.className = 'sc-chip-pattern';
     patternText.textContent = config.pattern;
-    patternText.title = config.pattern + descTitleSuffix(config.description);
+    const savedHint = saved ? '' : '  ·  unsaved (not in a saved session yet)';
+    patternText.title = config.pattern + savedHint + descTitleSuffix(config.description);
     if (config.description) patternText.textContent = `📝 ${config.pattern}`;
 
     const count = document.createElement('span');
@@ -14756,6 +14777,7 @@ async function loadSearchConfigSessions(): Promise<void> {
     searchConfigSessions = [];
   }
   renderSearchConfigSessionsUI();
+  renderSearchConfigsChips(); // sessions known now → refresh which chips read as saved
 }
 
 function renderSearchConfigSessionsUI(): void {
@@ -14771,13 +14793,24 @@ function renderSearchConfigSessionsUI(): void {
 
   const fragment = document.createDocumentFragment();
 
-  // Save Session button
+  // Save Session button — save the current working set as a NEW named session (entity).
   const saveBtn = document.createElement('button');
   saveBtn.className = 'sc-session-save-btn';
-  saveBtn.innerHTML = '&#128190; Save Session';
-  saveBtn.title = 'Save current search configs as a reusable session';
+  saveBtn.innerHTML = '&#128190; Save as session';
+  saveBtn.title = 'Save the current patterns as a new reusable session';
   saveBtn.addEventListener('click', saveCurrentAsSearchConfigSession);
   fragment.appendChild(saveBtn);
+
+  // Add-to-session button — append the current working set to an EXISTING session.
+  // Only meaningful when there is both a working set and at least one saved session.
+  if (searchConfigSessions.length > 0 && state.searchConfigs.length > 0) {
+    const addBtn = document.createElement('button');
+    addBtn.className = 'sc-session-save-btn sc-session-add-btn';
+    addBtn.innerHTML = '&#10133; Add to session';
+    addBtn.title = 'Add the current patterns to an existing saved session';
+    addBtn.addEventListener('click', (e) => showAddToSessionMenu(e as MouseEvent));
+    fragment.appendChild(addBtn);
+  }
 
   for (const session of searchConfigSessions) {
     const isActive = activeSessionIds.has(session.id);
@@ -14849,6 +14882,65 @@ async function saveCurrentAsSearchConfigSession(): Promise<void> {
     activeSessionIds.add(session.id);
     sessionConfigIds.set(session.id, state.searchConfigs.map(c => c.id));
     renderSearchConfigSessionsUI();
+    renderSearchConfigsChips(); // now saved → chips drop the "unsaved" mark
+  }
+}
+
+// Pop a small menu of existing sessions; picking one appends the current working set
+// to it. The "add to an existing entity" half of the save decision.
+function showAddToSessionMenu(e: MouseEvent): void {
+  document.querySelectorAll('.sc-context-menu').forEach(el => el.remove());
+  const menu = document.createElement('div');
+  menu.className = 'sc-context-menu';
+  menu.style.left = `${e.clientX}px`;
+  menu.style.top = `${e.clientY}px`;
+
+  for (const session of searchConfigSessions) {
+    const item = document.createElement('button');
+    item.className = 'sc-context-menu-item';
+    item.textContent = `${session.name} (${session.configs.length})${session.isGlobal ? ' · global' : ' · file'}`;
+    item.addEventListener('click', () => {
+      menu.remove();
+      void addWorkingConfigsToSession(session.id);
+    });
+    menu.appendChild(item);
+  }
+
+  document.body.appendChild(menu);
+  // Dismiss on the next outside click (deferred so THIS click doesn't close it).
+  setTimeout(() => {
+    const close = (ev: MouseEvent): void => {
+      if (!menu.contains(ev.target as Node)) { menu.remove(); document.removeEventListener('click', close); }
+    };
+    document.addEventListener('click', close);
+  }, 0);
+}
+
+// Append the current working-set patterns to an existing session (dedup by value),
+// then persist the updated session. Patterns already in it are skipped.
+async function addWorkingConfigsToSession(sessionId: string): Promise<void> {
+  const session = searchConfigSessions.find(s => s.id === sessionId);
+  if (!session) return;
+
+  const inSession = (c: SearchConfigDef): boolean =>
+    session.configs.some(sc =>
+      sc.pattern === c.pattern &&
+      !!sc.isRegex === !!c.isRegex &&
+      !!sc.matchCase === !!c.matchCase &&
+      !!sc.wholeWord === !!c.wholeWord);
+
+  const toAdd = state.searchConfigs.filter(c => !inSession(c));
+  if (toAdd.length === 0) {
+    showToast(`All patterns are already in "${session.name}"`);
+    return;
+  }
+  session.configs = [...session.configs, ...toAdd.map(({ ...def }) => def)];
+
+  const result = await window.api.searchConfigSessionSave(session);
+  if (result.success) {
+    renderSearchConfigSessionsUI();
+    renderSearchConfigsChips(); // added patterns now count as saved
+    showToast(`Added ${toAdd.length} pattern${toAdd.length === 1 ? '' : 's'} to "${session.name}"`);
   }
 }
 
