@@ -17,11 +17,17 @@ function fakeHandler(lines: string[]): CompositeMemberHandler['handler'] {
       lines.slice(start, start + count).map((_, k) => mk(start + k)),
     getLinesByNumbers: async (nums: number[]) => nums.filter((n) => n >= 0 && n < lines.length).map(mk),
     search: async (options: SearchOptions) => {
+      // Honor the two options the composite must translate: filteredLineIndices (LOCAL to
+      // this fake) and maxMatches (cap), so tests can prove the composite did it right.
+      const allow = options.filteredLineIndices ? new Set(options.filteredLineIndices) : null;
+      const cap = options.maxMatches ?? Infinity;
       const out: SearchMatch[] = [];
-      lines.forEach((text, i) => {
+      for (let i = 0; i < lines.length && out.length < cap; i++) {
+        if (allow && !allow.has(i)) continue;
+        const text = lines[i];
         const col = text.toLowerCase().indexOf(options.pattern.toLowerCase());
         if (col >= 0) out.push({ lineNumber: i, column: col, length: options.pattern.length, lineText: text });
-      });
+      }
       return out;
     },
     close: () => { /* noop */ },
@@ -85,5 +91,28 @@ describe('CompositeFileHandler', () => {
   it('stops searching when the signal is cancelled', async () => {
     const signal = { cancelled: true };
     expect(await comp.search(opts('ERR'), undefined, signal)).toEqual([]);
+  });
+
+  it('translates GLOBAL filteredLineIndices to each member local space when searching', async () => {
+    // Only allow global line 5 (c0 in file /c.log). The 'ERR' hit at global 1 (a1) must NOT
+    // appear — proving the indices were partitioned per-file, not forwarded raw.
+    const hits = await comp.search({ ...opts('ERR'), filteredLineIndices: [5] });
+    expect(hits.map((h) => h.lineNumber)).toEqual([5]);
+    // Restricting to the other match's global line yields only that one.
+    const hits2 = await comp.search({ ...opts('ERR'), filteredLineIndices: [1] });
+    expect(hits2.map((h) => h.lineNumber)).toEqual([1]);
+  });
+
+  it('applies maxMatches as a GLOBAL cap, not once per member', async () => {
+    // '0' matches a0 (g0), b0 (g3), c0 (g5). With cap 2 we must stop after b0 and never
+    // search /c.log — a per-member cap would have returned all three.
+    const hits = await comp.search({ ...opts('0'), maxMatches: 2 });
+    expect(hits.map((h) => h.lineNumber)).toEqual([0, 3]);
+  });
+
+  it('getLinesByNumbers drops out-of-range lines (matches FileHandler), preserving order', async () => {
+    const got = await comp.getLinesByNumbers([2, 99, 4]);
+    expect(got.map((l) => l.lineNumber)).toEqual([2, 4]);
+    expect(got.map((l) => l.text)).toEqual(['a2', 'b1']);
   });
 });
