@@ -1684,9 +1684,63 @@ body.platform-darwin .titlebar {
   color: var(--text-primary);
 }
 
+/* File groups — one collapsible section per file, sticky header while scrolling */
+.folder-search-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  user-select: none;
+}
+
+.folder-search-group-header:hover {
+  background: var(--bg-hover);
+}
+
+.folder-search-group-caret {
+  color: var(--text-secondary);
+  font-size: 9px;
+  width: 10px;
+  display: inline-block;
+  transition: transform 0.1s;
+}
+
+.folder-search-group.collapsed .folder-search-group-caret {
+  transform: rotate(-90deg);
+}
+
+.folder-search-group.collapsed .folder-search-group-items {
+  display: none;
+}
+
+.folder-search-group-file {
+  color: var(--info-color);
+  font-weight: 500;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-search-group-count {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  padding: 0 6px;
+  font-size: 9px;
+  min-width: 16px;
+  text-align: center;
+}
+
 .folder-search-item {
   display: block;
-  padding: 4px 8px;
+  padding: 4px 8px 4px 22px;
   cursor: pointer;
   border-bottom: 1px solid var(--border-color);
   line-height: 1.4;
