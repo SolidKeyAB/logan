@@ -5572,6 +5572,18 @@ kbd {
   opacity: 0.4;
 }
 
+/* Unsaved / working-set patterns: not yet stored in a named session (entity).
+   Dashed border + a subtle tint so the user can tell what still needs saving. */
+.search-config-chip.unsaved {
+  border-style: dashed;
+  border-color: rgba(255, 205, 100, 0.55);
+  background: rgba(255, 205, 100, 0.10);
+}
+
+.search-config-chip.unsaved:hover {
+  background: rgba(255, 205, 100, 0.18);
+}
+
 .sc-chip-swatch {
   width: 10px;
   height: 10px;
