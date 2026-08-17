@@ -173,7 +173,9 @@ function setActiveScope(desc: ScopeDescriptor | null): void {
 // indices for search/selection, so those arrive as {type:'indices'}. time/
 // component still fall back to whole-file + warning (need a scan — later PR).
 function buildScopeContext(): ScopeResolverContext {
-  const handler = getFileHandler();
+  // getReadHandler so scope (total-line count) resolves against an active single-session
+  // composite too — otherwise scope-based tools (time-gaps, scoped search) see 0 lines.
+  const handler = getReadHandler();
   return {
     getTotalLines: () => (handler ? handler.getTotalLines() : 0),
     getFilteredLines: () => getFilteredLines(),
@@ -1272,7 +1274,7 @@ app.whenReady().then(() => {
       return { success: true };
     },
     detectTimeGaps: async (options: any) => {
-      const handler = getFileHandler();
+      const handler = getReadHandler();
       if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
       timeGapSignal = { cancelled: false };
       try {
@@ -1304,7 +1306,7 @@ app.whenReady().then(() => {
       return analysisResultCache.get(currentFilePath) || null;
     },
     getLinesRaw: (startLine: number, count: number) => {
-      const handler = getFileHandler();
+      const handler = getReadHandler();
       if (!handler) return { success: false, error: 'No file open' };
       const lines = handler.getLines(startLine, count);
       return { success: true, lines };
@@ -5436,7 +5438,10 @@ function compileAdvancedFilter(config: AdvancedFilterConfig): CompiledMatcher {
 let filterSignal = { cancelled: false };
 
 ipcMain.handle('apply-filter', async (_, config: FilterConfig) => {
-  const handler = getFileHandler();
+  // getReadHandler so Filter runs over an active single-session composite too; matching
+  // lines are stored as GLOBAL line numbers, which GET_LINES already resolves per-member
+  // via getLinesByNumbers.
+  const handler = getReadHandler();
   if (!handler || !currentFilePath) {
     return { success: false, error: 'No file open' };
   }
