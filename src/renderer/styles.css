@@ -9231,7 +9231,21 @@ kbd {
 }
 .saved-item:hover { background: var(--bg-hover); border-left-color: var(--accent-color); }
 .saved-item-main { display: flex; align-items: center; gap: 6px; }
-.saved-item-name { font-size: 12px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.saved-item-lead { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.saved-item-name { font-size: 12px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.saved-item-actions { display: flex; gap: 2px; flex: none; opacity: 0; transition: opacity 0.1s; }
+.saved-item:hover .saved-item-actions { opacity: 1; }
+.saved-item-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+  color: var(--text-muted);
+}
+.saved-item-btn:hover { background: var(--bg-active, var(--bg-hover)); color: var(--text-primary); }
 .saved-item-sum { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .saved-desc-icon { font-size: 10px; opacity: 0.75; }
 .saved-scope {

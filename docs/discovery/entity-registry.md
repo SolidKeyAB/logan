@@ -13,6 +13,40 @@ The Entity Registry is that missing "index" noun in the tool grammar. Build the 
 once; every surface (a "Saved" panel, a Ctrl+P palette, the requirements-editor picker, the
 `logan_entities` agent tool) becomes a thin, swappable view over it.
 
+## North-star: entities as composable building blocks
+
+The registry is the first move in a larger shift: **turn every saved artifact into a reusable
+component the user picks up and combines** — the way you'd assemble a query from parts. Three
+layers stack:
+
+1. **Entities are the atoms.** Everything saveable — searches, filter presets, highlight
+   groups, bookmark sets, column layouts, column patterns, constants, trend properties, saved
+   patterns, context definitions, baselines, search sessions, investigations — is one uniform
+   thing: `name + description + scope`. The registry makes them enumerable; the Saved panel's
+   apply/reveal (PR #105) makes them *usable*, not just stored — ▶ apply/run, ↗ open where it
+   lives, ⧉ copy.
+
+2. **Investigations compose entities into a procedure.** A saved investigation is a re-runnable
+   sequence of verbs (search → time-gaps → trend → …) plus a **Requirements Manifest** that
+   *references* other entities by name (e.g. "expects the `auth-errors` highlight group") and
+   gates on a file template (PR #100). Composition today is by-reference; the next surface is a
+   **picker** that assembles that reference list by clicking registry rows instead of typing
+   names.
+
+3. **File profiles bind an entity bundle to a kind of log.** A **file template** recognizes a
+   log — column-pattern match / decoder-adapter id / signature regex / filename glob (already
+   the hard gate on investigations). The north-star extension: let a file template carry a
+   **collection of entities + settings** so that *opening a log of type X auto-applies its
+   bundle* — its highlight group(s), column pattern, default searches, trend props. Today that
+   bundle only exists as an investigation's requirement refs; the "profile that applies on open"
+   is not yet wired, but every primitive it needs exists (the file gate, the entity-by-reference
+   resolver `resolveSavedEntity`, and one-click apply).
+
+**End state:** the user builds a library of entities once, combines them into investigation
+templates and file profiles, and LOGAN brings the right toolkit to each log automatically —
+the *same instrument for both operators*: the human clicks, the agent references by name
+(`scope` / `apply`). That is the whole design in one sentence.
+
 ## Process (agreed 2026-08-14)
 Primitive first, surfaces earned with usage:
 - **0. Contract** — this doc: the descriptor shape + verbs.
@@ -68,3 +102,31 @@ ApiContext.listSavedEntities(kind?)  →  toDescriptor(kind, raw)   [entityRegis
 ```
 Investigations are appended by the `/api/entities` handler itself (api-server already imports
 `listTemplates`), so `index.ts` need not depend on `investigationStore`.
+
+## Status & remaining roadmap (updated 2026-08-16)
+
+Shipped:
+- **0–1  contract + registry + agent parity** — PR #102. Pure `entityRegistry.ts`
+  (`EntityDescriptor` + `toDescriptor`, 13 kinds), `ApiContext.listSavedEntities`,
+  `/api/entities`, MCP `logan_entities`.
+- **2  read-only Saved panel** — PR #103. Searchable, grouped activity-bar side panel
+  (`data-panel="saved"`).
+- **3 (apply/reveal)** — PR #105. Saved rows are actionable: ▶ apply / ↗ open / ⧉ copy.
+  Clean one-click apply for `investigation` (run), `highlightGroup` (apply/toggle) and
+  `session` (select), reusing the existing per-kind functions; ↗ reveal opens each kind's
+  home panel/tab (`SAVED_REVEAL_TARGET`); `filter`/`columnLayout`/`constant` live in
+  modals/pickers → copy-only. Usage counters `saved:apply|reveal|copy:<kind>` drive what
+  earns a dedicated apply next. Parity: written exemption (no new agent verb — reveal is
+  viewport-only; apply reaches verbs the agent already has).
+- **cross-entity by-reference links + file-template gate on investigations** — PR #100
+  (`resolveSavedEntity`, the preflight ✓/✗ + "Run anyway").
+
+Remaining, in build order:
+- **3b — requirements-editor picker.** Assemble an investigation's expected-entity list by
+  clicking registry rows (reuses the registry + `resolveSavedEntity`), replacing typed names.
+- **3c — dedicated apply for the copy-only kinds** as their `saved:apply` demand shows up.
+- **NEW — file profiles.** Promote the file-template gate into a first-class **profile** that
+  carries an entity bundle + settings and *auto-applies on open* (with a preflight/confirm).
+  This is the "file template with a collection of highlights etc." from the 2026-08-16 phone
+  chat — the layer-3 north-star made concrete.
+- **4 — consolidate** the scattered per-entity panels into the Saved panel.
