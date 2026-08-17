@@ -104,3 +104,13 @@ when each is next touched):
 - **Esotrace manual / folder decode** — IPC-only; part of the file-handler
   Phase-2 work, which must land behind a written security gate (see
   `docs/FILE_HANDLER_SECURITY.md`) before its verbs are exposed to the AI.
+- **Saved panel — APPLY / REVEAL a saved entity** (Entity Registry step 3) — the Saved
+  panel rows now dispatch to each entity's *existing* per-kind apply function
+  (`runInvestigationTemplate`, `applyHighlightGroup`, `selectSearchConfigSession`) and to
+  `openPanel`/`openBottomTab` for reveal. **Written exemption: no new agent verb.** *Reveal*
+  is a pure viewport action (jump the human to a panel) — human-only like MUTE / column
+  visibility. *Apply* reaches verbs the agent already has at parity: investigations via
+  `logan_run_investigation`, highlights via `logan_highlight`, searches/filters via
+  `logan_search`/`logan_filter`. The remaining kinds are copy-only for now and stay on the
+  pre-existing human-only backlog above; the `saved:apply|reveal|copy:<kind>` usage counters
+  decide which of them earns a dedicated apply next.
