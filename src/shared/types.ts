@@ -341,6 +341,7 @@ export interface SavedConnection {
 export const IPC = {
   OPEN_FILE_DIALOG: 'open-file-dialog',
   OPEN_FILE: 'open-file',
+  CREATE_COMPOSITE: 'create-composite',
   GET_LINES: 'get-lines',
   SEVERITY_INFO: 'severity-info',
   SEVERITY_NEXT: 'severity-next',
