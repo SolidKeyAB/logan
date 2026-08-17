@@ -6073,10 +6073,12 @@ function renderFolderSearchResults(pattern: string, cancelled?: boolean): void {
   `;
 
   const body = groups.map((g) => {
-    const rows = g.items.map(({ match, index }) => {
+    // `ord` = this match's position among THIS file's matches (line order). Used to
+    // re-anchor into a decoded/transformed view where the raw line number is off.
+    const rows = g.items.map(({ match, index }, ord) => {
       const lineText = match.lineText.length > 200 ? match.lineText.substring(0, 200) + '...' : match.lineText;
       return `
-        <div class="folder-search-item" data-index="${index}">
+        <div class="folder-search-item" data-index="${index}" data-ord="${ord}">
           <span class="folder-search-line">${match.lineNumber}</span>: <span class="folder-search-text">${highlightMatch(lineText, pattern)}</span>
         </div>
       `;
@@ -6108,37 +6110,75 @@ function renderFolderSearchResults(pattern: string, cancelled?: boolean): void {
   elements.folderSearchResults.querySelectorAll('.folder-search-item').forEach((item) => {
     item.addEventListener('click', async () => {
       const index = parseInt((item as HTMLElement).dataset.index || '0', 10);
+      const ord = parseInt((item as HTMLElement).dataset.ord || '0', 10);
       const match = state.folderSearchResults[index];
       if (!match) return;
-      await navigateToFolderMatch(match);
+      await navigateToFolderMatch(match, pattern, ord);
     });
   });
 }
 
 // Open a folder-search match: reuse the file if it's already open (suspending any
 // active filter), else load it fresh, then jump to the matched line.
-async function navigateToFolderMatch(match: FolderSearchMatch): Promise<void> {
+//
+// `pattern`/`ord` enable a decode-aware re-anchor. Folder search runs ripgrep on the
+// RAW bytes on disk, but LOGAN may display a DECODED view (esotrace/vtrace, mf4, jsonl)
+// with a totally different line numbering — so the raw line number lands on the wrong
+// decoded line. After jumping we verify the landed line actually contains the pattern;
+// if not, we re-find the pattern IN THE DECODED VIEW and jump to the match with the
+// same in-file ordinal. Plain text logs hit the fast path (line already matches), so
+// this is a no-op there and only corrects the case that was already wrong.
+async function navigateToFolderMatch(match: FolderSearchMatch, pattern?: string, ord?: number): Promise<void> {
   const absLine = match.lineNumber - 1; // ripgrep is 1-based → 0-based
 
   // Same file already open in current tab — suspend filter and navigate
   if (match.filePath === state.filePath) {
     if (state.isFiltered) await suspendFilter('auto');
     await navigateTo(absLine);
-    return;
+  } else {
+    // File open in another tab — switch to it, suspend any restored filter, navigate.
+    const existingTab = findTabByFilePath(match.filePath);
+    if (existingTab) {
+      await switchToTab(existingTab.id);
+      if (state.isFiltered) await suspendFilter('auto');
+      await navigateTo(absLine);
+    } else {
+      // File not open — load fresh (loadFile clears filter + pre-warms cache).
+      await loadFile(match.filePath);
+      await navigateTo(absLine);
+    }
   }
 
-  // File open in another tab — switch to it, suspend any restored filter, navigate
-  const existingTab = findTabByFilePath(match.filePath);
-  if (existingTab) {
-    await switchToTab(existingTab.id);
-    if (state.isFiltered) await suspendFilter('auto');
-    await navigateTo(absLine);
-    return;
-  }
+  await reanchorFolderMatchIfDecoded(absLine, pattern, ord);
+}
 
-  // File not open — load fresh (loadFile clears filter + pre-warms cache)
-  await loadFile(match.filePath);
-  await navigateTo(absLine);
+// If the viewer shows a decoded/transformed representation (so ripgrep's raw-file line
+// doesn't map to the visible line), re-find the pattern in the DECODED content and jump
+// to the same-ordinal match. Best-effort: any failure leaves the raw-line jump in place.
+async function reanchorFolderMatchIfDecoded(absLine: number, pattern?: string, ord?: number): Promise<void> {
+  if (!pattern) return;
+  try {
+    // Fast path: if the visible line already contains the pattern, the raw line mapped
+    // fine (plain text log or an aligned decode) — nothing to correct.
+    const at = await window.api.getLines(absLine, 1);
+    const landed = (at?.lines?.[0]?.text ?? '') as string;
+    if (landed.toLowerCase().includes(pattern.toLowerCase())) return;
+
+    // Mismatch → decoded view. Re-find the pattern in the decoded content (folder search
+    // is plain, case-insensitive) and pick the match with the same in-file ordinal.
+    const res = await window.api.search({
+      pattern, isRegex: false, isWildcard: false, matchCase: false, wholeWord: false, silent: true,
+    });
+    const matches = (res?.matches ?? []) as Array<{ lineNumber: number }>;
+    if (matches.length === 0) return; // pattern isn't literal in the decoded text — keep raw jump
+    const pick = matches[Math.min(ord ?? 0, matches.length - 1)];
+    if (pick && pick.lineNumber !== absLine) {
+      await navigateTo(pick.lineNumber);
+      showToast('Re-anchored to the decoded view (raw line differed)');
+    }
+  } catch {
+    /* best-effort — leave the original jump */
+  }
 }
 
 // === Terminal (tabbed, multi-session) ===
