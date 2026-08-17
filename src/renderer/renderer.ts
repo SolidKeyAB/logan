@@ -16161,6 +16161,65 @@ async function exportMergedFile(): Promise<void> {
   }
 }
 
+// "Single session": open the file set as ONE continuous read-only view (in list order),
+// with NO merge written to disk. Builds the composite in the main process, then opens its
+// synthetic id through the normal file-open path so the viewer/search work unchanged.
+async function openSingleSession(): Promise<void> {
+  const status = document.getElementById('time-sync-status');
+  if (timeSyncFileSet.length < 2) { if (status) status.textContent = 'Add at least 2 files.'; return; }
+  if (status) status.textContent = 'Building single session…';
+  showProgress('Building single session…');
+  try {
+    const res = await (window.api as any).createComposite(timeSyncFileSet.slice());
+    if (!res || !res.success) {
+      if (status) status.textContent = 'Failed';
+      showToast(res?.error || 'Single session failed');
+      return;
+    }
+    hideProgress();
+    // Reuse an existing composite tab if present (only one composite is active at a time),
+    // otherwise open a fresh tab. loadFile() re-fetches its info, so totals stay correct.
+    const existing = findTabByFilePath(res.id);
+    await loadFile(res.id, !existing);
+    renderCompositeInfo(res.info, res.boundaries || []);
+    const n = res.info?.totalLines || 0;
+    if (status) status.textContent = `Single session: ${n.toLocaleString()} lines across ${(res.boundaries || []).length} files`;
+  } catch (e) {
+    if (status) status.textContent = 'Failed';
+    showToast('Single session failed: ' + String(e));
+  } finally {
+    hideProgress();
+  }
+}
+
+// Render the composite's file boundaries into the Time Sync panel: one row per member
+// file showing the global line it starts at; click to jump there in the concatenated view.
+function renderCompositeInfo(info: any, boundaries: Array<{ filePath: string; startLine: number; lineCount: number }>): void {
+  const content = document.getElementById('time-sync-content');
+  if (!content) return;
+  const rows = boundaries.map((b, i) => {
+    const color = TIME_SYNC_COLORS[i % TIME_SYNC_COLORS.length];
+    return `<div class="ts-row" data-line="${b.startLine}">` +
+      `<span class="ts-swatch" style="background:${color}"></span>` +
+      `<span class="ts-time">@ ${(b.startLine + 1).toLocaleString()}</span>` +
+      `<span class="ts-text" title="${escapeHtml(b.filePath)}">${escapeHtml(tsBaseName(b.filePath))} · ${(b.lineCount || 0).toLocaleString()} lines</span></div>`;
+  }).join('');
+  content.innerHTML =
+    `<div class="ts-stats"><div class="ts-span"><strong>Single session:</strong> ` +
+    `${(info?.totalLines || 0).toLocaleString()} lines across ${boundaries.length} files — one continuous read-only view. ` +
+    `Click a file to jump to where it starts.</div></div>` +
+    `<div class="ts-rows">${rows}</div>`;
+  const rowsEl = content.querySelector('.ts-rows');
+  if (rowsEl) {
+    rowsEl.addEventListener('click', (e) => {
+      const row = (e.target as HTMLElement).closest('.ts-row') as HTMLElement | null;
+      if (!row) return;
+      const line = parseInt(row.dataset.line || '-1', 10);
+      if (line >= 0) goToLine(line);
+    });
+  }
+}
+
 async function jumpToTimeSyncRow(fileIndex: number, ln: number): Promise<void> {
   const filePath = timeSyncFileSet[fileIndex];
   if (!filePath) return;
@@ -24025,6 +24084,7 @@ function init(): void {
   document.getElementById('btn-time-sync-merge')?.addEventListener('click', (e) => withButtonBusy(e.currentTarget as HTMLElement, () => runTimeSyncMerge()));
   document.getElementById('btn-time-sync-add')?.addEventListener('click', addTimeSyncFile);
   document.getElementById('btn-time-sync-export')?.addEventListener('click', exportMergedFile);
+  document.getElementById('btn-time-sync-single')?.addEventListener('click', (e) => withButtonBusy(e.currentTarget as HTMLElement, () => openSingleSession()));
 
   // Pattern Columns panel
   document.querySelectorAll('.patcol-mode-btn').forEach((b) => b.addEventListener('click', (e) => {
