@@ -16,6 +16,11 @@ import type { FileHandler } from './fileHandler';
 import type { FileInfo, LineData, SearchMatch, SearchOptions } from '../shared/types';
 import { CompositeLineSpace } from './compositeLineSpace';
 
+// Mirrors DEFAULT_MAX_MATCHES in fileHandler.ts. Kept as a local literal (not imported)
+// so this module stays dependency-free of FileHandler's runtime — it only type-imports it,
+// which is what lets the boundary math be unit-tested headlessly. Must stay in sync.
+const DEFAULT_MAX_MATCHES = 100000;
+
 export interface CompositeMemberHandler {
   filePath: string;
   handler: Pick<
@@ -113,12 +118,14 @@ export class CompositeFileHandler {
       for (const ln of lines) byGlobal.set(base + ln.lineNumber, { ...ln, lineNumber: base + ln.lineNumber });
     }
 
+    // Drop unresolvable lines (out-of-range global, or a line the member didn't return),
+    // preserving request order — this matches FileHandler.getLinesByNumbers, which builds a
+    // positional array and filter()s out the misses. Callers key results by .lineNumber.
     const out: LineData[] = [];
-    routing.forEach((pos, i) => {
+    routing.forEach((pos) => {
       if (!pos) return;
       const got = byGlobal.get(this.space.members[pos.fileIndex].startLine + pos.localLine);
       if (got) out.push(got);
-      else out.push({ lineNumber: lineNumbers[i], text: '' });
     });
     return out;
   }
@@ -132,10 +139,30 @@ export class CompositeFileHandler {
     signal?: { cancelled: boolean }
   ): Promise<SearchMatch[]> {
     const all: SearchMatch[] = [];
+    // Match cap is GLOBAL across the session, like a single file: hand each member only the
+    // remaining budget and stop once it's reached — otherwise N files yield up to N×cap.
+    const cap = options.maxMatches ?? DEFAULT_MAX_MATCHES;
     for (let i = 0; i < this.members.length; i++) {
       if (signal?.cancelled) break;
+      if (all.length >= cap) break;
       const base = this.space.members[i].startLine;
-      const sub = await this.members[i].handler.search({ ...options, silent: true }, undefined, signal);
+      const lineCount = this.space.members[i].lineCount;
+      const memberOpts: SearchOptions = { ...options, silent: true, maxMatches: cap - all.length };
+      // filteredLineIndices arrive in GLOBAL space; translate to this member's LOCAL lines
+      // (forwarding them raw would make each member read the wrong lines). A member with no
+      // in-range indices contributes nothing, so skip its would-be-empty search.
+      if (options.filteredLineIndices) {
+        const local: number[] = [];
+        for (const g of options.filteredLineIndices) {
+          if (g >= base && g < base + lineCount) local.push(g - base);
+        }
+        if (local.length === 0) {
+          onProgress?.(Math.round(((i + 1) / this.members.length) * 100), all.length, []);
+          continue;
+        }
+        memberOpts.filteredLineIndices = local;
+      }
+      const sub = await this.members[i].handler.search(memberOpts, undefined, signal);
       const rebased = sub.map((m) => ({ ...m, lineNumber: base + m.lineNumber, displayIndex: undefined }));
       all.push(...rebased);
       onProgress?.(Math.round(((i + 1) / this.members.length) * 100), all.length, rebased);
