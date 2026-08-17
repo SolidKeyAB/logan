@@ -22119,6 +22119,24 @@ const SAVED_KIND_LABELS: Record<string, string> = {
   contextDef: 'Context definitions', baseline: 'Baselines', investigation: 'Investigations',
 };
 const SAVED_KIND_ORDER = ['search', 'session', 'filter', 'highlightGroup', 'bookmarkSet', 'columnLayout', 'columnPattern', 'constant', 'trendProperty', 'pattern', 'contextDef', 'baseline', 'investigation'];
+// Step 3 — where each kind "lives" (its existing management surface). Reveal opens it.
+// filter / columnLayout / constant live in modals or inline pickers (no standalone
+// panel/tab), so they get copy-only for now.
+const SAVED_REVEAL_TARGET: Record<string, { type: 'panel' | 'tab'; id: string }> = {
+  search: { type: 'tab', id: 'search-configs' },
+  session: { type: 'tab', id: 'search-configs' },
+  pattern: { type: 'tab', id: 'search-configs' },
+  columnPattern: { type: 'tab', id: 'pattern-columns' },
+  trendProperty: { type: 'tab', id: 'trends' },
+  contextDef: { type: 'tab', id: 'contexts' },
+  baseline: { type: 'tab', id: 'analysis' },
+  investigation: { type: 'tab', id: 'investigate' },
+  highlightGroup: { type: 'panel', id: 'highlights' },
+  bookmarkSet: { type: 'panel', id: 'bookmarks' },
+};
+// Step 3 — kinds with a clean, self-contained one-click "apply". Others earn it with
+// usage (the saved:apply/reveal/copy:<kind> counters feed the "earn the rest" decision).
+const SAVED_CAN_APPLY = new Set(['investigation', 'highlightGroup', 'session']);
 let savedEntitiesCache: any[] = [];
 let savedPanelInited = false;
 
@@ -22128,13 +22146,19 @@ async function loadSavedEntitiesPanel(): Promise<void> {
     const filterInput = document.getElementById('saved-filter') as HTMLInputElement | null;
     filterInput?.addEventListener('input', () => renderSavedEntities(filterInput.value));
     document.getElementById('btn-saved-refresh')?.addEventListener('click', () => { void loadSavedEntitiesPanel(); });
-    // Click an item → copy its name (handy for pasting into search / requirements),
-    // and record which kinds get reached for (instrumentation for step 3).
+    // A saved row is now actionable: ▶ apply / run, ↗ open where it lives, ⧉ copy name.
+    // Clicking the row body (no button) still copies the name. Each action feeds a
+    // saved:<verb>:<kind> usage counter so we can see which kinds get reached for.
     document.getElementById('saved-list')?.addEventListener('click', (e) => {
-      const row = (e.target as HTMLElement).closest('.saved-item') as HTMLElement | null;
+      const target = e.target as HTMLElement;
+      const row = target.closest('.saved-item') as HTMLElement | null;
       if (!row) return;
       const name = row.dataset.name || '';
       const kind = row.dataset.kind || '';
+      const id = row.dataset.id || '';
+      const act = (target.closest('.saved-item-btn') as HTMLElement | null)?.dataset.act;
+      if (act === 'apply') { void applySavedEntity(kind, id, name); return; }
+      if (act === 'open') { revealSavedEntity(kind); return; }
       trackUsage(`saved:copy:${kind}`);
       if (name) { void navigator.clipboard?.writeText(name); showToast(`Copied “${name}”`); }
     });
@@ -22164,14 +22188,54 @@ function renderSavedEntities(filter: string): void {
     for (const e of group) {
       const scope = e.scope ? `<span class="saved-scope saved-scope-${escapeHtml(e.scope)}">${escapeHtml(e.scope)}</span>` : '';
       const desc = e.description ? `<span class="saved-desc-icon" title="${escapeHtml(e.description)}">📝</span>` : '';
-      html += `<div class="saved-item" data-kind="${escapeHtml(e.kind)}" data-name="${escapeHtml(e.name)}" title="click to copy name">`
-        + `<div class="saved-item-main"><span class="saved-item-name">${escapeHtml(e.name)}</span>${scope}${desc}</div>`
+      const actions = `<span class="saved-item-actions">`
+        + (SAVED_CAN_APPLY.has(e.kind) ? `<button class="saved-item-btn" data-act="apply" title="Apply / run">▶</button>` : '')
+        + (SAVED_REVEAL_TARGET[e.kind] ? `<button class="saved-item-btn" data-act="open" title="Open where it lives">↗</button>` : '')
+        + `<button class="saved-item-btn" data-act="copy" title="Copy name">⧉</button></span>`;
+      html += `<div class="saved-item" data-kind="${escapeHtml(e.kind)}" data-id="${escapeHtml(e.id || '')}" data-name="${escapeHtml(e.name)}" title="${escapeHtml(e.name)}">`
+        + `<div class="saved-item-main"><div class="saved-item-lead"><span class="saved-item-name">${escapeHtml(e.name)}</span>${scope}${desc}</div>${actions}</div>`
         + (e.summary ? `<div class="saved-item-sum">${escapeHtml(e.summary)}</div>` : '')
         + `</div>`;
     }
     html += '</div>';
   }
   list.innerHTML = html;
+}
+
+// Apply / run a saved entity straight from the catalog (the "same instrument" the human
+// reaches for in each entity's own panel — routed here for the kinds where a one-click
+// apply is clean and self-contained). Reuses the existing per-kind apply functions.
+async function applySavedEntity(kind: string, id: string, name: string): Promise<void> {
+  trackUsage(`saved:apply:${kind}`);
+  try {
+    if (kind === 'investigation') {
+      openBottomTab('investigate');
+      await runInvestigationTemplate(name);
+    } else if (kind === 'highlightGroup') {
+      await loadHighlightGroups();           // ensure the group set is in memory
+      await applyHighlightGroup(id);          // applies (or toggles off if already active)
+      showToast(`Applied highlight group “${name}”`);
+    } else if (kind === 'session') {
+      await loadSearchConfigSessions();       // ensure the session set is in memory
+      openBottomTab('search-configs');
+      await selectSearchConfigSession(id);    // idempotent if already applied
+      showToast(`Applied session “${name}”`);
+    } else {
+      showToast('No one-click apply for this kind yet — opening where it lives');
+      revealSavedEntity(kind);
+    }
+  } catch {
+    showToast('Apply failed');
+  }
+}
+
+// Reveal a saved entity: jump to the panel / bottom-tab where it's managed.
+function revealSavedEntity(kind: string): void {
+  const target = SAVED_REVEAL_TARGET[kind];
+  if (!target) { showToast('No panel to open for this kind'); return; }
+  trackUsage(`saved:reveal:${kind}`);
+  if (target.type === 'panel') openPanel(target.id);
+  else openBottomTab(target.id);
 }
 
 function savePanelState(): void {
