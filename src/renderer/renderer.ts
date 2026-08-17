@@ -6049,58 +6049,96 @@ function renderFolderSearchResults(pattern: string, cancelled?: boolean): void {
     return;
   }
 
+  // Group matches by file, preserving first-seen order (ripgrep emits per-file
+  // already, so this keeps files contiguous and rows in on-disk line order).
+  const groups: { filePath: string; fileName: string; items: { match: FolderSearchMatch; index: number }[] }[] = [];
+  const byPath = new Map<string, number>();
+  matches.forEach((match, index) => {
+    let gi = byPath.get(match.filePath);
+    if (gi === undefined) {
+      gi = groups.length;
+      byPath.set(match.filePath, gi);
+      groups.push({ filePath: match.filePath, fileName: match.fileName, items: [] });
+    }
+    groups[gi].items.push({ match, index });
+  });
+
   const scope = folderSearchScopeLabel ? ` in “${escapeHtml(folderSearchScopeLabel)}”` : '';
+  const fileWord = groups.length !== 1 ? 'files' : 'file';
   const header = `
     <div class="folder-search-header">
-      <span>${matches.length}${cancelled ? '+' : ''} match${matches.length !== 1 ? 'es' : ''}${scope}</span>
+      <span>${matches.length}${cancelled ? '+' : ''} match${matches.length !== 1 ? 'es' : ''} in ${groups.length} ${fileWord}${scope}</span>
       <button class="folder-search-close" title="Close">&times;</button>
     </div>
   `;
 
-  const items = matches.map((match, index) => {
-    const lineText = match.lineText.length > 200 ? match.lineText.substring(0, 200) + '...' : match.lineText;
-
+  const body = groups.map((g) => {
+    const rows = g.items.map(({ match, index }) => {
+      const lineText = match.lineText.length > 200 ? match.lineText.substring(0, 200) + '...' : match.lineText;
+      return `
+        <div class="folder-search-item" data-index="${index}">
+          <span class="folder-search-line">${match.lineNumber}</span>: <span class="folder-search-text">${highlightMatch(lineText, pattern)}</span>
+        </div>
+      `;
+    }).join('');
     return `
-      <div class="folder-search-item" data-index="${index}">
-        <span class="folder-search-file">${escapeHtml(match.fileName)}</span>:<span class="folder-search-line">${match.lineNumber}</span>: <span class="folder-search-text">${highlightMatch(lineText, pattern)}</span>
+      <div class="folder-search-group">
+        <div class="folder-search-group-header" title="${escapeHtml(g.filePath)}">
+          <span class="folder-search-group-caret">▾</span>
+          <span class="folder-search-group-file">${escapeHtml(g.fileName)}</span>
+          <span class="folder-search-group-count">${g.items.length}</span>
+        </div>
+        <div class="folder-search-group-items">${rows}</div>
       </div>
     `;
   }).join('');
 
-  elements.folderSearchResults.innerHTML = header + items;
+  elements.folderSearchResults.innerHTML = header + body;
 
   // Add event listeners
   elements.folderSearchResults.querySelector('.folder-search-close')?.addEventListener('click', closeFolderSearchResults);
+
+  // Collapse/expand a file group when its header is clicked
+  elements.folderSearchResults.querySelectorAll('.folder-search-group-header').forEach((hdr) => {
+    hdr.addEventListener('click', () => {
+      (hdr.parentElement as HTMLElement | null)?.classList.toggle('collapsed');
+    });
+  });
 
   elements.folderSearchResults.querySelectorAll('.folder-search-item').forEach((item) => {
     item.addEventListener('click', async () => {
       const index = parseInt((item as HTMLElement).dataset.index || '0', 10);
       const match = state.folderSearchResults[index];
       if (!match) return;
-
-      const absLine = match.lineNumber - 1; // ripgrep is 1-based → 0-based
-
-      // Same file already open in current tab — suspend filter and navigate
-      if (match.filePath === state.filePath) {
-        if (state.isFiltered) await suspendFilter('auto');
-        await navigateTo(absLine);
-        return;
-      }
-
-      // File open in another tab — switch to it, suspend any restored filter, navigate
-      const existingTab = findTabByFilePath(match.filePath);
-      if (existingTab) {
-        await switchToTab(existingTab.id);
-        if (state.isFiltered) await suspendFilter('auto');
-        await navigateTo(absLine);
-        return;
-      }
-
-      // File not open — load fresh (loadFile clears filter + pre-warms cache)
-      await loadFile(match.filePath);
-      await navigateTo(absLine);
+      await navigateToFolderMatch(match);
     });
   });
+}
+
+// Open a folder-search match: reuse the file if it's already open (suspending any
+// active filter), else load it fresh, then jump to the matched line.
+async function navigateToFolderMatch(match: FolderSearchMatch): Promise<void> {
+  const absLine = match.lineNumber - 1; // ripgrep is 1-based → 0-based
+
+  // Same file already open in current tab — suspend filter and navigate
+  if (match.filePath === state.filePath) {
+    if (state.isFiltered) await suspendFilter('auto');
+    await navigateTo(absLine);
+    return;
+  }
+
+  // File open in another tab — switch to it, suspend any restored filter, navigate
+  const existingTab = findTabByFilePath(match.filePath);
+  if (existingTab) {
+    await switchToTab(existingTab.id);
+    if (state.isFiltered) await suspendFilter('auto');
+    await navigateTo(absLine);
+    return;
+  }
+
+  // File not open — load fresh (loadFile clears filter + pre-warms cache)
+  await loadFile(match.filePath);
+  await navigateTo(absLine);
 }
 
 // === Terminal (tabbed, multi-session) ===
