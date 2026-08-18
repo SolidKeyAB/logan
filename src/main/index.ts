@@ -1816,7 +1816,9 @@ app.whenReady().then(() => {
       };
     },
     trendDiscoverFields: async (options) => {
-      const handler = getFileHandler();
+      // getReadHandler so the agent's trend tools run over a single-session composite too
+      // (parity with the renderer path); the worker reads the members' unified line space.
+      const handler = getReadHandler();
       if (!handler) return { success: false, error: 'No file open' };
       try {
         const fields = await runTrendJob('discover', handler, {
@@ -1830,7 +1832,7 @@ app.whenReady().then(() => {
       }
     },
     trendSeries: async (options) => {
-      const handler = getFileHandler();
+      const handler = getReadHandler();
       if (!handler) return { success: false, error: 'No file open' };
       if (!options?.field) return { success: false, error: 'field required' };
       try {
@@ -1849,7 +1851,7 @@ app.whenReady().then(() => {
       }
     },
     trendTransitions: async (options) => {
-      const handler = getFileHandler();
+      const handler = getReadHandler();
       if (!handler) return { success: false, error: 'No file open' };
       if (!options?.field) return { success: false, error: 'field required' };
       try {
@@ -1867,7 +1869,7 @@ app.whenReady().then(() => {
       }
     },
     trendCorrelate: async (options) => {
-      const handler = getFileHandler();
+      const handler = getReadHandler();
       if (!handler) return { success: false, error: 'No file open' };
       if (!options?.field || !options?.event) return { success: false, error: 'field and event required' };
       try {
@@ -5279,7 +5281,9 @@ ipcMain.handle('analyze-file-path', async (_, filePath: string) => {
 // file never blocks the main/UI event loop — the panel stays responsive instead of
 // appearing stuck. The worker returns the exact same engine result shape.
 ipcMain.handle(IPC.TREND_DISCOVER_FIELDS, async (_, options) => {
-  const handler = getFileHandler();
+  // getReadHandler so Trends run over an active single-session composite too — the worker
+  // presents the members' unified line space, so field/series/… come back in global lines.
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
   try {
     const fields = await runTrendJob('discover', handler, {
@@ -5294,7 +5298,7 @@ ipcMain.handle(IPC.TREND_DISCOVER_FIELDS, async (_, options) => {
 });
 
 ipcMain.handle(IPC.TREND_DISCOVER_AXES, async (_, options) => {
-  const handler = getFileHandler();
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
   try {
     const axes = await runTrendJob('axes', handler, {
@@ -5309,7 +5313,7 @@ ipcMain.handle(IPC.TREND_DISCOVER_AXES, async (_, options) => {
 });
 
 ipcMain.handle(IPC.TREND_SERIES, async (_, options) => {
-  const handler = getFileHandler();
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
   if (!options?.field) return { success: false, error: 'field required' };
   try {
@@ -5330,7 +5334,7 @@ ipcMain.handle(IPC.TREND_SERIES, async (_, options) => {
 });
 
 ipcMain.handle(IPC.TREND_SIGNAL_SERIES, async (_, options) => {
-  const handler = getFileHandler();
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
   if (!options?.fields?.length) return { success: false, error: 'fields required' };
   try {
@@ -5348,7 +5352,7 @@ ipcMain.handle(IPC.TREND_SIGNAL_SERIES, async (_, options) => {
 });
 
 ipcMain.handle(IPC.TREND_TRANSITIONS, async (_, options) => {
-  const handler = getFileHandler();
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
   if (!options?.field) return { success: false, error: 'field required' };
   try {
@@ -5367,7 +5371,7 @@ ipcMain.handle(IPC.TREND_TRANSITIONS, async (_, options) => {
 });
 
 ipcMain.handle(IPC.TREND_CORRELATE, async (_, options) => {
-  const handler = getFileHandler();
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
   if (!options?.field || !options?.event) return { success: false, error: 'field and event required' };
   try {

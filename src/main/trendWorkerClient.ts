@@ -1,6 +1,7 @@
 import { Worker } from 'worker_threads';
 import * as path from 'path';
 import type { FileHandler } from './fileHandler';
+import { CompositeFileHandler } from './compositeFileHandler';
 
 /**
  * Main-process client for the trend worker. Gets the (cached) byte-offset index of the
@@ -9,15 +10,29 @@ import type { FileHandler } from './fileHandler';
  *
  * The offsets/lengths are backed by SharedArrayBuffers, so handing them to the worker is
  * zero-copy and zero-transfer (shared by reference). Nothing big is serialized per call.
+ *
+ * For a "single session" composite the handler is a CompositeFileHandler: we hand over one
+ * scan context PER MEMBER and let the worker present the unified global line space, so the
+ * engine runs once (in ONE worker) over the whole session — no per-member fan-out/merge.
  */
 export type TrendJobKind = 'discover' | 'axes' | 'series' | 'signal' | 'transitions' | 'correlate';
 
-export function runTrendJob(kind: TrendJobKind, handler: FileHandler, args: any): Promise<any> {
-  const scan = handler.getScanContext();
-  if (!scan) return Promise.reject(new Error('No file open'));
+export function runTrendJob(kind: TrendJobKind, handler: FileHandler | CompositeFileHandler, args: any): Promise<any> {
+  let workerData: { kind: TrendJobKind; args: any; scan?: unknown; scans?: unknown[] };
+  if (handler instanceof CompositeFileHandler) {
+    const scans = handler.getMemberScanContexts();
+    if (scans.length === 0 || scans.some((s) => !s)) {
+      return Promise.reject(new Error('Single session has no readable member index'));
+    }
+    workerData = { kind, args, scans };
+  } else {
+    const scan = handler.getScanContext();
+    if (!scan) return Promise.reject(new Error('No file open'));
+    workerData = { kind, args, scan };
+  }
   return new Promise((resolve, reject) => {
     const worker = new Worker(path.join(__dirname, 'trendWorker.js'), {
-      workerData: { kind, args, scan },
+      workerData,
     });
     let settled = false;
     const finish = (err?: Error, result?: any): void => {
