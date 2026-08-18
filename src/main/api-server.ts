@@ -374,6 +374,9 @@ export interface ApiContext {
   trendSeries(options: { field: string; startLine?: number; endLine?: number; bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string }): Promise<any>;
   trendTransitions(options: { field: string; startLine?: number; endLine?: number; maxTransitions?: number; pattern?: string; patternFlags?: string }): Promise<any>;
   trendCorrelate(options: { field: string; event: string; startLine?: number; endLine?: number; pattern?: string; patternFlags?: string }): Promise<any>;
+  // Build a "single session" composite from an ordered file-set and open it (agent parity
+  // for the human 🔗 button). Shares buildComposite + autoSaveSingleSession with the human path.
+  createComposite(filePaths: string[], label?: string): Promise<{ success: boolean; id?: string; info?: any; boundaries?: any[]; error?: string }>;
   getAnnotations(): Map<string, Annotation>;
   addAnnotation(annotation: Annotation): any;
   removeAnnotation(id: string): any;
@@ -1235,6 +1238,17 @@ export function startApiServer(ctx: ApiContext): void {
             win.webContents.send('agent-message', msg);
           }
           sendJson(res, { success: true, message: msg });
+          return;
+        }
+
+        // Build + open a "single session" composite from an ordered list of file paths.
+        // Parity with the human 🔗 button (Time Sync panel) — one shared impl (buildComposite).
+        if (url === '/api/composite-create') {
+          if (!Array.isArray(body.files) || body.files.length < 2) {
+            return sendError(res, 'files: an array of at least 2 absolute file paths is required');
+          }
+          const result = await ctx.createComposite(body.files, body.label);
+          sendJson(res, result);
           return;
         }
 

@@ -50,6 +50,7 @@ Use `logan_report_finding` for each distinct finding, then send a summary via `l
 | Tool | Purpose |
 |------|---------|
 | `logan_status` | Check if file is open, get line count and state |
+| `logan_single_session` | Combine 2+ files into one continuous read-only "single session" (composite) and open it (agent parity for the 🔗 button) |
 | `logan_evidence_pack` | **Fetch FIRST**: one compact briefing (severity, levels, grouped crashes, top components/gaps, discovered field vocabulary, filter hints, optional baseline delta) as `viewerLine` refs + counts — not raw text. Drill down from it instead of many exploratory calls |
 | `logan_report_finding` | **Pin a finding**: annotate + navigate + chat message in one call |
 | `logan_send_message` | Send chat message to user (for summaries, questions, greetings) |

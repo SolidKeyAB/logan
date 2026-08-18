@@ -235,6 +235,31 @@ server.tool(
   }
 );
 
+// === Tool: logan_single_session ===
+server.tool(
+  'logan_single_session',
+  'Combine 2+ already-existing log files into ONE continuous, read-only "single session" (composite) and open it. ' +
+    'Files are concatenated in the given order into a single global line space (no file is written to disk); ' +
+    'reads, search, filter, analyze, severity-jump and investigate then all operate across the whole set. ' +
+    'The session is auto-saved so it can be re-run later, and it appears in the viewer beside its source files. ' +
+    'Agent parity for the human 🔗 "Single session" button.',
+  {
+    files: z
+      .array(z.string())
+      .min(2)
+      .describe('Ordered list of absolute file paths to concatenate (at least 2).'),
+    label: z.string().optional().describe('Optional display name for the session (defaults to a name derived from the files).'),
+  },
+  async ({ files, label }) => {
+    try {
+      const result = await apiCall('POST', '/api/composite-create', { files, label });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_get_lines ===
 server.tool(
   'logan_get_lines',
