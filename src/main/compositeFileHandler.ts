@@ -15,6 +15,8 @@
 import type { FileHandler } from './fileHandler';
 import type { FileInfo, LineData, SearchMatch, SearchOptions } from '../shared/types';
 import { CompositeLineSpace } from './compositeLineSpace';
+import type { SeverityIndex, SeverityLevel, SeverityCounts } from './severityIndex';
+import { severityCounts, severityTicks, nextSeverityLine } from './severityIndex';
 
 // Mirrors DEFAULT_MAX_MATCHES in fileHandler.ts. Kept as a local literal (not imported)
 // so this module stays dependency-free of FileHandler's runtime — it only type-imports it,
@@ -25,7 +27,7 @@ export interface CompositeMemberHandler {
   filePath: string;
   handler: Pick<
     FileHandler,
-    'getTotalLines' | 'getLines' | 'getLinesAsync' | 'getLinesByNumbers' | 'search' | 'searchMulti' | 'getMaxLineLength' | 'getFileInfo' | 'close'
+    'getTotalLines' | 'getLines' | 'getLinesAsync' | 'getLinesByNumbers' | 'search' | 'searchMulti' | 'buildSeverityIndex' | 'getMaxLineLength' | 'getFileInfo' | 'close'
   >;
 }
 
@@ -227,6 +229,50 @@ export class CompositeFileHandler {
     this.lastSearchEngine = 'composite';
     this.lastSearchReason = `${this.members.length} files`;
     return results;
+  }
+
+  // === Severity index (jump-to-problem / F8) ===
+  // Build a combined severity index by rebasing each member's index into the global line
+  // space. Members are ordered and every member's lines fall within its own [startLine,
+  // +lineCount) range, so concatenating in member order yields globally-sorted arrays for
+  // free — exactly the invariant nextSeverityLine's binary search relies on. Cached.
+  private severityIndexCache: SeverityIndex | null = null;
+
+  async buildSeverityIndex(): Promise<SeverityIndex> {
+    if (this.severityIndexCache) return this.severityIndexCache;
+    const fatal: number[] = [];
+    const error: number[] = [];
+    const warning: number[] = [];
+    for (let i = 0; i < this.members.length; i++) {
+      const base = this.space.members[i].startLine;
+      const idx = await this.members[i].handler.buildSeverityIndex();
+      for (let k = 0; k < idx.fatal.length; k++) fatal.push(idx.fatal[k] + base);
+      for (let k = 0; k < idx.error.length; k++) error.push(idx.error[k] + base);
+      for (let k = 0; k < idx.warning.length; k++) warning.push(idx.warning[k] + base);
+    }
+    this.severityIndexCache = {
+      fatal: Uint32Array.from(fatal),
+      error: Uint32Array.from(error),
+      warning: Uint32Array.from(warning),
+    };
+    return this.severityIndexCache;
+  }
+
+  // Mirrors FileHandler.getSeverityInfo so the SEVERITY_INFO handler reads it uniformly
+  // across the union. `capped` is meaningless once merged (members cap independently) → false.
+  async getSeverityInfo(buckets: number): Promise<{ counts: SeverityCounts; ticks: number[]; totalLines: number; capped: boolean }> {
+    const idx = await this.buildSeverityIndex();
+    const total = this.space.totalLines;
+    const counts = severityCounts(idx);
+    const ticks = Array.from(severityTicks(idx, Math.max(0, Math.floor(buckets)), total));
+    return { counts, ticks, totalLines: total, capped: false };
+  }
+
+  // Next (dir=1) / previous (dir=-1) problem line across the requested levels, in the global
+  // composite line space. Mirrors FileHandler.getNextSeverityLine.
+  async getNextSeverityLine(fromLine: number, dir: 1 | -1, levels: SeverityLevel[]): Promise<number | null> {
+    const idx = await this.buildSeverityIndex();
+    return nextSeverityLine(idx, fromLine, dir === -1 ? -1 : 1, levels);
   }
 
   close(): void {
