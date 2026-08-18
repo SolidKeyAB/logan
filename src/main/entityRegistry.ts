@@ -11,6 +11,7 @@
 export type EntityKind =
   | 'search'          // SearchConfig (global)
   | 'session'         // SearchConfigSession (global)
+  | 'composite'       // SingleSessionEntry (ordered file-set concatenated into one view)
   | 'filter'          // FilterPreset
   | 'highlightGroup'  // HighlightGroup
   | 'bookmarkSet'     // BookmarkSet
@@ -24,7 +25,7 @@ export type EntityKind =
   | 'investigation';  // InvestigationTemplate
 
 export const ENTITY_KINDS: EntityKind[] = [
-  'search', 'session', 'filter', 'highlightGroup', 'bookmarkSet', 'columnLayout',
+  'search', 'session', 'composite', 'filter', 'highlightGroup', 'bookmarkSet', 'columnLayout',
   'columnPattern', 'constant', 'trendProperty', 'pattern', 'contextDef', 'baseline', 'investigation',
 ];
 
@@ -32,6 +33,7 @@ export const ENTITY_KINDS: EntityKind[] = [
 export const ENTITY_KIND_LABELS: Record<EntityKind, string> = {
   search: 'Searches',
   session: 'Search sessions',
+  composite: 'Single sessions',
   filter: 'Filter presets',
   highlightGroup: 'Highlight groups',
   bookmarkSet: 'Bookmark sets',
@@ -75,6 +77,12 @@ export function toDescriptor(kind: EntityKind, raw: any): EntityDescriptor {
     case 'session':
       return { kind, id: String(r.id ?? ''), name: r.name || '(unnamed)', description: r.description,
         scope: boolScope(r.isGlobal), summary: `${(r.configs || []).length} searches`, count: (r.configs || []).length };
+    case 'composite': {
+      const files = (r.files || []) as string[];
+      const names = files.map((f) => String(f).split(/[\\/]/).pop() || f);
+      return { kind, id: String(r.id ?? ''), name: r.name || '(unnamed)', description: r.description,
+        scope: boolScope(r.isGlobal), summary: clip(`${files.length} files · ${names.join(' + ')}`), count: files.length };
+    }
     case 'filter':
       return { kind, id: String(r.id ?? ''), name: r.name || '(unnamed)', description: r.description, scope: 'global',
         summary: clip(`${(r.levels || []).length ? `levels [${(r.levels || []).join(',')}]` : ''}${(r.includePatterns || []).length ? ` · ${(r.includePatterns || []).length} include` : ''}${(r.excludePatterns || []).length ? ` · ${(r.excludePatterns || []).length} exclude` : ''}`.trim().replace(/^·\s*/, '')) };

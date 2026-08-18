@@ -315,6 +315,19 @@ export interface SearchConfigSession {
   description?: string; // optional human/AI note: what this is for / why it was added
 }
 
+// A saved "single session": an ordered list of files that get concatenated into one
+// continuous read-only composite view. Persisted (auto-saved on creation) so the user can
+// re-run the exact same combination in a later session. Scope mirrors search sessions:
+// global (reusable on any file) or file-local (kept in that file's .logan/ sidecar).
+export interface SingleSessionEntry {
+  id: string;           // `sss-${Date.now()}`
+  name: string;
+  files: string[];      // absolute paths, in concat order
+  isGlobal: boolean;
+  createdAt: number;
+  description?: string; // optional human/AI note
+}
+
 // Live connection info returned to renderer
 export interface LiveConnectionInfo {
   id: string;
@@ -340,8 +353,12 @@ export interface SavedConnection {
 // IPC Channels
 export const IPC = {
   OPEN_FILE_DIALOG: 'open-file-dialog',
+  OPEN_FILES_DIALOG: 'open-files-dialog',
   OPEN_FILE: 'open-file',
   CREATE_COMPOSITE: 'create-composite',
+  SINGLE_SESSION_LIST: 'single-session-list',
+  SINGLE_SESSION_DELETE: 'single-session-delete',
+  SINGLE_SESSION_RENAME: 'single-session-rename',
   GET_LINES: 'get-lines',
   SEVERITY_INFO: 'severity-info',
   SEVERITY_NEXT: 'severity-next',
