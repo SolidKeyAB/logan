@@ -1399,7 +1399,10 @@ app.whenReady().then(() => {
       return out;
     },
     investigateCrashes: async (options) => {
-      const handler = getFileHandler();
+      // getReadHandler so this runs over an active single-session composite too: analysis
+      // fans out per-member (analyzeCurrentTarget) with crash lines already rebased into the
+      // global space, and getLines/getTotalLines here read that same global space.
+      const handler = getReadHandler();
       if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
       const contextLines = options.contextLines ?? 10;
       const maxCrashes = options.maxCrashes ?? 20;
@@ -1509,7 +1512,9 @@ app.whenReady().then(() => {
       };
     },
     investigateComponent: async (options) => {
-      const handler = getFileHandler();
+      // getReadHandler so a single-session composite is searched across all members (global
+      // line space); analyzeCurrentTarget below is already composite-aware.
+      const handler = getReadHandler();
       if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
       const component = options.component;
       const maxSamplesPerLevel = options.maxSamplesPerLevel ?? 5;
@@ -1629,7 +1634,11 @@ app.whenReady().then(() => {
       };
     },
     investigateTimerange: async (options) => {
-      const handler = getFileHandler();
+      // getReadHandler so the time-window binary search runs over a single-session composite
+      // too (global line space). Note: like any log with non-monotonic timestamps, a composite
+      // whose members aren't in wall-clock order can bound the window imperfectly — inherent to
+      // the timestamp search, not specific to composites.
+      const handler = getReadHandler();
       if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
       const totalLines = handler.getTotalLines();
       const maxSamples = options.maxSamples ?? 20;
