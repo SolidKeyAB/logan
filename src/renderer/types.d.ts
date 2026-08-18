@@ -745,6 +745,7 @@ interface Api {
   clearAgentMemory: () => Promise<{ success: boolean }>;
   onAgentMemoryChanged: (callback: (memory: any) => void) => () => void;
   onAgentTrendCell: (callback: (spec: { type: string; label: string; result: any }) => void) => () => void;
+  onAgentOpenSingleSession: (callback: (spec: { id: string; files: string[]; label?: string; info: any; boundaries: Array<{ filePath: string; startLine: number; lineCount: number }> }) => void) => () => void;
 
   // Device discovery
   serialListPorts: () => Promise<{ success: boolean; ports?: Array<{ path: string; manufacturer?: string; vendorId?: string; productId?: string }>; error?: string }>;

@@ -848,6 +848,14 @@ const api = {
     return () => ipcRenderer.removeListener('agent-trend-cell', handler);
   },
 
+  // The agent created a "single session" composite (logan_single_session); display it in
+  // the viewer. The composite is already built + active in main — this just reflects it.
+  onAgentOpenSingleSession: (callback: (spec: any) => void): (() => void) => {
+    const handler = (_: any, spec: any) => callback(spec);
+    ipcRenderer.on('agent-open-single-session', handler);
+    return () => ipcRenderer.removeListener('agent-open-single-session', handler);
+  },
+
   // Device discovery
   serialListPorts: (): Promise<{ success: boolean; ports?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.SERIAL_LIST_PORTS),
