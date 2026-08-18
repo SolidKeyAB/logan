@@ -60,6 +60,7 @@ export const VERB_REGISTRY: VerbFeature[] = [
   { feature: 'lines-saved',          display: 'Save snippet',         humanActions: ['lines_saved'],      aiSlugs: [] },
   { feature: 'filter-extract',       display: 'Extract filter → file', humanActions: ['filter_extracted'], aiSlugs: ['extract'] },
   { feature: 'files-merged',         display: 'Merge to file',        humanActions: ['files_merged'],     aiSlugs: [] },
+  { feature: 'composite-create',     display: 'Single session',       humanActions: ['composite_created'], aiSlugs: ['composite-create'] },
   { feature: 'cadence',              display: 'Cadence analysis',     humanActions: ['cadence_analysis'], aiSlugs: [] },
   { feature: 'compile-pattern',      display: 'Compile pattern',      humanActions: [],                   aiSlugs: ['compile-pattern'] },
   { feature: 'baseline-save',        display: 'Save baseline',        humanActions: [],                   aiSlugs: ['baseline-save'] },

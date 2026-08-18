@@ -1884,6 +1884,32 @@ app.whenReady().then(() => {
         return { success: false, error: String(error) };
       }
     },
+    // Agent parity for the human "🔗 Single session" button: build a composite from an
+    // ordered file-set and open it. Reuses the SAME primitives as the CREATE_COMPOSITE IPC
+    // (buildComposite + autoSaveSingleSession), then makes it the active read target and
+    // pushes the display to the renderer (which reflects it via the shared display path).
+    createComposite: async (filePaths, label) => {
+      if (!Array.isArray(filePaths) || filePaths.length < 2) {
+        return { success: false, error: 'Pick at least 2 files for a single session' };
+      }
+      const missing = filePaths.filter((fp) => !fs.existsSync(fp));
+      if (missing.length) return { success: false, error: `File(s) not found: ${missing.join(', ')}` };
+      try {
+        const built = await buildComposite(filePaths, label);
+        autoSaveSingleSession(filePaths, label);
+        // Make the composite the active read target immediately, so a follow-up agent call
+        // (search/analyze/…) operates on it even before the renderer finishes displaying it.
+        currentFilePath = built.id;
+        mainWindow?.webContents.send('agent-open-single-session', {
+          id: built.id, files: filePaths, label, info: built.info, boundaries: built.boundaries,
+        });
+        return { success: true, id: built.id, info: built.info, boundaries: built.boundaries };
+      } catch (error) {
+        activeComposite = null;
+        activeCompositeId = null;
+        return { success: false, error: String(error) };
+      }
+    },
   };
   loadPersistedSession(); // restore last 24h of chat history
   startApiServer(apiContext);
@@ -2970,6 +2996,10 @@ ipcMain.handle(IPC.CREATE_COMPOSITE, async (_, filePaths: string[], label?: stri
     // Auto-save this file-set so the exact same single session can be re-run later
     // (surfaces in the Saved panel + logan_entities; deduped by ordered file-set).
     autoSaveSingleSession(filePaths, label);
+    // Count the human "🔗 Single session" verb for the Usage Monitor (joins with the AI
+    // 'composite-create' slug via verbRegistry). The synthetic composite id isn't a writable
+    // path, so logActivity bumps usage but writes no sidecar — exactly what we want here.
+    logActivity(built.id, 'composite_created', { fileCount: filePaths.length });
     return { success: true, id: built.id, info: built.info, boundaries: built.boundaries };
   } catch (error) {
     activeComposite = null;
