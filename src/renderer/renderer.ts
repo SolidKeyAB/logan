@@ -4757,6 +4757,19 @@ function handleContextMenu(event: MouseEvent): void {
     });
     menu.appendChild(copySelection);
 
+    // Earn-from-context: chart the selected field/value straight from the viewer, so Trends
+    // is reached WHERE you already are instead of via a blank Discover → pick-field panel.
+    const trendSpec = deriveTrendSpecFromSelection(selectedText);
+    if (trendSpec) {
+      menu.appendChild(menuSeparator());
+      const chart = menuItem('\u{1F4C8}', `Chart "${trendSpec.label}" over time`);
+      chart.addEventListener('click', () => { void chartSelectionAsTrend(trendSpec, 'series'); menu.remove(); });
+      menu.appendChild(chart);
+      const flips = menuItem('\u{1F500}', `Show flips of "${trendSpec.label}"`);
+      flips.addEventListener('click', () => { void chartSelectionAsTrend(trendSpec, 'transitions'); menu.remove(); });
+      menu.appendChild(flips);
+    }
+
     menu.appendChild(menuSeparator());
   }
 
@@ -12552,6 +12565,35 @@ async function applyPatternAsTrend(p: SavedPatternDef, kind: 'series' | 'transit
   const patternFlags = p.matchCase ? '' : 'i';
   openBottomTab('trends');
   await addTrendCell({ field: p.label, pattern, patternFlags, type: kind });
+}
+
+// "Earn-from-context" charting: turn a right-clicked selection in the viewer into a Trends
+// cell with no cold-start (no Discover → pick-field → pick-type dance). Derives what to chart
+// from the selected token:
+//   • "key=value" / "key: value"  → chart the FIELD's value over time (engine discovers it)
+//   • a bare identifier ("temp")   → same, treated as a field name
+//   • any other short token        → chart that literal's occurrences over time
+// Returns null for empty / multi-line / long selections so the menu stays clean.
+function deriveTrendSpecFromSelection(
+  sel: string,
+): { field?: string; pattern?: string; patternFlags?: string; label: string } | null {
+  const t = sel.trim();
+  if (!t || t.includes('\n') || t.length > 60) return null;
+  const kv = t.match(/^([A-Za-z_][\w.\-]*)\s*[=:]\s*.+$/);
+  if (kv) return { field: kv[1], label: kv[1] };
+  if (/^[A-Za-z_][\w.\-]*$/.test(t)) return { field: t, label: t };
+  return { pattern: escapeRegex(t), patternFlags: 'i', label: t };
+}
+
+// Open the Trends panel and drop in a cell for the derived selection. Reuses addTrendCell,
+// so the cell is identical to one built by hand or pushed by the agent.
+async function chartSelectionAsTrend(
+  spec: { field?: string; pattern?: string; patternFlags?: string; label: string },
+  kind: 'series' | 'transitions',
+): Promise<void> {
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  openBottomTab('trends');
+  await addTrendCell({ field: spec.field, pattern: spec.pattern, patternFlags: spec.patternFlags, type: kind });
 }
 
 // Apply a saved pattern as a search config, then PIN its lane on the overview
