@@ -27,9 +27,12 @@ export interface CompositeMemberHandler {
   filePath: string;
   handler: Pick<
     FileHandler,
-    'getTotalLines' | 'getLines' | 'getLinesAsync' | 'getLinesByNumbers' | 'search' | 'searchMulti' | 'buildSeverityIndex' | 'getMaxLineLength' | 'getFileInfo' | 'close'
+    'getTotalLines' | 'getLines' | 'getLinesAsync' | 'getLinesByNumbers' | 'search' | 'searchMulti' | 'buildSeverityIndex' | 'getMaxLineLength' | 'getFileInfo' | 'getScanContext' | 'close'
   >;
 }
+
+// Byte-offset scan context of one member, as returned by FileHandler.getScanContext().
+export type MemberScanContext = ReturnType<FileHandler['getScanContext']>;
 
 export interface CompositeBoundary {
   filePath: string;
@@ -70,6 +73,15 @@ export class CompositeFileHandler {
       startLine: this.space.members[i].startLine,
       lineCount: this.space.members[i].lineCount,
     }));
+  }
+
+  // Each member's byte-offset scan context, in composite (member) order. Handed to the
+  // trend worker so it can open its OWN fds and present the SAME unified global line space
+  // (via CompositeLineSpace) the engine reads through — so a Trends/Signals scan runs once,
+  // off the main thread, over the whole session. A null slot means a member has no open
+  // index (shouldn't happen for a live composite); the caller treats any null as fatal.
+  getMemberScanContexts(): MemberScanContext[] {
+    return this.members.map((m) => m.handler.getScanContext());
   }
 
   // Resolve a global line to its originating file (for "which file is this line from?").
