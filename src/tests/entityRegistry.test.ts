@@ -21,6 +21,15 @@ describe('toDescriptor — per-kind mapping', () => {
     expect(d.summary).toBe('3 searches');
   });
 
+  it('composite: name + file count, basenames in summary, scope from isGlobal', () => {
+    const d = toDescriptor('composite', { id: 'sss1', name: 'Boot logs', files: ['/logs/a/boot.log', '/logs/b/kernel.log'], isGlobal: true });
+    expect(d).toMatchObject({ kind: 'composite', id: 'sss1', name: 'Boot logs', scope: 'global', count: 2 });
+    expect(d.summary).toContain('2 files');
+    expect(d.summary).toContain('boot.log');
+    expect(d.summary).toContain('kernel.log');
+    expect(toDescriptor('composite', { id: 'sss2', name: 'x', files: ['/a.log'], isGlobal: false }).scope).toBe('file');
+  });
+
   it('filter: levels + include/exclude summary', () => {
     const d = toDescriptor('filter', { id: 'f1', name: 'Errors only', levels: ['error', 'fatal'], includePatterns: ['x'], excludePatterns: [] });
     expect(d.name).toBe('Errors only');

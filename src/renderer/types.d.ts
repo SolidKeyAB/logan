@@ -504,6 +504,7 @@ interface FileHandlerResult {
 interface Api {
   // File operations
   openFileDialog: () => Promise<string | null>;
+  openFilesDialog: () => Promise<string[]>;
   openFile: (path: string) => Promise<{ success: boolean; info?: FileInfo; error?: string; splitFiles?: string[]; splitIndex?: number; bookmarks?: Bookmark[]; highlights?: HighlightConfig[]; hasLongLines?: boolean; maxLineLength?: number }>;
   getLines: (startLine: number, count: number) => Promise<{ success: boolean; lines?: LogLine[]; error?: string }>;
   getSeverityInfo: (buckets: number) => Promise<{ success: boolean; counts?: { fatal: number; error: number; warning: number }; ticks?: number[]; totalLines?: number; capped?: boolean; error?: string }>;
@@ -653,6 +654,11 @@ interface Api {
   searchConfigSessionList: () => Promise<{ success: boolean; sessions?: SearchConfigSessionDef[] }>;
   searchConfigSessionSave: (session: SearchConfigSessionDef) => Promise<{ success: boolean }>;
   searchConfigSessionDelete: (sessionId: string, isGlobal: boolean) => Promise<{ success: boolean }>;
+
+  // Saved single sessions (composite file-sets)
+  singleSessionList: () => Promise<{ success: boolean; sessions?: Array<{ id: string; name: string; files: string[]; isGlobal: boolean; createdAt: number; description?: string }> }>;
+  singleSessionDelete: (sessionId: string, isGlobal: boolean) => Promise<{ success: boolean; error?: string }>;
+  singleSessionRename: (sessionId: string, isGlobal: boolean, name: string) => Promise<{ success: boolean; error?: string }>;
 
   // Local file status & activity history
   loadActivityHistory: () => Promise<{ success: boolean; history?: ActivityEntry[]; error?: string }>;
