@@ -16033,7 +16033,7 @@ function renderTimeSyncFiles(): void {
   const el = document.getElementById('time-sync-files');
   if (!el) return;
   if (timeSyncFileSet.length === 0) {
-    el.innerHTML = '<span class="placeholder">No files selected — use <strong>＋ Add file…</strong>.</span>';
+    el.innerHTML = '<span class="placeholder">No files selected — use <strong>＋ Add files…</strong>.</span>';
     return;
   }
   el.innerHTML = timeSyncFileSet.map((p, i) => {
@@ -16048,9 +16048,47 @@ function renderTimeSyncFiles(): void {
   }));
 }
 
+// Add one or more files to the Time Sync set. Multi-select is supported: pick several
+// at once and LOGAN offers to immediately turn them into a Single session or a Merge-to-file
+// — or just drop them into the set. Cancelling opens/writes nothing (per user request).
 async function addTimeSyncFile(): Promise<void> {
-  const p = await window.api.openFileDialog();
-  if (p && !timeSyncFileSet.includes(p)) { timeSyncFileSet.push(p); renderTimeSyncFiles(); }
+  const picked = await (window.api as any).openFilesDialog() as string[];
+  if (!picked || picked.length === 0) return; // dialog cancelled → nothing happens
+
+  // Only files not already in the set are "new".
+  const fresh = picked.filter((p) => !timeSyncFileSet.includes(p));
+
+  // Single pick → keep the old, frictionless behaviour: just add it.
+  if (picked.length === 1) {
+    if (fresh.length) { timeSyncFileSet.push(...fresh); renderTimeSyncFiles(); }
+    return;
+  }
+
+  // Multiple picked → ask what to do with them. Cancel = don't add, don't open.
+  const shown = picked.slice(0, 5).map(tsBaseName).join(', ');
+  const names = picked.length > 5 ? `${shown} … (+${picked.length - 5} more)` : shown;
+  const choice = await showConfirmDialog({
+    title: `Add ${picked.length} files to Time Sync`,
+    message: `${names} — how should LOGAN combine them?`,
+    buttons: [
+      { label: '🔗 Single session', value: 'single', primary: true },
+      { label: '⬇ Merge to file…', value: 'merge' },
+      { label: '＋ Just add to list', value: 'add' },
+      { label: 'Cancel', value: 'cancel' },
+    ],
+  });
+  // Cancel / dismissed → don't touch the set, don't open anything.
+  if (!choice || choice === 'cancel') return;
+
+  // All three remaining actions operate on the set, so add the fresh files first.
+  if (fresh.length) { timeSyncFileSet.push(...fresh); renderTimeSyncFiles(); }
+
+  if (choice === 'single') {
+    await openSingleSession();
+  } else if (choice === 'merge') {
+    await exportMergedFile();
+  }
+  // 'add' → files are already in the set; nothing more to do.
 }
 
 async function runTimeSyncMerge(): Promise<void> {
@@ -16190,6 +16228,26 @@ async function openSingleSession(): Promise<void> {
   } finally {
     hideProgress();
   }
+  // A fresh single session was just auto-saved in the main process — reflect it live in
+  // the Saved panel if that panel is open, so it can be re-run in a later session.
+  if (savedPanelInited && activePanel === 'saved') void loadSavedEntitiesPanel();
+}
+
+// Re-run a saved single session (from the Saved panel): load its file-set into the Time
+// Sync panel and open the composite. Reuses openSingleSession() so tab reuse / progress /
+// boundary rendering are identical to building one by hand.
+async function applySavedSingleSession(id: string, name: string): Promise<void> {
+  const res = await (window.api as any).singleSessionList();
+  const rec = (res?.sessions || []).find((s: any) => s.id === id);
+  if (!rec || !Array.isArray(rec.files) || rec.files.length < 2) {
+    showToast('Saved single session is missing or has too few files');
+    return;
+  }
+  timeSyncFileSet = rec.files.slice();
+  openBottomTab('time-sync');
+  renderTimeSyncFiles();
+  await openSingleSession();
+  showToast(`Opened single session “${name}”`);
 }
 
 // Render the composite's file boundaries into the Time Sync panel: one row per member
@@ -22341,19 +22399,20 @@ function togglePanelVisibility(): void {
 
 // ─── Saved Entities panel (Entity Registry browser — step 2, read-only) ──────
 const SAVED_KIND_LABELS: Record<string, string> = {
-  search: 'Searches', session: 'Search sessions', filter: 'Filter presets',
+  search: 'Searches', session: 'Search sessions', composite: 'Single sessions', filter: 'Filter presets',
   highlightGroup: 'Highlight groups', bookmarkSet: 'Bookmark sets',
   columnLayout: 'Column layouts', columnPattern: 'Column patterns',
   constant: 'Constants', trendProperty: 'Trend properties', pattern: 'Saved patterns',
   contextDef: 'Context definitions', baseline: 'Baselines', investigation: 'Investigations',
 };
-const SAVED_KIND_ORDER = ['search', 'session', 'filter', 'highlightGroup', 'bookmarkSet', 'columnLayout', 'columnPattern', 'constant', 'trendProperty', 'pattern', 'contextDef', 'baseline', 'investigation'];
+const SAVED_KIND_ORDER = ['search', 'session', 'composite', 'filter', 'highlightGroup', 'bookmarkSet', 'columnLayout', 'columnPattern', 'constant', 'trendProperty', 'pattern', 'contextDef', 'baseline', 'investigation'];
 // Step 3 — where each kind "lives" (its existing management surface). Reveal opens it.
 // filter / columnLayout / constant live in modals or inline pickers (no standalone
 // panel/tab), so they get copy-only for now.
 const SAVED_REVEAL_TARGET: Record<string, { type: 'panel' | 'tab'; id: string }> = {
   search: { type: 'tab', id: 'search-configs' },
   session: { type: 'tab', id: 'search-configs' },
+  composite: { type: 'tab', id: 'time-sync' },
   pattern: { type: 'tab', id: 'search-configs' },
   columnPattern: { type: 'tab', id: 'pattern-columns' },
   trendProperty: { type: 'tab', id: 'trends' },
@@ -22365,7 +22424,10 @@ const SAVED_REVEAL_TARGET: Record<string, { type: 'panel' | 'tab'; id: string }>
 };
 // Step 3 — kinds with a clean, self-contained one-click "apply". Others earn it with
 // usage (the saved:apply/reveal/copy:<kind> counters feed the "earn the rest" decision).
-const SAVED_CAN_APPLY = new Set(['investigation', 'highlightGroup', 'session']);
+const SAVED_CAN_APPLY = new Set(['investigation', 'highlightGroup', 'session', 'composite']);
+// Kinds that expose an inline ✕ Delete in the Saved panel. Single sessions auto-save, so
+// they need a prune path here; other kinds are managed (and deleted) in their own surface.
+const SAVED_CAN_DELETE = new Set(['composite']);
 let savedEntitiesCache: any[] = [];
 let savedPanelInited = false;
 
@@ -22388,6 +22450,7 @@ async function loadSavedEntitiesPanel(): Promise<void> {
       const act = (target.closest('.saved-item-btn') as HTMLElement | null)?.dataset.act;
       if (act === 'apply') { void applySavedEntity(kind, id, name); return; }
       if (act === 'open') { revealSavedEntity(kind); return; }
+      if (act === 'delete') { void deleteSavedEntity(kind, id, name); return; }
       trackUsage(`saved:copy:${kind}`);
       if (name) { void navigator.clipboard?.writeText(name); showToast(`Copied “${name}”`); }
     });
@@ -22420,7 +22483,9 @@ function renderSavedEntities(filter: string): void {
       const actions = `<span class="saved-item-actions">`
         + (SAVED_CAN_APPLY.has(e.kind) ? `<button class="saved-item-btn" data-act="apply" title="Apply / run">▶</button>` : '')
         + (SAVED_REVEAL_TARGET[e.kind] ? `<button class="saved-item-btn" data-act="open" title="Open where it lives">↗</button>` : '')
-        + `<button class="saved-item-btn" data-act="copy" title="Copy name">⧉</button></span>`;
+        + `<button class="saved-item-btn" data-act="copy" title="Copy name">⧉</button>`
+        + (SAVED_CAN_DELETE.has(e.kind) ? `<button class="saved-item-btn saved-item-del" data-act="delete" title="Delete">✕</button>` : '')
+        + `</span>`;
       html += `<div class="saved-item" data-kind="${escapeHtml(e.kind)}" data-id="${escapeHtml(e.id || '')}" data-name="${escapeHtml(e.name)}" title="${escapeHtml(e.name)}">`
         + `<div class="saved-item-main"><div class="saved-item-lead"><span class="saved-item-name">${escapeHtml(e.name)}</span>${scope}${desc}</div>${actions}</div>`
         + (e.summary ? `<div class="saved-item-sum">${escapeHtml(e.summary)}</div>` : '')
@@ -22449,12 +22514,43 @@ async function applySavedEntity(kind: string, id: string, name: string): Promise
       openBottomTab('search-configs');
       await selectSearchConfigSession(id);    // idempotent if already applied
       showToast(`Applied session “${name}”`);
+    } else if (kind === 'composite') {
+      await applySavedSingleSession(id, name);
     } else {
       showToast('No one-click apply for this kind yet — opening where it lives');
       revealSavedEntity(kind);
     }
   } catch {
     showToast('Apply failed');
+  }
+}
+
+// Delete a saved entity from the catalog (only kinds in SAVED_CAN_DELETE expose this).
+// Confirms first, then removes via the kind's delete IPC and refreshes the panel.
+async function deleteSavedEntity(kind: string, id: string, name: string): Promise<void> {
+  if (!SAVED_CAN_DELETE.has(kind)) return;
+  const choice = await showConfirmDialog({
+    title: 'Delete saved single session',
+    message: `Delete “${name}”? This removes the saved file-set, not the files themselves.`,
+    buttons: [
+      { label: 'Delete', value: 'delete', danger: true },
+      { label: 'Cancel', value: 'cancel' },
+    ],
+  });
+  if (choice !== 'delete') return;
+  trackUsage(`saved:delete:${kind}`);
+  try {
+    if (kind === 'composite') {
+      // The Saved panel only lists global single sessions; scope tells us which store.
+      const rec = savedEntitiesCache.find(e => e.kind === kind && e.id === id);
+      const isGlobal = !rec || rec.scope !== 'file';
+      const res = await window.api.singleSessionDelete(id, isGlobal);
+      if (!res.success) { showToast(res.error || 'Delete failed'); return; }
+      showToast(`Deleted “${name}”`);
+      await loadSavedEntitiesPanel();  // reload so the row disappears
+    }
+  } catch {
+    showToast('Delete failed');
   }
 }
 
