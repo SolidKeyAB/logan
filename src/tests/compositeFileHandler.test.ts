@@ -30,6 +30,25 @@ function fakeHandler(lines: string[]): CompositeMemberHandler['handler'] {
       }
       return out;
     },
+    searchMulti: async (
+      configs: Array<{ id: string; pattern: string; isRegex: boolean; matchCase: boolean; wholeWord: boolean }>,
+      _onProgress?: unknown,
+      signal?: { cancelled: boolean },
+      _onMatches?: unknown,
+      maxMatchesPerConfig: number = Infinity,
+    ) => {
+      const out: Record<string, SearchMatch[]> = {};
+      for (const c of configs) {
+        const res: SearchMatch[] = [];
+        for (let i = 0; i < lines.length && res.length < maxMatchesPerConfig; i++) {
+          if (signal?.cancelled) break;
+          const col = lines[i].toLowerCase().indexOf(c.pattern.toLowerCase());
+          if (col >= 0) res.push({ lineNumber: i, column: col, length: c.pattern.length, lineText: lines[i] });
+        }
+        out[c.id] = res;
+      }
+      return out;
+    },
     close: () => { /* noop */ },
   } as CompositeMemberHandler['handler'];
 }
@@ -114,5 +133,32 @@ describe('CompositeFileHandler', () => {
     const got = await comp.getLinesByNumbers([2, 99, 4]);
     expect(got.map((l) => l.lineNumber)).toEqual([2, 4]);
     expect(got.map((l) => l.text)).toEqual(['a2', 'b1']);
+  });
+
+  const cfg = (id: string, pattern: string) => ({ id, pattern, isRegex: false, matchCase: false, wholeWord: false });
+
+  it('searchMulti fans out across members, rebasing each config into the global line space', async () => {
+    const res = await comp.searchMulti([cfg('err', 'ERR'), cfg('zero', '0')]);
+    expect(res.err.map((m) => m.lineNumber)).toEqual([1, 5]);       // a1 (g1), c0 (g5)
+    expect(res.zero.map((m) => m.lineNumber)).toEqual([0, 3, 5]);   // a0 (g0), b0 (g3), c0 (g5)
+  });
+
+  it('searchMulti applies maxMatchesPerConfig as a GLOBAL cap across members', async () => {
+    // '0' matches a0(g0), b0(g3), c0(g5). With cap 2 we stop after b0 and never search /c.log.
+    const res = await comp.searchMulti([cfg('zero', '0')], undefined, undefined, undefined, 2);
+    expect(res.zero.map((m) => m.lineNumber)).toEqual([0, 3]);
+  });
+
+  it('searchMulti streams rebased deltas via onMatches with global line numbers', async () => {
+    const seen: number[] = [];
+    await comp.searchMulti([cfg('err', 'ERR')], undefined, undefined, (delta) => {
+      for (const m of delta.err || []) seen.push(m.lineNumber);
+    });
+    expect(seen).toEqual([1, 5]);
+  });
+
+  it('searchMulti stops when the signal is cancelled', async () => {
+    const res = await comp.searchMulti([cfg('err', 'ERR')], undefined, { cancelled: true });
+    expect(res.err).toEqual([]);
   });
 });
