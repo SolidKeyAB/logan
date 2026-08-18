@@ -27,7 +27,8 @@ import { resolveFileHandlers, runFileHandler, FileHandlerQuery } from './fileHan
 import { extractBodyLine, extractHeaderLine } from '../shared/extractFormat';
 import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, SingleSessionEntry, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation, PatternProperty, SavedPattern, ScopeDescriptor, ResolvedScope, FileInfo } from '../shared/types';
 import * as Diff from 'diff';
-import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
+import { analyzerRegistry, AnalyzerOptions, AnalysisResult, AnalyzeProgress, LogAnalyzer } from './analyzers';
+import { mergeAnalysisResults } from './compositeAnalysis';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
 import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession, broadcastInterrupt, API_PORT, buildEvidencePack } from './api-server';
 import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
@@ -140,6 +141,36 @@ function cacheAnalysisResult(filePath: string, result: AnalysisResult): void {
     if (firstKey) analysisResultCache.delete(firstKey);
   }
   analysisResultCache.set(filePath, result);
+}
+
+// Analyze the current target. For a normal file this is just analyzer.analyze(path). For an
+// active single-session composite, analyze reads a raw path so it can't route through
+// getReadHandler like reads/search do — instead we fan out over each member file and merge
+// the results into the composite's global line space (see compositeAnalysis.ts). Callers
+// cache the merged result under the composite id, invalidated on a file-set change (buildComposite).
+async function analyzeCurrentTarget(
+  analyzer: LogAnalyzer,
+  options: AnalyzerOptions,
+  onProgress: (p: AnalyzeProgress) => void,
+  signal: { cancelled: boolean },
+): Promise<AnalysisResult> {
+  if (activeComposite && currentFilePath === activeCompositeId) {
+    const boundaries = activeComposite.boundaries();
+    const parts: AnalysisResult[] = [];
+    for (let i = 0; i < boundaries.length; i++) {
+      if (signal.cancelled) break;
+      const sub = await analyzer.analyze(
+        boundaries[i].filePath,
+        options,
+        // Fold each member's 0..100% into an overall progress span.
+        (p) => onProgress({ ...p, percent: Math.round(((i + (p.percent || 0) / 100) / boundaries.length) * 100) }),
+        signal,
+      );
+      parts.push(sub);
+    }
+    return mergeAnalysisResults(parts, boundaries.map((b) => b.startLine), analyzer.name, Date.now());
+  }
+  return analyzer.analyze(currentFilePath as string, options, onProgress, signal);
 }
 
 // Filter state - maps file path to array of visible line indices
@@ -297,9 +328,15 @@ async function buildComposite(
     }
     members.push({ filePath: fp, handler: h });
   }
+  // A rebuild with a DIFFERENT file-set must not reuse the previous session's analysis
+  // (both cache under the constant composite id). Same-set rebuilds (switch-back) keep it.
+  const oldFiles = activeComposite ? activeComposite.boundaries().map((b) => b.filePath) : [];
   const name = label || `Single session (${filePaths.length} files)`;
   activeComposite = new CompositeFileHandler(members, name);
   activeCompositeId = COMPOSITE_ID;
+  if (JSON.stringify(oldFiles) !== JSON.stringify(filePaths)) {
+    analysisResultCache.delete(COMPOSITE_ID);
+  }
   return { id: activeCompositeId, info: activeComposite.getFileInfo(), boundaries: activeComposite.boundaries() };
 }
 
@@ -1110,7 +1147,7 @@ app.whenReady().then(() => {
       if (!analyzer) return { success: false, error: 'Analyzer not found' };
       analyzeSignal = { cancelled: false };
       try {
-        const result = await analyzer.analyze(currentFilePath, {}, () => {}, analyzeSignal);
+        const result = await analyzeCurrentTarget(analyzer, {}, () => {}, analyzeSignal);
         logActivity(currentFilePath, 'analysis_run', { analyzerName: analyzer.name });
         cacheAnalysisResult(currentFilePath, result);
         return { success: true, result, scope: scopeInfo(resolved) };
@@ -1373,7 +1410,7 @@ app.whenReady().then(() => {
         const analyzer = analyzerRegistry.getDefault();
         if (!analyzer) return { success: false, error: 'No analyzer available' };
         analyzeSignal = { cancelled: false };
-        analysisResult = await analyzer.analyze(currentFilePath, {}, () => {}, analyzeSignal);
+        analysisResult = await analyzeCurrentTarget(analyzer, {}, () => {}, analyzeSignal);
         cacheAnalysisResult(currentFilePath, analysisResult);
       }
 
@@ -1485,7 +1522,7 @@ app.whenReady().then(() => {
         const analyzer = analyzerRegistry.getDefault();
         if (!analyzer) return { success: false, error: 'No analyzer available' };
         analyzeSignal = { cancelled: false };
-        analysisResult = await analyzer.analyze(currentFilePath, {}, () => {}, analyzeSignal);
+        analysisResult = await analyzeCurrentTarget(analyzer, {}, () => {}, analyzeSignal);
         cacheAnalysisResult(currentFilePath, analysisResult);
       }
 
@@ -3000,7 +3037,9 @@ ipcMain.handle(IPC.GET_LINES, async (_, startLine: number, count: number) => {
 // === Severity index (background jump-to-problem) ===
 
 ipcMain.handle(IPC.SEVERITY_INFO, async (_, buckets: number) => {
-  const handler = getFileHandler();
+  // getReadHandler so F8/Shift+F8 jump-to-problem works on an active single-session composite
+  // too — it builds a combined severity index by rebasing each member's index into global lines.
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
   try {
     const info = await handler.getSeverityInfo(typeof buckets === 'number' ? buckets : 0);
@@ -3011,7 +3050,7 @@ ipcMain.handle(IPC.SEVERITY_INFO, async (_, buckets: number) => {
 });
 
 ipcMain.handle(IPC.SEVERITY_NEXT, async (_, fromLine: number, dir: 1 | -1, levels: string[]) => {
-  const handler = getFileHandler();
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
   const allowed = (Array.isArray(levels) ? levels : [])
     .filter((l): l is 'fatal' | 'error' | 'warning' => l === 'fatal' || l === 'error' || l === 'warning');
@@ -5145,8 +5184,8 @@ ipcMain.handle('analyze-file', async (_, analyzerName?: string, options?: Analyz
   analyzeSignal = { cancelled: false };
 
   try {
-    const result = await analyzer.analyze(
-      currentFilePath,
+    const result = await analyzeCurrentTarget(
+      analyzer,
       options || {},
       (progress) => {
         mainWindow?.webContents.send('analyze-progress', progress);
