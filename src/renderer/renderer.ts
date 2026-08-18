@@ -16288,22 +16288,7 @@ async function openSingleSession(): Promise<void> {
       return;
     }
     hideProgress();
-    // Reuse an existing composite tab if present (only one composite is active at a time),
-    // otherwise open a fresh tab. loadFile() re-fetches its info, so totals stay correct.
-    // Tag the tab with its explanatory name + member set BEFORE loadFile: if loadFile routes
-    // through switchToTab (composite tab exists but isn't active), its rebuild-on-switch must
-    // see THIS session's files, not a previous session's. compositeFiles also drives the tab
-    // label/tooltip and the rebuild-on-switch-back (opening a real member file tears the
-    // singleton composite down, so we re-establish it when returning to this tab).
-    const existing = findTabByFilePath(res.id);
-    if (existing) { existing.displayName = label; existing.compositeFiles = files; }
-    await loadFile(res.id, !existing);
-    const compTab = findTabByFilePath(res.id);
-    if (compTab) { compTab.displayName = label; compTab.compositeFiles = files; }
-    // Show the source files beside the session so the virtual file lives with its real files.
-    addMemberTabsBeside(files, compTab?.id);
-    renderTabBar();
-    renderCompositeInfo(res.info, res.boundaries || []);
+    await displaySingleSession(res.id, files, label, res.info, res.boundaries || []);
     const n = res.info?.totalLines || 0;
     if (status) status.textContent = `Single session: ${n.toLocaleString()} lines across ${(res.boundaries || []).length} files`;
   } catch (e) {
@@ -16312,8 +16297,38 @@ async function openSingleSession(): Promise<void> {
   } finally {
     hideProgress();
   }
-  // A fresh single session was just auto-saved in the main process — reflect it live in
-  // the Saved panel if that panel is open, so it can be re-run in a later session.
+}
+
+// Display an already-built single-session composite in the viewer: open/reuse its tab, tag
+// it with its member set, show the source files beside it, and render its boundary info.
+// Shared by the human 🔗 flow (openSingleSession, which builds via createComposite) and the
+// agent-created flow (agent-open-single-session push, where main already built it) — so both
+// operators reach ONE display path (rule 5, "same instrument, two operators").
+async function displaySingleSession(
+  id: string,
+  files: string[],
+  label: string,
+  info: any,
+  boundaries: Array<{ filePath: string; startLine: number; lineCount: number }>,
+): Promise<void> {
+  // Reuse an existing composite tab if present (only one composite is active at a time),
+  // otherwise open a fresh tab. loadFile() re-fetches its info, so totals stay correct.
+  // Tag the tab with its explanatory name + member set BEFORE loadFile: if loadFile routes
+  // through switchToTab (composite tab exists but isn't active), its rebuild-on-switch must
+  // see THIS session's files, not a previous session's. compositeFiles also drives the tab
+  // label/tooltip and the rebuild-on-switch-back (opening a real member file tears the
+  // singleton composite down, so we re-establish it when returning to this tab).
+  const existing = findTabByFilePath(id);
+  if (existing) { existing.displayName = label; existing.compositeFiles = files; }
+  await loadFile(id, !existing);
+  const compTab = findTabByFilePath(id);
+  if (compTab) { compTab.displayName = label; compTab.compositeFiles = files; }
+  // Show the source files beside the session so the virtual file lives with its real files.
+  addMemberTabsBeside(files, compTab?.id);
+  renderTabBar();
+  renderCompositeInfo(info, boundaries || []);
+  // A fresh single session was just auto-saved in the main process — reflect it live in the
+  // Saved panel if that panel is open, so it can be re-run in a later session.
   if (savedPanelInited && activePanel === 'saved') void loadSavedEntitiesPanel();
 }
 
@@ -23843,6 +23858,23 @@ function init(): void {
   // Agent-pushed trend cells (logan_trend_show) → render into the Trends notebook
   window.api.onAgentTrendCell((spec: any) => {
     addAgentTrendCell(spec);
+  });
+
+  // Agent-created single session (logan_single_session): the composite is already built and
+  // active in main — reflect it in the viewer via the shared display path, and keep Time
+  // Sync's file-set aligned so the panel mirrors what's shown.
+  window.api.onAgentOpenSingleSession(async (spec: any) => {
+    try {
+      const files: string[] = Array.isArray(spec?.files) ? spec.files : [];
+      if (files.length < 2) return;
+      const label = spec.label || buildCompositeLabel(files);
+      timeSyncFileSet = files.slice();
+      renderTimeSyncFiles();
+      await displaySingleSession(spec.id, files, label, spec.info, spec.boundaries || []);
+      showToast(`Agent opened single session (${files.length} files)`);
+    } catch (e) {
+      showToast('Failed to open agent single session: ' + String(e));
+    }
   });
 
   // Clear agent memory button

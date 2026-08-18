@@ -16,6 +16,22 @@ describe('canonical verb registry', () => {
     expect(canonicalizeAiVerb('analyze')).toBe('analyze');
   });
 
+  it('joins the human 🔗 single-session action with the AI composite-create slug', () => {
+    // Single-session create parity (2026-08-18): human 🔗 button logs 'composite_created',
+    // the agent's logan_single_session hits /api/composite-create → both canonicalize to one feature.
+    expect(canonicalizeHumanVerb('composite_created')).toBe('composite-create');
+    expect(canonicalizeAiVerb('composite-create')).toBe('composite-create');
+    expect(featureDisplayName('composite-create')).toBe('Single session');
+    const rows = aggregateUsageByFeature([
+      { verb: 'composite_created', operator: 'human', count: 2, lastUsed: '2026-08-18T10:00:00.000Z' },
+      { verb: 'composite-create', operator: 'ai', count: 1, lastUsed: '2026-08-18T11:00:00.000Z' },
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].feature).toBe('composite-create');
+    expect(rows[0].human).toBe(2);
+    expect(rows[0].ai).toBe(1);
+  });
+
   it('is idempotent — canonicalizing an already-canonical verb returns it unchanged', () => {
     for (const f of VERB_REGISTRY) {
       // A stored feature id must round-trip for both operators.

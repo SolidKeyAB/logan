@@ -67,6 +67,18 @@ Closed by the `feat/columns-panel` parity work (2026-08-13):
 | Constants / tags (save/list/delete) | 🔤 Save as constant + picker | `logan_constants` (`/api/constants-*`) | ✅ shared `constantsStore` |
 | Column Layouts (save/list/delete) | Column Layouts builder / Columns window | `logan_column_layouts` (`/api/column-layout-*`) | ✅ shared `columnLayoutsStore` |
 
+Closed by the single-session composite parity work (2026-08-18):
+
+| Verb | Human | AI | Status |
+|------|-------|----|--------|
+| Create single session (composite) | 🔗 button (Time Sync panel) | `logan_single_session` (`/api/composite-create`) | ✅ shared `buildComposite` + `autoSaveSingleSession`; agent path pushes `agent-open-single-session` → shared renderer `displaySingleSession` |
+
+(The AI path builds the composite in main — making it the active read target — and pushes the
+display to the renderer, which reflects it through the SAME `displaySingleSession` helper the
+human 🔗 flow uses. Usage joins human `composite_created` ↔ AI `composite-create` via
+`verbRegistry`. Investigate-crashes/-component/-timerange already run on a composite as of the
+prior follow-up; Trends-on-a-composite is the remaining single-session gap.)
+
 Uniform entity `description` (2026-08-13) — every saveable "basic entity" gained an
 optional `description?: string` so both operators can record an entity's purpose/why
 (naming matches the existing `BaselineRecord.description` / `InvestigationTemplate.description`;

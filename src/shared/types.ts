@@ -129,6 +129,7 @@ export interface ActivityEntry {
     | 'lines_saved'
     | 'filter_extracted'
     | 'files_merged'
+    | 'composite_created'
     | 'annotation_added';
   details: Record<string, unknown>;
 }
