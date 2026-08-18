@@ -3702,7 +3702,10 @@ ipcMain.handle(IPC.SEARCH_CONFIG_DELETE, async (_, id: string) => {
 });
 
 ipcMain.handle(IPC.SEARCH_CONFIG_BATCH, async (_, configs: Array<{ id: string; pattern: string; isRegex: boolean; matchCase: boolean; wholeWord: boolean }>) => {
-  const handler = getFileHandler();
+  // getReadHandler so multi-pattern Search Configs run over an active single-session
+  // composite too (fans out per member, hits merged into global line space) — otherwise
+  // the synthetic composite id isn't in fileHandlerCache and this returns "No file open".
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
   const results: Record<string, Array<{ lineNumber: number; column: number; length: number; lineText: string; displayIndex?: number }>> = {};
