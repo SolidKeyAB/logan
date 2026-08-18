@@ -9312,6 +9312,7 @@ kbd {
   color: var(--text-muted);
 }
 .saved-item-btn:hover { background: var(--bg-active, var(--bg-hover)); color: var(--text-primary); }
+.saved-item-del:hover { background: #a1260d; color: #fff; }
 .saved-item-sum { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .saved-desc-icon { font-size: 10px; opacity: 0.75; }
 .saved-scope {

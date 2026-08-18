@@ -25,7 +25,7 @@ import { getRipgrepPath } from './ripgrepPath';
 import { openWithAdapter, NormalizedSource } from './sourceAdapter';
 import { resolveFileHandlers, runFileHandler, FileHandlerQuery } from './fileHandlers';
 import { extractBodyLine, extractHeaderLine } from '../shared/extractFormat';
-import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation, PatternProperty, SavedPattern, ScopeDescriptor, ResolvedScope, FileInfo } from '../shared/types';
+import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, SingleSessionEntry, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation, PatternProperty, SavedPattern, ScopeDescriptor, ResolvedScope, FileInfo } from '../shared/types';
 import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult } from './analyzers';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
@@ -1345,6 +1345,7 @@ app.whenReady().then(() => {
       try {
         add('search', loadSearchConfigsStore()['_global'] || []);
         add('session', loadGlobalSearchConfigSessions());
+        add('composite', loadGlobalSingleSessions());
         add('filter', loadFilterPresets());
         add('highlightGroup', loadHighlightGroups());
         add('bookmarkSet', loadBookmarkSets());
@@ -2346,6 +2347,21 @@ ipcMain.handle(IPC.OPEN_FILE_DIALOG, async () => {
   return result.canceled ? null : result.filePaths[0];
 });
 
+// Multi-select variant used by the Time Sync "Add files…" flow: returns every chosen
+// path (empty array on cancel) so the renderer can add them all in one action.
+ipcMain.handle(IPC.OPEN_FILES_DIALOG, async () => {
+  const result = await showOpenDialog({
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      { name: 'All Files', extensions: ['*'] },
+      { name: 'Log Files', extensions: ['log', 'txt', 'out', 'err'] },
+      { name: 'Data Files', extensions: ['json', 'xml', 'yaml', 'yml', 'csv', 'tsv', 'toml', 'ndjson', 'jsonl'] },
+      { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'svg', 'bmp', 'webp'] },
+    ],
+  });
+  return result.canceled ? [] : result.filePaths;
+});
+
 // === Folder Operations ===
 
 ipcMain.handle(IPC.OPEN_FOLDER_DIALOG, async () => {
@@ -2905,6 +2921,9 @@ ipcMain.handle(IPC.CREATE_COMPOSITE, async (_, filePaths: string[], label?: stri
       return { success: false, error: 'Pick at least 2 files for a single session' };
     }
     const built = await buildComposite(filePaths, label);
+    // Auto-save this file-set so the exact same single session can be re-run later
+    // (surfaces in the Saved panel + logan_entities; deduped by ordered file-set).
+    autoSaveSingleSession(filePaths, label);
     return { success: true, id: built.id, info: built.info, boundaries: built.boundaries };
   } catch (error) {
     activeComposite = null;
@@ -4133,6 +4152,106 @@ ipcMain.handle(IPC.SEARCH_CONFIG_SESSION_DELETE, async (_, sessionId: string, is
     if (!currentFilePath) return { success: false, error: 'No file open' };
     const sessions = loadLocalSearchConfigSessions(currentFilePath).filter(s => s.id !== sessionId);
     saveLocalSearchConfigSessions(currentFilePath, sessions);
+  }
+  return { success: true };
+});
+
+// === Single sessions (saved composite file-sets) ===
+// A "single session" is an ordered list of files concatenated into one continuous
+// read-only view. We auto-save each newly built composite so the same file combination
+// can be re-run in a later session (surfaced in the Saved panel + logan_entities). Scope
+// mirrors search sessions: global (reusable everywhere) or file-local (.logan/ sidecar).
+const getSingleSessionsPath = () => path.join(getConfigDir(), 'single-sessions.json');
+
+function loadGlobalSingleSessions(): SingleSessionEntry[] {
+  try {
+    const filePath = getSingleSessionsPath();
+    if (fs.existsSync(filePath)) return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+  } catch { /* ignore */ }
+  return [];
+}
+
+function saveGlobalSingleSessions(sessions: SingleSessionEntry[]): void {
+  ensureConfigDir();
+  fs.writeFileSync(getSingleSessionsPath(), JSON.stringify(sessions, null, 2), 'utf-8');
+}
+
+function loadLocalSingleSessions(filePath: string): SingleSessionEntry[] {
+  try {
+    const data = loadLocalFileData(filePath);
+    return (data as any).singleSessions || [];
+  } catch { /* ignore */ }
+  return [];
+}
+
+function saveLocalSingleSessions(filePath: string, sessions: SingleSessionEntry[]): void {
+  const data = loadLocalFileData(filePath);
+  (data as any).singleSessions = sessions;
+  saveLocalFileData(filePath, data);
+}
+
+// Derive a readable default name from the member basenames, e.g. "a.log + b.log (+2 more)".
+function defaultSingleSessionName(files: string[]): string {
+  const names = files.map(f => path.basename(f));
+  if (names.length <= 2) return names.join(' + ');
+  return `${names[0]} + ${names[1]} (+${names.length - 2} more)`;
+}
+
+// Auto-persist a just-built composite as a global single-session entity, deduped by the
+// exact ordered file-set (re-running the same combination updates in place, never piles up).
+function autoSaveSingleSession(files: string[], label?: string): void {
+  try {
+    if (!Array.isArray(files) || files.length < 2) return;
+    const key = JSON.stringify(files);
+    const sessions = loadGlobalSingleSessions();
+    const existing = sessions.find(s => JSON.stringify(s.files) === key);
+    if (existing) {
+      existing.createdAt = Date.now();
+      if (label) existing.name = label;
+    } else {
+      sessions.push({
+        id: `sss-${Date.now()}`,
+        name: label || defaultSingleSessionName(files),
+        files: files.slice(),
+        isGlobal: true,
+        createdAt: Date.now(),
+      });
+    }
+    // Hygiene cap: this store auto-grows (one entry per distinct file-set), so keep only
+    // the most-recent 100 so ad-hoc sessions can't pile up unbounded.
+    const capped = sessions.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 100);
+    saveGlobalSingleSessions(capped);
+  } catch (e) {
+    console.error('autoSaveSingleSession failed:', e);
+  }
+}
+
+// List saved single sessions: global ones + any file-local ones for the open file.
+ipcMain.handle(IPC.SINGLE_SESSION_LIST, async () => {
+  const globalSessions = loadGlobalSingleSessions().map(s => ({ ...s, isGlobal: true }));
+  const localSessions = currentFilePath
+    ? loadLocalSingleSessions(currentFilePath).map(s => ({ ...s, isGlobal: false }))
+    : [];
+  return { success: true, sessions: [...globalSessions, ...localSessions] };
+});
+
+ipcMain.handle(IPC.SINGLE_SESSION_DELETE, async (_, sessionId: string, isGlobal: boolean) => {
+  if (isGlobal) {
+    saveGlobalSingleSessions(loadGlobalSingleSessions().filter(s => s.id !== sessionId));
+  } else {
+    if (!currentFilePath) return { success: false, error: 'No file open' };
+    saveLocalSingleSessions(currentFilePath, loadLocalSingleSessions(currentFilePath).filter(s => s.id !== sessionId));
+  }
+  return { success: true };
+});
+
+ipcMain.handle(IPC.SINGLE_SESSION_RENAME, async (_, sessionId: string, isGlobal: boolean, name: string) => {
+  const apply = (arr: SingleSessionEntry[]) => { const s = arr.find(x => x.id === sessionId); if (s) s.name = name; return arr; };
+  if (isGlobal) {
+    saveGlobalSingleSessions(apply(loadGlobalSingleSessions()));
+  } else {
+    if (!currentFilePath) return { success: false, error: 'No file open' };
+    saveLocalSingleSessions(currentFilePath, apply(loadLocalSingleSessions(currentFilePath)));
   }
   return { success: true };
 });
