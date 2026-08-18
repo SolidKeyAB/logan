@@ -49,6 +49,19 @@ function fakeHandler(lines: string[]): CompositeMemberHandler['handler'] {
       }
       return out;
     },
+    buildSeverityIndex: async () => {
+      const fatal: number[] = [], error: number[] = [], warning: number[] = [];
+      lines.forEach((l, i) => {
+        if (/FATAL|PANIC/i.test(l)) fatal.push(i);
+        else if (/ERR/i.test(l)) error.push(i);
+        else if (/WARN/i.test(l)) warning.push(i);
+      });
+      return {
+        fatal: Uint32Array.from(fatal),
+        error: Uint32Array.from(error),
+        warning: Uint32Array.from(warning),
+      };
+    },
     close: () => { /* noop */ },
   } as CompositeMemberHandler['handler'];
 }
@@ -160,5 +173,21 @@ describe('CompositeFileHandler', () => {
   it('searchMulti stops when the signal is cancelled', async () => {
     const res = await comp.searchMulti([cfg('err', 'ERR')], undefined, { cancelled: true });
     expect(res.err).toEqual([]);
+  });
+
+  it('builds a combined severity index rebased into the global line space', async () => {
+    const info = await comp.getSeverityInfo(0);
+    // a1 (g1) + c0 (g5) match ERR → 2 errors; totals span the whole session.
+    expect(info.counts).toEqual({ fatal: 0, error: 2, warning: 0 });
+    expect(info.totalLines).toBe(9);
+    expect(info.capped).toBe(false);
+  });
+
+  it('navigates to next/previous problem line across members in global space', async () => {
+    expect(await comp.getNextSeverityLine(-1, 1, ['error'])).toBe(1); // first error, a1 (g1)
+    expect(await comp.getNextSeverityLine(1, 1, ['error'])).toBe(5);  // next, c0 (g5)
+    expect(await comp.getNextSeverityLine(9, 1, ['error'])).toBeNull();
+    expect(await comp.getNextSeverityLine(9, -1, ['error'])).toBe(5); // previous from end
+    expect(await comp.getNextSeverityLine(5, -1, ['error'])).toBe(1);
   });
 });
