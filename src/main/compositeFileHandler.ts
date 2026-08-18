@@ -25,7 +25,7 @@ export interface CompositeMemberHandler {
   filePath: string;
   handler: Pick<
     FileHandler,
-    'getTotalLines' | 'getLines' | 'getLinesAsync' | 'getLinesByNumbers' | 'search' | 'getMaxLineLength' | 'getFileInfo' | 'close'
+    'getTotalLines' | 'getLines' | 'getLinesAsync' | 'getLinesByNumbers' | 'search' | 'searchMulti' | 'getMaxLineLength' | 'getFileInfo' | 'close'
   >;
 }
 
@@ -170,6 +170,63 @@ export class CompositeFileHandler {
     this.lastSearchEngine = 'composite';
     this.lastSearchReason = `${this.members.length} files`;
     return all;
+  }
+
+  // Multi-pattern batch search (Search Configs panel) fanned out over every member and
+  // merged into the global line space. Mirrors FileHandler.searchMulti's shape so the
+  // SEARCH_CONFIG_BATCH handler can call it uniformly across the FileHandler | Composite
+  // union. Each config's match cap is GLOBAL across the whole session (like a single
+  // file) — we track a per-config remaining budget so N members can't each yield up to
+  // `cap` and blow the budget N×. Streamed deltas (onMatches) and the returned matches
+  // both carry GLOBAL line numbers, so the caller's overview/filter logic is unchanged.
+  async searchMulti(
+    configs: Array<{ id: string; pattern: string; isRegex: boolean; matchCase: boolean; wholeWord: boolean }>,
+    onProgress?: (counts: Record<string, number>, overallPercent: number) => void,
+    signal?: { cancelled: boolean },
+    onMatches?: (deltaByConfig: Record<string, SearchMatch[]>) => void,
+    maxMatchesPerConfig: number = DEFAULT_MAX_MATCHES
+  ): Promise<Record<string, SearchMatch[]>> {
+    const results: Record<string, SearchMatch[]> = {};
+    for (const c of configs) results[c.id] = [];
+    if (configs.length === 0) return results;
+
+    const remaining: Record<string, number> = {};
+    for (const c of configs) remaining[c.id] = maxMatchesPerConfig;
+
+    for (let i = 0; i < this.members.length; i++) {
+      if (signal?.cancelled) break;
+      // Stop early once every config has hit its global cap — nothing left to find.
+      if (configs.every((c) => remaining[c.id] <= 0)) break;
+      const base = this.space.members[i].startLine;
+      // Only search configs that still have budget; a full one is silently skipped.
+      const memberConfigs = configs.filter((c) => remaining[c.id] > 0);
+      if (memberConfigs.length === 0) continue;
+      const sub = await this.members[i].handler.searchMulti(
+        memberConfigs,
+        undefined, // fold per-member progress into our own aggregate below
+        signal,
+        undefined, // emit our own onMatches AFTER rebasing to global line numbers
+        maxMatchesPerConfig
+      );
+      const delta: Record<string, SearchMatch[]> = {};
+      for (const c of memberConfigs) {
+        const memberMatches = sub[c.id] || [];
+        // Respect this config's remaining GLOBAL budget, then rebase local→global lines.
+        const take = memberMatches.slice(0, remaining[c.id]);
+        if (take.length === 0) continue;
+        const rebased = take.map((m) => ({ ...m, lineNumber: base + m.lineNumber, displayIndex: undefined }));
+        results[c.id].push(...rebased);
+        remaining[c.id] -= rebased.length;
+        delta[c.id] = rebased;
+      }
+      if (onMatches && Object.keys(delta).length > 0) onMatches(delta);
+      const counts: Record<string, number> = {};
+      for (const c of configs) counts[c.id] = results[c.id].length;
+      onProgress?.(counts, Math.round(((i + 1) / this.members.length) * 100));
+    }
+    this.lastSearchEngine = 'composite';
+    this.lastSearchReason = `${this.members.length} files`;
+    return results;
   }
 
   close(): void {
