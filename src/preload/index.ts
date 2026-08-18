@@ -4,8 +4,12 @@ import type { ScopeDescriptor, ScopeInfo } from '../shared/types';
 // IPC Channel constants (must match main process)
 const IPC = {
   OPEN_FILE_DIALOG: 'open-file-dialog',
+  OPEN_FILES_DIALOG: 'open-files-dialog',
   OPEN_FILE: 'open-file',
   CREATE_COMPOSITE: 'create-composite',
+  SINGLE_SESSION_LIST: 'single-session-list',
+  SINGLE_SESSION_DELETE: 'single-session-delete',
+  SINGLE_SESSION_RENAME: 'single-session-rename',
   GET_LINES: 'get-lines',
   SEVERITY_INFO: 'severity-info',
   SEVERITY_NEXT: 'severity-next',
@@ -144,6 +148,10 @@ const api = {
   openFileDialog: (): Promise<string | null> =>
     ipcRenderer.invoke(IPC.OPEN_FILE_DIALOG),
 
+  // Multi-select variant: returns the full list of chosen paths (empty array if cancelled).
+  openFilesDialog: (): Promise<string[]> =>
+    ipcRenderer.invoke(IPC.OPEN_FILES_DIALOG),
+
   openFile: (path: string): Promise<{ success: boolean; info?: any; error?: string }> =>
     ipcRenderer.invoke(IPC.OPEN_FILE, path),
 
@@ -151,6 +159,14 @@ const api = {
   // view (no on-disk merge). Returns a synthetic `composite://…` id to open like a file.
   createComposite: (filePaths: string[], label?: string): Promise<{ success: boolean; id?: string; info?: any; boundaries?: Array<{ filePath: string; startLine: number; lineCount: number }>; error?: string }> =>
     ipcRenderer.invoke(IPC.CREATE_COMPOSITE, filePaths, label),
+
+  // Saved single sessions (auto-persisted composite file-sets) — list / delete / rename.
+  singleSessionList: (): Promise<{ success: boolean; sessions?: Array<{ id: string; name: string; files: string[]; isGlobal: boolean; createdAt: number; description?: string }> }> =>
+    ipcRenderer.invoke(IPC.SINGLE_SESSION_LIST),
+  singleSessionDelete: (sessionId: string, isGlobal: boolean): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.SINGLE_SESSION_DELETE, sessionId, isGlobal),
+  singleSessionRename: (sessionId: string, isGlobal: boolean, name: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.SINGLE_SESSION_RENAME, sessionId, isGlobal, name),
 
   getLines: (startLine: number, count: number): Promise<{ success: boolean; lines?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.GET_LINES, startLine, count),
