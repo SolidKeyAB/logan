@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-device="desktop">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>LOGAN — UI Redesign Preview</title>
+<style>
+/* ============================================================
+   LOGAN UI Redesign — standalone clickable preview
+   Preview-only mockup. No build step, no dependencies.
+   Demonstrates: new left rail (5+utility), grouped bottom pane
+   (6 workbenches), slim right toolbar (4+overflow), light/dark
+   themes, and phone / tablet / desktop responsive behaviour.
+   ============================================================ */
+
+/* ---------- Design tokens ---------- */
+:root {
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  --mono: "SF Mono", ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, monospace;
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 26px;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.16), 0 2px 8px rgba(0,0,0,.10);
+  --shadow-2: 0 8px 30px rgba(0,0,0,.22);
+  --shadow-pop: 0 12px 40px rgba(0,0,0,.35);
+  --ease: cubic-bezier(.22,1,.36,1);
+  --dur: .34s;
+  --rail-w: 76px;
+  --panel-w: 288px;
+  --tabbar-h: 66px;
+}
+
+/* Dark theme (default) */
+html[data-theme="dark"] {
+  --bg: #0b0e14;
+  --bg-elev: #12151f;
+  --bg-elev-2: #171b28;
+  --surface: rgba(30,35,50,.72);
+  --surface-solid: #1a1f2e;
+  --line: rgba(255,255,255,.08);
+  --line-strong: rgba(255,255,255,.14);
+  --txt: #e8ecf4;
+  --txt-dim: #9aa4b8;
+  --txt-faint: #626c82;
+  --accent: #6ea8ff;
+  --accent-2: #b088ff;
+  --accent-soft: rgba(110,168,255,.16);
+  --accent-glow: rgba(110,168,255,.40);
+  --ok: #52d69a;
+  --warn: #ffca6b;
+  --err: #ff7a85;
+  --err-soft: rgba(255,122,133,.14);
+  --warn-soft: rgba(255,202,107,.14);
+  --ok-soft: rgba(82,214,154,.14);
+  --glass: rgba(15,18,28,.66);
+  --frame: #05070c;
+}
+
+/* Light theme */
+html[data-theme="light"] {
+  --bg: #eef1f6;
+  --bg-elev: #f7f9fc;
+  --bg-elev-2: #ffffff;
+  --surface: rgba(255,255,255,.78);
+  --surface-solid: #ffffff;
+  --line: rgba(20,30,60,.10);
+  --line-strong: rgba(20,30,60,.16);
+  --txt: #1a2233;
+  --txt-dim: #59637a;
+  --txt-faint: #97a0b5;
+  --accent: #2f6bff;
+  --accent-2: #8a4bff;
+  --accent-soft: rgba(47,107,255,.12);
+  --accent-glow: rgba(47,107,255,.30);
+  --ok: #17a673;
+  --warn: #c98410;
+  --err: #e0384a;
+  --err-soft: rgba(224,56,74,.10);
+  --warn-soft: rgba(201,132,16,.12);
+  --ok-soft: rgba(23,166,115,.12);
+  --glass: rgba(255,255,255,.72);
+  --frame: #c9d0dd;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: var(--font);
+  background:
+    radial-gradient(1200px 600px at 15% -10%, var(--accent-soft), transparent 60%),
+    radial-gradient(1000px 500px at 110% 10%, rgba(176,136,255,.10), transparent 55%),
+    var(--frame);
+  color: var(--txt);
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+  transition: background var(--dur) var(--ease);
+  overflow-x: hidden;
+}
+
+/* ---------- Preview chrome (the controls above the mock) ---------- */
+.preview-bar {
+  width: 100%;
+  max-width: 1400px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 22px 8px;
+  flex-wrap: wrap;
+}
+.brand {
+  display: flex; align-items: center; gap: 10px;
+  font-weight: 700; letter-spacing: .3px; font-size: 16px; color: var(--txt);
+}
+.brand .logo {
+  width: 30px; height: 30px; border-radius: 9px;
+  background: linear-gradient(140deg, var(--accent), var(--accent-2));
+  display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 15px;
+  box-shadow: 0 4px 14px var(--accent-glow);
+}
+.brand small { color: var(--txt-faint); font-weight: 500; font-size: 12px; }
+.preview-bar .spacer { flex: 1; }
+
+.seg {
+  display: inline-flex; padding: 4px; gap: 3px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 999px; backdrop-filter: blur(12px);
+}
+.seg button {
+  border: 0; background: transparent; color: var(--txt-dim);
+  font-family: var(--font); font-size: 12.5px; font-weight: 600;
+  padding: 7px 14px; border-radius: 999px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px;
+  transition: color .2s, background .2s, box-shadow .2s;
+}
+.seg button:hover { color: var(--txt); }
+.seg button[aria-pressed="true"] {
+  color: #fff; background: linear-gradient(140deg, var(--accent), var(--accent-2));
+  box-shadow: 0 4px 14px var(--accent-glow);
+}
+html[data-theme="light"] .seg button[aria-pressed="true"] { color: #fff; }
+.seg .ico { font-size: 14px; }
+
+.hint { width: 100%; max-width: 1400px; padding: 0 22px 6px; color: var(--txt-faint); font-size: 12px; }
+.hint b { color: var(--txt-dim); font-weight: 600; }
+
+/* ---------- Device frame ---------- */
+.stage {
+  width: 100%;
+  display: flex; justify-content: center;
+  padding: 10px 20px 60px;
+}
+.device {
+  position: relative;
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+  transition: width var(--dur) var(--ease), height var(--dur) var(--ease);
+  width: 1360px; height: 840px;
+  display: flex; flex-direction: column;
+}
+html[data-device="tablet"] .device { width: 768px; height: 900px; }
+html[data-device="phone"]  .device { width: 390px; height: 812px; border-radius: var(--radius-xl); }
+
+/* The app shell inside the device is a container query context */
+.app {
+  flex: 1; min-height: 0;
+  display: grid;
+  grid-template-columns: var(--rail-w) 1fr;
+  grid-template-rows: auto 1fr;
+  background: var(--bg);
+  container-type: inline-size;
+  position: relative;
+}
+
+/* ---------- Top bar ---------- */
+.topbar {
+  grid-column: 1 / -1;
+  height: 52px;
+  display: flex; align-items: center; gap: 12px;
+  padding: 0 14px;
+  background: var(--glass);
+  backdrop-filter: blur(18px) saturate(1.3);
+  border-bottom: 1px solid var(--line);
+  z-index: 30;
+}
+.topbar .app-logo {
+  width: 26px; height: 26px; border-radius: 8px;
+  background: linear-gradient(140deg, var(--accent), var(--accent-2));
+  display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 13px;
+  flex-shrink: 0;
+}
+.filechip {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--surface); border: 1px solid var(--line);
+  padding: 6px 12px; border-radius: 999px; font-size: 12.5px; color: var(--txt-dim);
+  max-width: 46%;
+}
+.filechip .name { color: var(--txt); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filechip .meta { color: var(--txt-faint); font-variant-numeric: tabular-nums; }
+.topbar .grow { flex: 1; }
+.searchbox {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 999px; padding: 7px 14px; width: min(340px, 34%);
+  color: var(--txt-faint); font-size: 12.5px;
+  transition: border-color .2s, box-shadow .2s;
+}
+.searchbox:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.searchbox input { border: 0; background: transparent; color: var(--txt); font-family: var(--font); font-size: 13px; flex: 1; outline: none; }
+.iconbtn {
+  width: 34px; height: 34px; border-radius: 10px; border: 1px solid transparent;
+  background: transparent; color: var(--txt-dim); cursor: pointer; font-size: 15px;
+  display: grid; place-items: center; transition: background .18s, color .18s, border-color .18s;
+}
+.iconbtn:hover { background: var(--surface); color: var(--txt); border-color: var(--line); }
+
+/* ---------- Left rail ---------- */
+.rail {
+  grid-row: 2;
+  background: var(--bg-elev);
+  border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; align-items: center;
+  padding: 12px 0; gap: 4px;
+  z-index: 20;
+}
+.rail .rail-group { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 100%; }
+.rail .rail-spacer { flex: 1; }
+.rail-btn {
+  position: relative;
+  width: 52px; height: 50px; border: 0; background: transparent; cursor: pointer;
+  border-radius: var(--radius); color: var(--txt-dim);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  transition: color .18s, background .18s, transform .18s var(--ease);
+}
+.rail-btn .ico { font-size: 19px; line-height: 1; }
+.rail-btn .lbl { font-size: 9.5px; font-weight: 600; letter-spacing: .2px; }
+.rail-btn:hover { color: var(--txt); background: var(--surface); }
+.rail-btn:active { transform: scale(.94); }
+.rail-btn[aria-selected="true"] { color: var(--accent); background: var(--accent-soft); }
+.rail-btn[aria-selected="true"]::before {
+  content: ""; position: absolute; left: -12px; top: 50%; transform: translateY(-50%);
+  width: 4px; height: 26px; border-radius: 4px; background: linear-gradient(var(--accent), var(--accent-2));
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+.rail-btn .badge {
+  position: absolute; top: 6px; right: 8px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 999px; background: var(--accent); color: #fff; font-size: 9px; font-weight: 700;
+  display: grid; place-items: center;
+}
+.rail-btn.util { color: var(--txt-faint); }
+.rail-btn.util .lbl { display: none; }
+.rail-btn.util { height: 42px; }
+
+/* ---------- Side panel ---------- */
+.workarea {
+  grid-row: 2; grid-column: 2;
+  display: grid;
+  grid-template-columns: var(--panel-w) 1fr auto;
+  grid-template-rows: 1fr auto;
+  min-height: 0; min-width: 0;
+}
+.panel {
+  grid-row: 1 / -1;
+  background: var(--bg-elev);
+  border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; min-height: 0;
+}
+.panel-head {
+  padding: 14px 16px 10px; display: flex; align-items: center; gap: 8px;
+}
+.panel-head h2 { font-size: 15px; font-weight: 700; letter-spacing: .2px; }
+.panel-head .count { font-size: 11px; color: var(--txt-faint); background: var(--surface); border: 1px solid var(--line); padding: 2px 8px; border-radius: 999px; }
+.panel-head .grow { flex: 1; }
+.panel-sub { padding: 0 16px 10px; color: var(--txt-faint); font-size: 11.5px; }
+.panel-search {
+  margin: 0 14px 10px; display: flex; align-items: center; gap: 8px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 11px;
+  color: var(--txt-faint); font-size: 12.5px;
+}
+.panel-body { flex: 1; overflow: auto; padding: 4px 10px 14px; }
+.panel-body::-webkit-scrollbar { width: 9px; }
+.panel-body::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 9px; border: 3px solid transparent; background-clip: padding-box; }
+
+.group-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .8px; color: var(--txt-faint); font-weight: 700; padding: 12px 8px 6px; }
+.row {
+  display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 10px; cursor: pointer;
+  transition: background .15s; font-size: 13px;
+}
+.row:hover { background: var(--surface); }
+.row .dot { width: 9px; height: 9px; border-radius: 3px; flex-shrink: 0; }
+.row .r-main { flex: 1; min-width: 0; }
+.row .r-title { color: var(--txt); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .r-sub { color: var(--txt-faint); font-size: 11px; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .r-tag { font-size: 10px; color: var(--txt-dim); background: var(--surface); border: 1px solid var(--line); padding: 2px 7px; border-radius: 999px; }
+.row .r-line { font-family: var(--mono); font-size: 11px; color: var(--txt-faint); }
+
+.file-tree .row { padding-left: 8px; }
+.file-tree .row.indent { padding-left: 26px; }
+.file-tree .row.active { background: var(--accent-soft); }
+.file-tree .row.active .r-title { color: var(--accent); }
+
+.statcard {
+  margin: 4px 6px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+}
+.statcard .kv .k { font-size: 10.5px; color: var(--txt-faint); text-transform: uppercase; letter-spacing: .5px; }
+.statcard .kv .v { font-size: 16px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.statcard .kv .v.err { color: var(--err); }
+.statcard .kv .v.warn { color: var(--warn); }
+
+/* ---------- Viewer ---------- */
+.viewer {
+  grid-row: 1 / -1; grid-column: 2;
+  position: relative; min-width: 0; min-height: 0;
+  background: var(--bg);
+  display: flex; flex-direction: column;
+}
+.viewer-toolbar {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  border-bottom: 1px solid var(--line); background: var(--bg-elev);
+}
+.chiprow { display: flex; gap: 7px; flex-wrap: wrap; flex: 1; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--txt-dim);
+  background: var(--surface); border: 1px solid var(--line); padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.chip:hover { color: var(--txt); border-color: var(--line-strong); }
+.chip .x { color: var(--txt-faint); }
+.chip.err { color: var(--err); background: var(--err-soft); border-color: transparent; }
+.chip.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+
+.loglines { flex: 1; overflow: auto; padding: 6px 0; font-family: var(--mono); font-size: 12.5px; line-height: 1.7; }
+.loglines::-webkit-scrollbar { width: 11px; }
+.loglines::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 11px; border: 3px solid transparent; background-clip: padding-box; }
+.ln { display: flex; gap: 14px; padding: 0 14px; white-space: pre; }
+.ln:hover { background: var(--surface); }
+.ln .n { color: var(--txt-faint); user-select: none; width: 52px; text-align: right; flex-shrink: 0; }
+.ln .t { color: var(--txt-dim); }
+.ln.err { background: var(--err-soft); }
+.ln.err .lvl { color: var(--err); font-weight: 700; }
+.ln.warn { background: var(--warn-soft); }
+.ln.warn .lvl { color: var(--warn); font-weight: 700; }
+.ln .lvl { font-weight: 700; }
+.ln.info .lvl { color: var(--accent); }
+.ln .cmp { color: var(--accent-2); }
+.ln.pin { box-shadow: inset 3px 0 0 var(--err); }
+
+.minimap {
+  grid-row: 1 / -1; grid-column: 3;
+  width: 54px; background: var(--bg-elev); border-left: 1px solid var(--line);
+  position: relative; overflow: hidden;
+}
+.minimap .mm-track { position: absolute; inset: 8px 10px; border-radius: 6px; background: var(--surface); overflow: hidden; }
+.minimap .mm-tick { position: absolute; left: 0; right: 0; height: 3px; opacity: .8; }
+.minimap .mm-view { position: absolute; left: 4px; right: 4px; border-radius: 5px; border: 1.5px solid var(--accent); background: var(--accent-soft); }
+
+/* ---------- Right toolbar ---------- */
+.rtool {
+  grid-row: 2; grid-column: 3;
+  background: var(--bg-elev); border-left: 1px solid var(--line);
+  display: flex; flex-direction: column; align-items: center; padding: 10px 0; gap: 5px;
+}
+.rtool-btn {
+  width: 42px; height: 42px; border: 1px solid transparent; background: transparent; cursor: pointer;
+  border-radius: 11px; color: var(--txt-dim); font-size: 16px; display: grid; place-items: center;
+  transition: background .16s, color .16s, border-color .16s, transform .16s var(--ease);
+  position: relative;
+}
+.rtool-btn:hover { background: var(--surface); color: var(--txt); border-color: var(--line); }
+.rtool-btn:active { transform: scale(.92); }
+.rtool-btn[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+.rtool .sep { width: 22px; height: 1px; background: var(--line); margin: 4px 0; }
+
+/* ---------- Bottom pane (grouped workbenches) ---------- */
+.bottom {
+  grid-column: 1 / -1; grid-row: 3;
+  background: var(--bg-elev-2);
+  border-top: 1px solid var(--line);
+  display: flex; flex-direction: column;
+  height: 268px; min-height: 0;
+  box-shadow: 0 -8px 24px rgba(0,0,0,.14);
+}
+.app { grid-template-rows: 52px 1fr; }
+.app.has-bottom { grid-template-rows: 52px 1fr 268px; }
+.app { grid-template-areas: "top top" "rail work"; }
+.app.has-bottom { grid-template-areas: "top top" "rail work" "bottom bottom"; }
+.topbar { grid-area: top; }
+.rail { grid-area: rail; }
+.workarea { grid-area: work; }
+.bottom { grid-area: bottom; }
+
+.bottom-groups {
+  display: flex; align-items: center; gap: 4px; padding: 8px 10px 0; overflow-x: auto;
+}
+.bgroup {
+  display: inline-flex; align-items: center; gap: 8px; white-space: nowrap;
+  border: 0; background: transparent; cursor: pointer;
+  color: var(--txt-dim); font-family: var(--font); font-size: 13px; font-weight: 600;
+  padding: 9px 15px; border-radius: 11px 11px 0 0; position: relative;
+  transition: color .16s, background .16s;
+}
+.bgroup .ico { font-size: 15px; }
+.bgroup .n { font-size: 10px; color: var(--txt-faint); background: var(--surface); padding: 1px 6px; border-radius: 999px; }
+.bgroup:hover { color: var(--txt); background: var(--surface); }
+.bgroup[aria-selected="true"] { color: var(--txt); background: var(--bg-elev); }
+.bgroup[aria-selected="true"]::after {
+  content: ""; position: absolute; left: 12px; right: 12px; bottom: 0; height: 2.5px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: 3px;
+}
+.bottom-sub {
+  display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line);
+  background: var(--bg-elev); overflow-x: auto;
+}
+.subtab {
+  border: 1px solid var(--line); background: var(--surface); cursor: pointer; white-space: nowrap;
+  color: var(--txt-dim); font-family: var(--font); font-size: 12px; font-weight: 600;
+  padding: 6px 13px; border-radius: 999px; transition: all .16s;
+}
+.subtab:hover { color: var(--txt); border-color: var(--line-strong); }
+.subtab[aria-selected="true"] { color: #fff; background: linear-gradient(140deg, var(--accent), var(--accent-2)); border-color: transparent; box-shadow: 0 3px 10px var(--accent-glow); }
+.bottom-content { flex: 1; overflow: auto; padding: 14px 16px; }
+.bottom-content h3 { font-size: 14px; margin-bottom: 4px; }
+.bottom-content p { color: var(--txt-dim); font-size: 12.5px; max-width: 620px; line-height: 1.6; }
+.wb-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.btn {
+  border: 1px solid var(--line); background: var(--surface); color: var(--txt);
+  font-family: var(--font); font-size: 12.5px; font-weight: 600; padding: 8px 15px; border-radius: 10px; cursor: pointer;
+  transition: all .16s; display: inline-flex; align-items: center; gap: 7px;
+}
+.btn:hover { border-color: var(--line-strong); }
+.btn.primary { background: linear-gradient(140deg, var(--accent), var(--accent-2)); color: #fff; border-color: transparent; box-shadow: 0 4px 14px var(--accent-glow); }
+.mini-bars { display: flex; align-items: flex-end; gap: 4px; height: 66px; margin-top: 14px; }
+.mini-bars i { width: 12px; border-radius: 4px 4px 2px 2px; background: linear-gradient(var(--accent), var(--accent-2)); opacity: .85; }
+
+/* ---------- Overflow menu / sheet ---------- */
+.overlay { position: absolute; inset: 0; z-index: 90; display: none; }
+.overlay.open { display: block; }
+.overlay .scrim { position: absolute; inset: 0; background: rgba(0,0,0,.42); backdrop-filter: blur(2px); animation: fade .2s var(--ease); }
+.menu {
+  position: absolute; background: var(--surface-solid); border: 1px solid var(--line-strong);
+  border-radius: var(--radius); box-shadow: var(--shadow-pop); padding: 7px; min-width: 220px;
+  animation: pop .22s var(--ease);
+}
+.menu .mi { display: flex; align-items: center; gap: 11px; padding: 9px 11px; border-radius: 9px; cursor: pointer; font-size: 13px; color: var(--txt); }
+.menu .mi:hover { background: var(--accent-soft); color: var(--accent); }
+.menu .mi .ico { width: 20px; text-align: center; font-size: 15px; }
+.menu .mi kbd { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--txt-faint); background: var(--surface); border: 1px solid var(--line); padding: 1px 6px; border-radius: 5px; }
+.menu .msep { height: 1px; background: var(--line); margin: 6px 8px; }
+.menu .mtitle { font-size: 10.5px; text-transform: uppercase; letter-spacing: .8px; color: var(--txt-faint); font-weight: 700; padding: 8px 11px 4px; }
+
+@keyframes pop { from { opacity: 0; transform: translateY(8px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sheetUp { from { transform: translateY(100%); } to { transform: none; } }
+
+/* ---------- Mobile bottom nav (phone only, injected via class) ---------- */
+.mobile-nav {
+  display: none;
+  position: absolute; left: 0; right: 0; bottom: 0; height: var(--tabbar-h);
+  background: var(--glass); backdrop-filter: blur(20px) saturate(1.3);
+  border-top: 1px solid var(--line);
+  align-items: center; justify-content: space-around; padding: 0 6px 6px; z-index: 40;
+}
+.mnav-btn { border: 0; background: transparent; cursor: pointer; color: var(--txt-faint);
+  display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 10px; font-weight: 600; padding: 6px 8px; border-radius: 12px; }
+.mnav-btn .ico { font-size: 20px; }
+.mnav-btn[aria-selected="true"] { color: var(--accent); }
+.fab {
+  position: absolute; right: 16px; bottom: calc(var(--tabbar-h) + 14px); z-index: 45;
+  width: 54px; height: 54px; border-radius: 18px; border: 0; cursor: pointer;
+  background: linear-gradient(140deg, var(--accent), var(--accent-2)); color: #fff; font-size: 22px;
+  box-shadow: var(--shadow-pop); display: none; place-items: center;
+}
+
+/* =====================================================================
+   RESPONSIVE — container queries drive the phone / tablet adaptation.
+   The app is a container; the SAME markup reflows for each device.
+   ===================================================================== */
+
+/* Tablet: rail loses labels, side panel narrows, minimap hides */
+@container (max-width: 900px) {
+  .app { --rail-w: 60px; --panel-w: 240px; }
+  .rail-btn .lbl { display: none; }
+  .rail-btn { height: 46px; }
+  .minimap { display: none; }
+  .filechip .meta { display: none; }
+  .searchbox { width: 200px; }
+}
+
+/* Phone: rail → bottom nav, side panel → full sheet, bottom pane → sheet, FAB appears */
+@container (max-width: 520px) {
+  .app { --panel-w: 0px; grid-template-columns: 0 1fr; }
+  .rail { display: none; }
+  .rtool { display: none; }
+  .minimap { display: none; }
+  .mobile-nav { display: flex; }
+  .fab { display: grid; }
+  .topbar { height: 48px; padding: 0 10px; }
+  .filechip { max-width: 60%; }
+  .searchbox { display: none; }
+  .topbar .app-logo { display: none; }
+  .workarea { grid-template-columns: 1fr; }
+  .panel {
+    position: absolute; left: 0; right: 0; bottom: 0; top: 48px; z-index: 60;
+    border-right: 0; border-top-left-radius: var(--radius-lg); border-top-right-radius: var(--radius-lg);
+    box-shadow: var(--shadow-pop); animation: sheetUp .3s var(--ease);
+    transform: translateY(0);
+  }
+  .app:not(.mobile-panel-open) .panel { display: none; }
+  .viewer { grid-column: 1; }
+  .loglines { padding-bottom: 80px; }
+  .bottom {
+    position: absolute; left: 0; right: 0; bottom: var(--tabbar-h); top: 48px; height: auto; z-index: 55;
+    border-top-left-radius: var(--radius-lg); border-top-right-radius: var(--radius-lg);
+    box-shadow: var(--shadow-pop); animation: sheetUp .3s var(--ease);
+  }
+  .app:not(.mobile-bottom-open) .bottom { display: none; }
+  .app.has-bottom { grid-template-rows: 48px 1fr; }
+  .app.has-bottom { grid-template-areas: "top top" "rail work"; }
+  .bottom-groups { flex-wrap: nowrap; }
+}
+
+.sheet-grip { display: none; }
+@container (max-width: 520px) {
+  .sheet-grip { display: block; width: 40px; height: 4px; border-radius: 4px; background: var(--line-strong); margin: 8px auto 2px; }
+  .panel-close, .bottom-close { display: inline-grid !important; }
+}
+.panel-close, .bottom-close { display: none; }
+</style>
+</head>
+<body>
+
+<!-- ===================== Preview controls ===================== -->
+<div class="preview-bar">
+  <div class="brand">
+    <div class="logo">L</div>
+    <div>LOGAN <small>· UI redesign preview</small></div>
+  </div>
+  <div class="spacer"></div>
+
+  <div class="seg" role="group" aria-label="Device">
+    <button data-device="desktop" aria-pressed="true" onclick="setDevice('desktop')"><span class="ico">🖥️</span>Desktop</button>
+    <button data-device="tablet" aria-pressed="false" onclick="setDevice('tablet')"><span class="ico">📲</span>Tablet</button>
+    <button data-device="phone" aria-pressed="false" onclick="setDevice('phone')"><span class="ico">📱</span>Phone</button>
+  </div>
+
+  <div class="seg" role="group" aria-label="Theme">
+    <button data-theme="dark" aria-pressed="true" onclick="setTheme('dark')"><span class="ico">🌙</span>Dark</button>
+    <button data-theme="light" aria-pressed="false" onclick="setTheme('light')"><span class="ico">☀️</span>Light</button>
+  </div>
+</div>
+<div class="hint">
+  Click around — the rail, the right toolbar’s <b>⋯ overflow</b>, and the grouped bottom pane are all live.
+  Switch to <b>Phone</b> to see the rail collapse into a bottom nav + FAB and panels become sheets.
+</div>
+
+<!-- ===================== Device stage ===================== -->
+<div class="stage">
+  <div class="device">
+    <div class="app has-bottom" id="app">
+
+      <!-- Top bar -->
+      <div class="topbar">
+        <div class="app-logo">L</div>
+        <div class="filechip">
+          <span>📄</span>
+          <span class="name">ivi-session-2026-08-19.esotrace</span>
+          <span class="meta">· 4.28M lines · 812 MB</span>
+        </div>
+        <div class="grow"></div>
+        <label class="searchbox">
+          <span>🔎</span>
+          <input placeholder="Search this log…  (Ctrl+F)" />
+        </label>
+        <button class="iconbtn" title="Filter">⛃</button>
+        <button class="iconbtn" title="Jump to next problem (F8)">⚠️</button>
+      </div>
+
+      <!-- Left rail: 5 destinations + utility -->
+      <nav class="rail" aria-label="Primary">
+        <div class="rail-group">
+          <button class="rail-btn" aria-selected="true" data-panel="files" onclick="selectPanel('files')">
+            <span class="ico">📁</span><span class="lbl">Files</span>
+          </button>
+          <button class="rail-btn" data-panel="marks" onclick="selectPanel('marks')">
+            <span class="ico">🔖</span><span class="lbl">Marks</span>
+            <span class="badge">7</span>
+          </button>
+          <button class="rail-btn" data-panel="saved" onclick="selectPanel('saved')">
+            <span class="ico">📦</span><span class="lbl">Saved</span>
+          </button>
+          <button class="rail-btn" data-panel="activity" onclick="selectPanel('activity')">
+            <span class="ico">📊</span><span class="lbl">Activity</span>
+          </button>
+          <button class="rail-btn" data-panel="agent" onclick="selectPanel('agent')">
+            <span class="ico">✦</span><span class="lbl">Agent</span>
+          </button>
+        </div>
+        <div class="rail-spacer"></div>
+        <div class="rail-group">
+          <button class="rail-btn util" title="Features — toggle optional panels" onclick="openMenu(event,'features')"><span class="ico">🧩</span></button>
+          <button class="rail-btn util" title="Settings" onclick="openMenu(event,'settings')"><span class="ico">⚙️</span></button>
+          <button class="rail-btn util" title="Help (F1)" onclick="openMenu(event,'help')"><span class="ico">❔</span></button>
+        </div>
+      </nav>
+
+      <!-- Work area: side panel + viewer + minimap -->
+      <div class="workarea">
+
+        <!-- Side panel (content swaps with rail selection) -->
+        <aside class="panel" id="panel">
+          <div class="sheet-grip"></div>
+          <!-- populated by JS -->
+        </aside>
+
+        <!-- Viewer -->
+        <section class="viewer">
+          <div class="viewer-toolbar">
+            <div class="chiprow">
+              <span class="chip">wrap: off</span>
+              <span class="chip err">level: ERROR <span class="x">✕</span></span>
+              <span class="chip">component: BtStack <span class="x">✕</span></span>
+              <span class="chip" style="color:var(--accent);border-color:transparent;background:var(--accent-soft)">+ add filter</span>
+            </div>
+          </div>
+          <div class="loglines" id="loglines"><!-- populated by JS --></div>
+        </section>
+
+        <!-- Minimap -->
+        <div class="minimap" title="Minimap">
+          <div class="mm-track" id="mmtrack"></div>
+        </div>
+
+        <!-- Right toolbar: 4 view toggles + overflow -->
+        <div class="rtool" aria-label="View">
+          <button class="rtool-btn" aria-pressed="false" title="Word wrap (Alt+Z)" onclick="toggle(this)">↩</button>
+          <button class="rtool-btn" aria-pressed="true" title="Minimap" onclick="toggle(this)">▥</button>
+          <button class="rtool-btn" aria-pressed="false" title="Split view" onclick="toggle(this)">◫</button>
+          <button class="rtool-btn" aria-pressed="false" title="Overlays — Notes · Terminal · Annotations" onclick="openMenu(event,'overlays')">◳</button>
+          <div class="sep"></div>
+          <button class="rtool-btn" title="More view tools" onclick="openMenu(event,'viewmore')">⋯</button>
+        </div>
+      </div>
+
+      <!-- Bottom pane: 6 grouped workbenches -->
+      <div class="bottom" id="bottom">
+        <div class="sheet-grip"></div>
+        <div class="bottom-groups" id="bgroups"><!-- populated by JS --></div>
+        <div class="bottom-sub" id="bsub"><!-- populated by JS --></div>
+        <div class="bottom-content" id="bcontent"><!-- populated by JS --></div>
+      </div>
+
+      <!-- Mobile nav (phone) -->
+      <nav class="mobile-nav" aria-label="Mobile">
+        <button class="mnav-btn" aria-selected="true" onclick="mobileNav('files')"><span class="ico">📁</span>Files</button>
+        <button class="mnav-btn" onclick="mobileNav('marks')"><span class="ico">🔖</span>Marks</button>
+        <button class="mnav-btn" onclick="mobileNav('viewer')"><span class="ico">📃</span>Log</button>
+        <button class="mnav-btn" onclick="mobileNav('bottom')"><span class="ico">🧪</span>Tools</button>
+        <button class="mnav-btn" onclick="mobileNav('agent')"><span class="ico">✦</span>Agent</button>
+      </nav>
+      <button class="fab" title="Run analysis" onclick="mobileNav('bottom')">✨</button>
+
+      <!-- Overlay host (menus + scrim) -->
+      <div class="overlay" id="overlay"><div class="scrim" onclick="closeMenu()"></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   Data model for the mock — the redesigned IA.
+   ============================================================ */
+
+// --- Left rail side panels (5 destinations) ---
+const PANELS = {
+  files: {
+    title: "Files", count: "3 open", sub: "Recent folders · open logs",
+    render: () => `
+      <div class="panel-search">🔎 <span>Filter files…</span></div>
+      <div class="panel-body file-tree">
+        <div class="group-label">Open</div>
+        <div class="row active"><span>📄</span><div class="r-main"><div class="r-title">ivi-session-2026-08-19.esotrace</div><div class="r-sub">4.28M lines · decoded</div></div></div>
+        <div class="row"><span>📄</span><div class="r-main"><div class="r-title">canbus-trace.log</div><div class="r-sub">910K lines</div></div></div>
+        <div class="row"><span>🔗</span><div class="r-main"><div class="r-title">Single session · 3 files</div><div class="r-sub">composite · read-only</div></div></div>
+        <div class="group-label">Recent folder · ~/logs/ivi</div>
+        <div class="row indent"><span>📄</span><div class="r-main"><div class="r-title">boot-2026-08-18.log</div></div><span class="r-line">220K</span></div>
+        <div class="row indent"><span>📄</span><div class="r-main"><div class="r-title">bt-pairing.esotrace</div></div><span class="r-line">1.1M</span></div>
+        <div class="row indent"><span>📁</span><div class="r-main"><div class="r-title">archive/</div></div></div>
+        <div class="statcard">
+          <div class="kv"><div class="k">Lines</div><div class="v">4.28M</div></div>
+          <div class="kv"><div class="k">Errors</div><div class="v err">1,204</div></div>
+          <div class="kv"><div class="k">Warnings</div><div class="v warn">8,417</div></div>
+          <div class="kv"><div class="k">Span</div><div class="v">3h 12m</div></div>
+        </div>
+      </div>`
+  },
+  marks: {
+    title: "Marks", count: "7 + 4 groups", sub: "Bookmarks & highlight rules on this log",
+    render: () => `
+      <div class="panel-search">🔎 <span>Filter marks…</span></div>
+      <div class="panel-body">
+        <div class="group-label">Bookmarks</div>
+        <div class="row"><span class="dot" style="background:var(--err)"></span><div class="r-main"><div class="r-title">First BtStack abort</div><div class="r-sub">race on token refresh</div></div><span class="r-line">L 812,043</span></div>
+        <div class="row"><span class="dot" style="background:var(--warn)"></span><div class="r-main"><div class="r-title">Watchdog reset</div></div><span class="r-line">L 2,041,905</span></div>
+        <div class="row"><span class="dot" style="background:var(--accent)"></span><div class="r-main"><div class="r-title">Session start</div></div><span class="r-line">L 12</span></div>
+        <div class="group-label">Highlight rules</div>
+        <div class="row"><span class="dot" style="background:var(--err)"></span><div class="r-main"><div class="r-title">/timeout|abort/i</div><div class="r-sub">red · 1,204 hits</div></div><span class="r-tag">on</span></div>
+        <div class="row"><span class="dot" style="background:var(--ok)"></span><div class="r-main"><div class="r-title">/connected/i</div><div class="r-sub">green · 3,880 hits</div></div><span class="r-tag">on</span></div>
+        <div class="row"><span class="dot" style="background:var(--accent-2)"></span><div class="r-main"><div class="r-title">Group · “BT triage”</div><div class="r-sub">5 rules</div></div><span class="r-tag">off</span></div>
+      </div>`
+  },
+  saved: {
+    title: "Saved", count: "catalog", sub: "Every saved entity in one place",
+    render: () => `
+      <div class="panel-search">🔎 <span>Search saved…</span></div>
+      <div class="panel-body">
+        <div class="group-label">Investigations</div>
+        <div class="row"><span>🧭</span><div class="r-main"><div class="r-title">BT pairing failure</div><div class="r-sub">6-step recipe · ▶ run</div></div></div>
+        <div class="group-label">Single sessions</div>
+        <div class="row"><span>🔗</span><div class="r-main"><div class="r-title">boot + bt + canbus</div><div class="r-sub">3 files · global</div></div></div>
+        <div class="group-label">Searches & sessions</div>
+        <div class="row"><span>🔎</span><div class="r-main"><div class="r-title">errors near reset</div><div class="r-sub">regex · reusable</div></div></div>
+        <div class="row"><span>🗂️</span><div class="r-main"><div class="r-title">BT triage session</div><div class="r-sub">4 configs</div></div></div>
+        <div class="group-label">Column layouts · Constants · Trends</div>
+        <div class="row"><span>▦</span><div class="r-main"><div class="r-title">esotrace columns</div><div class="r-sub">grok template</div></div></div>
+        <div class="row"><span>📈</span><div class="r-main"><div class="r-title">heapUsedMB</div><div class="r-sub">numeric over time</div></div></div>
+      </div>`
+  },
+  activity: {
+    title: "Activity", count: "today", sub: "History · AI annotations · file stats",
+    render: () => `
+      <div class="panel-body">
+        <div class="statcard">
+          <div class="kv"><div class="k">Errors</div><div class="v err">1,204</div></div>
+          <div class="kv"><div class="k">Warnings</div><div class="v warn">8,417</div></div>
+          <div class="kv"><div class="k">Components</div><div class="v">42</div></div>
+          <div class="kv"><div class="k">Crashes</div><div class="v err">3</div></div>
+        </div>
+        <div class="group-label">AI annotations</div>
+        <div class="row"><span class="dot" style="background:var(--err)"></span><div class="r-main"><div class="r-title">Auth abort race</div><div class="r-sub">error · agent</div></div><span class="r-line">L 812,043</span></div>
+        <div class="row"><span class="dot" style="background:var(--warn)"></span><div class="r-main"><div class="r-title">Retry storm before reset</div><div class="r-sub">warning · agent</div></div><span class="r-line">L 2,039,110</span></div>
+        <div class="group-label">History · today</div>
+        <div class="row"><span>🔎</span><div class="r-main"><div class="r-title">search “abort”</div><div class="r-sub">1,204 hits · 10:41</div></div></div>
+        <div class="row"><span>⛃</span><div class="r-main"><div class="r-title">filter ERROR</div><div class="r-sub">10:39</div></div></div>
+        <div class="row"><span>📊</span><div class="r-main"><div class="r-title">ran analysis</div><div class="r-sub">10:32</div></div></div>
+      </div>`
+  },
+  agent: {
+    title: "Agent", count: "connected", sub: "Claude Code · MCP",
+    render: () => `
+      <div class="panel-body" style="display:flex;flex-direction:column;gap:10px;padding:12px">
+        <div style="align-self:flex-start;max-width:88%;background:var(--surface);border:1px solid var(--line);border-radius:14px 14px 14px 4px;padding:10px 13px;font-size:12.5px;line-height:1.5">
+          Found the root cause — a BtStack auth abort race at <b>L 812,043</b>. Pinned it as a finding. Want the timeline?
+        </div>
+        <div style="align-self:flex-end;max-width:88%;background:linear-gradient(140deg,var(--accent),var(--accent-2));color:#fff;border-radius:14px 14px 4px 14px;padding:10px 13px;font-size:12.5px;line-height:1.5">
+          Yes, and check for a retry storm before the reset.
+        </div>
+        <div style="align-self:flex-start;max-width:88%;background:var(--surface);border:1px solid var(--line);border-radius:14px 14px 14px 4px;padding:10px 13px;font-size:12.5px;line-height:1.5">
+          On it — trending retry count around L 2,039,000…
+        </div>
+        <div style="flex:1"></div>
+        <div class="panel-search" style="margin:0"><span>✦</span><span>Ask the agent…</span></div>
+      </div>`
+  }
+};
+
+// --- Bottom pane: 6 grouped workbenches, each with sub-tabs ---
+const GROUPS = [
+  { id:"analyze", ico:"🔬", label:"Analyze", subs:[
+      {id:"analysis", label:"Analysis", body:wbAnalysis},
+      {id:"investigate", label:"Investigate", body:()=>wbGeneric("Guided root-cause", "Pick a symptom — it crashed, it froze, it’s slow — and LOGAN runs a recipe (search + time-gaps + trends) then pins clickable findings.", ["It crashed","It froze","It’s slow","Wrong output"]) },
+      {id:"conclusion", label:"Conclusion", body:()=>wbGeneric("Conclusion report","One-click native root-cause verdict: first anomaly (trigger), event timeline, evidence, plain verdict. Export .md / .pdf.",["Build report","Export .md","Export .pdf"]) },
+      {id:"traceback", label:"Traceback", body:()=>wbGeneric("Traceback","Reverse timeline from any error line — what led up to it (same component, escalating warnings).",["From selected line"]) },
+    ]},
+  { id:"trends", ico:"📈", label:"Trends", subs:[
+      {id:"trends", label:"Trends", body:wbTrends},
+      {id:"signals", label:"Signals", body:()=>wbGeneric("Signals","Overlay numeric signals (MF4 channels, heap, temps) on one shared time axis. Click a point to jump to the record.",["Add signal","Auto-scale"]) },
+    ]},
+  { id:"timing", ico:"⏱️", label:"Timing", subs:[
+      {id:"gaps", label:"Time Gaps", body:()=>wbGeneric("Time Gaps","Find spans where no events were logged — hangs, freezes, missing data. 3 gaps > 2s found.",["Find gaps","Min 2s"]) },
+      {id:"cadence", label:"Cadence", body:()=>wbGeneric("Cadence","Pick a repeating event; LOGAN auto-detects its period and flags every skipped beat + drift. The negative-space instrument.",["Pick event","Auto-period"]) },
+      {id:"sync", label:"Time Sync", body:()=>wbGeneric("Time Sync","Merge 2+ files onto one wall-clock timeline, colour-tagged by file. Click a row to jump.",["Add file","Merge to file…"]) },
+      {id:"align", label:"Time Align", body:()=>wbGeneric("Time Align","Drag search-config result lanes left/right to apply offsets and correlate events across sources.",["Add lane"]) },
+    ]},
+  { id:"search", ico:"🔎", label:"Search", subs:[
+      {id:"results", label:"Results", body:()=>wbGeneric("Search Results","1,204 matches for “abort”. Click a result to jump. Regex · case · whole-word supported.",["Timeline view","Export"]) },
+      {id:"configs", label:"Configs", body:()=>wbGeneric("Search Configs","Save & reuse complex search patterns across files. Batch-run them as one session.",["New config","Run session"]) },
+      {id:"contexts", label:"Contexts", body:()=>wbGeneric("Contexts","must + clue patterns to find correlated events (ERROR near ‘timeout’ within 10 lines). Lane view compares them.",["New context","Lanes"]) },
+      {id:"columns", label:"Column Layouts", body:()=>wbGeneric("Column Layouts","Turn a line’s shape into named columns — grok %{name}, paint, or regex. Preview live over the file.",["Auto-detect","New layout"]) },
+    ]},
+  { id:"sources", ico:"🎛️", label:"Sources", subs:[
+      {id:"live", label:"Live", body:()=>wbGeneric("Live","Stream from Serial · ADB logcat · SSH. Up to 4 parallel connections, real-time.",["Connect…","+ add source"]) },
+      {id:"video", label:"Video", body:()=>wbGeneric("Video","Sync a screen recording to log timestamps. Scrub video ↔ jump to the matching log line.",["Open video","Set sync point"]) },
+      {id:"image", label:"Image", body:()=>wbGeneric("Image","View images referenced in the log side-by-side for visual correlation.",["Open image"]) },
+    ]},
+  { id:"workspace", ico:"🗒️", label:"Workspace", subs:[
+      {id:"notes", label:"Notes", body:()=>wbGeneric("Notes","Freeform notes saved per file (.logan/…notes.txt). ‘Save snippet’ appends selected log lines.",["New note","Save snippet"]) },
+      {id:"usage", label:"Usage", body:()=>wbGeneric("Usage Monitor","How often each feature/tool is used — you vs the AI agent. Dead features simply don’t appear.",["You","Agent","All"]) },
+    ]},
+];
+
+/* ---------- Workbench body renderers ---------- */
+function wbAnalysis(){
+  return `<h3>Analysis</h3>
+    <p>Level distribution, crash detection, component breakdown and timestamp density across the whole file.</p>
+    <div class="statcard" style="max-width:420px;margin-left:0">
+      <div class="kv"><div class="k">ERROR</div><div class="v err">1,204</div></div>
+      <div class="kv"><div class="k">WARN</div><div class="v warn">8,417</div></div>
+      <div class="kv"><div class="k">INFO</div><div class="v">2.9M</div></div>
+      <div class="kv"><div class="k">Crashes</div><div class="v err">3</div></div>
+    </div>
+    <div class="wb-actions"><button class="btn primary">▶ Run analysis</button><button class="btn">Compare baseline</button></div>`;
+}
+function wbTrends(){
+  const bars=[30,44,26,58,40,72,50,88,64,96,70,54,42,60,48].map(h=>`<i style="height:${h}%"></i>`).join("");
+  return `<h3>Trends · heapUsedMB over time</h3>
+    <p>Trend any numeric field over time, its value flips, or its correlation with an event. Click a point to jump to the line.</p>
+    <div class="mini-bars">${bars}</div>
+    <div class="wb-actions"><button class="btn primary">Discover fields</button><button class="btn">Show flips</button><button class="btn">Correlate…</button></div>`;
+}
+function wbGeneric(title, desc, actions){
+  const btns=(actions||[]).map((a,i)=>`<button class="btn ${i===0?'primary':''}">${a}</button>`).join("");
+  return `<h3>${title}</h3><p>${desc}</p><div class="wb-actions">${btns}</div>`;
+}
+
+/* ---------- Overflow menus ---------- */
+const MENUS = {
+  overlays: { at:"rtool", items:[
+    {t:"title", label:"Overlays"},
+    {ico:"🗒️", label:"Notes drawer", kbd:"⌘⇧N"},
+    {ico:"▾", label:"Terminal", kbd:"⌃`"},
+    {ico:"💬", label:"AI annotations", kbd:"⌘⇧A"},
+  ]},
+  viewmore: { at:"rtool", items:[
+    {t:"title", label:"View & tools"},
+    {ico:"{ }", label:"Format JSON"},
+    {ico:"⌁", label:"Decode esotrace"},
+    {ico:"▦", label:"Columns"},
+    {ico:"◫", label:"Split file"},
+    {t:"sep"},
+    {ico:"🐕", label:"Datadog"},
+  ]},
+  features: { at:"rail", items:[
+    {t:"title", label:"Optional panels"},
+    {ico:"🎞️", label:"Video · on"},
+    {ico:"▾", label:"Terminal · on"},
+    {ico:"🖼️", label:"Image · off"},
+    {ico:"⏱️", label:"Time Align · off"},
+  ]},
+  settings: { at:"rail", items:[
+    {t:"title", label:"Settings"},
+    {ico:"🎨", label:"Appearance"},
+    {ico:"⌨️", label:"Keyboard shortcuts"},
+    {ico:"✦", label:"Agent setup wizard"},
+    {ico:"🕵️", label:"Redaction rules"},
+  ]},
+  help: { at:"rail", items:[
+    {t:"title", label:"Help"},
+    {ico:"📘", label:"Quick start"},
+    {ico:"⌨️", label:"Shortcut cheatsheet", kbd:"F1"},
+    {ico:"🧭", label:"Guided tour"},
+  ]},
+};
+
+/* ============================================================
+   Behaviour
+   ============================================================ */
+let currentPanel = "files";
+let currentGroup = "analyze";
+let currentSub = {}; // group -> sub id
+
+function setTheme(t){
+  document.documentElement.setAttribute("data-theme", t);
+  document.querySelectorAll('.seg [data-theme]').forEach(b=>b.setAttribute("aria-pressed", b.dataset.theme===t));
+}
+function setDevice(d){
+  document.documentElement.setAttribute("data-device", d);
+  document.querySelectorAll('.seg [data-device]').forEach(b=>b.setAttribute("aria-pressed", b.dataset.device===d));
+  const app=document.getElementById("app");
+  app.classList.remove("mobile-panel-open","mobile-bottom-open");
+}
+
+function selectPanel(id){
+  currentPanel = id;
+  document.querySelectorAll('.rail-btn[data-panel]').forEach(b=>b.setAttribute("aria-selected", b.dataset.panel===id));
+  const p = PANELS[id];
+  const el = document.getElementById("panel");
+  el.innerHTML = `<div class="sheet-grip"></div>
+    <div class="panel-head">
+      <h2>${p.title}</h2><span class="count">${p.count}</span><div class="grow"></div>
+      <button class="iconbtn panel-close" onclick="closeMobilePanel()">✕</button>
+    </div>
+    <div class="panel-sub">${p.sub}</div>
+    ${p.render()}`;
+}
+
+function renderBottom(){
+  // groups
+  document.getElementById("bgroups").innerHTML = GROUPS.map(g=>`
+    <button class="bgroup" aria-selected="${g.id===currentGroup}" onclick="selectGroup('${g.id}')">
+      <span class="ico">${g.ico}</span><span>${g.label}</span><span class="n">${g.subs.length}</span>
+    </button>`).join("");
+  const g = GROUPS.find(x=>x.id===currentGroup);
+  const sub = currentSub[currentGroup] || g.subs[0].id;
+  currentSub[currentGroup]=sub;
+  document.getElementById("bsub").innerHTML = g.subs.map(s=>`
+    <button class="subtab" aria-selected="${s.id===sub}" onclick="selectSub('${s.id}')">${s.label}</button>`).join("");
+  const s = g.subs.find(x=>x.id===sub);
+  document.getElementById("bcontent").innerHTML = s.body();
+}
+function selectGroup(id){ currentGroup=id; renderBottom(); }
+function selectSub(id){ currentSub[currentGroup]=id; renderBottom(); }
+
+function toggle(btn){ btn.setAttribute("aria-pressed", btn.getAttribute("aria-pressed")!=="true"); }
+
+/* Overflow menu / dropdown */
+function openMenu(ev, key){
+  ev.stopPropagation();
+  const spec = MENUS[key];
+  const overlay = document.getElementById("overlay");
+  overlay.querySelectorAll(".menu").forEach(m=>m.remove());
+  const menu = document.createElement("div");
+  menu.className="menu";
+  menu.innerHTML = spec.items.map(it=>{
+    if(it.t==="sep") return `<div class="msep"></div>`;
+    if(it.t==="title") return `<div class="mtitle">${it.label}</div>`;
+    return `<div class="mi"><span class="ico">${it.ico}</span><span>${it.label}</span>${it.kbd?`<kbd>${it.kbd}</kbd>`:""}</div>`;
+  }).join("");
+  overlay.classList.add("open");
+  overlay.appendChild(menu);
+  // position near the trigger, clamped to the app box
+  const app = document.getElementById("app").getBoundingClientRect();
+  const r = ev.currentTarget.getBoundingClientRect();
+  menu.style.visibility="hidden";
+  requestAnimationFrame(()=>{
+    const mw = menu.offsetWidth, mh = menu.offsetHeight;
+    let left, top = r.top - app.top;
+    if(spec.at==="rtool"){ left = r.left - app.left - mw - 10; }
+    else { left = r.right - app.left + 10; }
+    left = Math.max(8, Math.min(left, app.width - mw - 8));
+    top  = Math.max(8, Math.min(top, app.height - mh - 8));
+    menu.style.left = left+"px"; menu.style.top = top+"px";
+    menu.style.visibility="visible";
+    menu.querySelectorAll(".mi").forEach(mi=>mi.addEventListener("click", closeMenu));
+  });
+}
+function closeMenu(){ const o=document.getElementById("overlay"); o.classList.remove("open"); o.querySelectorAll(".menu").forEach(m=>m.remove()); }
+
+/* Mobile nav */
+function mobileNav(target){
+  const app = document.getElementById("app");
+  document.querySelectorAll(".mnav-btn").forEach(b=>b.setAttribute("aria-selected","false"));
+  event && event.currentTarget && event.currentTarget.setAttribute && event.currentTarget.setAttribute("aria-selected","true");
+  app.classList.remove("mobile-panel-open","mobile-bottom-open");
+  if(target==="viewer") return;
+  if(target==="bottom"){ app.classList.add("mobile-bottom-open"); return; }
+  // files / marks / agent -> open side panel sheet with that content
+  selectPanel(target);
+  app.classList.add("mobile-panel-open");
+}
+function closeMobilePanel(){ document.getElementById("app").classList.remove("mobile-panel-open"); }
+
+/* Fake log content */
+function buildLog(){
+  const comps=["BtStack","AudioHAL","IviUI","CanBus","PowerMgr","Nav","Media","Sys"];
+  const msgs=[
+    ["info","service started, waiting for handshake"],
+    ["info","token acquired, expiry in 3600s"],
+    ["warn","retry #%n — remote not ready"],
+    ["info","channel opened id=0x%h"],
+    ["err","auth abort: token refresh raced with disconnect"],
+    ["warn","backpressure high, dropping frame"],
+    ["info","state → CONNECTED"],
+    ["err","watchdog: no heartbeat for 2400ms → reset"],
+    ["info","heapUsedMB=%d rss=%d"],
+    ["info","request ok in %nms"],
+  ];
+  let out="", ln=812030;
+  for(let i=0;i<120;i++){
+    const m=msgs[Math.floor((i*7+3)%msgs.length)];
+    const c=comps[(i*3)%comps.length];
+    const lvl=m[0];
+    const t=`10:4${(i%9)}:${String((i*13)%60).padStart(2,"0")}.${String((i*37)%1000).padStart(3,"0")}`;
+    let txt=m[1].replace("%n", (i%9)+1).replace("%h",(0x1a2+i).toString(16)).replace(/%d/g,(120+i*3)).replace("%nms",(4+i%40)+"ms");
+    const cls = lvl==="err"?"err":lvl==="warn"?"warn":"info";
+    const lvlTxt = lvl==="err"?"ERROR":lvl==="warn"?"WARN ":"INFO ";
+    const pin = lvl==="err" && i===4 ? " pin":"";
+    out += `<div class="ln ${cls}${pin}"><span class="n">${(ln+i).toLocaleString()}</span><span class="t">${t}</span><span class="lvl">${lvlTxt}</span><span class="cmp">${c.padEnd(9)}</span><span>${txt}</span></div>`;
+  }
+  document.getElementById("loglines").innerHTML = out;
+}
+function buildMinimap(){
+  const track=document.getElementById("mmtrack");
+  let h="";
+  for(let i=0;i<80;i++){
+    const top=(i/80*100).toFixed(1);
+    const r=(i*53)%100;
+    const col = r<8?"var(--err)": r<26?"var(--warn)":"transparent";
+    if(col!=="transparent") h+=`<div class="mm-tick" style="top:${top}%;background:${col}"></div>`;
+  }
+  h+=`<div class="mm-view" style="top:6%;height:16%"></div>`;
+  track.innerHTML=h;
+}
+
+/* init — allow ?device=phone&theme=light deep-links for sharing a specific view */
+(function(){
+  const q = new URLSearchParams(location.search);
+  const d = q.get("device"); if(d && ["desktop","tablet","phone"].includes(d)) setDevice(d);
+  const t = q.get("theme");  if(t && ["dark","light"].includes(t)) setTheme(t);
+  if(q.get("panel") && PANELS[q.get("panel")]) currentPanel=q.get("panel");
+})();
+selectPanel(currentPanel);
+renderBottom();
+buildLog();
+buildMinimap();
+window.addEventListener("resize", ()=>closeMenu());
+</script>
+</body>
+</html>
