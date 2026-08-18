@@ -1,7 +1,7 @@
 import { parentPort, workerData } from 'worker_threads';
-import * as fs from 'fs';
 import { discoverFields, discoverAxes, extractSeries, extractSignalSeries, detectTransitions, correlate } from './trendEngine';
 import { parseTimestampFast } from './timestampParse';
+import { WorkerFileReader, CompositeWorkerReader, ScanContext } from './trendWorkerReaders';
 import type { FileHandler } from './fileHandler';
 
 /**
@@ -11,54 +11,24 @@ import type { FileHandler } from './fileHandler';
  *
  * The parent hands over a byte-offset index (see FileHandler.getScanContext) so this
  * worker can open its OWN fd to the same file and read the exact same lines without
- * sharing the main process's handler. Messages back:
+ * sharing the main process's handler. For a "single session" composite the parent
+ * hands over ONE scan context per member (`scans`); the CompositeWorkerReader then
+ * presents the SAME continuous global line space the CompositeFileHandler does (via
+ * the shared, unit-tested CompositeLineSpace) so the engine runs once over the whole
+ * session and every line number it returns is already global. Messages back:
  *   { type: 'done', result }     — finished
  *   { type: 'error', message }   — fatal
  */
-interface ScanContext {
-  filePath: string;
-  headerLineCount: number;
-  maxLineRead: number;
-  offsets: Float64Array;
-  lengths: Float64Array;
-}
-
-// Minimal read-only stand-in for FileHandler — the trend engine only calls
-// getTotalLines() and getLines(), and only reads .lineNumber/.text off each line.
-class WorkerFileReader {
-  private fd: number;
-  constructor(private ctx: ScanContext) {
-    this.fd = fs.openSync(ctx.filePath, 'r');
-  }
-  getTotalLines(): number {
-    return this.ctx.offsets.length - this.ctx.headerLineCount;
-  }
-  getLines(startLine: number, count: number): Array<{ lineNumber: number; text: string; level: undefined }> {
-    const { offsets, lengths, headerLineCount, maxLineRead } = this.ctx;
-    const out: Array<{ lineNumber: number; text: string; level: undefined }> = [];
-    const actualStart = startLine + headerLineCount;
-    const actualEnd = Math.min(actualStart + count, offsets.length);
-    for (let i = actualStart; i < actualEnd; i++) {
-      const offset = offsets[i];
-      const length = lengths[i];
-      const readLength = Math.min(length, maxLineRead);
-      const buffer = Buffer.alloc(readLength);
-      fs.readSync(this.fd, buffer, 0, readLength, offset);
-      let text = buffer.toString('utf-8');
-      if (length > maxLineRead) text += ' … (truncated)';
-      out.push({ lineNumber: i - headerLineCount, text, level: undefined });
-    }
-    return out;
-  }
-  close(): void {
-    try { fs.closeSync(this.fd); } catch { /* already closed */ }
-  }
-}
-
-const { kind, args, scan } = workerData as { kind: string; args: any; scan: ScanContext };
+const { kind, args, scan, scans } = workerData as {
+  kind: string; args: any; scan?: ScanContext; scans?: ScanContext[];
+};
 
 try {
-  const reader = new WorkerFileReader(scan);
+  // A composite (single session) hands over `scans` (one per member); a plain file hands
+  // over a single `scan`. Both expose getTotalLines/getLines, all the engine needs.
+  const reader = scans && scans.length
+    ? new CompositeWorkerReader(scans.map((s) => new WorkerFileReader(s)))
+    : new WorkerFileReader(scan!);
   // The engine only uses getTotalLines/getLines; cast through unknown to satisfy its type.
   const handler = reader as unknown as FileHandler;
   let result: any;
