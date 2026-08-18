@@ -208,6 +208,13 @@ interface ColumnConfig {
 interface TabState {
   id: string;
   filePath: string;
+  // Optional human label shown in the tab bar instead of the basename (used by single
+  // sessions, whose filePath is a synthetic composite:// id with no meaningful basename).
+  displayName?: string;
+  // For a single-session (composite) tab: the ordered member file paths it concatenates.
+  // Lets us rebuild the composite in the main process when the user switches back to this
+  // tab after opening one of the real member files (which tears the singleton composite down).
+  compositeFiles?: string[];
   fileStats: FileStats | null;
   totalLines: number;
   scrollTop: number;
@@ -16202,13 +16209,37 @@ async function exportMergedFile(): Promise<void> {
 // "Single session": open the file set as ONE continuous read-only view (in list order),
 // with NO merge written to disk. Builds the composite in the main process, then opens its
 // synthetic id through the normal file-open path so the viewer/search work unchanged.
+// Build an explanatory tab label from the member basenames, e.g. "🔗 a.log + b.log + c.log"
+// (first three, then "+N more"). Beats the synthetic "single-session" basename in the tab bar.
+function buildCompositeLabel(files: string[]): string {
+  const names = files.map((f) => tsBaseName(f));
+  const shown = names.slice(0, 3).join(' + ');
+  const extra = names.length > 3 ? ` +${names.length - 3} more` : '';
+  return `🔗 ${shown}${extra}`;
+}
+
+// Open the member source files as (lazily-loaded) tabs positioned just before the composite
+// tab, so the virtual single-session sits beside the real files it was built from. Already-open
+// files are left where they are (no duplicates); new tabs don't steal focus from the session.
+function addMemberTabsBeside(files: string[], compositeTabId?: string): void {
+  const compIdx = compositeTabId ? state.tabs.findIndex((t) => t.id === compositeTabId) : -1;
+  let insertAt = compIdx >= 0 ? compIdx : state.tabs.length;
+  for (const fp of files) {
+    if (findTabByFilePath(fp)) continue; // already open — don't duplicate
+    state.tabs.splice(insertAt, 0, createTab(fp));
+    insertAt++; // keep member order, all before the composite tab
+  }
+}
+
 async function openSingleSession(): Promise<void> {
   const status = document.getElementById('time-sync-status');
   if (timeSyncFileSet.length < 2) { if (status) status.textContent = 'Add at least 2 files.'; return; }
   if (status) status.textContent = 'Building single session…';
   showProgress('Building single session…');
   try {
-    const res = await (window.api as any).createComposite(timeSyncFileSet.slice());
+    const files = timeSyncFileSet.slice();
+    const label = buildCompositeLabel(files);
+    const res = await (window.api as any).createComposite(files, label);
     if (!res || !res.success) {
       if (status) status.textContent = 'Failed';
       showToast(res?.error || 'Single session failed');
@@ -16217,8 +16248,19 @@ async function openSingleSession(): Promise<void> {
     hideProgress();
     // Reuse an existing composite tab if present (only one composite is active at a time),
     // otherwise open a fresh tab. loadFile() re-fetches its info, so totals stay correct.
+    // Tag the tab with its explanatory name + member set BEFORE loadFile: if loadFile routes
+    // through switchToTab (composite tab exists but isn't active), its rebuild-on-switch must
+    // see THIS session's files, not a previous session's. compositeFiles also drives the tab
+    // label/tooltip and the rebuild-on-switch-back (opening a real member file tears the
+    // singleton composite down, so we re-establish it when returning to this tab).
     const existing = findTabByFilePath(res.id);
+    if (existing) { existing.displayName = label; existing.compositeFiles = files; }
     await loadFile(res.id, !existing);
+    const compTab = findTabByFilePath(res.id);
+    if (compTab) { compTab.displayName = label; compTab.compositeFiles = files; }
+    // Show the source files beside the session so the virtual file lives with its real files.
+    addMemberTabsBeside(files, compTab?.id);
+    renderTabBar();
     renderCompositeInfo(res.info, res.boundaries || []);
     const n = res.info?.totalLines || 0;
     if (status) status.textContent = `Single session: ${n.toLocaleString()} lines across ${(res.boundaries || []).length} files`;
@@ -24863,6 +24905,14 @@ async function switchToTab(tabId: string): Promise<void> {
   }
 
   try {
+    // Single-session tab: rebuild the composite in main before opening it. Opening any real
+    // file (e.g. clicking one of the member tabs) sets activeComposite=null, so on the way
+    // back we re-establish it from the stored member set; members reuse their cached handlers
+    // so this is cheap. No-op'd naturally when the composite is still active (rebuild is idempotent).
+    if (tab.compositeFiles && tab.compositeFiles.length >= 2) {
+      await (window.api as any).createComposite(tab.compositeFiles, tab.displayName);
+    }
+
     const result = await window.api.openFile(tab.filePath);
 
     if (result.success && result.info) {
@@ -25053,7 +25103,12 @@ function renderTabBar(): void {
     tabElement.dataset.tabId = tab.id;
 
     const fileName = getFileName(tab.filePath);
-    let displayName = fileName;
+    // Single sessions carry an explanatory label (built from their member basenames); real
+    // files fall back to the basename. The tooltip lists the member files for a session.
+    let displayName = tab.displayName || fileName;
+    const tabTooltip = tab.compositeFiles && tab.compositeFiles.length
+      ? `Single session:\n${tab.compositeFiles.map((f) => getFileName(f)).join('\n')}`
+      : tab.filePath;
 
     // Add split indicator if part of a split set
     if (tab.splitFiles.length > 0 && tab.currentSplitIndex >= 0) {
@@ -25061,7 +25116,7 @@ function renderTabBar(): void {
     }
 
     tabElement.innerHTML = `
-      <span class="tab-title" title="${tab.filePath}">${displayName}</span>
+      <span class="tab-title" title="${escapeHtml(tabTooltip)}">${escapeHtml(displayName)}</span>
       <button class="tab-close" data-tab-id="${tab.id}" title="Close">&times;</button>
     `;
 
