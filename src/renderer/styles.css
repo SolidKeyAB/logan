@@ -3885,6 +3885,73 @@ button.is-cancelable:hover, .btn.is-cancelable:hover { filter: brightness(1.12);
   line-height: 1.4;
 }
 
+/* ── Agent handoff card (batch findings from logan_import_findings) ── */
+.ho-card {
+  margin: 6px 8px 10px;
+  border: 1px solid var(--border-color, rgba(255,255,255,0.10));
+  border-radius: 8px;
+  background: var(--bg-tertiary, rgba(255,255,255,0.03));
+  overflow: hidden;
+}
+.ho-head { padding: 8px 10px 6px; }
+.ho-title-row { display: flex; align-items: center; gap: 6px; }
+.ho-icon { font-size: 12px; flex-shrink: 0; }
+.ho-title {
+  font-size: 12px; font-weight: 700; color: var(--text-primary);
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ho-progress {
+  font-size: 10px; font-weight: 600; color: var(--text-muted);
+  font-variant-numeric: tabular-nums; background: rgba(255,255,255,0.06);
+  border-radius: 999px; padding: 1px 7px; flex-shrink: 0;
+}
+.ho-progress.complete { color: #52d69a; background: rgba(82,214,154,0.14); }
+.ho-clear {
+  border: 0; background: transparent; color: var(--text-muted);
+  cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 4px; border-radius: 4px; flex-shrink: 0;
+}
+.ho-clear:hover { color: var(--text-primary); background: rgba(255,255,255,0.08); }
+.ho-meta { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+.ho-summary {
+  font-size: 11px; color: var(--text-secondary); line-height: 1.45;
+  margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--border-color, rgba(255,255,255,0.08));
+}
+
+.ho-finding {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 6px 10px; border-left: 3px solid transparent;
+  transition: background 0.1s;
+}
+.ho-finding:hover { background: var(--bg-hover, rgba(255,255,255,0.05)); }
+.ho-finding.severity-info    { border-left-color: rgba(180, 120, 255, 0.8); }
+.ho-finding.severity-warning { border-left-color: rgba(255, 180,  40, 0.8); }
+.ho-finding.severity-error   { border-left-color: rgba(255,  80,  80, 0.8); }
+.ho-finding.active { background: rgba(180, 120, 255, 0.12); }
+.ho-finding.done { opacity: 0.5; }
+.ho-finding.done .ho-ftext { text-decoration: line-through; }
+
+.ho-check { margin-top: 2px; flex-shrink: 0; cursor: pointer; accent-color: #52d69a; }
+.ho-fbody { flex: 1; overflow: hidden; cursor: pointer; }
+.ho-fmain { display: flex; align-items: baseline; gap: 6px; }
+.ho-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; align-self: center; }
+.severity-info    .ho-dot { background: rgba(180, 120, 255, 0.9); }
+.severity-warning .ho-dot { background: rgba(255, 180,  40, 0.9); }
+.severity-error   .ho-dot { background: rgba(255,  80,  80, 0.9); }
+.ho-fline {
+  font-size: 10px; font-family: var(--font-mono, monospace);
+  color: var(--text-muted); flex-shrink: 0;
+}
+.ho-ftext { font-size: 11px; color: var(--text-secondary); line-height: 1.4; word-break: break-word; }
+.ho-action { font-size: 10px; color: rgba(110,168,255,0.95); margin-top: 2px; margin-left: 13px; }
+.ho-detail {
+  font-size: 10px; color: var(--text-muted); line-height: 1.4;
+  margin-top: 3px; margin-left: 13px; white-space: pre-wrap; word-break: break-word;
+}
+.ho-divider {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
+  color: var(--text-muted); font-weight: 700; padding: 8px 10px 4px;
+}
+
 /* Tab Bar */
 .tab-bar {
   display: flex;

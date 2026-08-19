@@ -55,6 +55,15 @@ export interface Annotation {
   agentName: string;
   timestamp: number;
   severity?: 'info' | 'warning' | 'error';
+  // --- Agent handoff (batch findings import via logan_import_findings) ---
+  // When an agent hands off a whole investigation, each finding is an Annotation
+  // sharing one handoffId; the group renders as a titled, tick-off-able worklist.
+  handoffId?: string;       // groups findings imported together in one handoff
+  handoffTitle?: string;    // title of the handoff (the group header)
+  handoffSummary?: string;  // one-paragraph summary of the whole handoff
+  detail?: string;          // longer per-finding explanation (shown on expand)
+  suggestedAction?: string; // optional next step for this finding
+  done?: boolean;           // user ticks it off while working through the handoff
 }
 
 export interface BookmarkSet {

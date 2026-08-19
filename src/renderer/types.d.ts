@@ -738,6 +738,8 @@ interface Api {
   removeAnnotation: (id: string) => Promise<{ success: boolean }>;
   listAnnotations: () => Promise<{ success: boolean; annotations?: Array<{ id: string; lineNumber: number; text: string; agentName: string; timestamp: number; severity?: string }> }>;
   clearAnnotations: () => Promise<{ success: boolean }>;
+  updateAnnotation: (id: string, patch: any) => Promise<{ success: boolean }>;
+  clearHandoff: (handoffId: string) => Promise<{ success: boolean }>;
   onAnnotationsChanged: (callback: (annotations: any[]) => void) => () => void;
 
   getAgentMemory: () => Promise<{ content: string; agentName: string; updatedAt: number } | null>;
