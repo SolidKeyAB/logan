@@ -379,8 +379,11 @@ export interface ApiContext {
   createComposite(filePaths: string[], label?: string): Promise<{ success: boolean; id?: string; info?: any; boundaries?: any[]; error?: string }>;
   getAnnotations(): Map<string, Annotation>;
   addAnnotation(annotation: Annotation): any;
+  addAnnotations(annotations: Annotation[]): any;
+  updateAnnotation(id: string, patch: Partial<Annotation>): any;
   removeAnnotation(id: string): any;
   clearAnnotations(): any;
+  clearHandoff(handoffId: string): any;
   extractFilteredToFile(opts?: { includeLineNumbers?: boolean; columnConfig?: any }): Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }>;
 }
 
@@ -1132,6 +1135,54 @@ export function startApiServer(ctx: ApiContext): void {
 
         if (url === '/api/annotation-clear') {
           const result = ctx.clearAnnotations();
+          sendJson(res, result);
+          return;
+        }
+
+        // Batch findings handoff — import a whole investigation's findings in one call.
+        // Each finding becomes an Annotation sharing one handoffId so the renderer shows
+        // them as a titled, tick-off-able worklist. lineNumber is already 0-based here.
+        if (url === '/api/import-findings') {
+          if (!Array.isArray(body.findings) || body.findings.length === 0) {
+            return sendError(res, 'findings[] required');
+          }
+          if (body.clearPrevious) ctx.clearAnnotations();
+          const source: string = body.source || activeAgent?.name || 'Agent';
+          const title: string = body.title || 'Agent handoff';
+          const summary: string = body.summary || '';
+          const handoffId = `ho-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+          const ts = Date.now();
+          const anns: Annotation[] = body.findings.map((f: any, i: number) => ({
+            id: `ann-${ts}-${i}-${Math.random().toString(36).substring(2, 6)}`,
+            lineNumber: f.lineNumber ?? 0,
+            ...(f.endLine !== undefined ? { endLine: f.endLine } : {}),
+            text: f.title || f.text || '(finding)',
+            agentName: source,
+            timestamp: ts,
+            severity: f.severity || 'info',
+            handoffId,
+            handoffTitle: title,
+            handoffSummary: summary,
+            ...(f.detail ? { detail: f.detail } : {}),
+            ...(f.suggestedAction ? { suggestedAction: f.suggestedAction } : {}),
+            done: false,
+          }));
+          ctx.addAnnotations(anns);
+          // Land the viewer on the first finding so the handoff is immediately visible.
+          if (anns.length && body.navigate !== false) ctx.navigateToLine(anns[0].lineNumber);
+          // Also drop a summary line into the chat panel.
+          if (!activeAgent) touchPollingAgent(source, ctx);
+          const msgText = `**📥 Handoff — ${title}** (${anns.length} finding${anns.length === 1 ? '' : 's'})${summary ? `\n\n${summary}` : ''}`;
+          const msg = addChatMessage('agent', msgText);
+          const win = ctx.getMainWindow();
+          if (win && !win.isDestroyed()) win.webContents.send('agent-message', msg);
+          sendJson(res, { success: true, handoffId, count: anns.length });
+          return;
+        }
+
+        if (url === '/api/annotation-update') {
+          if (!body.id) return sendError(res, 'id required');
+          const result = ctx.updateAnnotation(body.id, body.patch || {});
           sendJson(res, result);
           return;
         }

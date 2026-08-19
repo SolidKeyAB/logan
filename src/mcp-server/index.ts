@@ -1694,6 +1694,47 @@ server.tool(
   }
 );
 
+// === Tool: logan_import_findings ===
+// Batch counterpart to logan_report_finding: hand off a whole investigation's findings
+// to LOGAN in ONE call. Each finding becomes a clickable, severity-coded annotation, and
+// they're grouped under a named "handoff" that renders as a tick-off-able worklist in the
+// AI Annotations panel — so the user can pick up where the agent left off.
+server.tool(
+  'logan_import_findings',
+  'Hand off a batch of findings to LOGAN in ONE call. Each finding becomes a clickable, severity-coded annotation in the viewer, grouped under a named "handoff" the user can review and tick off in the AI Annotations panel. Use this to transfer a whole investigation into LOGAN so the user can continue there — prefer it over many separate logan_report_finding calls.',
+  {
+    title: z.string().describe('Title of this handoff (the group header), e.g. "BT pairing race — root cause"'),
+    summary: z.string().optional().describe('One short paragraph summarising the whole investigation — shown at the top of the handoff'),
+    source: z.string().optional().describe('Who produced these findings, e.g. "Copilot" (defaults to the connected agent name)'),
+    clearPrevious: z.boolean().default(false).describe('Clear existing annotations before importing (use on a fresh handoff to avoid mixing sessions)'),
+    findings: z.array(z.object({
+      lineNumber: z.number().int().min(1).describe('1-based viewer line (use viewerLine from search/get-lines results)'),
+      endLine: z.number().int().min(1).optional().describe('1-based end line for a range finding (inclusive)'),
+      title: z.string().describe('Short finding title shown in the list'),
+      detail: z.string().optional().describe('Longer explanation, shown when the finding is expanded'),
+      severity: z.enum(['info', 'warning', 'error']).default('warning').describe('Severity: error | warning | info'),
+      suggestedAction: z.string().optional().describe('Optional next step for the user, e.g. "filter to BtStack around this line"'),
+    })).min(1).describe('The findings to hand off (1 or more)'),
+  },
+  async ({ title, summary, source, clearPrevious, findings }) => {
+    try {
+      // Convert 1-based viewer lines to 0-based internal line numbers (as /api/annotate expects).
+      const mapped = findings.map((f) => ({
+        lineNumber: Math.max(0, f.lineNumber - 1),
+        ...(f.endLine !== undefined ? { endLine: Math.max(0, f.endLine - 1) } : {}),
+        title: f.title,
+        ...(f.detail ? { detail: f.detail } : {}),
+        severity: f.severity,
+        ...(f.suggestedAction ? { suggestedAction: f.suggestedAction } : {}),
+      }));
+      const result = await apiCall('POST', '/api/import-findings', { title, summary, source, clearPrevious, findings: mapped });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_triage_recipe ===
 // The guided-triage recipe engine (docs/TRIAGE_GUIDE.md). One symptom in → an ordered
 // set of LOGAN primitives run for you, findings pinned in the viewer, and a COMPACT
