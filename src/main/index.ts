@@ -6800,7 +6800,7 @@ ipcMain.handle('format-json-file', async (_, filePath: string) => {
 // the current file regardless of extension, so a renamed capture — or a file whose
 // magic sits past the detection head — still decodes. parseVtraceToFile throws when
 // the file has no traceserverIVI record anywhere, which surfaces as a clean error.
-ipcMain.handle('decode-esotrace-file', async (_, filePath: string) => {
+ipcMain.handle('decode-esotrace-file', async (_, filePath: string, epochMsAnchor?: number | null) => {
   try {
     const baseName = path.basename(filePath, path.extname(filePath));
     // Write to a temp `.txt` so it indexes as plain text and does NOT re-trigger the
@@ -6810,9 +6810,14 @@ ipcMain.handle('decode-esotrace-file', async (_, filePath: string) => {
       os.tmpdir(),
       `${baseName}.decoded.${process.pid}-${Date.now().toString(36)}.txt`
     );
+    // A finite epochMsAnchor (uptime-0 → epoch ms) forces absolute dates on every line —
+    // this is the manual "set anchor from a line" path when the trace has no embedded /
+    // sidecar anchor. null → the decoder auto-detects (in-message pair) or falls back to
+    // relative uptime seconds, exactly as before.
+    const anchor = (typeof epochMsAnchor === 'number' && isFinite(epochMsAnchor)) ? epochMsAnchor : null;
     await parseVtraceToFile(filePath, decodedPath, (percent) => {
       mainWindow?.webContents.send('esotrace-decode-progress', { percent });
-    });
+    }, { epochMsAnchor: anchor });
     return { success: true, decodedPath };
   } catch (error) {
     return { success: false, error: String(error) };
