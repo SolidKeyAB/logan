@@ -123,6 +123,15 @@ time-gaps and the ⏱ timeline all operate on wall-clock time. When it doesn't
 (no anchor message in that file), the decoder falls back to the relative
 device-uptime seconds it has always emitted — nothing breaks.
 
+**Manual anchor (implemented).** When neither an in-message pair nor a sidecar is
+available, the user can pin the clock by hand: right-click any line in a *decoded*
+esotrace view → **"Set time anchor from this line…"**. The leading token of a
+no-anchor line is its relative uptime seconds, so given the real wall-clock time
+of that one line the renderer back-computes `epoch0_ms = real_ms − uptime_s·1000`
+and re-decodes with that `epochMsAnchor` — every line then shows a real date. The
+prompt pre-fills from an in-message `timestamp=<ms>` or ISO datetime when present.
+To re-anchor, toggle Decode off then on (reverts to seconds) and set it again.
+
 **Sidecar anchor (future).** The capture *bundle* also carries sidecars:
 
 - `loggertime/loggertime_<sid>.json` — a linear map `{x1,y1,x2,y2}` from a logger

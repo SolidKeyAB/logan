@@ -396,8 +396,8 @@ const api = {
     ipcRenderer.invoke('format-json-file', filePath),
 
   // esotrace (vtrace) manual decode
-  decodeEsotraceFile: (filePath: string): Promise<{ success: boolean; decodedPath?: string; error?: string }> =>
-    ipcRenderer.invoke('decode-esotrace-file', filePath),
+  decodeEsotraceFile: (filePath: string, epochMsAnchor?: number | null): Promise<{ success: boolean; decodedPath?: string; error?: string }> =>
+    ipcRenderer.invoke('decode-esotrace-file', filePath, epochMsAnchor),
 
   // esotrace (vtrace) batch folder decode
   decodeEsotraceFolder: (folderPath: string): Promise<{

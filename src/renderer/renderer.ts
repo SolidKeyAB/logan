@@ -640,6 +640,7 @@ let jsonFormattingEnabled = false;
 let jsonOriginalFile: string | null = null; // Track original file when viewing formatted JSON
 let esotraceDecodeEnabled = false;
 let esotraceOriginalFile: string | null = null; // Track original file when viewing decoded esotrace
+let esotraceEpochAnchorMs: number | null = null; // Manual wall-clock anchor (uptime-0 → epoch ms) for the current decode
 
 // Check if text contains JSON
 function containsJson(text: string): boolean {
@@ -4770,6 +4771,18 @@ function handleContextMenu(event: MouseEvent): void {
       menu.appendChild(flips);
     }
 
+    menu.appendChild(menuSeparator());
+  }
+
+  // Esotrace: set a manual wall-clock anchor from this line so every decoded line gets a
+  // real date (fallback when the trace has no embedded/sidecar anchor). Only in a decoded view.
+  if (esotraceDecodeEnabled && esotraceOriginalFile) {
+    const anchorItem = menuItem('\u{1F552}', 'Set time anchor from this line…');
+    anchorItem.addEventListener('click', () => {
+      menu.remove();
+      void setEsotraceTimeAnchorFromLine(lineNumber);
+    });
+    menu.appendChild(anchorItem);
     menu.appendChild(menuSeparator());
   }
 
@@ -16127,11 +16140,104 @@ async function decodeEsotraceAndLoad(): Promise<void> {
   } else {
     // Toggle off — return to the raw original file.
     esotraceDecodeEnabled = false;
+    esotraceEpochAnchorMs = null;
     elements.btnEsotraceDecode.classList.remove('active');
     if (esotraceOriginalFile) {
       await loadFile(esotraceOriginalFile);
       esotraceOriginalFile = null;
     }
+  }
+}
+
+// Parse a manual anchor input into epoch-ms. Accepts either a raw epoch-ms integer
+// (10+ digits) or a local "YYYY-MM-DD HH:MM:SS(.mmm)" datetime (parsed in LOCAL time to
+// match the decoder's formatAbsoluteMs, so the anchor round-trips to the same instant).
+function parseAnchorInput(s: string): number | null {
+  const t = s.trim();
+  if (/^\d{10,}$/.test(t)) {
+    const ms = parseInt(t, 10);
+    return isFinite(ms) ? ms : null;
+  }
+  const m = t.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?$/);
+  if (!m) return null;
+  const ms = new Date(
+    parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10),
+    parseInt(m[4], 10), parseInt(m[5], 10), parseInt(m[6], 10),
+    m[7] ? parseInt(m[7].padEnd(3, '0'), 10) : 0,
+  ).getTime();
+  return isFinite(ms) ? ms : null;
+}
+
+// Manual time anchor: the user picks a decoded line whose real wall-clock time they know
+// (or that carries an in-message timestamp), and we back-compute uptime-0 → epoch, then
+// re-decode so EVERY line gets a real date. This is the fallback when a trace has no
+// embedded pair and no sidecar meta file. Only meaningful while a decoded esotrace (with
+// relative uptime-seconds stamps) is open.
+async function setEsotraceTimeAnchorFromLine(lineNumber: number): Promise<void> {
+  if (!esotraceDecodeEnabled || !esotraceOriginalFile) {
+    showToast('Open a decoded esotrace first, then set an anchor.');
+    return;
+  }
+  const res = await window.api.getLines(lineNumber, 1);
+  const lineText: string = (res?.lines && res.lines[0]?.text) || '';
+  // The leading token is the relative uptime seconds when decoded without an anchor.
+  const firstTok = lineText.trimStart().split(/\s+/)[0] || '';
+  const uptimeSec = parseFloat(firstTok);
+  if (!/^\d+(\.\d+)?$/.test(firstTok) || !isFinite(uptimeSec)) {
+    showToast('This view already shows real dates. Toggle Decode off then on to re-anchor.');
+    return;
+  }
+  // Prefill from an in-message epoch (timestamp=<ms>) or ISO datetime, if present.
+  let prefill = '';
+  const epochM = lineText.match(/(?:^|[^A-Za-z])timestamp=(\d{10,})/);
+  const isoM = lineText.match(/\b(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?)/);
+  if (epochM) {
+    prefill = String(parseInt(epochM[1], 10));
+  } else if (isoM) {
+    prefill = `${isoM[1]} ${isoM[2]}`;
+  }
+  const input = await showInputPrompt(
+    `Real wall-clock time at line ${lineNumber + 1} (device uptime ${uptimeSec.toFixed(3)}s).\n` +
+    `Enter a date "YYYY-MM-DD HH:MM:SS.mmm" or a raw epoch-ms — every line is re-dated from it:`,
+    prefill,
+  );
+  if (input == null) return;
+  const realMs = parseAnchorInput(input);
+  if (realMs == null) {
+    showToast('Could not parse that time — use "YYYY-MM-DD HH:MM:SS" or epoch-ms.');
+    return;
+  }
+  const epoch0Ms = realMs - uptimeSec * 1000;
+  await redecodeEsotraceWithAnchor(epoch0Ms);
+}
+
+// Re-run the decoder on the original .esotrace with a fixed wall-clock anchor, then reload
+// the fresh decoded output so the viewer shows real dates.
+async function redecodeEsotraceWithAnchor(epochMsAnchor: number): Promise<void> {
+  if (!esotraceOriginalFile || esotraceDecodeInProgress) return;
+  esotraceDecodeInProgress = true;
+  showProgress('Applying time anchor... 0%');
+  const unsub = (window.api as any).onEsotraceDecodeProgress?.((data: { percent: number }) => {
+    updateProgress(data.percent);
+    updateProgressText(`Applying time anchor... ${data.percent}%`);
+  });
+  try {
+    const result = await (window.api as any).decodeEsotraceFile(esotraceOriginalFile, epochMsAnchor);
+    if (unsub) unsub();
+    if (result.success && result.decodedPath) {
+      esotraceEpochAnchorMs = epochMsAnchor;
+      await loadFile(result.decodedPath);
+      showToast('⏱ Time anchor applied — lines now show real dates.');
+    } else {
+      hideProgress();
+      showToast('Re-decode failed: ' + (result.error || 'unknown'));
+    }
+  } catch (err) {
+    if (unsub) unsub();
+    hideProgress();
+    showToast('Re-decode failed.');
+  } finally {
+    esotraceDecodeInProgress = false;
   }
 }
 
