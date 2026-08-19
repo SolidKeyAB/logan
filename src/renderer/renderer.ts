@@ -10244,34 +10244,158 @@ function renderAnnotationsPanel(): void {
 
   if (badge) badge.textContent = String(state.annotations.length);
 
-  const sorted = [...state.annotations].sort((a, b) => a.lineNumber - b.lineNumber);
-  const frag = document.createDocumentFragment();
-
-  for (const ann of sorted) {
-    const sev = ann.severity || 'info';
-    const item = document.createElement('div');
-    item.className = `ann-panel-item severity-${sev}`;
-    item.dataset.lineNumber = String(ann.lineNumber);
-    item.dataset.annId = ann.id;
-
-    const lineLabel = ann.endLine !== undefined && ann.endLine > ann.lineNumber
-      ? `L${ann.lineNumber + 1}–${ann.endLine + 1}`
-      : `L${ann.lineNumber + 1}`;
-    item.innerHTML =
-      `<span class="ann-panel-line">${lineLabel}</span>` +
-      `<div class="ann-panel-body">` +
-        `<span class="ann-panel-agent">${escapeHtml(ann.agentName)}</span>` +
-        `<span class="ann-panel-text">${escapeHtml(ann.text)}</span>` +
-      `</div>`;
-
-    if (ann.id === activeAnnotationId) item.classList.add('active');
-    item.addEventListener('click', () => navigateToAnnotation(ann));
-
-    frag.appendChild(item);
+  // Partition into agent-handoff groups (findings sharing a handoffId → a tick-off-able
+  // worklist) and loose single annotations (rendered as the original compact rows).
+  const groups = new Map<string, any[]>();
+  const loose: any[] = [];
+  for (const ann of state.annotations) {
+    if (ann.handoffId) {
+      const arr = groups.get(ann.handoffId) || [];
+      arr.push(ann);
+      groups.set(ann.handoffId, arr);
+    } else {
+      loose.push(ann);
+    }
   }
 
   list.innerHTML = '';
+  const frag = document.createDocumentFragment();
+
+  // Handoff cards first — newest handoff on top.
+  const groupEntries = [...groups.entries()].sort((a, b) => {
+    const ta = Math.max(...a[1].map((x) => x.timestamp || 0));
+    const tb = Math.max(...b[1].map((x) => x.timestamp || 0));
+    return tb - ta;
+  });
+
+  for (const [handoffId, annsRaw] of groupEntries) {
+    const anns = [...annsRaw].sort((a, b) => a.lineNumber - b.lineNumber);
+    const first = anns[0];
+    const doneCount = anns.filter((a) => a.done).length;
+
+    const card = document.createElement('div');
+    card.className = 'ho-card';
+
+    const head = document.createElement('div');
+    head.className = 'ho-head';
+    head.innerHTML =
+      `<div class="ho-title-row">` +
+        `<span class="ho-icon">📥</span>` +
+        `<span class="ho-title">${escapeHtml(first.handoffTitle || 'Agent handoff')}</span>` +
+        `<span class="ho-progress${doneCount === anns.length ? ' complete' : ''}">${doneCount}/${anns.length}</span>` +
+        `<button class="ho-clear" title="Clear this handoff">✕</button>` +
+      `</div>` +
+      `<div class="ho-meta">${escapeHtml(first.agentName || 'Agent')} · ${anns.length} finding${anns.length === 1 ? '' : 's'}</div>` +
+      (first.handoffSummary ? `<div class="ho-summary">${escapeHtml(first.handoffSummary)}</div>` : '');
+    head.querySelector('.ho-clear')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await window.api.clearHandoff(handoffId);
+    });
+    card.appendChild(head);
+
+    for (const ann of anns) {
+      const sev = ann.severity || 'info';
+      const row = document.createElement('div');
+      row.className = `ho-finding severity-${sev}${ann.done ? ' done' : ''}`;
+      if (ann.id === activeAnnotationId) row.classList.add('active');
+      row.dataset.annId = ann.id;
+      row.dataset.lineNumber = String(ann.lineNumber);
+
+      const lineLabel = ann.endLine !== undefined && ann.endLine > ann.lineNumber
+        ? `L${ann.lineNumber + 1}–${ann.endLine + 1}`
+        : `L${ann.lineNumber + 1}`;
+
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'ho-check';
+      cb.checked = !!ann.done;
+      cb.title = ann.done ? 'Mark not done' : 'Mark done';
+      cb.addEventListener('click', (e) => e.stopPropagation());
+      cb.addEventListener('change', async () => {
+        await window.api.updateAnnotation(ann.id, { done: cb.checked });
+      });
+
+      const body = document.createElement('div');
+      body.className = 'ho-fbody';
+      body.innerHTML =
+        `<div class="ho-fmain">` +
+          `<span class="ho-dot"></span>` +
+          `<span class="ho-fline">${lineLabel}</span>` +
+          `<span class="ho-ftext">${escapeHtml(ann.text)}</span>` +
+        `</div>` +
+        (ann.suggestedAction ? `<div class="ho-action">→ ${escapeHtml(ann.suggestedAction)}</div>` : '') +
+        (ann.detail ? `<div class="ho-detail">${escapeHtml(ann.detail)}</div>` : '');
+      body.addEventListener('click', () => navigateToAnnotation(ann));
+
+      row.appendChild(cb);
+      row.appendChild(body);
+      card.appendChild(row);
+    }
+
+    frag.appendChild(card);
+  }
+
+  // Loose single annotations — original compact rows, under a subtle divider.
+  if (loose.length) {
+    if (groupEntries.length) {
+      const divider = document.createElement('div');
+      divider.className = 'ho-divider';
+      divider.textContent = 'Other annotations';
+      frag.appendChild(divider);
+    }
+    const sortedLoose = [...loose].sort((a, b) => a.lineNumber - b.lineNumber);
+    for (const ann of sortedLoose) {
+      const sev = ann.severity || 'info';
+      const item = document.createElement('div');
+      item.className = `ann-panel-item severity-${sev}`;
+      item.dataset.lineNumber = String(ann.lineNumber);
+      item.dataset.annId = ann.id;
+
+      const lineLabel = ann.endLine !== undefined && ann.endLine > ann.lineNumber
+        ? `L${ann.lineNumber + 1}–${ann.endLine + 1}`
+        : `L${ann.lineNumber + 1}`;
+      item.innerHTML =
+        `<span class="ann-panel-line">${lineLabel}</span>` +
+        `<div class="ann-panel-body">` +
+          `<span class="ann-panel-agent">${escapeHtml(ann.agentName)}</span>` +
+          `<span class="ann-panel-text">${escapeHtml(ann.text)}</span>` +
+        `</div>`;
+
+      if (ann.id === activeAnnotationId) item.classList.add('active');
+      item.addEventListener('click', () => navigateToAnnotation(ann));
+      frag.appendChild(item);
+    }
+  }
+
   list.appendChild(frag);
+}
+
+// Track which handoffs we've already toasted so re-renders don't re-announce them.
+const seenHandoffs = new Set<string>();
+
+// When a fresh handoff arrives (findings imported in the last ~20s), toast it and bring
+// the AI Annotations panel forward so the user notices the handoff immediately. Old
+// handoffs restored from a file's sidecar (stale timestamps) are seeded silently.
+function announceFreshHandoffs(): void {
+  const now = Date.now();
+  const byId = new Map<string, any[]>();
+  for (const ann of state.annotations) {
+    if (!ann.handoffId) continue;
+    const arr = byId.get(ann.handoffId) || [];
+    arr.push(ann);
+    byId.set(ann.handoffId, arr);
+  }
+  for (const [id, anns] of byId) {
+    if (seenHandoffs.has(id)) continue;
+    seenHandoffs.add(id);
+    const newest = Math.max(...anns.map((a) => a.timestamp || 0));
+    if (now - newest > 20000) continue; // stale (loaded from sidecar) → don't announce
+    const first = anns[0];
+    const src = first.agentName || 'Agent';
+    const title = first.handoffTitle || 'findings';
+    showToast(`📥 ${src} sent ${anns.length} finding${anns.length === 1 ? '' : 's'} — ${title}`);
+    if (activePanel !== 'annotations') openPanel('annotations');
+  }
 }
 
 function toggleAnnotations(): void {
@@ -23890,6 +24014,7 @@ function init(): void {
     renderAnnotationsPanel();
     renderVisibleLines();
     renderMinimapMarkers();
+    announceFreshHandoffs();
   });
 
   // Clear all annotations button
