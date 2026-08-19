@@ -53,6 +53,7 @@ Use `logan_report_finding` for each distinct finding, then send a summary via `l
 | `logan_single_session` | Combine 2+ files into one continuous read-only "single session" (composite) and open it (agent parity for the 🔗 button) |
 | `logan_evidence_pack` | **Fetch FIRST**: one compact briefing (severity, levels, grouped crashes, top components/gaps, discovered field vocabulary, filter hints, optional baseline delta) as `viewerLine` refs + counts — not raw text. Drill down from it instead of many exploratory calls |
 | `logan_report_finding` | **Pin a finding**: annotate + navigate + chat message in one call |
+| `logan_import_findings` | **Hand off a BATCH of findings in one call**: each becomes a clickable annotation grouped under a named "handoff" the user reviews + ticks off in the AI Annotations panel. Prefer over many `logan_report_finding` calls when transferring a whole investigation for the user to continue in LOGAN |
 | `logan_send_message` | Send chat message to user (for summaries, questions, greetings) |
 | `logan_wait_for_message` | Block until user replies (SSE-backed) |
 | `logan_get_messages` | Fetch chat history |
