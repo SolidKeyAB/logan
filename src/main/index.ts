@@ -1273,6 +1273,27 @@ app.whenReady().then(() => {
       pushAnnotationsToRenderer();
       return { success: true };
     },
+    addAnnotations: (anns: Annotation[]) => {
+      for (const a of anns) annotations.set(a.id, a);
+      saveAnnotationsForCurrentFile();
+      if (currentFilePath) logActivity(currentFilePath, 'annotation_added', { count: anns.length, agentName: anns[0]?.agentName });
+      pushAnnotationsToRenderer();
+      return { success: true, count: anns.length };
+    },
+    updateAnnotation: (id: string, patch: Partial<Annotation>) => {
+      const a = annotations.get(id);
+      if (!a) return { success: false, error: 'not found' };
+      annotations.set(id, { ...a, ...patch, id: a.id });
+      saveAnnotationsForCurrentFile();
+      pushAnnotationsToRenderer();
+      return { success: true };
+    },
+    clearHandoff: (handoffId: string) => {
+      for (const [id, a] of annotations) if (a.handoffId === handoffId) annotations.delete(id);
+      saveAnnotationsForCurrentFile();
+      pushAnnotationsToRenderer();
+      return { success: true };
+    },
     removeAnnotation: (id: string) => {
       annotations.delete(id);
       saveAnnotationsForCurrentFile();
@@ -3637,6 +3658,24 @@ ipcMain.handle('annotation-list', async () => {
 
 ipcMain.handle('annotation-clear', async () => {
   annotations.clear();
+  saveAnnotationsForCurrentFile();
+  pushAnnotationsToRenderer();
+  return { success: true };
+});
+
+// Update one annotation in place (e.g. the user ticks a handoff finding done).
+ipcMain.handle('annotation-update', async (_, id: string, patch: Partial<Annotation>) => {
+  const a = annotations.get(id);
+  if (!a) return { success: false, error: 'not found' };
+  annotations.set(id, { ...a, ...patch, id: a.id });
+  saveAnnotationsForCurrentFile();
+  pushAnnotationsToRenderer();
+  return { success: true };
+});
+
+// Clear one whole handoff group (all findings sharing a handoffId).
+ipcMain.handle('annotation-clear-handoff', async (_, handoffId: string) => {
+  for (const [id, a] of annotations) if (a.handoffId === handoffId) annotations.delete(id);
   saveAnnotationsForCurrentFile();
   pushAnnotationsToRenderer();
   return { success: true };

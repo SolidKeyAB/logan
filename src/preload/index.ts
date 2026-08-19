@@ -824,6 +824,10 @@ const api = {
     ipcRenderer.invoke('annotation-list'),
   clearAnnotations: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('annotation-clear'),
+  updateAnnotation: (id: string, patch: any): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('annotation-update', id, patch),
+  clearHandoff: (handoffId: string): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('annotation-clear-handoff', handoffId),
   onAnnotationsChanged: (callback: (annotations: any[]) => void): (() => void) => {
     const handler = (_: any, anns: any[]) => callback(anns);
     ipcRenderer.on('annotations-changed', handler);

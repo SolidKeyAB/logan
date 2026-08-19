@@ -126,3 +126,15 @@ when each is next touched):
   `logan_search`/`logan_filter`. The remaining kinds are copy-only for now and stay on the
   pre-existing human-only backlog above; the `saved:apply|reveal|copy:<kind>` usage counters
   decide which of them earns a dedicated apply next.
+
+- **Agent findings handoff — `logan_import_findings`** (batch findings → tick-off-able
+  worklist). **At parity, with a written create-side exemption.** Agent surface: MCP
+  `logan_import_findings` + `/api/import-findings` (builds N annotations sharing one
+  `handoffId`, reusing `addAnnotations` → the same annotation store/persistence/push as
+  `logan_report_finding`). Human surface: the **AI Annotations panel** now renders each
+  handoff as a titled card (summary + N/M-done progress) whose findings the human can
+  click-to-jump, **tick off** (`annotation-update` IPC + `/api/annotation-update`), and
+  **clear** (`annotation-clear-handoff` IPC). *Creating* a handoff is agent-only by nature
+  (a human doesn't batch-import an external agent's findings) — **written exemption**; the
+  human already creates single findings by hand, and fully operates the review/consume
+  surface. Done-toggle + clear have both IPC (human) and an api route (agent) for symmetry.
