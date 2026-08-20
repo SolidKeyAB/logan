@@ -4107,13 +4107,18 @@ function saveColumnPatternsStore(items: ColumnPatternSaved[]): void {
   }
 }
 
-ipcMain.handle('column-pattern-preview', async (_, spec: ColumnPatternSpec, opts?: { sampleLines?: number }) => {
+ipcMain.handle('column-pattern-preview', async (_, spec: ColumnPatternSpec, opts?: { sampleLines?: number; scan?: boolean }) => {
   try {
     const N = Math.max(1, Math.min(500, opts?.sampleLines ?? 200));
+    // scan=false is the LIVE painting path: preview the single sample line only — no file
+    // read, no refine — so interactive painting never touches the file or stalls the main
+    // thread (which also serves the viewer). scan=true (default) is the deliberate "Test
+    // over file" / commit step where match-rate + refine-from-data actually belong.
+    const doScan = opts?.scan !== false;
     // Gather the candidate lines once (the user's sample first, then the file head).
     const sampleLines: string[] = [];
     if (spec.sample && spec.sample.trim()) sampleLines.push(spec.sample);
-    const handler = getFileHandler();
+    const handler = doScan ? getFileHandler() : null;
     if (handler) {
       const scanTo = Math.min(handler.getTotalLines(), N * 4);
       for (const line of handler.getLines(0, scanTo)) {
@@ -4140,7 +4145,7 @@ ipcMain.handle('column-pattern-preview', async (_, spec: ColumnPatternSpec, opts
     // constant WRAPPER (/…/, xx…xx, …blah…) and re-compile, then re-extract with the smarter
     // pattern. No-op when no wrapper is shared across values.
     let refined = false;
-    if (spec.mode === 'paint' && rows.length >= 2 && compiled.fields.length > 0) {
+    if (doScan && spec.mode === 'paint' && rows.length >= 2 && compiled.fields.length > 0) {
       const fieldSamples = compiled.fields.map((_f, ci) => rows.map(r => r[ci]).filter(Boolean));
       const refinedCompiled = refinePaintPattern(spec, fieldSamples);
       if (refinedCompiled.regex !== compiled.regex) {

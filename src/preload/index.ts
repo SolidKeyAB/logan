@@ -445,8 +445,8 @@ const api = {
   // Pattern Columns (paint / grok / regex → named columns)
   columnPatternPreview: (
     spec: { mode: 'grok' | 'regex' | 'paint'; pattern?: string; sample?: string; spans?: Array<{ start: number; end: number; name: string }>; flags?: string },
-    opts?: { sampleLines?: number }
-  ): Promise<{ success: boolean; regex?: string; flags?: string; fields?: string[]; named?: boolean; rows?: string[][]; matched?: number; scanned?: number; error?: string }> =>
+    opts?: { sampleLines?: number; scan?: boolean }
+  ): Promise<{ success: boolean; regex?: string; flags?: string; fields?: string[]; named?: boolean; rows?: string[][]; matched?: number; scanned?: number; refined?: boolean; error?: string }> =>
     ipcRenderer.invoke('column-pattern-preview', spec, opts),
   columnPatternList: (): Promise<{ success: boolean; patterns?: any[] }> =>
     ipcRenderer.invoke('column-pattern-list'),
