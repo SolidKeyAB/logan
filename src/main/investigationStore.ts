@@ -16,11 +16,16 @@ export interface JournalEntry {
   label: string;                // human summary, e.g. 'search "auth fail"'
 }
 
+// Classification of a fill-in noun — drives ordering + typing of the human
+// tweak-before-replay form (time/range windows first, then component, …).
+export type ParamKind = 'time' | 'range' | 'component' | 'field' | 'pattern' | 'event' | 'other';
+
 export interface ParamDef {
   key: string;                  // the body key this param fills, e.g. 'component'
   stepIndex: number;            // which step it belongs to
   label: string;                // display label
   default: any;                 // value captured at record time
+  kind?: ParamKind;             // declared noun kind (added 2026-08-20; back-filled for old templates)
 }
 
 export interface TemplateStep {
@@ -41,7 +46,31 @@ export interface InvestigationTemplate {
 }
 
 // Body keys worth exposing as fill-in parameters when replaying on a new log.
-const PARAM_KEYS = ['component', 'field', 'pattern', 'event', 'expect', 'analyzerName', 'thresholdSeconds'];
+// Time-window / range keys lead: the #1 noun to tweak when rerunning a past
+// root-cause hunt on a NEW incident is the window, component second.
+const PARAM_KEYS = ['startTime', 'endTime', 'startLine', 'endLine', 'component', 'field', 'pattern', 'event', 'expect', 'analyzerName', 'thresholdSeconds'];
+
+// Classify a body key into a ParamKind (ordering + typing of the tweak-form).
+export function paramKind(key: string): ParamKind {
+  switch (key) {
+    case 'startTime': case 'endTime': return 'time';
+    case 'startLine': case 'endLine': return 'range';
+    case 'component': return 'component';
+    case 'field': return 'field';
+    case 'pattern': return 'pattern';
+    case 'event': return 'event';
+    default: return 'other';
+  }
+}
+
+// Back-fill fields that older on-disk templates may lack (currently the param
+// `kind`, added 2026-08-20) so every consumer sees a complete param schema.
+function normalizeTemplate(tpl: InvestigationTemplate): InvestigationTemplate {
+  if (Array.isArray(tpl.params)) {
+    for (const p of tpl.params) if (!p.kind) p.kind = paramKind(p.key);
+  }
+  return tpl;
+}
 
 const TEMPLATES_DIR = path.join(os.homedir(), '.logan', 'investigate-templates');
 
@@ -61,7 +90,7 @@ export function buildTemplate(name: string, journal: JournalEntry[], sourceFile?
     for (const key of PARAM_KEYS) {
       const v = step.body[key];
       if (v !== undefined && v !== null && v !== '') {
-        params.push({ key, stepIndex: i, label: `${stepLabel(step)} · ${key}`, default: v });
+        params.push({ key, stepIndex: i, label: `${stepLabel(step)} · ${key}`, default: v, kind: paramKind(key) });
       }
     }
   });
@@ -87,7 +116,7 @@ export function listTemplates(): InvestigationTemplate[] {
   for (const f of files) {
     try {
       const tpl = JSON.parse(fs.readFileSync(path.join(TEMPLATES_DIR, f), 'utf-8'));
-      if (tpl && Array.isArray(tpl.steps)) out.push(tpl);
+      if (tpl && Array.isArray(tpl.steps)) out.push(normalizeTemplate(tpl));
     } catch { /* skip corrupt */ }
   }
   return out.sort((a, b) => b.createdAt - a.createdAt);
@@ -98,9 +127,9 @@ export function getTemplate(slugOrName: string): InvestigationTemplate | null {
   ensureDir();
   const file = path.join(TEMPLATES_DIR, slug + '.json');
   try {
-    if (fs.existsSync(file)) return JSON.parse(fs.readFileSync(file, 'utf-8'));
+    if (fs.existsSync(file)) return normalizeTemplate(JSON.parse(fs.readFileSync(file, 'utf-8')));
   } catch { /* ignore */ }
-  // Fall back to scanning by name
+  // Fall back to scanning by name (listTemplates already normalizes)
   return listTemplates().find(t => t.slug === slug || t.name === slugOrName) || null;
 }
 
