@@ -36,6 +36,7 @@ import { BaselineStore, buildFingerprint } from './baselineStore';
 import { bumpUsage, getUsage, clearUsage, flushUsage, isAiContext } from './usageStore';
 import { canonicalizeHumanVerb, aggregateUsageByFeature } from '../shared/verbRegistry';
 import { saveConstant, getConstants, deleteConstant, flushConstants } from './constantsStore';
+import { flushSequences } from './sequenceStore';
 import { loadColumnLayouts, upsertColumnLayout, deleteColumnLayout, ColumnLayoutSaved } from './columnLayoutsStore';
 import { EntityDescriptor, EntityKind, toDescriptors } from './entityRegistry';
 import { getPatternLog, clearPatternLog, logPattern, PatternLogEntry, flushPatternLog } from './patternLog';
@@ -1967,6 +1968,7 @@ app.on('will-quit', () => {
   try { flushUsage(); } catch { /* non-critical */ }
   try { flushPatternLog(); } catch { /* non-critical */ }
   try { flushConstants(); } catch { /* non-critical */ }
+  try { flushSequences(); } catch { /* non-critical */ }
   stopApiServer();
 });
 
