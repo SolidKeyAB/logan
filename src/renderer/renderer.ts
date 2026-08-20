@@ -6993,11 +6993,25 @@ function initInvestigatePanel(): void {
   void loadInvestigationTemplates();
 }
 
+// Last-loaded investigation templates, cached so the replay tweak-form can read
+// a template's param schema without an extra round-trip.
+let investigationTemplatesCache: any[] = [];
+
+// Look up one saved investigation by name/slug (cache first, else fetch).
+async function getInvestigationTemplate(name: string): Promise<any | null> {
+  const hit = investigationTemplatesCache.find(t => t.name === name || t.slug === name);
+  if (hit) return hit;
+  const res = await window.api.listInvestigations();
+  investigationTemplatesCache = (res.success && res.templates) ? res.templates : [];
+  return investigationTemplatesCache.find((t: any) => t.name === name || t.slug === name) || null;
+}
+
 async function loadInvestigationTemplates(): Promise<void> {
   const list = document.getElementById('investigate-patterns-list');
   if (!list) return;
   const res = await window.api.listInvestigations();
   const templates = (res.success && res.templates) ? res.templates : [];
+  investigationTemplatesCache = templates;
   list.innerHTML = '';
   if (templates.length === 0) {
     list.innerHTML = '<span class="investigate-patterns-empty">none yet — ask the agent to investigate, then “Save current”</span>';
@@ -7069,17 +7083,28 @@ async function saveCurrentInvestigation(): Promise<void> {
   void loadInvestigationTemplates();
 }
 
-async function runInvestigationTemplate(name: string, force = false): Promise<void> {
+async function runInvestigationTemplate(name: string, force = false, overrides: Record<string, any> | null = null): Promise<void> {
   if (!state.filePath) { showToast('Open a log file first'); return; }
   const container = document.getElementById('investigate-results');
+  // First click (overrides not collected yet): if the template has tweakable nouns,
+  // show the inline tweak-before-replay form so the user can retarget the hunt
+  // (time window / component / …) onto THIS incident before running. No params →
+  // run straight away with the captured values (old behaviour).
+  if (overrides === null) {
+    const tpl = await getInvestigationTemplate(name);
+    const params = dedupeReplayParams(tpl?.params || []);
+    if (params.length) { renderReplayParamForm(container, name, params, force); return; }
+    overrides = {};
+  }
   if (container) container.innerHTML = `<p class="placeholder">Replaying “${escapeHtml(name)}”…</p>`;
-  const res = await window.api.runInvestigation(name, undefined, force);
+  const res = await window.api.runInvestigation(name, overrides, force);
   if (!res.success) { if (container) container.innerHTML = `<p class="placeholder">${escapeHtml(res.error || 'Replay failed')}</p>`; return; }
-  // Blocked by requirements: show the report + a one-click "Run anyway" override.
+  // Blocked by requirements: show the report + a one-click "Run anyway" override
+  // (carry the collected overrides through the force retry).
   if (res.blocked) {
     if (container) {
       container.innerHTML = `<div class="investigate-replay"><div class="investigate-replay-title">“${escapeHtml(name)}” doesn't match this log</div>${renderRequirementChecks(res.requirements)}<div class="investigate-req-actions"><button class="secondary-btn small" id="btn-inv-force">Run anyway</button></div></div>`;
-      document.getElementById('btn-inv-force')?.addEventListener('click', () => { void runInvestigationTemplate(name, true); });
+      document.getElementById('btn-inv-force')?.addEventListener('click', () => { void runInvestigationTemplate(name, true, overrides || {}); });
     }
     return;
   }
@@ -7090,8 +7115,74 @@ async function runInvestigationTemplate(name: string, force = false): Promise<vo
     const reqNote = (res.requirements && (res.requirements.checks || []).length)
       ? `<div class="investigate-req-note" title="${escapeHtml((res.requirements.checks || []).map((c: any) => `${c.label}: ${c.detail}`).join('\n'))}">requirements: ${escapeHtml(res.requirements.summary || '')}</div>`
       : '';
-    container.innerHTML = `<div class="investigate-replay"><div class="investigate-replay-title">Replayed “${escapeHtml(name)}” — ${(res.steps || []).length} steps</div>${reqNote}${rows}</div>`;
+    const tweakNote = (overrides && Object.keys(overrides).length)
+      ? `<div class="investigate-req-note">retargeted: ${escapeHtml(Object.entries(overrides).map(([k, v]) => `${k}=${v}`).join(', '))}</div>`
+      : '';
+    container.innerHTML = `<div class="investigate-replay"><div class="investigate-replay-title">Replayed “${escapeHtml(name)}” — ${(res.steps || []).length} steps</div>${reqNote}${tweakNote}${rows}</div>`;
   }
+}
+
+// Ordering + friendly hint per param kind for the tweak-form (window nouns lead).
+const REPLAY_PARAM_ORDER: Record<string, number> = { time: 0, range: 1, component: 2, field: 3, pattern: 4, event: 5, other: 6 };
+const REPLAY_PARAM_HINT: Record<string, string> = { time: 'time window', range: 'line range', component: 'component', field: 'field', pattern: 'pattern', event: 'event', other: '' };
+
+// One row per UNIQUE param key (a key can recur across steps; resolveSteps applies
+// an override for a key to every step that uses it), ordered by kind.
+function dedupeReplayParams(params: any[]): any[] {
+  const byKey = new Map<string, any>();
+  for (const p of (params || [])) {
+    if (!p || !p.key) continue;
+    const existing = byKey.get(p.key);
+    if (!existing) {
+      byKey.set(p.key, { key: p.key, kind: p.kind || 'other', default: p.default, count: 1, differs: false });
+    } else {
+      existing.count++;
+      // Same key captured with DIFFERENT values across steps — editing it will set
+      // all of them (resolveSteps applies an override to every step using the key).
+      if (JSON.stringify(existing.default) !== JSON.stringify(p.default)) existing.differs = true;
+    }
+  }
+  return Array.from(byKey.values()).sort((a, b) =>
+    (REPLAY_PARAM_ORDER[a.kind] ?? 9) - (REPLAY_PARAM_ORDER[b.kind] ?? 9) || a.key.localeCompare(b.key));
+}
+
+// Inline "tweak the nouns, then replay" form — prefilled with captured values,
+// window/range first. Collects only edited (non-empty) fields as overrides.
+function renderReplayParamForm(container: HTMLElement | null, name: string, params: any[], force: boolean): void {
+  if (!container) return;
+  const rows = params.map(p => {
+    const baseHint = REPLAY_PARAM_HINT[p.kind] || '';
+    const multiHint = p.differs ? `${p.count} steps, values differ — editing sets all` : '';
+    const hint = [baseHint, multiHint].filter(Boolean).join(' — ');
+    const val = p.default == null ? '' : String(p.default);
+    const numeric = typeof p.default === 'number' ? '1' : '0';
+    return `<div class="filter-group replay-param-row">`
+      + `<label>${escapeHtml(p.key)}${hint ? ` <span class="req-hint">(${escapeHtml(hint)})</span>` : ''}</label>`
+      + `<input type="text" class="modal-input replay-param-input" data-param-key="${escapeHtml(p.key)}" data-param-numeric="${numeric}" value="${escapeHtml(val)}">`
+      + `</div>`;
+  }).join('');
+  container.innerHTML = `<div class="investigate-replay">`
+    + `<div class="investigate-replay-title">Rerun “${escapeHtml(name)}” on this log — adjust the window / nouns</div>`
+    + `<div class="investigate-req-note">Leave a field as-is to reuse the captured value; edit to retarget the hunt onto this incident.</div>`
+    + rows
+    + `<div class="investigate-req-actions"><button class="secondary-btn small" id="btn-replay-reset">Reset</button><button class="primary-btn small" id="btn-replay-run">▶ Run replay</button></div>`
+    + `</div>`;
+  container.querySelector('#btn-replay-reset')?.addEventListener('click', () => renderReplayParamForm(container, name, params, force));
+  container.querySelector('#btn-replay-run')?.addEventListener('click', () => {
+    const overrides: Record<string, any> = {};
+    container.querySelectorAll('.replay-param-input').forEach(el => {
+      const input = el as HTMLInputElement;
+      const key = input.getAttribute('data-param-key') || '';
+      // UNTOUCHED field (still equals the rendered capture) → do NOT override, so the
+      // step keeps its own captured value verbatim. Only genuinely edited fields
+      // become overrides (which resolveSteps then applies to every step using the key).
+      if (!key || input.value === input.defaultValue) return;
+      const raw = input.value.trim();
+      if (raw === '') return; // cleared → also keep the captured default
+      overrides[key] = (input.getAttribute('data-param-numeric') === '1' && !isNaN(Number(raw))) ? Number(raw) : raw;
+    });
+    void runInvestigationTemplate(name, force, overrides);
+  });
 }
 
 // Render a requirements report (array of checks) as a compact ✓/✗ list.
