@@ -8,6 +8,7 @@ import { FileHandler } from './fileHandler';
 import { type BaselineStore, buildFingerprint } from './baselineStore';
 import { AnalysisResult } from './analyzers/types';
 import { JournalEntry, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps } from './investigationStore';
+import { listSequences, saveSequence, appendClue, deleteSequence } from './sequenceStore';
 import { evaluateRequirements, suggestRequirements, mergeRequirements, RequirementCheckContext, EntityRef } from './investigationRequirements';
 import { EntityDescriptor, toDescriptors } from './entityRegistry';
 import { pickAdapter } from './sourceAdapter';
@@ -865,6 +866,9 @@ export function startApiServer(ctx: ApiContext): void {
           if (!kind || kind === 'investigation') {
             entities.push(...toDescriptors('investigation', listTemplates()));
           }
+          if (!kind || kind === 'sequence') {
+            entities.push(...toDescriptors('sequence', listSequences()));
+          }
           sendJson(res, { success: true, count: entities.length, entities });
           return;
         }
@@ -989,6 +993,41 @@ export function startApiServer(ctx: ApiContext): void {
         if (url === '/api/constants-delete') {
           const removed = deleteConstant(String(body.name || ''));
           sendJson(res, { success: true, removed, entries: getConstants() });
+          return;
+        }
+
+        // Clue sequences — ordered "evidence trail" entities (the EVIDENCE twin of an
+        // investigation; see docs/discovery/investigation-workflow-canvas.md). Agent
+        // parity for collect + save; the human right-click gesture + clue tray is
+        // Increment B. Shared store, both operators.
+        if (url === '/api/sequences') {
+          sendJson(res, { success: true, sequences: listSequences() });
+          return;
+        }
+        if (url === '/api/sequence-save') {
+          const seq = saveSequence({
+            id: body.id, name: body.name, description: body.description, scope: body.scope,
+            sourceFile: body.sourceFile ?? ctx.getCurrentFilePath() ?? undefined, clues: body.clues,
+          });
+          if (!seq) { sendJson(res, { success: false, error: 'a sequence name (or id) is required' }); return; }
+          const win = ctx.getMainWindow();
+          if (win && !win.isDestroyed()) win.webContents.send('sequences-changed');
+          sendJson(res, { success: true, sequence: seq });
+          return;
+        }
+        if (url === '/api/sequence-append-clue') {
+          const seq = appendClue(String(body.name || body.id || ''), body.clue || body);
+          if (!seq) { sendJson(res, { success: false, error: 'a valid clue (ref) and a sequence name are required' }); return; }
+          const win = ctx.getMainWindow();
+          if (win && !win.isDestroyed()) win.webContents.send('sequences-changed');
+          sendJson(res, { success: true, sequence: seq });
+          return;
+        }
+        if (url === '/api/sequence-delete') {
+          const removed = deleteSequence(String(body.name || body.id || ''));
+          const win = ctx.getMainWindow();
+          if (win && !win.isDestroyed()) win.webContents.send('sequences-changed');
+          sendJson(res, { success: true, removed });
           return;
         }
 
