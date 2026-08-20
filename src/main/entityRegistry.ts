@@ -22,11 +22,12 @@ export type EntityKind =
   | 'pattern'         // SavedPattern (pattern library)
   | 'contextDef'      // ContextDefinition (global)
   | 'baseline'        // BaselineRecord
-  | 'investigation';  // InvestigationTemplate
+  | 'investigation'   // InvestigationTemplate
+  | 'sequence';       // ClueSequence (ordered evidence trail — the evidence twin of an investigation)
 
 export const ENTITY_KINDS: EntityKind[] = [
   'search', 'session', 'composite', 'filter', 'highlightGroup', 'bookmarkSet', 'columnLayout',
-  'columnPattern', 'constant', 'trendProperty', 'pattern', 'contextDef', 'baseline', 'investigation',
+  'columnPattern', 'constant', 'trendProperty', 'pattern', 'contextDef', 'baseline', 'investigation', 'sequence',
 ];
 
 // Human labels for each kind (for grouping headers in a UI / agent readout).
@@ -45,6 +46,7 @@ export const ENTITY_KIND_LABELS: Record<EntityKind, string> = {
   contextDef: 'Context definitions',
   baseline: 'Baselines',
   investigation: 'Investigations',
+  sequence: 'Clue sequences',
 };
 
 export interface EntityDescriptor {
@@ -116,6 +118,9 @@ export function toDescriptor(kind: EntityKind, raw: any): EntityDescriptor {
     case 'investigation':
       return { kind, id: String(r.slug ?? r.name ?? ''), name: r.name || '(unnamed)', description: r.description, scope: 'global',
         summary: `${(r.steps || []).length} steps${r.requirements ? ' · has requirements' : ''}`, count: (r.steps || []).length };
+    case 'sequence':
+      return { kind, id: String(r.id ?? r.name ?? ''), name: r.name || '(unnamed)', description: r.description, scope: r.scope || 'global',
+        summary: `${(r.clues || []).length} clues`, count: (r.clues || []).length };
     default:
       return { kind, id: String(r.id ?? ''), name: r.name || r.label || '(unknown)', description: r.description, scope: 'global' };
   }

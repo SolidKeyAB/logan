@@ -835,13 +835,65 @@ server.tool(
 // === Tool: logan_entities ===
 server.tool(
   'logan_entities',
-  "List every saved/reusable entity in LOGAN as ONE catalog — searches, search sessions, filter presets, highlight groups, bookmark sets, column layouts, column patterns, constants, trend properties, saved patterns, context definitions, baselines, and investigations. Each item is {kind, id, name, description, scope, summary, count}. Use it to recall what the user has already saved (so you can reference or reuse it — e.g. pick an entity for an investigation's requirements) instead of re-deriving things. Optionally filter by `kind`.",
+  "List every saved/reusable entity in LOGAN as ONE catalog — searches, search sessions, filter presets, highlight groups, bookmark sets, column layouts, column patterns, constants, trend properties, saved patterns, context definitions, baselines, investigations, and clue sequences (ordered evidence trails). Each item is {kind, id, name, description, scope, summary, count}. Use it to recall what the user has already saved (so you can reference or reuse it — e.g. pick an entity for an investigation's requirements) instead of re-deriving things. Optionally filter by `kind`.",
   {
-    kind: z.enum(['search', 'session', 'filter', 'highlightGroup', 'bookmarkSet', 'columnLayout', 'columnPattern', 'constant', 'trendProperty', 'pattern', 'contextDef', 'baseline', 'investigation']).optional().describe('Only list this kind (omit for the whole catalog)'),
+    kind: z.enum(['search', 'session', 'filter', 'highlightGroup', 'bookmarkSet', 'columnLayout', 'columnPattern', 'constant', 'trendProperty', 'pattern', 'contextDef', 'baseline', 'investigation', 'sequence']).optional().describe('Only list this kind (omit for the whole catalog)'),
   },
   async ({ kind }) => {
     try {
       const result = await apiCall('POST', '/api/entities', { kind });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_save_sequence ===
+server.tool(
+  'logan_save_sequence',
+  'Save (or replace) a named "clue sequence" — an ORDERED evidence trail of the log lines / ranges / signal values / findings that show what went wrong across the incident, in time order. This is the EVIDENCE twin of a saved investigation (which records the PROCESS / ordered tool calls); a sequence records the CLUES. It becomes a reusable entity: it appears in logan_entities and (soon) the Saved panel, and can be re-verified on a new incident. Tip: you can also save a KNOWN-GOOD run\'s sequence as a healthy baseline to check a bug run against.',
+  {
+    name: z.string().describe('Sequence name, e.g. "Auth expiry — evidence trail"'),
+    clues: z.array(z.object({
+      ref: z.enum(['line', 'range', 'signalValue', 'searchHit', 'finding']).describe('what this clue points at'),
+      line: z.number().int().optional().describe('1-based viewer line (line / range / searchHit / finding)'),
+      endLine: z.number().int().optional().describe('1-based end line (ref = range)'),
+      at: z.number().optional().describe('timestamp / epoch-ms (ref = signalValue, or a time anchor)'),
+      field: z.string().optional().describe('signal / field name (ref = signalValue)'),
+      value: z.union([z.string(), z.number()]).optional().describe('captured value'),
+      note: z.string().optional().describe('why this clue matters'),
+    })).optional().describe('ordered clues, in incident time order. OMIT to keep the existing clues (e.g. to set only the description after building the trail with logan_add_clue); pass [] to clear them'),
+    description: z.string().optional().describe('what this trail is for / when it applies'),
+    scope: z.enum(['global', 'file', 'ticket']).optional().describe('reuse scope (default global)'),
+  },
+  async ({ name, clues, description, scope }) => {
+    try {
+      const result = await apiCall('POST', '/api/sequence-save', { name, clues, description, scope });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_add_clue ===
+server.tool(
+  'logan_add_clue',
+  'Append ONE clue to a named clue sequence (creates the sequence if it does not exist yet) — the natural "collect as you investigate" gesture for the agent. Call it each time you find a piece of evidence, exactly like pinning a finding with logan_report_finding. See logan_save_sequence to write a whole trail at once.',
+  {
+    sequence: z.string().describe('sequence name to append to (created if missing)'),
+    ref: z.enum(['line', 'range', 'signalValue', 'searchHit', 'finding']).describe('what this clue points at'),
+    line: z.number().int().optional().describe('1-based viewer line'),
+    endLine: z.number().int().optional().describe('1-based end line (ref = range)'),
+    at: z.number().optional().describe('timestamp / epoch-ms (ref = signalValue)'),
+    field: z.string().optional().describe('signal / field name (ref = signalValue)'),
+    value: z.union([z.string(), z.number()]).optional().describe('captured value'),
+    note: z.string().optional().describe('why this clue matters'),
+  },
+  async ({ sequence, ref, line, endLine, at, field, value, note }) => {
+    try {
+      const result = await apiCall('POST', '/api/sequence-append-clue', { name: sequence, clue: { ref, line, endLine, at, field, value, note } });
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err: any) {
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
