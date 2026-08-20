@@ -16838,10 +16838,26 @@ function patcolBuildSpec(): any {
 
 function patcolPreviewSoon(): void {
   if (patcolDebounce) window.clearTimeout(patcolDebounce);
-  patcolDebounce = window.setTimeout(patcolPreview, 250);
+  // Live path only — single sample line, no file scan (see patcolPreview).
+  patcolDebounce = window.setTimeout(() => { void patcolPreview(false); }, 250);
 }
 
-async function patcolPreview(): Promise<void> {
+// The deliberate "process the file AFTER the layout is prepared" step: scan the file for
+// match-rate + full preview table + ✨ refine-from-data. This is the ONLY path that reads
+// the file, so interactive painting stays instant no matter how many columns. Runs on the
+// "✓ Test over file" button and implicitly when committing (Use as columns / Save).
+async function patcolTestOverFile(): Promise<void> {
+  const spec = patcolBuildSpec();
+  const empty = (spec.mode === 'paint') ? (spec.spans.length === 0) : !String(spec.pattern || '').trim();
+  if (empty) { showToast('Paint or author a pattern first'); return; }
+  const status = document.getElementById('patcol-status');
+  if (status) status.textContent = 'testing over file…';
+  await patcolPreview(true);
+}
+
+// scan=false (default, live): preview the SINGLE sample line only — no file read, no refine,
+// so painting never stalls the viewer. scan=true: full file scan + match-rate + refine.
+async function patcolPreview(scan = false): Promise<void> {
   const status = document.getElementById('patcol-status');
   const out = document.getElementById('patcol-regex-out');
   const content = document.getElementById('patcol-content');
@@ -16849,7 +16865,7 @@ async function patcolPreview(): Promise<void> {
   const empty = (spec.mode === 'paint') ? (spec.spans.length === 0) : !String(spec.pattern || '').trim();
   if (empty) { patcolCompiled = null; if (out) out.textContent = '—'; if (status) status.textContent = ''; return; }
   try {
-    const res = await (window.api as any).columnPatternPreview(spec, { sampleLines: 200 });
+    const res = await (window.api as any).columnPatternPreview(spec, { sampleLines: scan ? 200 : 1, scan });
     if (!res || !res.success) {
       patcolCompiled = null;
       if (out) out.textContent = '—';
@@ -16859,8 +16875,12 @@ async function patcolPreview(): Promise<void> {
     }
     patcolCompiled = { regex: res.regex, flags: res.flags || '', fields: res.fields || [], named: !!res.named };
     if (out) out.textContent = res.regex || '—';
-    const rate = res.scanned ? Math.round((res.matched / res.scanned) * 100) : 0;
-    if (status) status.textContent = `${res.fields.length} cols · matched ${(res.matched || 0).toLocaleString()}/${(res.scanned || 0).toLocaleString()} (${rate}%)${res.refined ? ' · ✨ refined from data' : ''}`;
+    if (scan) {
+      const rate = res.scanned ? Math.round((res.matched / res.scanned) * 100) : 0;
+      if (status) status.textContent = `${res.fields.length} cols · matched ${(res.matched || 0).toLocaleString()}/${(res.scanned || 0).toLocaleString()} (${rate}%)${res.refined ? ' · ✨ refined from data' : ''}`;
+    } else if (status) {
+      status.textContent = `${res.fields.length} cols · sample preview — press “✓ Test over file” to validate + refine`;
+    }
     patcolRenderPreview(res);
   } catch (e) {
     if (status) status.textContent = 'Failed';
@@ -16893,6 +16913,7 @@ function patcolCopyRegex(): void {
 }
 
 async function patcolSavePattern(): Promise<void> {
+  await patcolPreview(true); // persist the file-validated + refined regex, not the sample-only one
   if (!patcolCompiled) { showToast('Author a valid pattern first'); return; }
   const name = await showInputPrompt('Name this pattern (e.g. "http-access", "sensor-line"):', '');
   if (!name || !name.trim()) return;
@@ -16906,7 +16927,8 @@ async function patcolSavePattern(): Promise<void> {
 }
 
 // "Use as columns": apply the authored pattern as the viewer's live column model (Phase 2).
-function patcolUseAsColumns(): void {
+async function patcolUseAsColumns(): Promise<void> {
+  await patcolPreview(true); // committing = validate + refine over the file first
   if (!patcolCompiled) { showToast('Author a valid pattern first'); return; }
   applyColumnPattern(patcolCompiled.regex, patcolCompiled.flags, patcolCompiled.fields);
 }
@@ -16914,6 +16936,7 @@ function patcolUseAsColumns(): void {
 // "Save as layout": persist the pattern as a reusable Column Layout (method:'pattern') so it
 // shows up in the Columns window's layout chips and can be applied on any file.
 async function patcolSaveAsLayout(): Promise<void> {
+  await patcolPreview(true); // persist the file-validated + refined regex, not the sample-only one
   if (!patcolCompiled) { showToast('Author a valid pattern first'); return; }
   const name = await showInputPrompt('Name this column layout (e.g. "access-log", "sensor"):');
   if (!name) return;
@@ -24522,8 +24545,9 @@ function init(): void {
   document.getElementById('btn-patcol-sample')?.addEventListener('click', patcolPullSample);
   document.getElementById('btn-patcol-autodetect')?.addEventListener('click', () => { void patcolAutoDetect(); });
   document.getElementById('btn-patcol-copy')?.addEventListener('click', patcolCopyRegex);
+  document.getElementById('btn-patcol-test')?.addEventListener('click', () => { void patcolTestOverFile(); });
   document.getElementById('btn-patcol-save')?.addEventListener('click', patcolSavePattern);
-  document.getElementById('btn-patcol-apply')?.addEventListener('click', () => patcolUseAsColumns());
+  document.getElementById('btn-patcol-apply')?.addEventListener('click', () => { void patcolUseAsColumns(); });
   document.getElementById('btn-patcol-save-layout')?.addEventListener('click', () => { void patcolSaveAsLayout(); });
   document.getElementById('patcol-sample-input')?.addEventListener('input', () => { if (patcolMode === 'paint') patcolRenderPaint(); patcolPreviewSoon(); });
   document.getElementById('patcol-grok-input')?.addEventListener('input', patcolPreviewSoon);
