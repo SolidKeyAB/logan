@@ -581,6 +581,16 @@ export function pickAdapter(filePath: string, forceId?: string): SourceAdapter {
 }
 
 /**
+ * True when a file opens as a pure passthrough (the text fallback) — i.e. no adapter
+ * derives a normalized copy, so the bytes indexed ARE the file's bytes. Auto-segmenting
+ * only applies here: a decoded/normalized format indexes a derived temp file, so segmenting
+ * the original bytes would desync line numbers. Cheap — reuses pickAdapter's detection.
+ */
+export function isTextPassthrough(filePath: string, forceId?: string): boolean {
+  return pickAdapter(filePath, forceId).id === textAdapter.id;
+}
+
+/**
  * Open a file through the adapter layer, then hand the normalized text to the
  * existing indexer. For text this is identical to `indexer.open(filePath)` with no
  * added IO. Returns both the FileInfo and the resolved NormalizedSource (stamped
