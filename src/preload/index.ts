@@ -139,6 +139,11 @@ const IPC = {
   CONSTANTS_SAVE: 'constants-save',
   CONSTANTS_GET: 'constants-get',
   CONSTANTS_DELETE: 'constants-delete',
+  // Clue sequences (ordered evidence trails — human side of the `sequence` entity)
+  SEQUENCE_LIST: 'sequence-list',
+  SEQUENCE_SAVE: 'sequence-save',
+  SEQUENCE_APPEND_CLUE: 'sequence-append-clue',
+  SEQUENCE_DELETE: 'sequence-delete',
   // Active scope ("Use … as scope" / breadcrumb)
   SET_ACTIVE_SCOPE: 'set-active-scope',
   GET_ACTIVE_SCOPE: 'get-active-scope',
@@ -808,6 +813,21 @@ const api = {
     const handler = () => callback();
     ipcRenderer.on('investigation-templates-changed', handler);
     return () => ipcRenderer.removeListener('investigation-templates-changed', handler);
+  },
+
+  // Clue sequences (ordered evidence trails) — human side of the `sequence` entity.
+  listSequences: (): Promise<{ success: boolean; sequences?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.SEQUENCE_LIST),
+  saveSequence: (input: any): Promise<{ success: boolean; sequence?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.SEQUENCE_SAVE, input),
+  appendClueToSequence: (nameOrId: string, clue: any): Promise<{ success: boolean; sequence?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.SEQUENCE_APPEND_CLUE, nameOrId, clue),
+  deleteSequence: (nameOrId: string): Promise<{ success: boolean; removed?: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.SEQUENCE_DELETE, nameOrId),
+  onSequencesChanged: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('sequences-changed', handler);
+    return () => ipcRenderer.removeListener('sequences-changed', handler);
   },
 
   getAgentRunning: (): Promise<{ running: boolean }> =>

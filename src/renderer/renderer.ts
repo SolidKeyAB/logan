@@ -5056,6 +5056,31 @@ function handleContextMenu(event: MouseEvent): void {
   });
   menu.appendChild(commentItem);
 
+  // 🧵 Add to clue sequence — append this line as a clue in an ordered evidence trail
+  // (the `sequence` entity). Defaults to the last-used trail so repeated adds are one Enter.
+  const seqItem = menuItem('\u{1F9F5}', 'Add to clue sequence…');
+  seqItem.addEventListener('click', async () => {
+    menu.remove();
+    const seqName = ((await showInputPrompt('Add this line to clue sequence (name):', lastSequenceName || '')) || '').trim();
+    if (!seqName) return;
+    // Capture the line's own text as the clue note. Under a filter cachedLines is keyed by
+    // display position, so only use the cached text when it's actually this line (else omit).
+    const cl = cachedLines.get(lineNumber);
+    const snippet = (cl && cl.lineNumber === lineNumber ? cl.text : '').slice(0, 140);
+    const clue = { ref: 'line', line: lineNumber + 1, note: snippet };
+    const res = await (window.api as any).appendClueToSequence(seqName, clue);
+    if (res && res.success) {
+      lastSequenceName = seqName;
+      if (res.sequence?.id) expandedSeqIds.add(res.sequence.id); // keep the trail you're building open
+      const n = res.sequence?.clues?.length ?? 0;
+      showToast(`Added to “${seqName}” (${n} clue${n === 1 ? '' : 's'})`);
+      if (savedPanelInited) void loadSavedEntitiesPanel();
+    } else {
+      showToast(res?.error || 'Failed to add to sequence');
+    }
+  });
+  menu.appendChild(seqItem);
+
   menu.appendChild(menuSeparator());
 
   const copyLine = menuItem('\u{1F4CB}', 'Copy Line');
@@ -22789,8 +22814,9 @@ const SAVED_KIND_LABELS: Record<string, string> = {
   columnLayout: 'Column layouts', columnPattern: 'Column patterns',
   constant: 'Constants', trendProperty: 'Trend properties', pattern: 'Saved patterns',
   contextDef: 'Context definitions', baseline: 'Baselines', investigation: 'Investigations',
+  sequence: 'Clue sequences',
 };
-const SAVED_KIND_ORDER = ['search', 'session', 'composite', 'filter', 'highlightGroup', 'bookmarkSet', 'columnLayout', 'columnPattern', 'constant', 'trendProperty', 'pattern', 'contextDef', 'baseline', 'investigation'];
+const SAVED_KIND_ORDER = ['search', 'session', 'composite', 'filter', 'highlightGroup', 'bookmarkSet', 'columnLayout', 'columnPattern', 'constant', 'trendProperty', 'pattern', 'contextDef', 'baseline', 'investigation', 'sequence'];
 // Step 3 — where each kind "lives" (its existing management surface). Reveal opens it.
 // filter / columnLayout / constant live in modals or inline pickers (no standalone
 // panel/tab), so they get copy-only for now.
@@ -22809,12 +22835,20 @@ const SAVED_REVEAL_TARGET: Record<string, { type: 'panel' | 'tab'; id: string }>
 };
 // Step 3 — kinds with a clean, self-contained one-click "apply". Others earn it with
 // usage (the saved:apply/reveal/copy:<kind> counters feed the "earn the rest" decision).
-const SAVED_CAN_APPLY = new Set(['investigation', 'highlightGroup', 'session', 'composite']);
+const SAVED_CAN_APPLY = new Set(['investigation', 'highlightGroup', 'session', 'composite', 'sequence']);
 // Kinds that expose an inline ✕ Delete in the Saved panel. Single sessions auto-save, so
 // they need a prune path here; other kinds are managed (and deleted) in their own surface.
-const SAVED_CAN_DELETE = new Set(['composite']);
+// Clue sequences are collected inline (no separate manager) so they get delete here too.
+const SAVED_CAN_DELETE = new Set(['composite', 'sequence']);
 let savedEntitiesCache: any[] = [];
 let savedPanelInited = false;
+// Clue-sequence view state: id→clues (fetched alongside the catalog so the trail can render
+// inline) + the last sequence a clue was added to (so repeat "Add to sequence" defaults to it).
+let seqCluesById: Record<string, any[]> = {};
+let lastSequenceName = '';
+// Which sequence rows are expanded (persisted across the panel's innerHTML rebuilds so adding
+// a clue doesn't collapse the trail you're building).
+const expandedSeqIds = new Set<string>();
 
 async function loadSavedEntitiesPanel(): Promise<void> {
   if (!savedPanelInited) {
@@ -22822,11 +22856,23 @@ async function loadSavedEntitiesPanel(): Promise<void> {
     const filterInput = document.getElementById('saved-filter') as HTMLInputElement | null;
     filterInput?.addEventListener('input', () => renderSavedEntities(filterInput.value));
     document.getElementById('btn-saved-refresh')?.addEventListener('click', () => { void loadSavedEntitiesPanel(); });
+    // Agent added a clue (logan_add_clue) or another surface changed a sequence → refresh
+    // the inline trails live. Registered once, when the Saved panel first opens.
+    (window.api as any).onSequencesChanged?.(() => { void loadSavedEntitiesPanel(); });
     // A saved row is now actionable: ▶ apply / run, ↗ open where it lives, ⧉ copy name.
     // Clicking the row body (no button) still copies the name. Each action feeds a
     // saved:<verb>:<kind> usage counter so we can see which kinds get reached for.
     document.getElementById('saved-list')?.addEventListener('click', (e) => {
       const target = e.target as HTMLElement;
+      // Click a clue in a sequence's inline trail → jump to its line. clue.line is a
+      // 1-based original line; pass BOTH the filtered display index (scroll target) and
+      // the raw 0-based line (cursor) so it lands correctly even with a filter active.
+      const clueEl = target.closest('.saved-seq-clue') as HTMLElement | null;
+      if (clueEl) {
+        const ln0 = parseInt(clueEl.dataset.line || '', 10) - 1;
+        if (!isNaN(ln0) && ln0 >= 0) { const di = getFilteredDisplayIndex(ln0); goToLine(di >= 0 ? di : ln0, ln0); }
+        return;
+      }
       const row = target.closest('.saved-item') as HTMLElement | null;
       if (!row) return;
       const name = row.dataset.name || '';
@@ -22836,12 +22882,25 @@ async function loadSavedEntitiesPanel(): Promise<void> {
       if (act === 'apply') { void applySavedEntity(kind, id, name); return; }
       if (act === 'open') { revealSavedEntity(kind); return; }
       if (act === 'delete') { void deleteSavedEntity(kind, id, name); return; }
+      // A sequence row BODY (no button) toggles its inline clue trail. (The ⧉ copy button
+      // has act='copy' and falls through to the copy path below.)
+      if (kind === 'sequence' && !act) {
+        if (expandedSeqIds.has(id)) { expandedSeqIds.delete(id); row.classList.remove('expanded'); }
+        else { expandedSeqIds.add(id); row.classList.add('expanded'); }
+        return;
+      }
       trackUsage(`saved:copy:${kind}`);
       if (name) { void navigator.clipboard?.writeText(name); showToast(`Copied “${name}”`); }
     });
   }
   const res = await window.api.listEntities();
   savedEntitiesCache = (res.success && res.entities) ? res.entities : [];
+  // Also pull full clue lists so the "Clue sequences" group can render the trail inline.
+  try {
+    const seqRes = await (window.api as any).listSequences();
+    seqCluesById = {};
+    for (const s of (seqRes?.sequences || [])) seqCluesById[s.id] = s.clues || [];
+  } catch { seqCluesById = {}; }
   const filterInput = document.getElementById('saved-filter') as HTMLInputElement | null;
   renderSavedEntities(filterInput?.value || '');
 }
@@ -22871,9 +22930,26 @@ function renderSavedEntities(filter: string): void {
         + `<button class="saved-item-btn" data-act="copy" title="Copy name">⧉</button>`
         + (SAVED_CAN_DELETE.has(e.kind) ? `<button class="saved-item-btn saved-item-del" data-act="delete" title="Delete">✕</button>` : '')
         + `</span>`;
-      html += `<div class="saved-item" data-kind="${escapeHtml(e.kind)}" data-id="${escapeHtml(e.id || '')}" data-name="${escapeHtml(e.name)}" title="${escapeHtml(e.name)}">`
+      // Clue sequences render their ordered trail inline (collapsed until the row is
+      // clicked). Each clue is click-to-line; the note is the captured line snippet.
+      let clueList = '';
+      if (e.kind === 'sequence') {
+        const clues = seqCluesById[e.id] || [];
+        clueList = `<div class="saved-seq-clues">` + (clues.length
+          ? clues.map((c: any, i: number) => {
+              const loc = c.ref === 'range' ? `L${c.line}–${c.endLine}`
+                : (c.line != null ? `L${c.line}` : (c.field ? escapeHtml(String(c.field)) : escapeHtml(String(c.ref))));
+              const noteTxt = c.note ? `<span class="saved-seq-clue-note"> · ${escapeHtml(String(c.note))}</span>` : '';
+              return `<div class="saved-seq-clue" data-line="${c.line != null ? escapeHtml(String(c.line)) : ''}" title="Go to ${loc}"><span class="saved-seq-clue-idx">${i + 1}</span><span class="saved-seq-clue-loc">${loc}</span>${noteTxt}</div>`;
+            }).join('')
+          : '<div class="saved-seq-empty">No clues yet — right-click a line → “Add to clue sequence”.</div>')
+          + `</div>`;
+      }
+      const seqExpanded = e.kind === 'sequence' && expandedSeqIds.has(e.id) ? ' expanded' : '';
+      html += `<div class="saved-item${e.kind === 'sequence' ? ' saved-item-seq' : ''}${seqExpanded}" data-kind="${escapeHtml(e.kind)}" data-id="${escapeHtml(e.id || '')}" data-name="${escapeHtml(e.name)}" title="${escapeHtml(e.name)}">`
         + `<div class="saved-item-main"><div class="saved-item-lead"><span class="saved-item-name">${escapeHtml(e.name)}</span>${scope}${desc}</div>${actions}</div>`
         + (e.summary ? `<div class="saved-item-sum">${escapeHtml(e.summary)}</div>` : '')
+        + clueList
         + `</div>`;
     }
     html += '</div>';
@@ -22901,6 +22977,15 @@ async function applySavedEntity(kind: string, id: string, name: string): Promise
       showToast(`Applied session “${name}”`);
     } else if (kind === 'composite') {
       await applySavedSingleSession(id, name);
+    } else if (kind === 'sequence') {
+      // "Apply" a clue trail = expand its inline list and jump to the first clue.
+      const row = document.querySelector(`.saved-item[data-kind="sequence"][data-id="${(window as any).CSS?.escape ? CSS.escape(id) : id}"]`) as HTMLElement | null;
+      if (row) row.classList.add('expanded');
+      expandedSeqIds.add(id);
+      const clues = seqCluesById[id] || [];
+      const first = clues.find((c: any) => c.line != null);
+      if (first) { const ln0 = first.line - 1; const di = getFilteredDisplayIndex(ln0); goToLine(di >= 0 ? di : ln0, ln0); }
+      showToast(`Clue trail “${name}” — ${clues.length} clue${clues.length === 1 ? '' : 's'}`);
     } else {
       showToast('No one-click apply for this kind yet — opening where it lives');
       revealSavedEntity(kind);
@@ -22914,9 +22999,12 @@ async function applySavedEntity(kind: string, id: string, name: string): Promise
 // Confirms first, then removes via the kind's delete IPC and refreshes the panel.
 async function deleteSavedEntity(kind: string, id: string, name: string): Promise<void> {
   if (!SAVED_CAN_DELETE.has(kind)) return;
+  const isSeq = kind === 'sequence';
   const choice = await showConfirmDialog({
-    title: 'Delete saved single session',
-    message: `Delete “${name}”? This removes the saved file-set, not the files themselves.`,
+    title: isSeq ? 'Delete clue sequence' : 'Delete saved single session',
+    message: isSeq
+      ? `Delete clue sequence “${name}”? This removes the saved trail, not the log.`
+      : `Delete “${name}”? This removes the saved file-set, not the files themselves.`,
     buttons: [
       { label: 'Delete', value: 'delete', danger: true },
       { label: 'Cancel', value: 'cancel' },
@@ -22933,6 +23021,11 @@ async function deleteSavedEntity(kind: string, id: string, name: string): Promis
       if (!res.success) { showToast(res.error || 'Delete failed'); return; }
       showToast(`Deleted “${name}”`);
       await loadSavedEntitiesPanel();  // reload so the row disappears
+    } else if (kind === 'sequence') {
+      const res = await (window.api as any).deleteSequence(id || name);
+      if (!res || !res.success) { showToast(res?.error || 'Delete failed'); return; }
+      showToast(`Deleted “${name}”`);
+      await loadSavedEntitiesPanel();
     }
   } catch {
     showToast('Delete failed');
