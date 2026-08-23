@@ -1,6 +1,14 @@
 # Auto-composite large files (background virtual segmenting)
 
-**Status:** Captured only — no code. Awaiting greenlight for P1.
+**Status:** P1 shipped (PR #123 — range-scoped index primitive). P2 engine built
+(`SegmentedFileHandler` lazy+LRU read + whole-file search/severity delegate + `segmentPlan`
+adaptive budget). **P2 increment 2 wired (PR #124):** OPEN_FILE auto-segments an over-budget
+plain-text file behind a **default-OFF** `auto-segment` Features toggle, with a live RAM
+readout (whole-file index vs budget vs resident). `getReadHandler()` carries read/search/
+severity; filter/split/**trends** stay disabled in segmented mode (no resident whole-file
+index to hand the trend worker). Headless-green (tsc 0 / 770 tests / build) — awaiting GUI
+eyeball on the laptop, then merge #123 → #124.
+Next (P2/3 ideas): boundary gutter markers; stream-per-segment trends; agent open-path parity.
 **Date:** 2026-08-22 (phone, Özge)
 **One-liner:** For any single file above a *resource-bearing size*, automatically wrap it
 in the existing **virtual-file (composite) entity** in the background — split into N

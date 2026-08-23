@@ -1,0 +1,245 @@
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { FileHandler } from '../main/fileHandler';
+import { SegmentedFileHandler } from '../main/segmentedFileHandler';
+import type { LineData, SearchMatch, SearchOptions } from '../shared/types';
+
+const opts = (pattern: string): SearchOptions => ({
+  pattern, isRegex: false, isWildcard: false, matchCase: false, wholeWord: false,
+});
+const stripMatch = (m: SearchMatch) => ({ lineNumber: m.lineNumber, lineText: m.lineText });
+
+// P2 increment 1: prove SegmentedFileHandler reads a big file identically to a whole-file
+// FileHandler while keeping only a bounded number of segment indexes resident (the LRU
+// that actually banks the RAM win).
+
+let tmpDir: string;
+const files: string[] = [];
+
+function writeTmp(name: string, data: string): string {
+  const p = path.join(tmpDir, name);
+  fs.writeFileSync(p, data);
+  files.push(p);
+  return p;
+}
+
+// Deterministic content: 500 varied lines (some carry level keywords for detectLevel).
+function makeContent(n: number): string {
+  const lines: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const kind = i % 11 === 0 ? 'ERROR' : i % 7 === 0 ? 'WARN' : 'INFO';
+    lines.push(`${kind} [${i}] event payload ${'x'.repeat(i % 40)} end`);
+  }
+  return lines.join('\n') + '\n';
+}
+
+function strip(l: LineData): { lineNumber: number; text: string; level: string | undefined } {
+  return { lineNumber: l.lineNumber, text: l.text, level: l.level };
+}
+
+beforeAll(() => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'logan-segfh-'));
+});
+afterAll(() => {
+  for (const f of files) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
+  try { fs.rmdirSync(tmpDir); } catch { /* ignore */ }
+});
+
+describe('SegmentedFileHandler — read parity with whole-file FileHandler', () => {
+  it('totals, boundaries and full read match the whole file (multi-segment, LRU cap 2)', async () => {
+    const N = 500;
+    const p = writeTmp('seg-read.log', makeContent(N));
+
+    const whole = new FileHandler();
+    await whole.open(p);
+    const total = whole.getTotalLines();
+    expect(total).toBe(N);
+    const wholeLines = whole.getLines(0, total);
+
+    // Force many small segments so eviction actually happens with a cap of 2.
+    const fileSize = fs.statSync(p).size;
+    const seg = await SegmentedFileHandler.open(p, {
+      segmentBytes: Math.ceil(fileSize / 12),
+      maxResidentSegments: 2,
+    });
+
+    expect(seg.getTotalLines()).toBe(N);
+    expect(seg.getMaxLineLength()).toBe(whole.getMaxLineLength());
+    expect(seg.boundaries().length).toBeGreaterThanOrEqual(4); // genuinely multi-segment
+
+    // Sync full read — global line numbers, text and levels all match.
+    expect(seg.getLines(0, total).map(strip)).toEqual(wholeLines.map(strip));
+    // ...and residency never exceeded the cap during that full scan.
+    expect(seg.residentSegmentCount()).toBeLessThanOrEqual(2);
+
+    seg.close();
+    whole.close();
+  });
+
+  it('async read in viewport-sized chunks matches, staying within the resident cap', async () => {
+    const N = 500;
+    const p = writeTmp('seg-async.log', makeContent(N));
+    const whole = new FileHandler();
+    await whole.open(p);
+    const wholeLines = whole.getLines(0, N);
+
+    const fileSize = fs.statSync(p).size;
+    const seg = await SegmentedFileHandler.open(p, { segmentBytes: Math.ceil(fileSize / 15), maxResidentSegments: 3 });
+
+    const chunk = 37;
+    const collected: LineData[] = [];
+    for (let start = 0; start < N; start += chunk) {
+      const got = await seg.getLinesAsync(start, Math.min(chunk, N - start));
+      collected.push(...got);
+      expect(seg.residentSegmentCount()).toBeLessThanOrEqual(3);
+    }
+    expect(collected.map(strip)).toEqual(wholeLines.map(strip));
+    seg.close();
+    whole.close();
+  });
+
+  it('getLinesByNumbers returns scattered lines in request order', async () => {
+    const N = 500;
+    const p = writeTmp('seg-bynum.log', makeContent(N));
+    const whole = new FileHandler();
+    await whole.open(p);
+
+    const fileSize = fs.statSync(p).size;
+    const seg = await SegmentedFileHandler.open(p, { segmentBytes: Math.ceil(fileSize / 10), maxResidentSegments: 2 });
+
+    const req = [499, 0, 250, 13, 480, 7, 300, 1];
+    const wholeByNum = await whole.getLinesByNumbers(req);
+    const segByNum = await seg.getLinesByNumbers(req);
+    expect(segByNum.map(strip)).toEqual(wholeByNum.map(strip));
+    expect(seg.residentSegmentCount()).toBeLessThanOrEqual(2);
+    seg.close();
+    whole.close();
+  });
+
+  it('re-reads a segment correctly AFTER it was evicted (rebuild on demand)', async () => {
+    const N = 300;
+    const p = writeTmp('seg-evict.log', makeContent(N));
+    const whole = new FileHandler();
+    await whole.open(p);
+    const wholeLines = whole.getLines(0, N);
+
+    const fileSize = fs.statSync(p).size;
+    const seg = await SegmentedFileHandler.open(p, { segmentBytes: Math.ceil(fileSize / 8), maxResidentSegments: 1 });
+
+    // Touch segment 0, then a far segment (evicts 0), then come back to 0 — must rebuild.
+    const first = await seg.getLinesAsync(0, 5);
+    await seg.getLinesAsync(N - 5, 5);       // evicts the earlier segment (cap 1)
+    const firstAgain = await seg.getLinesAsync(0, 5);
+
+    expect(first.map(strip)).toEqual(wholeLines.slice(0, 5).map(strip));
+    expect(firstAgain.map(strip)).toEqual(wholeLines.slice(0, 5).map(strip));
+    expect(seg.residentSegmentCount()).toBeLessThanOrEqual(1);
+    seg.close();
+    whole.close();
+  });
+
+  it('degenerates cleanly to a single segment when segmentBytes >= fileSize', async () => {
+    const N = 120;
+    const p = writeTmp('seg-single.log', makeContent(N));
+    const whole = new FileHandler();
+    await whole.open(p);
+    const wholeLines = whole.getLines(0, N);
+
+    const seg = await SegmentedFileHandler.open(p, { segmentBytes: 10 * 1024 * 1024, maxResidentSegments: 4 });
+    expect(seg.boundaries().length).toBe(1);
+    expect(seg.getLines(0, N).map(strip)).toEqual(wholeLines.map(strip));
+    seg.close();
+    whole.close();
+  });
+
+  it('fileOf maps a global line back to a local line within its segment', async () => {
+    const N = 400;
+    const p = writeTmp('seg-fileof.log', makeContent(N));
+    const fileSize = fs.statSync(p).size;
+    const seg = await SegmentedFileHandler.open(p, { segmentBytes: Math.ceil(fileSize / 9), maxResidentSegments: 2 });
+
+    for (const g of [0, 1, 199, 200, 399]) {
+      const loc = seg.fileOf(g);
+      expect(loc).not.toBeNull();
+      expect(loc!.filePath).toBe(p);
+      // The line read at (segment start + localLine) equals the global line's text.
+      const global = seg.getLines(g, 1)[0];
+      expect(global.lineNumber).toBe(g);
+    }
+    expect(seg.fileOf(N)).toBeNull(); // out of range
+    seg.close();
+  });
+});
+
+describe('SegmentedFileHandler — search + severity parity (one whole-file rg pass)', () => {
+  async function openBoth(name: string, content: string) {
+    const p = writeTmp(name, content);
+    const whole = new FileHandler();
+    await whole.open(p);
+    const fileSize = fs.statSync(p).size;
+    const seg = await SegmentedFileHandler.open(p, {
+      segmentBytes: Math.max(1, Math.ceil(fileSize / 10)),
+      maxResidentSegments: 2,
+    });
+    return { p, whole, seg };
+  }
+
+  it('search returns the same global line numbers + text as a whole-file FileHandler', async () => {
+    const { whole, seg } = await openBoth('segsearch.log', makeContent(400));
+    for (const pat of ['ERROR', 'WARN', 'event', 'payload']) {
+      const w = (await whole.search(opts(pat))).map(stripMatch);
+      const s = (await seg.search(opts(pat))).map(stripMatch);
+      expect(s).toEqual(w);
+    }
+    expect(seg.boundaries().length).toBeGreaterThanOrEqual(4); // genuinely segmented
+    seg.close();
+    whole.close();
+  });
+
+  it('searchMulti matches the whole-file result per config', async () => {
+    const { whole, seg } = await openBoth('segmulti.log', makeContent(400));
+    const cfgs = [
+      { id: 'err', pattern: 'ERROR', isRegex: false, matchCase: false, wholeWord: false },
+      { id: 'warn', pattern: 'WARN', isRegex: false, matchCase: false, wholeWord: false },
+    ];
+    const w = await whole.searchMulti(cfgs);
+    const s = await seg.searchMulti(cfgs);
+    expect(s.err.map(stripMatch)).toEqual(w.err.map(stripMatch));
+    expect(s.warn.map(stripMatch)).toEqual(w.warn.map(stripMatch));
+    seg.close();
+    whole.close();
+  });
+
+  it('severity counts, ticks and next/prev navigation match the whole file', async () => {
+    const { whole, seg } = await openBoth('segsev.log', makeContent(400));
+    const w = await whole.getSeverityInfo(24);
+    const s = await seg.getSeverityInfo(24);
+    expect(s.counts).toEqual(w.counts);
+    expect(s.totalLines).toBe(w.totalLines);
+    expect(s.ticks).toEqual(w.ticks);
+
+    for (const from of [-1, 0, 50, 200, 399]) {
+      expect(await seg.getNextSeverityLine(from, 1, ['error', 'warning']))
+        .toBe(await whole.getNextSeverityLine(from, 1, ['error', 'warning']));
+      expect(await seg.getNextSeverityLine(from, -1, ['error', 'warning']))
+        .toBe(await whole.getNextSeverityLine(from, -1, ['error', 'warning']));
+    }
+    seg.close();
+    whole.close();
+  });
+
+  it('handles a CR-only file (delegate falls back to the \\r-aware index)', async () => {
+    // Old-Mac CR terminators: whole-file FileHandler uses its byte-offset remap; the
+    // segmented handler must produce the same search hits via a full-open delegate.
+    const lines = Array.from({ length: 120 }, (_, i) => (i % 9 === 0 ? `ERROR row ${i}` : `info row ${i}`));
+    const { whole, seg } = await openBoth('segcr.log', lines.join('\r') + '\r');
+    const w = (await whole.search(opts('ERROR'))).map(stripMatch);
+    const s = (await seg.search(opts('ERROR'))).map(stripMatch);
+    expect(s).toEqual(w);
+    expect(s.length).toBeGreaterThan(0);
+    seg.close();
+    whole.close();
+  });
+});

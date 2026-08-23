@@ -365,6 +365,10 @@ export const IPC = {
   OPEN_FILE_DIALOG: 'open-file-dialog',
   OPEN_FILES_DIALOG: 'open-files-dialog',
   OPEN_FILE: 'open-file',
+  // Auto-composite large files: renderer syncs the (default-OFF) Features toggle to main,
+  // and asks main for the live segment-plan readout (RAM budget vs whole-file index).
+  SET_AUTO_SEGMENT: 'set-auto-segment',
+  SEGMENT_PLAN_PREVIEW: 'segment-plan-preview',
   CREATE_COMPOSITE: 'create-composite',
   SINGLE_SESSION_LIST: 'single-session-list',
   SINGLE_SESSION_DELETE: 'single-session-delete',
