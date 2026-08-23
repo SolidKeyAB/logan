@@ -28,3 +28,12 @@ scripts/logan-agent.py
 scripts/poll_chat.py
 .claude/worktrees/
 .claude/scheduled_tasks.lock
+
+# nexum: agent MCP configs carry an injected Lore token — never commit
+.gemini/
+.agents/
+
+# nexum: managed generated files (self-healed each prep; .nexum-shared/ = phone file-drop scratch) — never commit
+GEMINI.md
+.geminiignore
+.nexum-shared/
