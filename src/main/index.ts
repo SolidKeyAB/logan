@@ -8046,6 +8046,12 @@ ipcMain.handle(IPC.INVESTIGATION_CHECK, async (_e, name: string) => callApiServe
 ipcMain.handle(IPC.INVESTIGATION_SET_REQS, async (_e, name: string, requirements: any) => callApiServer('/api/investigation-set-requirements', { name, requirements }));
 ipcMain.handle(IPC.INVESTIGATION_SUGGEST_REQS, async () => callApiServer('/api/investigation-suggest-requirements', {}));
 ipcMain.handle(IPC.ENTITIES_LIST, async (_e, kind?: string) => callApiServer('/api/entities', { kind }));
+// Clue sequences (ordered evidence trails) — human side proxies to the same /api/sequence-*
+// endpoints the agent uses (one store, two operators).
+ipcMain.handle(IPC.SEQUENCE_LIST, async () => callApiServer('/api/sequences', {}));
+ipcMain.handle(IPC.SEQUENCE_SAVE, async (_e, input: any) => callApiServer('/api/sequence-save', input || {}));
+ipcMain.handle(IPC.SEQUENCE_APPEND_CLUE, async (_e, nameOrId: string, clue: any) => callApiServer('/api/sequence-append-clue', { name: nameOrId, clue }));
+ipcMain.handle(IPC.SEQUENCE_DELETE, async (_e, nameOrId: string) => callApiServer('/api/sequence-delete', { name: nameOrId }));
 
 // --- Agent Setup Wizard ---
 

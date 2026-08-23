@@ -510,6 +510,11 @@ export const IPC = {
   CONSTANTS_SAVE: 'constants-save',
   CONSTANTS_GET: 'constants-get',
   CONSTANTS_DELETE: 'constants-delete',
+  // Clue sequences (ordered evidence trails — the human side of the `sequence` entity)
+  SEQUENCE_LIST: 'sequence-list',
+  SEQUENCE_SAVE: 'sequence-save',
+  SEQUENCE_APPEND_CLUE: 'sequence-append-clue',
+  SEQUENCE_DELETE: 'sequence-delete',
   // Active scope ("Use filter/search/selection as scope" — human sets what the
   // AI's scope:"active" then runs inside; same instrument, two operators)
   SET_ACTIVE_SCOPE: 'set-active-scope',
