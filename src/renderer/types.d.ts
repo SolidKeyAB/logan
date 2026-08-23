@@ -51,6 +51,28 @@ interface ScopeInfo {
   warning?: string;
 }
 
+// Semantic-summary result (mirror of src/main/logTemplates.ts, ambient for the renderer).
+interface LogTemplate {
+  id: number;
+  shape: string;
+  count: number;
+  firstLine: number; // 1-based viewerLine
+  lastLine: number;
+  firstTs?: string;
+  lastTs?: string;
+  severity: string | null;
+  examples: number[]; // 1-based viewerLines
+}
+interface TemplateSummary {
+  templates: LogTemplate[];
+  other: { lines: number; shapes: number };
+  totalLines: number;
+  distinctShapes: number;
+  coverage: number; // 0..1
+  capped: boolean;
+  matchedTemplates?: number; // present when a `contains` lens was applied
+}
+
 interface SearchColumnConfig {
   delimiter: string;
   columns: Array<{ index: number; visible: boolean }>;
@@ -838,6 +860,10 @@ interface Api {
 
   // Guided triage
   triageRecipe: (options: { symptom: string; domain?: string; component?: string; sinceLine?: number; field?: string; expect?: string; baselineId?: string; maxFindings?: number; pin?: boolean }) => Promise<{ success: boolean; error?: string; [key: string]: any }>;
+
+  // Semantic summary — fold the log into distinct message templates
+  summarize: (opts?: { maxTemplates?: number; maxExamples?: number; detectSeverity?: boolean; detectTimestamp?: boolean; contains?: string }, scope?: ScopeDescriptor | null) => Promise<{ success: boolean; summary?: TemplateSummary; scope?: ScopeInfo; error?: string }>;
+  summarizeCancel: () => Promise<{ success: boolean }>;
 
   // Evidence pack (native "📋 Brief") — same briefing the AI's logan_evidence_pack builds
   getEvidencePack: (options?: { thresholdSeconds?: number; topFields?: number; topGaps?: number; topComponents?: number; fieldSampleSize?: number; analyzerName?: string; baselineId?: string }) => Promise<{ success: boolean; pack?: EvidencePack; error?: string }>;

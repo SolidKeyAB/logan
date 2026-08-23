@@ -865,6 +865,12 @@ const elements = {
   analysisResults: document.getElementById('analysis-results') as HTMLDivElement,
   briefResults: document.getElementById('brief-results') as HTMLDivElement,
   btnBrief: document.getElementById('btn-brief') as HTMLButtonElement,
+  summarizeResults: document.getElementById('summarize-results') as HTMLDivElement,
+  btnRunSummarize: document.getElementById('btn-run-summarize') as HTMLButtonElement,
+  summarizeContains: document.getElementById('summarize-contains') as HTMLInputElement,
+  summarizeSort: document.getElementById('summarize-sort') as HTMLSelectElement,
+  summarizeUseScope: document.getElementById('summarize-use-scope') as HTMLInputElement,
+  summarizeStatus: document.getElementById('summarize-status') as HTMLSpanElement,
   conclusionContent: document.getElementById('conclusion-content') as HTMLDivElement,
   conclusionStatus: document.getElementById('conclusion-status') as HTMLSpanElement,
   btnBuildConclusion: document.getElementById('btn-build-conclusion') as HTMLButtonElement,
@@ -6863,6 +6869,9 @@ function openBottomTab(tabId: string): void {
   if (tabId === 'conclusion') {
     initConclusionPanel();
   }
+  if (tabId === 'summarize') {
+    initSummarizePanel();
+  }
   if (tabId === 'time-sync') {
     initTimeSyncPanel();
   }
@@ -6882,6 +6891,211 @@ function openBottomTab(tabId: string): void {
   }
 
   saveBottomPanelState();
+}
+
+// ─── Summarize panel (semantic template fold — human twin of logan_summarize) ──
+// Folds the log into its distinct message TEMPLATES: near-duplicate lines that
+// differ only by a timestamp / id / number collapse into one shape + count, so a
+// million-line log becomes a scannable page. Same engine as the AI's
+// logan_summarize — ApiContext.summarize over the SUMMARIZE IPC.
+
+let summarizeResult: TemplateSummary | null = null;
+let summarizeRunning = false;
+const SUMMARIZE_MAX_ROWS = 250; // cap RENDERED rows; overflow is reported, never silently dropped
+
+function initSummarizePanel(): void {
+  // Re-render the cached result when the tab is re-opened; otherwise leave the
+  // empty-state scaffold from index.html untouched.
+  if (summarizeResult) renderSummarize(summarizeResult);
+}
+
+async function runSummarize(): Promise<void> {
+  if (summarizeRunning) return;
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  summarizeRunning = true;
+  setSummarizeBusy(true);
+  setSummarizeStatus('');
+  const useScope = !!elements.summarizeUseScope?.checked;
+  const scope: ScopeDescriptor = useScope ? { type: 'active' } : { type: 'all' };
+  elements.summarizeResults.innerHTML =
+    `<div class="summarize-loading"><div class="sum-spinner"></div><div class="summarize-loading-text">Folding the log into templates…</div></div>`;
+  try {
+    const res = await window.api.summarize({ maxExamples: 8 }, scope);
+    if (!res.success || !res.summary) {
+      const cancelled = res.error === 'Cancelled';
+      elements.summarizeResults.innerHTML =
+        `<div class="summarize-empty"><div class="summarize-empty-glyph">${cancelled ? '⏹' : '⚠'}</div>` +
+        `<div class="summarize-empty-title">${escapeHtml(cancelled ? 'Summary cancelled' : (res.error || 'Summary failed'))}</div></div>`;
+      return;
+    }
+    summarizeResult = res.summary;
+    if (elements.summarizeContains) elements.summarizeContains.disabled = false;
+    if (elements.summarizeSort) elements.summarizeSort.disabled = false;
+    renderSummarize(summarizeResult);
+    const scopeLabel = res.scope?.label && res.scope.label !== 'whole file' ? ` · ${escapeHtml(res.scope.label)}` : '';
+    setSummarizeStatus(`${summarizeResult.distinctShapes.toLocaleString()} templates · ${summarizeResult.totalLines.toLocaleString()} lines${scopeLabel}`);
+    trackUsage('summarize:run');
+  } catch (err) {
+    elements.summarizeResults.innerHTML =
+      `<div class="summarize-empty"><div class="summarize-empty-glyph">⚠</div><div class="summarize-empty-title">${escapeHtml(String(err))}</div></div>`;
+  } finally {
+    summarizeRunning = false;
+    setSummarizeBusy(false);
+  }
+}
+
+async function cancelSummarize(): Promise<void> {
+  if (!summarizeRunning) return;
+  try { await window.api.summarizeCancel(); } catch { /* the in-flight call resolves with error:'Cancelled' */ }
+}
+
+function setSummarizeBusy(busy: boolean): void {
+  const btn = elements.btnRunSummarize;
+  if (!btn) return;
+  btn.classList.toggle('is-cancel', busy);
+  btn.textContent = busy ? 'Cancel' : 'Summarize log';
+}
+
+function setSummarizeStatus(text: string): void {
+  if (elements.summarizeStatus) elements.summarizeStatus.textContent = text;
+}
+
+function summarizeSeverityRank(sev: string | null): number {
+  return sev === 'fatal' ? 3 : sev === 'error' ? 2 : sev === 'warning' ? 1 : 0;
+}
+
+function summarizeSeverityClass(sev: string | null): string {
+  return sev === 'fatal' ? 'sev-fatal' : sev === 'error' ? 'sev-error' : sev === 'warning' ? 'sev-warning' : 'sev-none';
+}
+
+function summarizeComparator(mode: string): (a: LogTemplate, b: LogTemplate) => number {
+  switch (mode) {
+    case 'last': return (a, b) => b.lastLine - a.lastLine || b.count - a.count;
+    case 'first': return (a, b) => a.firstLine - b.firstLine;
+    case 'severity': return (a, b) => summarizeSeverityRank(b.severity) - summarizeSeverityRank(a.severity) || b.count - a.count;
+    default: return (a, b) => b.count - a.count || a.firstLine - b.firstLine; // 'count'
+  }
+}
+
+// Escape the shape, then render the masked variable slots (<TS>, <NUM>, <IP>, …)
+// as subtle inline chips so a template reads as "literal text + variable slots".
+function formatSummarizeShape(shape: string): string {
+  return escapeHtml(shape).replace(/&lt;([A-Z]{2,6})&gt;/g, '<span class="tmpl-var">$1</span>');
+}
+
+function renderSummarize(summary: TemplateSummary): void {
+  const container = elements.summarizeResults;
+  if (!container) return;
+
+  // Client-side filter (contains) + sort over the already-fetched top-K — instant, no re-scan.
+  const needle = (elements.summarizeContains?.value || '').trim().toLowerCase();
+  const sortMode = elements.summarizeSort?.value || 'count';
+  let templates = summary.templates.slice();
+  if (needle) templates = templates.filter(t => t.shape.toLowerCase().includes(needle));
+  templates.sort(summarizeComparator(sortMode));
+
+  const total = summary.totalLines || 1;
+  const maxCount = templates.length ? Math.max(...templates.map(t => t.count)) : 1;
+  const coveragePct = Math.round(summary.coverage * 1000) / 10;
+
+  const kpis =
+    `<div class="sum-kpis">` +
+      `<div class="sum-kpi"><div class="sum-kpi-value">${summary.totalLines.toLocaleString()}</div><div class="sum-kpi-label">lines scanned</div></div>` +
+      `<div class="sum-kpi"><div class="sum-kpi-value">${summary.distinctShapes.toLocaleString()}</div><div class="sum-kpi-label">distinct templates</div></div>` +
+      `<div class="sum-kpi sum-kpi-wide"><div class="sum-kpi-value">${coveragePct}%</div><div class="sum-kpi-label">covered by kept templates</div><div class="sum-kpi-bar"><span style="width:${Math.min(100, coveragePct)}%"></span></div></div>` +
+      `<div class="sum-kpi"><div class="sum-kpi-value">${summary.other.lines.toLocaleString()}</div><div class="sum-kpi-label">rare lines folded · ${summary.other.shapes.toLocaleString()} shapes</div></div>` +
+    `</div>`;
+
+  const cappedNote = summary.capped
+    ? `<div class="sum-note sum-note-warn">Template cap reached — ${summary.other.lines.toLocaleString()} rarer lines (${summary.other.shapes.toLocaleString()} shapes) folded into «other».</div>`
+    : '';
+
+  if (!templates.length) {
+    container.innerHTML = kpis + cappedNote +
+      `<div class="sum-empty-rows">No templates${needle ? ` match “${escapeHtml(needle)}”` : ' found'}.</div>`;
+    return;
+  }
+
+  const shown = templates.slice(0, SUMMARIZE_MAX_ROWS);
+  const overflow = templates.length - shown.length;
+
+  const head =
+    `<div class="sum-table">` +
+      `<div class="sum-row sum-head">` +
+        `<div class="sc-sev"></div>` +
+        `<div class="sc-shape">Template <span class="sum-head-hint">${templates.length.toLocaleString()}${needle ? ' matching' : ''}</span></div>` +
+        `<div class="sc-count">Lines</div>` +
+        `<div class="sc-range">First → last</div>` +
+        `<div class="sc-exp"></div>` +
+      `</div>`;
+
+  const rows = shown.map(t => {
+    const sevClass = summarizeSeverityClass(t.severity);
+    const sharePct = (t.count / total) * 100;
+    const barPct = (t.count / maxCount) * 100;
+    const shareLabel = sharePct >= 0.1 ? sharePct.toFixed(1) + '%' : '<0.1%';
+    const examples = (t.examples && t.examples.length ? t.examples : [t.firstLine]).join(',');
+    const tsSpan = (t.firstTs || t.lastTs)
+      ? `<div class="sum-range-ts">${escapeHtml((t.firstTs || '').trim())}${t.lastTs && t.lastTs !== t.firstTs ? ' → ' + escapeHtml(t.lastTs.trim()) : ''}</div>`
+      : '';
+    return (
+      `<div class="sum-row sum-tmpl ${sevClass}" data-examples="${examples}" title="Click to show example lines">` +
+        `<div class="sc-sev"><span class="sum-sev-dot" title="${escapeHtml(t.severity || 'no severity')}"></span></div>` +
+        `<div class="sc-shape">` +
+          `<div class="sum-shape-text">${formatSummarizeShape(t.shape)}</div>` +
+          `<div class="sum-share"><div class="sum-share-bar"><span style="width:${barPct.toFixed(2)}%"></span></div><span class="sum-share-pct">${shareLabel}</span></div>` +
+        `</div>` +
+        `<div class="sc-count">${t.count.toLocaleString()}</div>` +
+        `<div class="sc-range">` +
+          `<a class="sum-jump" data-jump="${t.firstLine}" title="Jump to first occurrence">L${t.firstLine.toLocaleString()}</a>` +
+          `<span class="sum-arrow">→</span>` +
+          `<a class="sum-jump" data-jump="${t.lastLine}" title="Jump to last occurrence">L${t.lastLine.toLocaleString()}</a>` +
+          tsSpan +
+        `</div>` +
+        `<div class="sc-exp"><span class="sum-exp-caret">▸</span></div>` +
+      `</div>` +
+      `<div class="sum-examples" hidden></div>`
+    );
+  }).join('');
+
+  const overflowNote = overflow > 0
+    ? `<div class="sum-note">Showing top ${SUMMARIZE_MAX_ROWS} of ${templates.length.toLocaleString()} templates — use the filter to narrow.</div>`
+    : '';
+
+  container.innerHTML = kpis + cappedNote + head + rows + `</div>` + overflowNote;
+}
+
+function onSummarizeResultsClick(e: MouseEvent): void {
+  const target = e.target as HTMLElement;
+  const jump = target.closest('.sum-jump') as HTMLElement | null;
+  if (jump) {
+    e.stopPropagation();
+    const line1 = parseInt(jump.dataset.jump || '0', 10);
+    if (line1 > 0) jumpToTrendLine(line1 - 1); // engine gives 1-based viewerLines; viewer is 0-based
+    return;
+  }
+  const row = target.closest('.sum-tmpl') as HTMLElement | null;
+  if (row) toggleSummarizeExamples(row);
+}
+
+function toggleSummarizeExamples(row: HTMLElement): void {
+  const drawer = row.nextElementSibling as HTMLElement | null;
+  if (!drawer || !drawer.classList.contains('sum-examples')) return;
+  if (!drawer.hasAttribute('hidden')) {
+    drawer.setAttribute('hidden', '');
+    row.classList.remove('expanded');
+    return;
+  }
+  if (!drawer.dataset.built) {
+    const examples = (row.dataset.examples || '').split(',').filter(Boolean);
+    drawer.innerHTML = examples.length
+      ? `<span class="sum-examples-label">Example lines</span>` +
+        examples.map(l => `<a class="sum-jump sum-ex-chip" data-jump="${l}">L${Number(l).toLocaleString()}</a>`).join('')
+      : `<span class="sum-examples-label">No examples.</span>`;
+    drawer.dataset.built = '1';
+  }
+  drawer.removeAttribute('hidden');
+  row.classList.add('expanded');
 }
 
 // ─── Optional Features (toggleable "plugins") ────────────────────────────────
@@ -24715,6 +24929,14 @@ function init(): void {
   onCancelableClick(elements.btnAnalyze, () => { void analyzeFile(); });
   document.getElementById('btn-run-analysis')?.addEventListener('click', analyzeFile);
   elements.btnBrief?.addEventListener('click', showBrief);
+
+  // Summarize (semantic template fold) — run/cancel toggle + client-side filter/sort
+  elements.btnRunSummarize?.addEventListener('click', () => {
+    if (summarizeRunning) { void cancelSummarize(); } else { void runSummarize(); }
+  });
+  elements.summarizeContains?.addEventListener('input', () => { if (summarizeResult) renderSummarize(summarizeResult); });
+  elements.summarizeSort?.addEventListener('change', () => { if (summarizeResult) renderSummarize(summarizeResult); });
+  elements.summarizeResults?.addEventListener('click', onSummarizeResultsClick);
 
   // Conclusion (native root-cause synthesis)
   elements.btnBuildConclusion.addEventListener('click', () => buildConclusion());
