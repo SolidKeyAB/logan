@@ -9,17 +9,20 @@
 // file's fd. A "coarse index" (per-segment {startByte, endByte, lineCount}) is always
 // resident and tiny (N entries); the "fine index" (per-line offsets) is lazy + evictable.
 //
-// Scope (increment 1): read path only (getLines / getLinesAsync / getLinesByNumbers +
-// totals / boundaries). Search + severity fan-out (which touch every segment) and the
-// open-path wiring + Features toggle are the next increment — mirrors how the composite
-// itself was staged.
+// Scope: full read + search + severity surface, so it's a drop-in for the
+// FileHandler | CompositeFileHandler read/search union — reads via lazy+LRU segments;
+// search/severity via ONE whole-file ripgrep pass (line numbers already global, no fan-out,
+// no resident index). Still to come: open-path wiring + Features toggle (the GUI-visible
+// increment) — mirrors how the composite itself was staged.
 
 import * as fs from 'fs';
-import type { FileInfo, LineData } from '../shared/types';
+import type { FileInfo, LineData, SearchMatch, SearchOptions } from '../shared/types';
 import { CompositeLineSpace } from './compositeLineSpace';
 import { FileHandler } from './fileHandler';
 import { findLineStartAtOrAfter, scanFileIndex } from './indexScan';
 import { computeSegmentPlan, readSystemMemory, SegmentPlan } from './segmentPlan';
+import type { SeverityIndex, SeverityLevel, SeverityCounts } from './severityIndex';
+import { severityCounts, severityTicks, nextSeverityLine } from './severityIndex';
 
 interface SegmentDescriptor {
   startByte: number;
@@ -47,11 +50,23 @@ export class SegmentedFileHandler {
   // last. touch() re-inserts to move an entry to the end.
   private residentSegments = new Map<number, FileHandler>();
 
+  // One whole-file handler used ONLY for search + severity (a single ripgrep pass whose
+  // line numbers are already global). Built lazily so a file that's only scrolled never
+  // pays for it. Non-CR files use openForSearchOnly (no index); a CR-only file needs the
+  // \r-aware byte-offset remap, so it falls back to a full open().
+  private searchDelegate: FileHandler | null = null;
+
+  // Mirrors FileHandler's post-search readout so the SEARCH IPC handler can read these
+  // uniformly across the FileHandler | CompositeFileHandler | SegmentedFileHandler union.
+  lastSearchEngine?: string;
+  lastSearchReason?: string;
+
   private constructor(
     private filePath: string,
     private segments: SegmentDescriptor[],
     private maxResident: number,
     private fileSize: number,
+    private hasStandaloneCR: boolean,
     readonly plan: SegmentPlan | null
   ) {
     this.space = new CompositeLineSpace(segments.map((s) => s.lineCount));
@@ -82,6 +97,7 @@ export class SegmentedFileHandler {
     const boundaries = Array.from(rawBoundaries).sort((a, b) => a - b);
 
     const segments: SegmentDescriptor[] = [];
+    let anyStandaloneCR = false;
     for (let i = 0; i + 1 < boundaries.length; i++) {
       const startByte = boundaries[i];
       const endByte = boundaries[i + 1];
@@ -90,6 +106,7 @@ export class SegmentedFileHandler {
       // offsets — only the tiny descriptor is retained. Peak build RAM ≈ one segment index.
       const scan = scanFileIndex(filePath, undefined, { startByte, endByte });
       segments.push({ startByte, endByte, lineCount: scan.totalLines, maxLineLength: scan.maxLineLength });
+      anyStandaloneCR = anyStandaloneCR || scan.hasStandaloneCR;
       opts.onProgress?.(Math.round(((i + 1) / (boundaries.length - 1)) * 100));
       await Promise.resolve(); // cooperative yield
     }
@@ -98,7 +115,7 @@ export class SegmentedFileHandler {
     // line space is well-formed (0 total lines).
     if (segments.length === 0) segments.push({ startByte: 0, endByte: 0, lineCount: 0, maxLineLength: 0 });
 
-    return new SegmentedFileHandler(filePath, segments, maxResident, fileSize, plan);
+    return new SegmentedFileHandler(filePath, segments, maxResident, fileSize, anyStandaloneCR, plan);
   }
 
   getTotalLines(): number {
@@ -184,9 +201,76 @@ export class SegmentedFileHandler {
     return out;
   }
 
+  // === Search + severity (one whole-file ripgrep pass; line numbers are already global) ===
+
+  // Lazily build the whole-file search delegate. A big file is ONE file, so a single
+  // ripgrep pass over it yields global line numbers directly — no fan-out, no resident
+  // index needed (except CR-only files, which need the \r-aware byte-offset remap → full open).
+  private async ensureSearchDelegate(): Promise<FileHandler> {
+    if (this.searchDelegate) return this.searchDelegate;
+    const h = new FileHandler();
+    if (this.hasStandaloneCR) {
+      await h.open(this.filePath); // rare: CR-only needs the offset index for byte→line remap
+    } else {
+      // headerLineCount 0: the segmented view shows every physical line (it does not hide a
+      // #SPLIT header — segmentation targets un-split big logs), so rg line N ↦ global N-1.
+      h.openForSearchOnly(this.filePath, 0);
+    }
+    this.searchDelegate = h;
+    return h;
+  }
+
+  async search(
+    options: SearchOptions,
+    onProgress?: (percent: number, matchCount: number, deltaMatches?: SearchMatch[]) => void,
+    signal?: { cancelled: boolean }
+  ): Promise<SearchMatch[]> {
+    const h = await this.ensureSearchDelegate();
+    const res = await h.search(options, onProgress, signal);
+    this.lastSearchEngine = h.lastSearchEngine ?? undefined;
+    this.lastSearchReason = h.lastSearchReason ?? undefined;
+    return res;
+  }
+
+  async searchMulti(
+    configs: Array<{ id: string; pattern: string; isRegex: boolean; matchCase: boolean; wholeWord: boolean }>,
+    onProgress?: (counts: Record<string, number>, overallPercent: number) => void,
+    signal?: { cancelled: boolean },
+    onMatches?: (deltaByConfig: Record<string, SearchMatch[]>) => void,
+    maxMatchesPerConfig?: number
+  ): Promise<Record<string, SearchMatch[]>> {
+    const h = await this.ensureSearchDelegate();
+    const res = await h.searchMulti(configs, onProgress, signal, onMatches, maxMatchesPerConfig);
+    this.lastSearchEngine = h.lastSearchEngine ?? undefined;
+    this.lastSearchReason = h.lastSearchReason ?? undefined;
+    return res;
+  }
+
+  async buildSeverityIndex(signal?: { cancelled: boolean }): Promise<SeverityIndex> {
+    const h = await this.ensureSearchDelegate();
+    return h.buildSeverityIndex(signal);
+  }
+
+  // Counts + minimap ticks over the WHOLE file. Mirrors CompositeFileHandler.getSeverityInfo:
+  // the delegate builds the (global) index, we compute counts/ticks against our total.
+  async getSeverityInfo(buckets: number): Promise<{ counts: SeverityCounts; ticks: number[]; totalLines: number; capped: boolean }> {
+    const idx = await this.buildSeverityIndex();
+    const total = this.space.totalLines;
+    const counts = severityCounts(idx);
+    const ticks = Array.from(severityTicks(idx, Math.max(0, Math.floor(buckets)), total));
+    return { counts, ticks, totalLines: total, capped: false };
+  }
+
+  async getNextSeverityLine(fromLine: number, dir: 1 | -1, levels: SeverityLevel[]): Promise<number | null> {
+    const idx = await this.buildSeverityIndex();
+    return nextSeverityLine(idx, fromLine, dir === -1 ? -1 : 1, levels);
+  }
+
   close(): void {
     for (const h of this.residentSegments.values()) h.close();
     this.residentSegments.clear();
+    this.searchDelegate?.close();
+    this.searchDelegate = null;
   }
 
   // === LRU segment residency ===
