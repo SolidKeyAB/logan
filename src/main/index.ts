@@ -21,8 +21,10 @@ if (process.platform !== 'linux') {
 }
 import { FileHandler, filterLineToVisibleColumns, splitLineIntoColumns, ColumnConfig } from './fileHandler';
 import { CompositeFileHandler, CompositeMemberHandler, CompositeBoundary } from './compositeFileHandler';
+import { SegmentedFileHandler } from './segmentedFileHandler';
+import { computeSegmentPlan, readSystemMemory } from './segmentPlan';
 import { getRipgrepPath } from './ripgrepPath';
-import { openWithAdapter, NormalizedSource } from './sourceAdapter';
+import { openWithAdapter, NormalizedSource, isTextPassthrough } from './sourceAdapter';
 import { resolveFileHandlers, runFileHandler, FileHandlerQuery } from './fileHandlers';
 import { extractBodyLine, extractHeaderLine } from '../shared/extractFormat';
 import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, SingleSessionEntry, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation, PatternProperty, SavedPattern, ScopeDescriptor, ResolvedScope, FileInfo } from '../shared/types';
@@ -96,6 +98,43 @@ let currentFilePath: string | null = null;
 let activeComposite: CompositeFileHandler | null = null;
 let activeCompositeId: string | null = null;
 const COMPOSITE_ID = 'composite://single-session';
+
+// Auto-composite large files (P2 of auto-composite-large-files). When enabled (default OFF,
+// synced from the renderer Features toggle), opening an over-budget plain-text file wraps it
+// in a SegmentedFileHandler instead of building the full whole-file line index — only the few
+// hot segments near the viewport stay indexed (LRU), so a 50M-line file no longer costs its
+// whole ~800MB offset index. Kept as a dedicated ref (like activeComposite) because a
+// SegmentedFileHandler is NOT a FileHandler and must not live in fileHandlerCache; when active,
+// currentFilePath is the real file path and reads route through getReadHandler().
+let activeSegmented: SegmentedFileHandler | null = null;
+let activeSegmentedPath: string | null = null;
+// Opt-in flag (default OFF), kept in lockstep with the renderer's `auto-segment` Features
+// toggle via IPC.SET_AUTO_SEGMENT. Main owns it so EVERY open path (renderer + agent) agrees.
+let autoSegmentEnabled = false;
+
+// Close + drop any active segmented handler (releases its resident segment fds/indexes). Call
+// whenever we leave segmented mode (opening a real file / entering a composite).
+function clearActiveSegmented(): void {
+  if (activeSegmented) { try { activeSegmented.close(); } catch { /* ignore */ } }
+  activeSegmented = null;
+  activeSegmentedPath = null;
+}
+
+// Decide whether to auto-segment `filePath` and, if so, build the segmented handler. Returns
+// null (→ normal full-index open) unless the feature is ON, the file is a plain-text
+// passthrough, and the adaptive plan says its whole-file index would exceed the RAM budget.
+async function maybeOpenSegmented(
+  filePath: string,
+  onProgress: (percent: number) => void,
+): Promise<SegmentedFileHandler | null> {
+  if (!autoSegmentEnabled) return null;
+  if (!isTextPassthrough(filePath)) return null; // decoded formats index a derived temp file
+  let size = 0;
+  try { size = fs.statSync(filePath).size; } catch { return null; }
+  const plan = computeSegmentPlan(size, readSystemMemory());
+  if (!plan.shouldSegment) return null;
+  return SegmentedFileHandler.open(filePath, { plan, onProgress });
+}
 // Set in app.whenReady(); reused by top-level IPC handlers that need the same
 // in-process bridge the API server uses (e.g. the native "📋 Brief" evidence pack).
 let apiContext: ApiContext | null = null;
@@ -304,8 +343,12 @@ function getFileHandler(): FileHandler | null {
 // search/getTotalLines/getFileInfo/lastSearch* shape), otherwise the current file's real
 // FileHandler. Only the read/search paths (GET_LINES, SEARCH, api getLines/search/status)
 // use this; everything else keeps calling getFileHandler() and is a no-op in composite mode.
-function getReadHandler(): FileHandler | CompositeFileHandler | null {
+function getReadHandler(): FileHandler | CompositeFileHandler | SegmentedFileHandler | null {
   if (activeComposite && currentFilePath === activeCompositeId) return activeComposite;
+  // A segmented big file shares FileHandler's read/search/severity method shape, so the same
+  // GET_LINES/SEARCH/SEVERITY paths carry it. FileHandler-only features (filter, split) call
+  // getFileHandler() instead and stay disabled in segmented mode, exactly like composite mode.
+  if (activeSegmented && currentFilePath === activeSegmentedPath) return activeSegmented;
   return getFileHandler();
 }
 
@@ -317,6 +360,7 @@ async function buildComposite(
   filePaths: string[],
   label?: string,
 ): Promise<{ id: string; info: FileInfo; boundaries: CompositeBoundary[] }> {
+  clearActiveSegmented(); // entering composite mode exits any active segmented view
   const members: CompositeMemberHandler[] = [];
   for (const fp of filePaths) {
     let h = fileHandlerCache.get(fp);
@@ -2882,12 +2926,14 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
         compositeBoundaries: activeComposite.boundaries(),
       };
     }
-    // Opening any real file exits composite mode.
+    // Opening any real file exits composite / segmented mode.
     activeComposite = null;
     activeCompositeId = null;
+    clearActiveSegmented();
 
     // Check if file is already cached
     let fileHandler = fileHandlerCache.get(filePath);
+    let segmented: SegmentedFileHandler | null = null;
     let info;
 
     // Drop the cached handler if the file changed on disk since it was indexed,
@@ -2905,21 +2951,48 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
       // Send 100% progress immediately since no indexing needed
       mainWindow?.webContents.send('indexing-progress', 100);
     } else {
-      // New file - pick a format adapter, normalize, then index.
-      // Text is a zero-overhead passthrough (original path, no copy/decode).
-      fileHandler = new FileHandler();
-      const opened = await openWithAdapter(fileHandler, filePath, (percent) => {
+      // Auto-composite a big plain-text file: index only the hot segments (bounded RAM)
+      // instead of the whole-file offset index. No-op (returns null) unless the feature is
+      // ON and the file's whole-file index would exceed the adaptive memory budget.
+      segmented = await maybeOpenSegmented(filePath, (percent) => {
         mainWindow?.webContents.send('indexing-progress', percent);
       });
-      info = opened.info;
-      sourceRegistry.set(filePath, opened.source);
-      addToCache(filePath, fileHandler);
-      currentFilePath = filePath;
+      if (segmented) {
+        activeSegmented = segmented;
+        activeSegmentedPath = filePath;
+        currentFilePath = filePath;
+        info = segmented.getFileInfo();
+        mainWindow?.webContents.send('indexing-progress', 100);
+        const p = segmented.plan;
+        console.log(
+          `[auto-segment] ${filePath}: ${p?.totalSegments} segments, resident cap ` +
+          `${p?.maxResidentSegments}; est whole-file index ` +
+          `${Math.round((p?.estWholeIndexBytes ?? 0) / 1e6)}MB → resident ` +
+          `${Math.round((p?.estResidentIndexBytes ?? 0) / 1e6)}MB (budget ` +
+          `${Math.round((p?.budgetBytes ?? 0) / 1e6)}MB)`
+        );
+      } else {
+        // New file - pick a format adapter, normalize, then index.
+        // Text is a zero-overhead passthrough (original path, no copy/decode).
+        fileHandler = new FileHandler();
+        const opened = await openWithAdapter(fileHandler, filePath, (percent) => {
+          mainWindow?.webContents.send('indexing-progress', percent);
+        });
+        info = opened.info;
+        sourceRegistry.set(filePath, opened.source);
+        addToCache(filePath, fileHandler);
+        currentFilePath = filePath;
+      }
     }
+
+    // The active read target for this open — either the real FileHandler or the segmented
+    // wrapper. Both expose getMaxLineLength(); split lineage is FileHandler-only (segmented
+    // targets un-split big logs), so it's read only when we have a real FileHandler.
+    const readHandler: FileHandler | SegmentedFileHandler = fileHandler ?? segmented!;
 
     // Detect long lines for warning
     const LONG_LINE_THRESHOLD = 5000; // chars
-    const maxLineLength = fileHandler.getMaxLineLength();
+    const maxLineLength = readHandler.getMaxLineLength();
     const hasLongLines = maxLineLength > LONG_LINE_THRESHOLD && !filePath.includes('.formatted.');
 
     // Load bookmarks and highlights for this file
@@ -2955,8 +3028,9 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
     logActivity(persistPath, 'file_opened', { filePath: persistPath });
     addToRecentFiles(persistPath);
 
-    // Check for split metadata in file header (preferred)
-    const splitMeta = fileHandler.getSplitMetadata();
+    // Check for split metadata in file header (preferred). Segmented mode has no real
+    // FileHandler and targets un-split big logs, so there's no split lineage to read.
+    const splitMeta = fileHandler ? fileHandler.getSplitMetadata() : null;
     let splitInfo: { files: string[]; currentIndex: number } | undefined;
 
     if (splitMeta) {
@@ -3004,6 +3078,44 @@ ipcMain.handle(IPC.OPEN_FILE, async (_, filePath: string) => {
       highlights: Array.from(highlights.values()),
       hasLongLines,
       maxLineLength,
+    };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// Sync the renderer's `auto-segment` Features toggle into main. Main owns the flag so every
+// open path (renderer OPEN_FILE + agent open) agrees on whether to auto-segment a big file.
+ipcMain.handle(IPC.SET_AUTO_SEGMENT, (_e, enabled: boolean) => {
+  autoSegmentEnabled = !!enabled;
+  return { success: true };
+});
+
+// Live segment-plan readout for the currently-open file — drives the legible RAM readout in
+// the Features modal (est whole-file index vs adaptive budget, and, if active, the plan +
+// how many segment indexes are resident right now).
+ipcMain.handle(IPC.SEGMENT_PLAN_PREVIEW, () => {
+  try {
+    const mem = readSystemMemory();
+    const active = !!(activeSegmented && currentFilePath === activeSegmentedPath);
+    let fileSize = 0;
+    let passthrough = false;
+    let plan = null as ReturnType<typeof computeSegmentPlan> | null;
+    // Skip the synthetic composite id (not a real path) — statSync would throw.
+    if (currentFilePath && currentFilePath !== activeCompositeId) {
+      passthrough = isTextPassthrough(currentFilePath);
+      try { fileSize = fs.statSync(currentFilePath).size; } catch { fileSize = 0; }
+      if (fileSize > 0) plan = computeSegmentPlan(fileSize, mem);
+    }
+    return {
+      success: true,
+      enabled: autoSegmentEnabled,
+      active,
+      passthrough,
+      fileSize,
+      residentSegments: active ? activeSegmented!.residentSegmentCount() : 0,
+      mem: { freeBytes: mem.freeBytes, heapLimitBytes: mem.heapLimitBytes, heapUsedBytes: mem.heapUsedBytes },
+      plan,
     };
   } catch (error) {
     return { success: false, error: String(error) };

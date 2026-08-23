@@ -2,6 +2,7 @@ import { Worker } from 'worker_threads';
 import * as path from 'path';
 import type { FileHandler } from './fileHandler';
 import { CompositeFileHandler } from './compositeFileHandler';
+import { SegmentedFileHandler } from './segmentedFileHandler';
 
 /**
  * Main-process client for the trend worker. Gets the (cached) byte-offset index of the
@@ -17,7 +18,14 @@ import { CompositeFileHandler } from './compositeFileHandler';
  */
 export type TrendJobKind = 'discover' | 'axes' | 'series' | 'signal' | 'transitions' | 'correlate';
 
-export function runTrendJob(kind: TrendJobKind, handler: FileHandler | CompositeFileHandler, args: any): Promise<any> {
+export function runTrendJob(kind: TrendJobKind, handler: FileHandler | CompositeFileHandler | SegmentedFileHandler, args: any): Promise<any> {
+  // Trends run off-thread from a resident scan context (offsets/lengths SharedArrayBuffer).
+  // An auto-segmented file deliberately holds no whole-file index (only a few hot segments,
+  // LRU-bounded), so there's nothing to hand the worker without materializing the full index
+  // — which would defeat the RAM budget. Disable trends in segmented mode (like filter/split).
+  if (handler instanceof SegmentedFileHandler) {
+    return Promise.reject(new Error('Trends are not available for auto-segmented large files.'));
+  }
   let workerData: { kind: TrendJobKind; args: any; scan?: unknown; scans?: unknown[] };
   if (handler instanceof CompositeFileHandler) {
     const scans = handler.getMemberScanContexts();
