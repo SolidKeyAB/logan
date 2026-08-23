@@ -6,6 +6,8 @@ const IPC = {
   OPEN_FILE_DIALOG: 'open-file-dialog',
   OPEN_FILES_DIALOG: 'open-files-dialog',
   OPEN_FILE: 'open-file',
+  SET_AUTO_SEGMENT: 'set-auto-segment',
+  SEGMENT_PLAN_PREVIEW: 'segment-plan-preview',
   CREATE_COMPOSITE: 'create-composite',
   SINGLE_SESSION_LIST: 'single-session-list',
   SINGLE_SESSION_DELETE: 'single-session-delete',
@@ -154,6 +156,32 @@ const api = {
 
   openFile: (path: string): Promise<{ success: boolean; info?: any; error?: string }> =>
     ipcRenderer.invoke(IPC.OPEN_FILE, path),
+
+  // Auto-composite large files (default OFF). setAutoSegment syncs the Features toggle to
+  // main so the OPEN_FILE path can decide; segmentPlanPreview returns the live RAM/plan
+  // readout for the currently-open file (drives the legible readout in the Features modal).
+  setAutoSegment: (enabled: boolean): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.SET_AUTO_SEGMENT, enabled),
+  segmentPlanPreview: (): Promise<{
+    success: boolean;
+    enabled?: boolean;
+    active?: boolean;
+    passthrough?: boolean;
+    fileSize?: number;
+    residentSegments?: number;
+    mem?: { freeBytes: number; heapLimitBytes: number; heapUsedBytes: number };
+    plan?: {
+      shouldSegment: boolean;
+      budgetBytes: number;
+      estWholeIndexBytes: number;
+      segmentBytes: number;
+      totalSegments: number;
+      maxResidentSegments: number;
+      estResidentIndexBytes: number;
+    } | null;
+    error?: string;
+  }> =>
+    ipcRenderer.invoke(IPC.SEGMENT_PLAN_PREVIEW),
 
   // "Single session": concatenate N already-open files into one continuous read-only
   // view (no on-disk merge). Returns a synthetic `composite://…` id to open like a file.

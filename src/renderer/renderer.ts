@@ -6880,6 +6880,7 @@ const OPTIONAL_FEATURES: OptionalFeatureDef[] = [
   { id: 'image',      label: 'Image Viewer', description: 'View image files referenced in a log or bug report.',                   defaultEnabled: false, bottomTab: 'image' },
   { id: 'time-align', label: 'Time Align',   description: 'Align search-config results on draggable timeline lanes.',              defaultEnabled: false, bottomTab: 'time-align' },
   { id: 'history',    label: 'History',      description: 'Action history (searches, filters, runs) with replay.',                defaultEnabled: false, panel: 'history' },
+  { id: 'auto-segment', label: 'Auto-composite big files', description: 'For very large files, index only the segments near the viewport (bounded RAM) instead of the whole-file line index. Experimental.', defaultEnabled: false },
 ];
 
 const FEATURES_LS_KEY = 'logan-features';
@@ -6945,10 +6946,57 @@ function openFeaturesModal(): void {
     cb.addEventListener('change', () => {
       setFeatureEnabled(def.id, cb.checked);
       applyFeatureVisibility();
+      // Behaviour features (no UI panel) need their own side-effect. Auto-segment lives in
+      // the main process, so push the flag there and refresh the RAM readout.
+      if (def.id === 'auto-segment') {
+        window.api.setAutoSegment(cb.checked);
+        if (readout) renderSegmentReadout(readout, cb.checked);
+      }
     });
     list.appendChild(row);
+    // Auto-composite: show a live, legible RAM readout for the currently-open file so the
+    // choice (would this file segment? how many segments? how much index RAM saved?) is visible.
+    let readout: HTMLElement | undefined;
+    if (def.id === 'auto-segment') {
+      readout = document.createElement('div');
+      readout.className = 'features-row-readout';
+      list.appendChild(readout);
+      renderSegmentReadout(readout, on);
+    }
   }
   document.getElementById('features-modal')?.classList.remove('hidden');
+}
+
+function fmtMB(bytes: number | undefined): string {
+  if (!bytes || bytes <= 0) return '0 MB';
+  const mb = bytes / 1e6;
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`;
+}
+
+// Fill the auto-segment readout from main's live segment-plan preview for the open file.
+async function renderSegmentReadout(el: HTMLElement, enabled: boolean): Promise<void> {
+  el.textContent = 'Checking current file…';
+  try {
+    const r = await window.api.segmentPlanPreview();
+    if (!r.success) { el.textContent = ''; return; }
+    if (!r.fileSize) { el.textContent = 'Open a file to see its segment plan.'; return; }
+    if (!r.passthrough) { el.textContent = 'Current file is a decoded format — segmenting applies to plain-text logs only.'; return; }
+    const p = r.plan;
+    const parts: string[] = [];
+    parts.push(`File ${fmtMB(r.fileSize)} · whole-file index ≈ ${fmtMB(p?.estWholeIndexBytes)} · budget ${fmtMB(p?.budgetBytes)}`);
+    if (r.active) {
+      parts.push(`Active: ${p?.totalSegments} segments, ${r.residentSegments}/${p?.maxResidentSegments} indexes resident now → ~${fmtMB(p?.estResidentIndexBytes)} resident (vs ${fmtMB(p?.estWholeIndexBytes)}).`);
+    } else if (p?.shouldSegment) {
+      parts.push(enabled
+        ? `Would segment into ${p.totalSegments} parts (cap ${p.maxResidentSegments} resident ≈ ${fmtMB(p.estResidentIndexBytes)}). Reopen the file to apply.`
+        : `Over budget — would segment into ${p.totalSegments} parts if enabled.`);
+    } else {
+      parts.push('Under budget — this file opens normally (no segmenting needed).');
+    }
+    el.textContent = parts.join('  ');
+  } catch {
+    el.textContent = '';
+  }
 }
 
 // ─── Investigate (Guided Triage) ─────────────────────────────────────────────
@@ -24820,6 +24868,9 @@ function init(): void {
   // Optional features (toggleable panels) — wire gear + apply saved visibility
   document.getElementById('btn-features')?.addEventListener('click', openFeaturesModal);
   applyFeatureVisibility();
+  // Auto-segment is a main-process behaviour, not a UI panel — push its saved state to main
+  // on startup so an over-budget file opened before the modal is ever seen is still honoured.
+  window.api.setAutoSegment(isFeatureEnabled('auto-segment'));
 
   // Load initial data
   loadBookmarks();

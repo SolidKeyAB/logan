@@ -506,6 +506,28 @@ interface Api {
   openFileDialog: () => Promise<string | null>;
   openFilesDialog: () => Promise<string[]>;
   openFile: (path: string) => Promise<{ success: boolean; info?: FileInfo; error?: string; splitFiles?: string[]; splitIndex?: number; bookmarks?: Bookmark[]; highlights?: HighlightConfig[]; hasLongLines?: boolean; maxLineLength?: number }>;
+  // Auto-composite large files (default OFF): sync the Features toggle to main, and fetch
+  // the live segment-plan readout (RAM budget vs whole-file index) for the open file.
+  setAutoSegment: (enabled: boolean) => Promise<{ success: boolean }>;
+  segmentPlanPreview: () => Promise<{
+    success: boolean;
+    enabled?: boolean;
+    active?: boolean;
+    passthrough?: boolean;
+    fileSize?: number;
+    residentSegments?: number;
+    mem?: { freeBytes: number; heapLimitBytes: number; heapUsedBytes: number };
+    plan?: {
+      shouldSegment: boolean;
+      budgetBytes: number;
+      estWholeIndexBytes: number;
+      segmentBytes: number;
+      totalSegments: number;
+      maxResidentSegments: number;
+      estResidentIndexBytes: number;
+    } | null;
+    error?: string;
+  }>;
   getLines: (startLine: number, count: number) => Promise<{ success: boolean; lines?: LogLine[]; error?: string }>;
   getSeverityInfo: (buckets: number) => Promise<{ success: boolean; counts?: { fatal: number; error: number; warning: number }; ticks?: number[]; totalLines?: number; capped?: boolean; error?: string }>;
   nextSeverityLine: (fromLine: number, dir: 1 | -1, levels: string[]) => Promise<{ success: boolean; line?: number | null; error?: string }>;
