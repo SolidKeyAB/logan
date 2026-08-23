@@ -359,6 +359,29 @@ server.tool(
   }
 );
 
+// === Tool: logan_summarize ===
+server.tool(
+  'logan_summarize',
+  'Semantic compression: fold the open log into its distinct message TEMPLATES (near-duplicate lines — differing only by timestamp/counter/id — collapse to one shape). Returns the top-K templates, each with a count, first→last viewerLine + timestamps, worst severity, and a few example viewerLines to drill into — plus coverage and an «other» bucket size (no silent truncation). Triage a huge log in ONE call, then logan_report_finding on the interesting templates. Pass `scope` to summarize only a subset (active filter, range, line-set); `contains` to view only templates whose shape contains a substring.',
+  {
+    scope: scopeSchema,
+    maxTemplates: z.number().int().min(1).optional().describe('Max distinct templates to keep (K). Default 5000.'),
+    maxExamples: z.number().int().min(1).optional().describe('Example viewerLines kept per template. Default 5.'),
+    contains: z.string().optional().describe('Only return templates whose shape contains this substring (case-insensitive).'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+  },
+  async ({ scope, maxTemplates, maxExamples, contains, redact }) => {
+    try {
+      const opts = { maxTemplates, maxExamples, contains };
+      const result = await apiCall('POST', '/api/summarize', { opts, scope: toApiScope(scope as any) });
+      const output = redact ? maybeRedact(result, true) : result;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_filter ===
 server.tool(
   'logan_filter',

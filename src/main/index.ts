@@ -50,6 +50,7 @@ import { parseVtraceToFile } from './vtraceParse';
 import { runTrendJob } from './trendWorkerClient';
 import { resolveScope, isWholeFile, scopeInfo, forEachScopeLine, ScopeResolverContext } from './scope';
 import { analyzeScope } from './analyzers/scopedAnalysis';
+import { TemplateFolder } from './logTemplates';
 import { detectColumns } from './analyzers/lineClassify';
 import { GapDetector } from './timeGaps';
 // Native-dependent modules — lazy-loaded to prevent SIGSEGV if bindings aren't built
@@ -87,6 +88,7 @@ if (process.platform === 'linux' && !process.env.GTK_THEME) {
 let mainWindow: BrowserWindow | null = null;
 let searchSignal: { cancelled: boolean } = { cancelled: false };
 let diffSignal: { cancelled: boolean } = { cancelled: false };
+let summarizeSignal: { cancelled: boolean } = { cancelled: false };
 let currentFilePath: string | null = null;
 
 // "Single session" — N already-open files presented as ONE continuous read-only view
@@ -1396,6 +1398,45 @@ app.whenReady().then(() => {
         const gaps = detector.sorted();
         logActivity(currentFilePath, 'time_gap_analysis', { threshold: thresholdSeconds, gapsFound: gaps.length, scope: resolved.label });
         return { success: true, gaps, totalLines: scanned, scope: scopeInfo(resolved) };
+      } catch (error) {
+        return { success: false, error: String(error) };
+      }
+    },
+    // Summarize (semantic compression): fold the scanned lines into their distinct
+    // message templates via the shared TemplateFolder. Scans in batches over the
+    // active scope (whole file / filter / range / indices) through getReadHandler,
+    // so it honours scope and works on a composite/segmented view — same path as
+    // detectTimeGaps. viewerLine is 1-based (scan lineNumber is 0-based).
+    summarize: async (opts?: any, scope?: ScopeDescriptor) => {
+      const handler = getReadHandler();
+      if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
+      summarizeSignal = { cancelled: false };
+      try {
+        const resolved = resolveCurrentScope(scope);
+        const folder = new TemplateFolder({
+          maxTemplates: opts?.maxTemplates,
+          maxExamples: opts?.maxExamples,
+          detectSeverity: opts?.detectSeverity,
+          detectTimestamp: opts?.detectTimestamp,
+        });
+        let cancelled = false;
+        forEachScopeLine(handler, resolved, (text, lineNumber) => {
+          if (summarizeSignal.cancelled) { cancelled = true; return false; }
+          folder.feed(text, lineNumber + 1);
+          return true;
+        });
+        if (cancelled) return { success: false, error: 'Cancelled' };
+        let summary = folder.finish();
+        // Optional post-filter view: keep only templates whose shape contains
+        // `contains` (case-insensitive). A lens over the fold — the full-run
+        // counts/coverage/«other» are unchanged; `matchedTemplates` reports the view.
+        if (opts?.contains) {
+          const needle = String(opts.contains).toLowerCase();
+          const kept = summary.templates.filter((t) => t.shape.toLowerCase().includes(needle));
+          summary = { ...summary, templates: kept, matchedTemplates: kept.length } as typeof summary & { matchedTemplates: number };
+        }
+        logActivity(currentFilePath, 'summarize', { templates: summary.templates.length, totalLines: summary.totalLines, capped: summary.capped, scope: resolved.label });
+        return { success: true, summary, scope: scopeInfo(resolved) };
       } catch (error) {
         return { success: false, error: String(error) };
       }

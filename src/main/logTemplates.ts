@@ -108,34 +108,38 @@ function lineSeverityRank(line: string): number {
 }
 
 /**
- * Fold an iterable of raw log lines into the top-K distinct message templates.
- * One streaming pass, O(K) memory. `lines` may be a generator so a worker can
- * stream a 50M-line file without materialising it.
+ * Streaming fold: feed lines one at a time (each with its explicit 1-based
+ * viewerLine) and call finish() for the summary. O(K) memory, no input buffering
+ * — the driver (a main-thread scan or worker) never holds the whole file. Taking
+ * viewerLine per-line (rather than a single startLine offset) means it works for
+ * NON-contiguous scopes too (an indices/filter scope). Mirrors GapDetector.feed().
  */
-export function foldTemplates(
-  lines: Iterable<string>,
-  opts: FoldTemplatesOptions = {},
-): TemplateSummary {
-  const K = opts.maxTemplates ?? 5000;
-  const maxExamples = Math.max(1, opts.maxExamples ?? 5);
-  const startLine = opts.startLine ?? 1;
-  const wantSev = opts.detectSeverity ?? true;
-  const wantTs = opts.detectTimestamp ?? true;
+export class TemplateFolder {
+  private readonly K: number;
+  private readonly maxExamples: number;
+  private readonly wantSev: boolean;
+  private readonly wantTs: boolean;
+  private readonly map = new Map<string, Acc>();
+  private evictedLines = 0;
+  private evictedShapes = 0;
+  private capped = false;
+  private totalLines = 0;
 
-  const map = new Map<string, Acc>();
-  let evictedLines = 0;
-  let evictedShapes = 0;
-  let capped = false;
-  let totalLines = 0;
+  constructor(opts: FoldTemplatesOptions = {}) {
+    this.K = opts.maxTemplates ?? 5000;
+    this.maxExamples = Math.max(1, opts.maxExamples ?? 5);
+    this.wantSev = opts.detectSeverity ?? true;
+    this.wantTs = opts.detectTimestamp ?? true;
+  }
 
-  let viewerLine = startLine;
-  for (const line of lines) {
-    totalLines++;
+  /** Fold one raw line recorded at `viewerLine` (1-based, as shown in the viewer). */
+  feed(line: string, viewerLine: number): void {
+    this.totalLines++;
     const shape = normalizeShape(line);
-    const ts = wantTs ? parseTimestampFast(line)?.str : undefined;
-    const sevRank = wantSev ? lineSeverityRank(line) : 0;
+    const ts = this.wantTs ? parseTimestampFast(line)?.str : undefined;
+    const sevRank = this.wantSev ? lineSeverityRank(line) : 0;
 
-    let acc = map.get(shape);
+    const acc = this.map.get(shape);
     if (acc) {
       acc.count++;
       acc.lastLine = viewerLine;
@@ -145,73 +149,95 @@ export function foldTemplates(
       }
       if (sevRank > acc.sevRank) acc.sevRank = sevRank;
       // Reservoir: keep the first (maxExamples-1) + the most recent.
-      if (acc.examples.length < maxExamples) acc.examples.push(viewerLine);
-      else acc.examples[maxExamples - 1] = viewerLine;
-    } else {
-      if (map.size >= K) {
-        // Evict the smallest-count template into the count-only «other» bucket.
-        // (Linear min-scan: eviction is rare on real logs — few distinct shapes;
-        //  only pathological all-unique input thrashes, which «other» then reports.)
-        capped = true;
-        let minKey: string | null = null;
-        let minCount = Infinity;
-        for (const [k, v] of map) {
-          if (v.count < minCount) {
-            minCount = v.count;
-            minKey = k;
-          }
-        }
-        if (minKey !== null) {
-          const victim = map.get(minKey)!;
-          evictedLines += victim.count;
-          evictedShapes++;
-          map.delete(minKey);
-        }
-      }
-      acc = {
-        id: fnv1a(shape),
-        shape,
-        count: 1,
-        firstLine: viewerLine,
-        lastLine: viewerLine,
-        firstTs: ts,
-        lastTs: ts,
-        sevRank,
-        examples: [viewerLine],
-      };
-      map.set(shape, acc);
+      if (acc.examples.length < this.maxExamples) acc.examples.push(viewerLine);
+      else acc.examples[this.maxExamples - 1] = viewerLine;
+      return;
     }
 
-    viewerLine++;
+    if (this.map.size >= this.K) {
+      // Evict the smallest-count template into the count-only «other» bucket.
+      // (Linear min-scan: eviction is rare on real logs — few distinct shapes;
+      //  only pathological all-unique input thrashes, which «other» then reports.)
+      this.capped = true;
+      let minKey: string | null = null;
+      let minCount = Infinity;
+      for (const [k, v] of this.map) {
+        if (v.count < minCount) {
+          minCount = v.count;
+          minKey = k;
+        }
+      }
+      if (minKey !== null) {
+        const victim = this.map.get(minKey)!;
+        this.evictedLines += victim.count;
+        this.evictedShapes++;
+        this.map.delete(minKey);
+      }
+    }
+    this.map.set(shape, {
+      id: fnv1a(shape),
+      shape,
+      count: 1,
+      firstLine: viewerLine,
+      lastLine: viewerLine,
+      firstTs: ts,
+      lastTs: ts,
+      sevRank,
+      examples: [viewerLine],
+    });
   }
 
-  const templates: LogTemplate[] = [...map.values()]
-    .map((a) => ({
-      id: a.id,
-      shape: a.shape,
-      count: a.count,
-      firstLine: a.firstLine,
-      lastLine: a.lastLine,
-      firstTs: a.firstTs,
-      lastTs: a.lastTs,
-      severity: rankToLevel(a.sevRank),
-      examples: a.examples,
-    }))
-    .sort(
-      (x, y) =>
-        y.count - x.count ||
-        x.firstLine - y.firstLine ||
-        (x.shape < y.shape ? -1 : x.shape > y.shape ? 1 : 0),
-    );
+  /** Number of lines fed so far (for progress). */
+  get scanned(): number {
+    return this.totalLines;
+  }
 
-  const coverage = totalLines === 0 ? 1 : (totalLines - evictedLines) / totalLines;
+  /** Build the summary from everything fed so far. Safe to call once at the end. */
+  finish(): TemplateSummary {
+    const templates: LogTemplate[] = [...this.map.values()]
+      .map((a) => ({
+        id: a.id,
+        shape: a.shape,
+        count: a.count,
+        firstLine: a.firstLine,
+        lastLine: a.lastLine,
+        firstTs: a.firstTs,
+        lastTs: a.lastTs,
+        severity: rankToLevel(a.sevRank),
+        examples: a.examples,
+      }))
+      .sort(
+        (x, y) =>
+          y.count - x.count ||
+          x.firstLine - y.firstLine ||
+          (x.shape < y.shape ? -1 : x.shape > y.shape ? 1 : 0),
+      );
 
-  return {
-    templates,
-    other: { lines: evictedLines, shapes: evictedShapes },
-    totalLines,
-    distinctShapes: templates.length + evictedShapes,
-    coverage,
-    capped,
-  };
+    const coverage = this.totalLines === 0 ? 1 : (this.totalLines - this.evictedLines) / this.totalLines;
+
+    return {
+      templates,
+      other: { lines: this.evictedLines, shapes: this.evictedShapes },
+      totalLines: this.totalLines,
+      distinctShapes: templates.length + this.evictedShapes,
+      coverage,
+      capped: this.capped,
+    };
+  }
+}
+
+/**
+ * Fold an iterable of raw log lines into the top-K distinct message templates.
+ * Thin wrapper over TemplateFolder for contiguous input; `lines[0]` is assumed to
+ * be at viewerLine `opts.startLine` (default 1). A worker/scan driver that has an
+ * explicit viewerLine per line should drive TemplateFolder directly instead.
+ */
+export function foldTemplates(
+  lines: Iterable<string>,
+  opts: FoldTemplatesOptions = {},
+): TemplateSummary {
+  const folder = new TemplateFolder(opts);
+  let viewerLine = opts.startLine ?? 1;
+  for (const line of lines) folder.feed(line, viewerLine++);
+  return folder.finish();
 }
