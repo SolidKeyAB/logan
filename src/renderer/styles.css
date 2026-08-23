@@ -8979,6 +8979,17 @@ kbd {
   color: var(--text-secondary);
   line-height: 1.4;
 }
+/* Live RAM/segment-plan readout under the auto-composite toggle. */
+.features-row-readout {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: -6px 0 10px 30px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--accent, #4a9eff);
+  background: var(--bg-secondary, rgba(127, 127, 127, 0.08));
+  border-radius: 3px;
+}
 
 /* ─── Trends Notebook ─────────────────────────────────────────────────────── */
 .trends-toolbar {
