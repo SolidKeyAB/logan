@@ -1,6 +1,8 @@
 # Auto-composite large files (background virtual segmenting)
 
-**Status:** Captured only — no code. Awaiting greenlight for P1.
+**Status:** P1 shipped (PR #123 — range-scoped index primitive). P2 increment 1 built
+(`SegmentedFileHandler` lazy+LRU read path + `segmentPlan` adaptive budget, headless).
+Next: P2 increment 2 = wire into the open path + Features toggle + search/severity fan-out.
 **Date:** 2026-08-22 (phone, Özge)
 **One-liner:** For any single file above a *resource-bearing size*, automatically wrap it
 in the existing **virtual-file (composite) entity** in the background — split into N
