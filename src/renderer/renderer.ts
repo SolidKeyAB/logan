@@ -19188,7 +19188,9 @@ function updateLevelVisibilityBar(): void {
     const level = btn.dataset.level!;
     const hidden = state.hiddenLevels.has(level);
     btn.classList.toggle('hidden-level', hidden);
-    btn.title = hidden ? `${level} (hidden — click to show)` : `${level} — click to hide`;
+    btn.title = hidden
+      ? `${level} (hidden — click to show · dbl-click / ⌥·⌘-click = show only ${level})`
+      : `${level} — click to hide · dbl-click / ⌥·⌘-click = show only ${level}`;
   });
 }
 
@@ -19214,6 +19216,45 @@ async function applyLevelVisibilityFilter(): Promise<void> {
     exactMatch: false,
     contextLines: 0,
   });
+}
+
+// Isolate ("show only this level") — the dbl-click / ⌥·⌘-click gesture on a pill.
+// Hides every level EXCEPT `level`, so applyLevelVisibilityFilter shows only that
+// one. Repeating it on the already-isolated level clears back to "show all". Blocks
+// (with a toast) only when we KNOW the level has 0 lines, to avoid an empty view.
+async function isolateLevel(level: string): Promise<void> {
+  const lc = state.analysisResult?.levelCounts;
+  if (lc && level in lc && lc[level] === 0) {
+    showToast(`No ${level} lines to isolate`);
+    return;
+  }
+  const others = (ALL_LOG_LEVELS as readonly string[]).filter((l) => l !== level);
+  const alreadyIsolated =
+    !state.hiddenLevels.has(level) && others.every((l) => state.hiddenLevels.has(l));
+  state.hiddenLevels = new Set<string>(alreadyIsolated ? [] : others);
+  await applyLevelVisibilityFilter();
+}
+
+// Single-click hide/show toggle for one level (deferred so a double-click can
+// upgrade to isolate — see the level-visibility-bar click handler).
+function toggleHideLevel(level: string): void {
+  if (state.hiddenLevels.has(level)) state.hiddenLevels.delete(level);
+  else state.hiddenLevels.add(level);
+  void applyLevelVisibilityFilter();
+}
+
+// Pending single-click state for the level pills (distinguishes click vs dbl-click).
+let lvPillClickTimer: ReturnType<typeof setTimeout> | null = null;
+let lvPillPendingLevel: string | null = null;
+
+// Flush a deferred single-click immediately (e.g. when another pill is clicked).
+function commitPendingLevelToggle(): void {
+  if (!lvPillClickTimer) return;
+  clearTimeout(lvPillClickTimer);
+  lvPillClickTimer = null;
+  const level = lvPillPendingLevel;
+  lvPillPendingLevel = null;
+  if (level) toggleHideLevel(level);
 }
 
 // Suspend: keep config, temporarily show unfiltered view.
@@ -24581,17 +24622,43 @@ function init(): void {
   });
   document.getElementById('btn-status-clear-filter')?.addEventListener('click', clearFilter);
 
-  // Level visibility quick-toggle
+  // Level visibility quick-toggle:
+  //   single click              → hide/show that level (mute noise)
+  //   double-click / ⌥·⌘-click  → isolate ("show only this level")
+  // Single-clicks are deferred ~220ms so a double-click can upgrade to isolate —
+  // one filter pass per gesture instead of three (matters a lot on huge logs).
   document.getElementById('level-visibility-bar')?.addEventListener('click', async (e) => {
     const pill = (e.target as HTMLElement).closest<HTMLButtonElement>('.lv-pill');
     if (!pill || !pill.dataset.level) return;
     const level = pill.dataset.level;
-    if (state.hiddenLevels.has(level)) {
-      state.hiddenLevels.delete(level);
-    } else {
-      state.hiddenLevels.add(level);
+
+    // Modifier-click → isolate immediately (no debounce wait).
+    if (e.altKey || e.metaKey) {
+      if (lvPillClickTimer) { clearTimeout(lvPillClickTimer); lvPillClickTimer = null; lvPillPendingLevel = null; }
+      await isolateLevel(level);
+      return;
     }
-    await applyLevelVisibilityFilter();
+
+    // Second plain click on the SAME pill within the window → double-click → isolate.
+    if (lvPillClickTimer && lvPillPendingLevel === level) {
+      clearTimeout(lvPillClickTimer);
+      lvPillClickTimer = null;
+      lvPillPendingLevel = null;
+      await isolateLevel(level);
+      return;
+    }
+
+    // A click on a DIFFERENT pill flushes the previous pill's deferred toggle first.
+    if (lvPillClickTimer) commitPendingLevelToggle();
+
+    // First plain click on this pill → defer briefly to allow a double-click upgrade.
+    lvPillPendingLevel = level;
+    lvPillClickTimer = setTimeout(() => {
+      lvPillClickTimer = null;
+      const lv = lvPillPendingLevel;
+      lvPillPendingLevel = null;
+      if (lv) toggleHideLevel(lv);
+    }, 220);
   });
 
   elements.btnAddIncludePattern.addEventListener('click', () => addIncludePatternRow());
