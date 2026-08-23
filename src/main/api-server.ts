@@ -32,7 +32,7 @@ const INVESTIGATIVE_PATHS = new Set<string>([
   '/api/trend-fields', '/api/trend-series', '/api/trend-transitions', '/api/trend-correlate',
   '/api/trend-show', '/api/investigate-crashes', '/api/investigate-component',
   '/api/investigate-timerange', '/api/triage', '/api/navigate', '/api/evidence-pack',
-  '/api/build-conclusion',
+  '/api/build-conclusion', '/api/summarize',
 ]);
 const JOURNAL_CAP = 200;
 let agentJournal: JournalEntry[] = [];
@@ -60,6 +60,7 @@ function journalLabel(p: string, body: Record<string, any>): string {
   if (p === '/api/triage') return `triage ${body.symptom ?? ''}`.trim();
   if (p === '/api/evidence-pack') return `evidence-pack${body.baselineId ? ' (vs baseline)' : ''}`;
   if (p === '/api/build-conclusion') return 'build-conclusion';
+  if (p === '/api/summarize') return `summarize${body.opts?.contains ? ` ~"${body.opts.contains}"` : ''}`;
   return name;
 }
 
@@ -357,6 +358,8 @@ export interface ApiContext {
   saveAgentMemory(content: string, agentName?: string): any;
   clearAgentMemory(): any;
   detectTimeGaps(options: any): Promise<any>;
+  // Semantic compression: fold the (scoped) log into its distinct message templates.
+  summarize(opts?: { maxTemplates?: number; maxExamples?: number; detectSeverity?: boolean; detectTimestamp?: boolean; contains?: string }, scope?: ScopeDescriptor): Promise<any>;
   navigateToLine(lineNumber: number): void;
   getBaselineStore(): BaselineStore;
   getAnalysisResult(): AnalysisResult | null;
@@ -932,6 +935,12 @@ export function startApiServer(ctx: ApiContext): void {
 
         if (url === '/api/analyze') {
           const result = await ctx.analyze(body.analyzerName, body.scope);
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/summarize') {
+          const result = await ctx.summarize(body.opts, body.scope);
           sendJson(res, result);
           return;
         }
