@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { foldTemplates } from '../main/logTemplates';
+import { foldTemplates, TemplateFolder } from '../main/logTemplates';
 
 describe('foldTemplates — global whole-file fold', () => {
   it('collapses near-duplicate lines (differ only by ts/counter) into one template', () => {
@@ -88,6 +88,35 @@ describe('foldTemplates — global whole-file fold', () => {
     expect(s.totalLines).toBe(0);
     expect(s.coverage).toBe(1);
     expect(s.other).toEqual({ lines: 0, shapes: 0 });
+  });
+});
+
+describe('TemplateFolder — streaming feed with explicit viewerLines', () => {
+  it('matches foldTemplates when fed contiguous lines', () => {
+    const lines = ['a 1', 'b', 'a 2', 'c', 'b'];
+    const folder = new TemplateFolder();
+    lines.forEach((l, i) => folder.feed(l, i + 1));
+    expect(folder.finish()).toEqual(foldTemplates(lines));
+  });
+
+  it('records the exact viewerLine fed (non-contiguous scope) in first/last/examples', () => {
+    // Simulate a filter/indices scope: same shape at viewerLines 10, 40, 90.
+    const folder = new TemplateFolder({ maxExamples: 5 });
+    folder.feed('poll tick 1', 10);
+    folder.feed('poll tick 2', 40);
+    folder.feed('poll tick 3', 90);
+    const t = folder.finish().templates[0];
+    expect(t.firstLine).toBe(10);
+    expect(t.lastLine).toBe(90);
+    expect(t.examples).toEqual([10, 40, 90]);
+    expect(t.count).toBe(3);
+  });
+
+  it('exposes scanned count for progress', () => {
+    const folder = new TemplateFolder();
+    folder.feed('x', 1);
+    folder.feed('y', 2);
+    expect(folder.scanned).toBe(2);
   });
 });
 
