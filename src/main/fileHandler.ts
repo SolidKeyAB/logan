@@ -267,6 +267,30 @@ export class FileHandler {
     return this.fileInfo;
   }
 
+  // Open a file for SEARCH/SEVERITY ONLY — no resident line index. ripgrep does its own
+  // pass and, for LF/CRLF files, its line numbers already equal our global line numbers, so
+  // search() / buildSeverityIndex() need only filePath + fd + headerLineCount, NOT the
+  // offset arrays. SegmentedFileHandler uses this to run one whole-file search over a big
+  // file without paying its 16 B/line index. CR-only files still need the \r-aware
+  // byte-offset remap (which reads this.offsets), so the caller must use full open() for
+  // those instead — this method leaves _hasStandaloneCR false and the index empty.
+  openForSearchOnly(filePath: string, headerLineCount = 0): void {
+    this.close();
+    this.filePath = filePath;
+    this.headerLineCount = headerLineCount;
+    this.splitMetadata = null;
+    this.offsets = new Float64Array(0);
+    this.lengths = new Float64Array(0);
+    this.lineCount = 0;
+    this._maxLineLength = 0;
+    this._hasStandaloneCR = false;
+    const stat = fs.statSync(filePath);
+    this.indexedMtimeMs = stat.mtimeMs;
+    this.indexedSize = stat.size;
+    this.fd = fs.openSync(filePath, 'r');
+    this.fileInfo = { path: filePath, size: stat.size, totalLines: 0 };
+  }
+
   // Run the index scan in a worker thread so the byte scan stays off the Electron
   // main thread. Falls back to an inline (synchronous) scan when the compiled worker
   // isn't present (e.g. unit tests) or the worker fails to spawn / errors — so opening
