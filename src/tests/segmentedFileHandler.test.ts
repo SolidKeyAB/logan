@@ -4,7 +4,12 @@ import * as os from 'os';
 import * as path from 'path';
 import { FileHandler } from '../main/fileHandler';
 import { SegmentedFileHandler } from '../main/segmentedFileHandler';
-import type { LineData } from '../shared/types';
+import type { LineData, SearchMatch, SearchOptions } from '../shared/types';
+
+const opts = (pattern: string): SearchOptions => ({
+  pattern, isRegex: false, isWildcard: false, matchCase: false, wholeWord: false,
+});
+const stripMatch = (m: SearchMatch) => ({ lineNumber: m.lineNumber, lineText: m.lineText });
 
 // P2 increment 1: prove SegmentedFileHandler reads a big file identically to a whole-file
 // FileHandler while keeping only a bounded number of segment indexes resident (the LRU
@@ -165,5 +170,76 @@ describe('SegmentedFileHandler — read parity with whole-file FileHandler', () 
     }
     expect(seg.fileOf(N)).toBeNull(); // out of range
     seg.close();
+  });
+});
+
+describe('SegmentedFileHandler — search + severity parity (one whole-file rg pass)', () => {
+  async function openBoth(name: string, content: string) {
+    const p = writeTmp(name, content);
+    const whole = new FileHandler();
+    await whole.open(p);
+    const fileSize = fs.statSync(p).size;
+    const seg = await SegmentedFileHandler.open(p, {
+      segmentBytes: Math.max(1, Math.ceil(fileSize / 10)),
+      maxResidentSegments: 2,
+    });
+    return { p, whole, seg };
+  }
+
+  it('search returns the same global line numbers + text as a whole-file FileHandler', async () => {
+    const { whole, seg } = await openBoth('segsearch.log', makeContent(400));
+    for (const pat of ['ERROR', 'WARN', 'event', 'payload']) {
+      const w = (await whole.search(opts(pat))).map(stripMatch);
+      const s = (await seg.search(opts(pat))).map(stripMatch);
+      expect(s).toEqual(w);
+    }
+    expect(seg.boundaries().length).toBeGreaterThanOrEqual(4); // genuinely segmented
+    seg.close();
+    whole.close();
+  });
+
+  it('searchMulti matches the whole-file result per config', async () => {
+    const { whole, seg } = await openBoth('segmulti.log', makeContent(400));
+    const cfgs = [
+      { id: 'err', pattern: 'ERROR', isRegex: false, matchCase: false, wholeWord: false },
+      { id: 'warn', pattern: 'WARN', isRegex: false, matchCase: false, wholeWord: false },
+    ];
+    const w = await whole.searchMulti(cfgs);
+    const s = await seg.searchMulti(cfgs);
+    expect(s.err.map(stripMatch)).toEqual(w.err.map(stripMatch));
+    expect(s.warn.map(stripMatch)).toEqual(w.warn.map(stripMatch));
+    seg.close();
+    whole.close();
+  });
+
+  it('severity counts, ticks and next/prev navigation match the whole file', async () => {
+    const { whole, seg } = await openBoth('segsev.log', makeContent(400));
+    const w = await whole.getSeverityInfo(24);
+    const s = await seg.getSeverityInfo(24);
+    expect(s.counts).toEqual(w.counts);
+    expect(s.totalLines).toBe(w.totalLines);
+    expect(s.ticks).toEqual(w.ticks);
+
+    for (const from of [-1, 0, 50, 200, 399]) {
+      expect(await seg.getNextSeverityLine(from, 1, ['error', 'warning']))
+        .toBe(await whole.getNextSeverityLine(from, 1, ['error', 'warning']));
+      expect(await seg.getNextSeverityLine(from, -1, ['error', 'warning']))
+        .toBe(await whole.getNextSeverityLine(from, -1, ['error', 'warning']));
+    }
+    seg.close();
+    whole.close();
+  });
+
+  it('handles a CR-only file (delegate falls back to the \\r-aware index)', async () => {
+    // Old-Mac CR terminators: whole-file FileHandler uses its byte-offset remap; the
+    // segmented handler must produce the same search hits via a full-open delegate.
+    const lines = Array.from({ length: 120 }, (_, i) => (i % 9 === 0 ? `ERROR row ${i}` : `info row ${i}`));
+    const { whole, seg } = await openBoth('segcr.log', lines.join('\r') + '\r');
+    const w = (await whole.search(opts('ERROR'))).map(stripMatch);
+    const s = (await seg.search(opts('ERROR'))).map(stripMatch);
+    expect(s).toEqual(w);
+    expect(s.length).toBeGreaterThan(0);
+    seg.close();
+    whole.close();
   });
 });
