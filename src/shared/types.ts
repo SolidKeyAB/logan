@@ -495,6 +495,9 @@ export const IPC = {
   TREND_CORRELATE: 'trend-correlate',
   // Guided triage
   TRIAGE_RECIPE: 'triage-recipe',
+  // Semantic summary — fold the log into distinct message templates (human twin of logan_summarize)
+  SUMMARIZE: 'summarize',
+  SUMMARIZE_CANCEL: 'summarize-cancel',
   // Evidence pack (native "📋 Brief" — same briefing the AI's logan_evidence_pack builds)
   EVIDENCE_PACK: 'evidence-pack',
   // Usage Monitor (per-feature usage counts, split human vs AI)
