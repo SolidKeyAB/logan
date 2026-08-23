@@ -139,7 +139,8 @@ export interface ActivityEntry {
     | 'filter_extracted'
     | 'files_merged'
     | 'composite_created'
-    | 'annotation_added';
+    | 'annotation_added'
+    | 'summarize';
   details: Record<string, unknown>;
 }
 
