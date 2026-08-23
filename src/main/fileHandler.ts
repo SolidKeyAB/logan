@@ -197,6 +197,64 @@ export class FileHandler {
     return this.fileInfo;
   }
 
+  /**
+   * Open the file but index ONLY the byte window [startByte, endByte) — a line-aligned
+   * SEGMENT of a larger file (the primitive behind auto-composite-large-files). The
+   * recorded offsets are ABSOLUTE file coordinates, so reads go straight through the
+   * whole-file fd; totalLines / returned lineNumbers are LOCAL to the segment (0-based),
+   * which is exactly what CompositeFileHandler re-bases into the global line space.
+   *
+   * PRECONDITION: startByte and endByte MUST be physical line boundaries (a line's first
+   * byte, or 0 / fileSize) — derive them with findLineStartAtOrAfter(). A mid-line cut
+   * would mis-count the boundary lines. Segments are read-only slices: do NOT live-tail
+   * one (indexNewLines is deliberately neutered below).
+   *
+   * Runs the scan inline (segments are budget-sized, so no worker needed).
+   */
+  async openSegment(
+    filePath: string,
+    startByte: number,
+    endByte: number,
+    onProgress?: (percent: number) => void
+  ): Promise<FileInfo> {
+    this.close();
+    this.filePath = filePath;
+    this.splitMetadata = null;
+    this.headerLineCount = 0;
+
+    const stat = fs.statSync(filePath);
+    this.indexedMtimeMs = stat.mtimeMs;
+
+    const result = scanFileIndex(filePath, onProgress, { startByte, endByte });
+
+    this.offsets = result.offsets;
+    this.lengths = result.lengths;
+    this.lineCount = result.totalLines;
+    this._maxLineLength = result.maxLineLength;
+    // Only a segment that starts at byte 0 can carry the file's hidden #SPLIT header; a
+    // mid-file segment (startByte > 0) never does, so it hides nothing.
+    this.headerLineCount = startByte === 0 ? result.headerLineCount : 0;
+    this.splitMetadata = startByte === 0 ? result.splitMetadata : null;
+    this._hasStandaloneCR = result.hasStandaloneCR;
+
+    this.fileInfo = {
+      path: filePath,
+      // This segment's own byte span — CompositeFileHandler.getFileInfo() sums member
+      // sizes, so N segment spans add back up to the whole file size.
+      size: Math.max(0, endByte - startByte),
+      totalLines: this.lineCount - this.headerLineCount,
+    };
+
+    this.fd = fs.openSync(filePath, 'r');
+    // A segment is a read-only slice, not a live-tail target. Marking it fully indexed to
+    // the real file size makes any accidental indexNewLines() call a no-op (newSize <=
+    // indexedSize) rather than appending the bytes that belong to the NEXT segment.
+    this.indexedSize = stat.size;
+
+    onProgress?.(100);
+    return this.fileInfo;
+  }
+
   // Run the index scan in a worker thread so the byte scan stays off the Electron
   // main thread. Falls back to an inline (synchronous) scan when the compiled worker
   // isn't present (e.g. unit tests) or the worker fails to spawn / errors — so opening
