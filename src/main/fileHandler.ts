@@ -217,6 +217,18 @@ export class FileHandler {
     endByte: number,
     onProgress?: (percent: number) => void
   ): Promise<FileInfo> {
+    return this.openSegmentSync(filePath, startByte, endByte, onProgress);
+  }
+
+  // Synchronous core of openSegment. scanFileIndex + fs.openSync are both synchronous, so
+  // the whole thing can run inline — SegmentedFileHandler uses this to materialise a cold
+  // segment on the sync getLines() path (segments are budget-sized, so the scan is cheap).
+  openSegmentSync(
+    filePath: string,
+    startByte: number,
+    endByte: number,
+    onProgress?: (percent: number) => void
+  ): FileInfo {
     this.close();
     this.filePath = filePath;
     this.splitMetadata = null;
