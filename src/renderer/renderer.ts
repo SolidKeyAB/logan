@@ -867,6 +867,7 @@ const elements = {
   btnBrief: document.getElementById('btn-brief') as HTMLButtonElement,
   summarizeResults: document.getElementById('summarize-results') as HTMLDivElement,
   btnRunSummarize: document.getElementById('btn-run-summarize') as HTMLButtonElement,
+  btnFoldRepeats: document.getElementById('btn-fold-repeats') as HTMLButtonElement,
   summarizeContains: document.getElementById('summarize-contains') as HTMLInputElement,
   summarizeSort: document.getElementById('summarize-sort') as HTMLSelectElement,
   summarizeUseScope: document.getElementById('summarize-use-scope') as HTMLInputElement,
@@ -1388,6 +1389,17 @@ class LRUCache<K, V> {
 }
 
 let cachedLines = new LRUCache<number, LogLine>(CACHE_SIZE);
+
+// ─── In-place viewer folding state ───────────────────────────────────────────
+// Detected repeating blocks + which are collapsed. Folding reuses the FILTER
+// machinery: a collapsed region's interior is hidden by applying the visible
+// line-set as a fold filter (SET_FOLD_FILTER), and each region's first line gets
+// a clickable "▶ ×N" header (foldHeaderMap: fileLine → region index). Not
+// persisted across tabs in v1 (reset on tab switch / clear filter).
+interface FoldViewState { regions: FoldRegion[]; collapsed: boolean[]; }
+let foldView: FoldViewState | null = null;
+let foldActive = false;
+const foldHeaderMap = new Map<number, number>();
 
 // DOM Element Pool for recycling
 class ElementPool {
@@ -2786,6 +2798,18 @@ function renderVisibleLines(): void {
       }
 
       fragment.appendChild(lineElement);
+
+      // Fold header — a clickable "▶ ×N" chip on a repeat-region's first line.
+      if (foldActive && foldHeaderMap.size > 0) {
+        const regionIdx = foldHeaderMap.get(line.lineNumber);
+        if (regionIdx !== undefined && foldView) {
+          const collapsed = foldView.collapsed[regionIdx];
+          lineElement.classList.add(collapsed ? 'fold-anchor' : 'fold-anchor-open');
+          if (!wordWrapEnabled && !jsonFormattingEnabled) {
+            fragment.appendChild(createFoldBadge(foldView.regions[regionIdx], regionIdx, collapsed, top));
+          }
+        }
+      }
 
       // Annotation highlight — colored left border + background stripe on annotated lines
       if (state.showAnnotations && state.annotations.length > 0) {
@@ -7096,6 +7120,176 @@ function toggleSummarizeExamples(row: HTMLElement): void {
   }
   drawer.removeAttribute('hidden');
   row.classList.add('expanded');
+}
+
+// ─── In-place viewer folding (collapse repeating blocks) ─────────────────────
+// Surfaces the RepeatRegion engine: "Fold repeats" detects contiguous repeating
+// blocks off-thread and collapses each to its first block + a "▶ ×N" header the
+// user can expand/collapse. Implemented on the filter machinery — a collapsed
+// region's interior lines are hidden via SET_FOLD_FILTER (an explicit line-set),
+// so the read path maps display↔file with no new plumbing.
+
+const FOLD_GUTTER_LEFT = 64; // px — start of the text area, past the line-number gutter
+
+function rebuildFoldHeaderMap(): void {
+  foldHeaderMap.clear();
+  if (!foldView) return;
+  foldView.regions.forEach((r, idx) => foldHeaderMap.set(r.start, idx));
+}
+
+// Lines visible under the current fold state = every file line MINUS each
+// collapsed region's interior [start+blockLen .. end]. Empty ⇒ nothing collapsed.
+function computeFoldVisibleLines(): number[] {
+  if (!foldView) return [];
+  const total = state.totalLines;
+  const hidden: Array<[number, number]> = [];
+  foldView.regions.forEach((r, idx) => {
+    if (foldView!.collapsed[idx]) hidden.push([r.start + r.blockLen, r.end]);
+  });
+  if (hidden.length === 0) return [];
+  hidden.sort((a, b) => a[0] - b[0]);
+  const visible: number[] = [];
+  let h = 0;
+  for (let ln = 0; ln < total; ln++) {
+    while (h < hidden.length && ln > hidden[h][1]) h++;
+    if (h < hidden.length && ln >= hidden[h][0] && ln <= hidden[h][1]) continue;
+    visible.push(ln);
+  }
+  return visible;
+}
+
+function currentTopFileLine(): number {
+  const disp = scrollTopToLine(logViewerElement?.scrollTop || 0);
+  if (state.isFiltered && state.filteredLineNumbers) {
+    return state.filteredLineNumbers[Math.min(disp, state.filteredLineNumbers.length - 1)] ?? 0;
+  }
+  return disp;
+}
+
+function createFoldBadge(region: FoldRegion, idx: number, collapsed: boolean, top: number): HTMLDivElement {
+  const badge = document.createElement('div');
+  badge.className = 'fold-badge';
+  badge.style.cssText = `position:absolute;left:${FOLD_GUTTER_LEFT}px;top:${top}px;height:${getLineHeight()}px;display:flex;align-items:center;pointer-events:none;z-index:3;`;
+  const chip = document.createElement('span');
+  chip.className = 'fold-chip' + (collapsed ? ' collapsed' : ' expanded');
+  chip.textContent = collapsed
+    ? `▶ ×${region.repeatCount} · +${region.hiddenLines.toLocaleString()}`
+    : `▼ ×${region.repeatCount}`;
+  chip.title = collapsed
+    ? `${region.hiddenLines.toLocaleString()} repeated lines hidden (L${region.start + 1}–L${region.end + 1}). Click to expand.`
+    : `Repeating block L${region.start + 1}–L${region.end + 1}. Click to collapse.`;
+  chip.addEventListener('click', (e) => { e.stopPropagation(); void toggleFoldRegion(idx); });
+  badge.appendChild(chip);
+  return badge;
+}
+
+// Push the fold view-set to main (as an explicit line filter) and repaint,
+// preserving the reading position around `anchorFileLine` when given.
+async function applyFoldView(anchorFileLine?: number): Promise<void> {
+  if (!foldView) return;
+  rebuildFoldHeaderMap();
+  const visible = computeFoldVisibleLines();
+  if (visible.length === 0) {
+    // Nothing collapsed — clear the fold filter but stay in fold mode so the
+    // headers still render (letting the user re-collapse).
+    await window.api.setFoldFilter([]);
+    state.isFiltered = false;
+    state.filteredLines = null;
+    state.filteredLineNumbers = null;
+  } else {
+    const res = await window.api.setFoldFilter(visible);
+    if (!res.success) { showToast(res.error || 'Fold failed'); return; }
+    state.isFiltered = true;
+    state.filteredLines = res.filteredLines ?? visible.length;
+    state.filteredLineNumbers = res.filteredLineNumbers ?? visible;
+  }
+  state.lastFilterConfig = null;
+  cachedLines.clear();
+  if (anchorFileLine !== undefined && anchorFileLine >= 0) {
+    const disp = state.isFiltered ? getFilteredDisplayIndex(anchorFileLine) : anchorFileLine;
+    const d = disp >= 0 ? disp : 0;
+    state.visibleStartLine = Math.max(0, d - BUFFER_LINES);
+    state.visibleEndLine = Math.min(getTotalLines() - 1, d + 100);
+    if (logViewerElement) logViewerElement.scrollTop = Math.max(0, lineToScrollTop(d));
+  } else {
+    state.visibleStartLine = 0;
+    state.visibleEndLine = Math.min(100, getTotalLines() - 1);
+    if (logViewerElement) logViewerElement.scrollTop = 0;
+  }
+  await loadVisibleLines();
+  updateStatusBar();
+  updateFoldButton();
+}
+
+async function toggleFoldRegion(idx: number): Promise<void> {
+  if (!foldView) return;
+  foldView.collapsed[idx] = !foldView.collapsed[idx];
+  await applyFoldView(foldView.regions[idx].start); // keep the region in view
+}
+
+// Enter/exit fold mode from the "Fold repeats" button.
+async function toggleFoldMode(): Promise<void> {
+  if (foldActive) { await exitFoldMode(); return; }
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  if (state.isFiltered) { showToast('Clear the active filter first, then fold repeats'); return; }
+  setFoldButtonBusy(true);
+  try {
+    const res = await window.api.detectFoldRegions({});
+    if (!res.success) { showToast(res.error || 'Fold detection failed'); return; }
+    const regions = res.regions || [];
+    if (regions.length === 0) { showToast('No repeating blocks found to fold'); return; }
+    foldView = { regions, collapsed: regions.map(() => true) };
+    foldActive = true;
+    trackUsage('fold:enter');
+    await applyFoldView(currentTopFileLine());
+    showToast(`Folded ${regions.length} block${regions.length > 1 ? 's' : ''} — ${(res.foldableLines || 0).toLocaleString()} lines hidden`);
+  } finally {
+    setFoldButtonBusy(false);
+  }
+}
+
+async function exitFoldMode(): Promise<void> {
+  const anchor = currentTopFileLine();
+  foldView = null;
+  foldActive = false;
+  foldHeaderMap.clear();
+  await window.api.setFoldFilter([]); // clears the fold filter on main
+  state.isFiltered = false;
+  state.filteredLines = null;
+  state.filteredLineNumbers = null;
+  state.lastFilterConfig = null;
+  cachedLines.clear();
+  const d = Math.max(0, anchor);
+  state.visibleStartLine = Math.max(0, d - BUFFER_LINES);
+  state.visibleEndLine = Math.min(getTotalLines() - 1, d + 100);
+  if (logViewerElement) logViewerElement.scrollTop = Math.max(0, lineToScrollTop(d));
+  await loadVisibleLines();
+  updateStatusBar();
+  updateFoldButton();
+}
+
+// Reset fold state without touching the view — for tab switch / file change,
+// where the filter/scroll are being rebuilt by the caller anyway.
+function resetFoldState(): void {
+  foldView = null;
+  foldActive = false;
+  foldHeaderMap.clear();
+}
+
+function setFoldButtonBusy(busy: boolean): void {
+  const btn = elements.btnFoldRepeats;
+  if (!btn) return;
+  btn.disabled = busy;
+  if (busy) btn.textContent = 'Detecting…';
+  else updateFoldButton();
+}
+
+function updateFoldButton(): void {
+  const btn = elements.btnFoldRepeats;
+  if (!btn) return;
+  btn.disabled = false;
+  btn.textContent = foldActive ? '⊞ Unfold repeats' : '⊟ Fold repeats';
+  btn.classList.toggle('active', foldActive);
 }
 
 // ─── Optional Features (toggleable "plugins") ────────────────────────────────
@@ -19380,6 +19574,8 @@ async function clearFilter(): Promise<void> {
   state.filterSuspended = null;
   state.levelBarFilterActive = false;
   cachedLines.clear();
+  // Clearing the filter also exits fold mode (folding rides on the filter).
+  if (foldActive) { resetFoldState(); updateFoldButton(); }
 
   await window.api.clearFilter();
 
@@ -24937,6 +25133,7 @@ function init(): void {
   elements.summarizeContains?.addEventListener('input', () => { if (summarizeResult) renderSummarize(summarizeResult); });
   elements.summarizeSort?.addEventListener('change', () => { if (summarizeResult) renderSummarize(summarizeResult); });
   elements.summarizeResults?.addEventListener('click', onSummarizeResultsClick);
+  elements.btnFoldRepeats?.addEventListener('click', () => { void toggleFoldMode(); });
 
   // Conclusion (native root-cause synthesis)
   elements.btnBuildConclusion.addEventListener('click', () => buildConclusion());
@@ -25550,6 +25747,10 @@ function saveCurrentTabState(): void {
 }
 
 function restoreTabState(tab: TabState): void {
+  // Fold state isn't persisted per-tab (v1) — drop it so a switched-in tab's
+  // filter/scroll aren't shadowed by a stale fold view.
+  resetFoldState();
+  updateFoldButton();
   state.filePath = tab.filePath;
   state.fileStats = tab.fileStats;
   state.totalLines = tab.totalLines;

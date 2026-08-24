@@ -84,6 +84,46 @@ export function canSummarizeOffThread(handler: FileHandler | CompositeFileHandle
   return !(handler instanceof SegmentedFileHandler);
 }
 
+// Off-thread fold-region detection (kind:'foldRegions') for in-place viewer
+// folding — whole-file fingerprint scan, so it must not run on the UI thread.
+// Segmented big files (no whole-file index to share) are unsupported, like Trends.
+export function runFoldRegionsJob(
+  handler: FileHandler | CompositeFileHandler | SegmentedFileHandler,
+  opts: { maxPeriod?: number; minRepeats?: number; tolerance?: number; minHidden?: number },
+): Promise<any> {
+  if (handler instanceof SegmentedFileHandler) {
+    return Promise.reject(new Error('Fold detection is not available for auto-segmented large files.'));
+  }
+  let workerData: { kind: 'foldRegions'; args: { opts: typeof opts }; scan?: unknown; scans?: unknown[] };
+  if (handler instanceof CompositeFileHandler) {
+    const scans = handler.getMemberScanContexts();
+    if (scans.length === 0 || scans.some((s) => !s)) {
+      return Promise.reject(new Error('Single session has no readable member index'));
+    }
+    workerData = { kind: 'foldRegions', args: { opts }, scans };
+  } else {
+    const scan = handler.getScanContext();
+    if (!scan) return Promise.reject(new Error('No file open'));
+    workerData = { kind: 'foldRegions', args: { opts }, scan };
+  }
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(path.join(__dirname, 'trendWorker.js'), { workerData });
+    let settled = false;
+    const finish = (err?: Error, result?: any): void => {
+      if (settled) return;
+      settled = true;
+      worker.terminate();
+      if (err) reject(err); else resolve(result);
+    };
+    worker.on('message', (msg: { type: string; result?: any; message?: string }) => {
+      if (msg?.type === 'done') finish(undefined, msg.result);
+      else if (msg?.type === 'error') finish(new Error(msg.message || 'fold-regions worker error'));
+    });
+    worker.on('error', (err) => finish(err instanceof Error ? err : new Error(String(err))));
+    worker.on('exit', (code) => { if (code !== 0) finish(new Error(`fold-regions worker exited with code ${code}`)); });
+  });
+}
+
 export function runSummarizeJob(
   handler: FileHandler | CompositeFileHandler | SegmentedFileHandler,
   opts: { maxTemplates?: number; maxExamples?: number; detectSeverity?: boolean; detectTimestamp?: boolean },
