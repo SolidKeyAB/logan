@@ -48,7 +48,7 @@ export interface InvestigationTemplate {
 // Body keys worth exposing as fill-in parameters when replaying on a new log.
 // Time-window / range keys lead: the #1 noun to tweak when rerunning a past
 // root-cause hunt on a NEW incident is the window, component second.
-const PARAM_KEYS = ['startTime', 'endTime', 'startLine', 'endLine', 'component', 'field', 'pattern', 'event', 'expect', 'analyzerName', 'thresholdSeconds'];
+export const PARAM_KEYS = ['startTime', 'endTime', 'startLine', 'endLine', 'component', 'field', 'pattern', 'event', 'expect', 'analyzerName', 'thresholdSeconds'];
 
 // Classify a body key into a ParamKind (ordering + typing of the tweak-form).
 export function paramKind(key: string): ParamKind {
