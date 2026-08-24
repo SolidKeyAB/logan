@@ -875,6 +875,25 @@ export function startApiServer(ctx: ApiContext): void {
           sendJson(res, { success: true, ran: tpl.name, steps: results, requirements });
           return;
         }
+        // Fork (Workflow Canvas Phase 3) — "save as a new instance": derive a NEW saved
+        // investigation from an existing one with tweaked nouns baked in as the new
+        // captured defaults. Apply the param overrides to the source steps, then
+        // re-extract the param schema from the overridden bodies (buildTemplate) so the
+        // fork's own tweak-form prefills the new values. Requirements carry over.
+        if (url === '/api/investigation-fork') {
+          const src = getTemplate(body.name || body.slug || '');
+          if (!src) return sendError(res, `No saved investigation named "${body.name || body.slug}"`);
+          const newName = (body.newName || '').trim();
+          if (!newName) return sendError(res, 'newName required');
+          const resolved = resolveSteps(src, body.params || {});
+          const journal = resolved.map(s => ({ path: s.path, body: s.body, ts: 0, label: s.label }));
+          const tpl = buildTemplate(newName, journal, src.sourceFile, body.description || src.description, src.requirements);
+          saveTemplate(tpl);
+          const win = ctx.getMainWindow();
+          if (win && !win.isDestroyed()) win.webContents.send('investigation-templates-changed');
+          sendJson(res, { success: true, template: tpl });
+          return;
+        }
         if (url === '/api/investigation-check') {
           // Dry-run the requirements preflight without replaying — lets a caller (or the
           // UI) ask "would this investigation apply to the open log?".
