@@ -23438,7 +23438,7 @@ const SAVED_KIND_LABELS: Record<string, string> = {
 const SAVED_KIND_ORDER = ['search', 'session', 'composite', 'filter', 'highlightGroup', 'bookmarkSet', 'columnLayout', 'columnPattern', 'constant', 'trendProperty', 'pattern', 'contextDef', 'baseline', 'investigation', 'sequence'];
 // Step 3 — where each kind "lives" (its existing management surface). Reveal opens it.
 // filter / columnLayout / constant live in modals or inline pickers (no standalone
-// panel/tab), so they get copy-only for now.
+// panel/tab), so they have no Reveal target — but they now Apply directly (below).
 const SAVED_REVEAL_TARGET: Record<string, { type: 'panel' | 'tab'; id: string }> = {
   search: { type: 'tab', id: 'search-configs' },
   session: { type: 'tab', id: 'search-configs' },
@@ -23454,7 +23454,8 @@ const SAVED_REVEAL_TARGET: Record<string, { type: 'panel' | 'tab'; id: string }>
 };
 // Step 3 — kinds with a clean, self-contained one-click "apply". Others earn it with
 // usage (the saved:apply/reveal/copy:<kind> counters feed the "earn the rest" decision).
-const SAVED_CAN_APPLY = new Set(['investigation', 'highlightGroup', 'session', 'composite', 'sequence']);
+// filter / columnLayout / constant were copy-only; they now apply directly (no modal).
+const SAVED_CAN_APPLY = new Set(['investigation', 'highlightGroup', 'session', 'composite', 'sequence', 'filter', 'columnLayout', 'constant']);
 // Kinds that expose an inline ✕ Delete in the Saved panel. Single sessions auto-save, so
 // they need a prune path here; other kinds are managed (and deleted) in their own surface.
 // Clue sequences are collected inline (no separate manager) so they get delete here too.
@@ -23576,6 +23577,43 @@ function renderSavedEntities(filter: string): void {
   list.innerHTML = html;
 }
 
+// Apply a saved column layout straight to the viewer (no modal). Mirrors the
+// Columns-modal commit: pattern layouts re-render as regex-group columns; delimiter
+// layouts set the column config (visibility via CSS; re-render only if the delimiter
+// changed).
+async function applyColumnLayoutToView(layout: any): Promise<void> {
+  if (layout.method === 'pattern' && layout.pattern && Array.isArray(layout.pattern.fields)) {
+    applyColumnPattern(layout.pattern.regex, layout.pattern.flags, layout.pattern.fields, layout.columns);
+    return;
+  }
+  const prevDelimiter = state.columnConfig?.delimiter ?? null;
+  state.columnConfig = {
+    delimiter: layout.delimiter,
+    delimiterName: layout.delimiterName,
+    columns: (layout.columns || []).map((c: any) => ({ index: c.index, sample: c.sample, visible: c.visible !== false, name: c.name })),
+  };
+  updateColumnHideStyle();
+  if (prevDelimiter !== state.columnConfig.delimiter) {
+    if (logContentElement) { logContentElement.innerHTML = ''; lineElementPool.releaseAll(); }
+    await loadVisibleLines();
+  }
+}
+
+// "Apply" a saved constant = insert its value into the search box (opening the search
+// panel if needed) so you can search with it immediately; fallback = copy to clipboard.
+function insertConstantIntoSearch(value: string, name: string): void {
+  const input = elements.searchInput;
+  if (!input) { void navigator.clipboard?.writeText(value); showToast(`Copied constant “${name}”`); return; }
+  if (elements.searchPanel?.classList.contains('hidden')) toggleSearchPanel();
+  input.focus();
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? input.value.length;
+  input.value = input.value.slice(0, start) + value + input.value.slice(end);
+  const caret = start + value.length;
+  try { input.setSelectionRange(caret, caret); } catch {}
+  showToast(`Inserted constant “${name}” into search`);
+}
+
 // Apply / run a saved entity straight from the catalog (the "same instrument" the human
 // reaches for in each entity's own panel — routed here for the kinds where a one-click
 // apply is clean and self-contained). Reuses the existing per-kind apply functions.
@@ -23605,6 +23643,35 @@ async function applySavedEntity(kind: string, id: string, name: string): Promise
       const first = clues.find((c: any) => c.line != null);
       if (first) { const ln0 = first.line - 1; const di = getFilteredDisplayIndex(ln0); goToLine(di >= 0 ? di : ln0, ln0); }
       showToast(`Clue trail “${name}” — ${clues.length} clue${clues.length === 1 ? '' : 's'}`);
+    } else if (kind === 'filter') {
+      // Apply the saved filter preset directly to the view (no modal): map it to a
+      // FilterConfig and run applyFilter — exactly what the filter modal commits.
+      if (!state.filePath) { showToast('Open a log file first'); return; }
+      const res = await window.api.filterPresetsList();
+      const preset = (res.presets || []).find((p: FilterPreset) => p.id === id || p.name === name);
+      if (!preset) { showToast(`Filter “${name}” not found`); return; }
+      await applyFilter({
+        levels: preset.levels,
+        includePatterns: preset.includePatterns,
+        excludePatterns: preset.excludePatterns,
+        matchCase: preset.matchCase,
+        exactMatch: preset.exactMatch,
+        contextLines: preset.contextLines,
+      });
+      showToast(`Applied filter “${name}”`);
+    } else if (kind === 'columnLayout') {
+      if (!state.filePath) { showToast('Open a log file first'); return; }
+      await loadColumnLayouts();               // ensure the layout set is in memory
+      const layout = columnLayouts.find((l: any) => l.id === id || l.name === name);
+      if (!layout) { showToast(`Column layout “${name}” not found`); return; }
+      await applyColumnLayoutToView(layout);
+      showToast(`Applied column layout “${name}”`);
+    } else if (kind === 'constant') {
+      // No view to apply to → insert the value into the search box (fallback: copy).
+      const res = await window.api.getConstants();
+      const c = (res.entries || []).find((e: { name: string; value: string }) => e.name === name);
+      if (!c) { showToast(`Constant “${name}” not found`); return; }
+      insertConstantIntoSearch(c.value, c.name);
     } else {
       showToast('No one-click apply for this kind yet — opening where it lives');
       revealSavedEntity(kind);
