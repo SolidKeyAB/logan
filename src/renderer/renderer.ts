@@ -23660,6 +23660,143 @@ function revealSavedEntity(kind: string): void {
   else openBottomTab(target.id);
 }
 
+// ─── Entity command palette (Ctrl+P) ─────────────────────────────────────────
+// One keystroke → fuzzy-find ANY saved entity in the registry → apply / open /
+// copy. A single generic access surface over the whole catalog: it reuses
+// listEntities (agent parity: logan_entities) + applySavedEntity /
+// revealSavedEntity, so it adds discovery + keyboard reach without any new
+// per-kind logic. Enter = the kind's primary action (apply where it's clean,
+// else open where it lives, else copy the name); Shift+Enter forces "open".
+let entityPaletteAll: any[] = [];     // full catalog fetched on open
+let entityPaletteItems: any[] = [];   // filtered+ranked rows currently shown
+let entityPaletteSel = 0;             // selected row index
+let entityPaletteInited = false;
+
+function entityPaletteAction(kind: string): 'apply' | 'open' | 'copy' {
+  if (SAVED_CAN_APPLY.has(kind)) return 'apply';
+  if (SAVED_REVEAL_TARGET[kind]) return 'open';
+  return 'copy';
+}
+
+function entityPaletteIsOpen(): boolean {
+  const overlay = document.getElementById('entity-palette');
+  return !!overlay && !overlay.hasAttribute('hidden');
+}
+
+async function openEntityPalette(): Promise<void> {
+  const overlay = document.getElementById('entity-palette');
+  const input = document.getElementById('entity-palette-input') as HTMLInputElement | null;
+  if (!overlay || !input) return;
+  if (!entityPaletteInited) { entityPaletteInited = true; initEntityPalette(); }
+  trackUsage('palette:open');
+  // Fresh catalog each open so newly-saved entities appear immediately.
+  try {
+    const res = await window.api.listEntities();
+    entityPaletteAll = (res.success && res.entities) ? res.entities : [];
+  } catch { entityPaletteAll = []; }
+  overlay.removeAttribute('hidden');
+  input.value = '';
+  entityPaletteSel = 0;
+  renderEntityPalette('');
+  input.focus();
+}
+
+function closeEntityPalette(): void {
+  const overlay = document.getElementById('entity-palette');
+  if (overlay) overlay.setAttribute('hidden', '');
+}
+
+function entityRank(e: any, q: string): number {
+  const n = (e.name || '').toLowerCase();
+  if (n === q) return 0;
+  if (n.startsWith(q)) return 1;
+  if (n.includes(q)) return 2;
+  return 3;
+}
+
+function renderEntityPalette(filter: string): void {
+  const list = document.getElementById('entity-palette-list');
+  if (!list) return;
+  const q = filter.trim().toLowerCase();
+  let items = entityPaletteAll;
+  if (q) {
+    items = entityPaletteAll
+      .filter(e => `${e.name} ${e.summary || ''} ${e.description || ''} ${e.kind} ${SAVED_KIND_LABELS[e.kind] || ''}`.toLowerCase().includes(q))
+      .slice()
+      .sort((a, b) => entityRank(a, q) - entityRank(b, q));
+  }
+  items = items.slice(0, 60);
+  entityPaletteItems = items;
+  if (entityPaletteSel >= items.length) entityPaletteSel = Math.max(0, items.length - 1);
+  if (items.length === 0) {
+    list.innerHTML = entityPaletteAll.length === 0
+      ? '<div class="entity-palette-empty">Nothing saved yet.</div>'
+      : '<div class="entity-palette-empty">No matching entities.</div>';
+    return;
+  }
+  list.innerHTML = items.map((e, i) => {
+    const action = entityPaletteAction(e.kind);
+    const actLabel = action === 'apply' ? 'Apply' : action === 'open' ? 'Open' : 'Copy';
+    const scope = e.scope ? `<span class="saved-scope saved-scope-${escapeHtml(e.scope)}">${escapeHtml(e.scope)}</span>` : '';
+    const desc = e.description ? `<span class="saved-desc-icon" title="${escapeHtml(e.description)}">📝</span>` : '';
+    return `<div class="entity-palette-row${i === entityPaletteSel ? ' selected' : ''}" data-idx="${i}">`
+      + `<span class="entity-palette-kind">${escapeHtml(SAVED_KIND_LABELS[e.kind] || e.kind)}</span>`
+      + `<span class="entity-palette-name">${escapeHtml(e.name)}</span>${scope}${desc}`
+      + (e.summary ? `<span class="entity-palette-sum">${escapeHtml(e.summary)}</span>` : '')
+      + `<span class="entity-palette-act entity-palette-act-${action}">${actLabel}</span>`
+      + `</div>`;
+  }).join('');
+  (list.querySelector('.entity-palette-row.selected') as HTMLElement | null)?.scrollIntoView({ block: 'nearest' });
+}
+
+// Run the selected row's action, then close. Shift forces "open where it lives".
+function triggerEntityPalette(idx: number, forceReveal: boolean): void {
+  const item = entityPaletteItems[idx];
+  if (!item) return;
+  closeEntityPalette();
+  const action = (forceReveal && SAVED_REVEAL_TARGET[item.kind]) ? 'open' : entityPaletteAction(item.kind);
+  if (action === 'apply') {
+    void applySavedEntity(item.kind, item.id || '', item.name);
+  } else if (action === 'open') {
+    revealSavedEntity(item.kind);
+  } else {
+    trackUsage(`saved:copy:${item.kind}`);
+    if (item.name) { void navigator.clipboard?.writeText(item.name); showToast(`Copied “${item.name}”`); }
+  }
+}
+
+// Wire the palette's input + list once (first open). Keyboard drives selection;
+// clicking a row runs its action; clicking the backdrop closes.
+function initEntityPalette(): void {
+  const input = document.getElementById('entity-palette-input') as HTMLInputElement | null;
+  const list = document.getElementById('entity-palette-list');
+  const overlay = document.getElementById('entity-palette');
+  if (!input || !list || !overlay) return;
+  input.addEventListener('input', () => { entityPaletteSel = 0; renderEntityPalette(input.value); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault(); e.stopPropagation();
+      if (entityPaletteItems.length) { entityPaletteSel = (entityPaletteSel + 1) % entityPaletteItems.length; renderEntityPalette(input.value); }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault(); e.stopPropagation();
+      if (entityPaletteItems.length) { entityPaletteSel = (entityPaletteSel - 1 + entityPaletteItems.length) % entityPaletteItems.length; renderEntityPalette(input.value); }
+    } else if (e.key === 'Enter') {
+      e.preventDefault(); e.stopPropagation();
+      triggerEntityPalette(entityPaletteSel, e.shiftKey);
+    } else if (e.key === 'Escape') {
+      e.preventDefault(); e.stopPropagation();
+      closeEntityPalette();
+    }
+  });
+  list.addEventListener('click', (e) => {
+    const row = (e.target as HTMLElement).closest('.entity-palette-row') as HTMLElement | null;
+    if (!row) return;
+    const idx = parseInt(row.dataset.idx || '', 10);
+    if (!isNaN(idx)) triggerEntityPalette(idx, (e as MouseEvent).shiftKey);
+  });
+  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) closeEntityPalette(); });
+}
+
 function savePanelState(): void {
   localStorage.setItem('logan-panel', JSON.stringify({
     activePanel,
@@ -24073,6 +24210,14 @@ function setupKeyboardShortcuts(): void {
       openFile();
     }
 
+    // Ctrl/Cmd + P: Entity command palette — fuzzy-find + apply any saved entity.
+    // (Ctrl+Shift+P is the live tab; this plain-P form only overrides native print.)
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'p' || e.key === 'P')) {
+      e.preventDefault();
+      if (entityPaletteIsOpen()) closeEntityPalette(); else void openEntityPalette();
+      return;
+    }
+
     // Ctrl/Cmd + F: Focus search
     if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
       e.preventDefault();
@@ -24127,6 +24272,8 @@ function setupKeyboardShortcuts(): void {
 
     // Escape: Cancel range selection, close split/diff, close bottom panel, terminal, or modals
     if (e.key === 'Escape') {
+      // Entity palette takes priority — close it first if open.
+      if (entityPaletteIsOpen()) { closeEntityPalette(); return; }
       // Close search panel first if it's open
       if (!elements.searchPanel.classList.contains('hidden')) {
         hideSearchPanel();
