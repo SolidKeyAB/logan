@@ -3,6 +3,7 @@ import { discoverFields, discoverAxes, extractSeries, extractSignalSeries, detec
 import { parseTimestampFast } from './timestampParse';
 import { WorkerFileReader, CompositeWorkerReader, ScanContext } from './trendWorkerReaders';
 import { foldScope } from './summarizeScan';
+import { detectFoldRegions } from './foldRegions';
 import type { FileHandler } from './fileHandler';
 
 /**
@@ -61,6 +62,11 @@ try {
         detectSeverity: args.opts?.detectSeverity,
         detectTimestamp: args.opts?.detectTimestamp,
       });
+      break;
+    case 'foldRegions':
+      // Detect contiguous repeating blocks so the viewer can collapse them.
+      // Whole-file fingerprint scan → off-thread so the UI never blocks.
+      result = detectFoldRegions(reader, args.opts || {});
       break;
     default:
       throw new Error(`Unknown trend job kind: ${kind}`);

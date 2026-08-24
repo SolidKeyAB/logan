@@ -32,7 +32,7 @@ const INVESTIGATIVE_PATHS = new Set<string>([
   '/api/trend-fields', '/api/trend-series', '/api/trend-transitions', '/api/trend-correlate',
   '/api/trend-show', '/api/investigate-crashes', '/api/investigate-component',
   '/api/investigate-timerange', '/api/triage', '/api/navigate', '/api/evidence-pack',
-  '/api/build-conclusion', '/api/summarize',
+  '/api/build-conclusion', '/api/summarize', '/api/fold-regions',
 ]);
 const JOURNAL_CAP = 200;
 let agentJournal: JournalEntry[] = [];
@@ -61,6 +61,7 @@ function journalLabel(p: string, body: Record<string, any>): string {
   if (p === '/api/evidence-pack') return `evidence-pack${body.baselineId ? ' (vs baseline)' : ''}`;
   if (p === '/api/build-conclusion') return 'build-conclusion';
   if (p === '/api/summarize') return `summarize${body.opts?.contains ? ` ~"${body.opts.contains}"` : ''}`;
+  if (p === '/api/fold-regions') return 'fold-regions';
   return name;
 }
 
@@ -360,6 +361,8 @@ export interface ApiContext {
   detectTimeGaps(options: any): Promise<any>;
   // Semantic compression: fold the (scoped) log into its distinct message templates.
   summarize(opts?: { maxTemplates?: number; maxExamples?: number; detectSeverity?: boolean; detectTimestamp?: boolean; contains?: string }, scope?: ScopeDescriptor): Promise<any>;
+  // In-place viewer folding: detect contiguous repeating blocks (line spans + ×count).
+  foldRegions(opts?: { maxPeriod?: number; minRepeats?: number; tolerance?: number; minHidden?: number }): Promise<any>;
   navigateToLine(lineNumber: number): void;
   getBaselineStore(): BaselineStore;
   getAnalysisResult(): AnalysisResult | null;
@@ -941,6 +944,12 @@ export function startApiServer(ctx: ApiContext): void {
 
         if (url === '/api/summarize') {
           const result = await ctx.summarize(body.opts, body.scope);
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/fold-regions') {
+          const result = await ctx.foldRegions(body.opts);
           sendJson(res, result);
           return;
         }

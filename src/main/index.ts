@@ -47,7 +47,7 @@ import { parseTimestampFast } from './timestampParse';
 import { carryForwardTimestamps, buildOriginTags, formatWallClock } from './mergeTimeline';
 import { compileColumnPattern, makeColumnExtractor, refinePaintPattern, CompiledColumnPattern, ColumnPatternSpec } from './columnPattern';
 import { parseVtraceToFile } from './vtraceParse';
-import { runTrendJob, runSummarizeJob, cancelSummarizeJob, canSummarizeOffThread } from './trendWorkerClient';
+import { runTrendJob, runSummarizeJob, cancelSummarizeJob, canSummarizeOffThread, runFoldRegionsJob } from './trendWorkerClient';
 import { resolveScope, isWholeFile, scopeInfo, forEachScopeLine, ScopeResolverContext } from './scope';
 import { analyzeScope } from './analyzers/scopedAnalysis';
 import { TemplateFolder, type TemplateSummary } from './logTemplates';
@@ -1456,6 +1456,25 @@ app.whenReady().then(() => {
         }
         logActivity(currentFilePath, 'summarize', { templates: summary.templates.length, totalLines: summary.totalLines, capped: summary.capped, scope: resolved.label });
         return { success: true, summary, scope: scopeInfo(resolved) };
+      } catch (error) {
+        return { success: false, error: String(error) };
+      }
+    },
+    // Fold-region detection (in-place viewer folding): find contiguous repeating
+    // blocks so the viewer can collapse each to its first block + a "×N" header.
+    // Off-thread (whole-file fingerprint scan) — never blocks the UI.
+    foldRegions: async (opts?: any) => {
+      const handler = getReadHandler();
+      if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
+      try {
+        const result = await runFoldRegionsJob(handler, {
+          maxPeriod: opts?.maxPeriod,
+          minRepeats: opts?.minRepeats,
+          tolerance: opts?.tolerance,
+          minHidden: opts?.minHidden,
+        });
+        logActivity(currentFilePath, 'fold_regions', { regions: result.regions.length, foldableLines: result.foldableLines });
+        return { success: true, ...result };
       } catch (error) {
         return { success: false, error: String(error) };
       }
@@ -5673,6 +5692,31 @@ ipcMain.handle(IPC.SUMMARIZE_CANCEL, async () => {
   summarizeSignal.cancelled = true;
   cancelSummarizeJob();
   return { success: true };
+});
+
+// In-place viewer folding — detect the repeating blocks (off-thread).
+ipcMain.handle(IPC.DETECT_FOLD_REGIONS, async (_, opts?: any) => {
+  if (!apiContext) return { success: false, error: 'Not ready' };
+  try {
+    return await apiContext.foldRegions(opts);
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// Apply the folded VIEW as an explicit line-set filter: the renderer computes the
+// visible lines (all lines minus each collapsed region's interior) and hands them
+// here, so the existing filtered read path maps display↔file with no new plumbing.
+// An empty set means "unfold everything" → clear the filter.
+ipcMain.handle(IPC.SET_FOLD_FILTER, async (_, lines: number[]) => {
+  if (!currentFilePath) return { success: false, error: 'No file open' };
+  if (!lines || lines.length === 0) {
+    filterState.delete(currentFilePath);
+    return { success: true, filteredLines: 0, filteredLineNumbers: null };
+  }
+  const sorted = Array.from(new Set(lines)).sort((a, b) => a - b);
+  filterState.set(currentFilePath, sorted);
+  return { success: true, filteredLines: sorted.length, filteredLineNumbers: sorted };
 });
 
 // Evidence pack (native "📋 Brief") — reuses the SAME buildEvidencePack the AI's
