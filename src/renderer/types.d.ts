@@ -73,6 +73,17 @@ interface TemplateSummary {
   matchedTemplates?: number; // present when a `contains` lens was applied
 }
 
+// In-place viewer folding — a contiguous repeating block (mirror of foldRegions.ts).
+interface FoldRegion {
+  start: number;       // 0-based first file line (inclusive)
+  end: number;         // 0-based last file line (inclusive)
+  blockLen: number;    // repeating-unit length; first blockLen lines stay visible
+  repeatCount: number;
+  totalLines: number;  // end - start + 1
+  hiddenLines: number; // totalLines - blockLen
+  sample: string;      // first line text (trimmed)
+}
+
 interface SearchColumnConfig {
   delimiter: string;
   columns: Array<{ index: number; visible: boolean }>;
@@ -864,6 +875,10 @@ interface Api {
   // Semantic summary — fold the log into distinct message templates
   summarize: (opts?: { maxTemplates?: number; maxExamples?: number; detectSeverity?: boolean; detectTimestamp?: boolean; contains?: string }, scope?: ScopeDescriptor | null) => Promise<{ success: boolean; summary?: TemplateSummary; scope?: ScopeInfo; error?: string }>;
   summarizeCancel: () => Promise<{ success: boolean }>;
+
+  // In-place viewer folding — detect repeating blocks, then apply/clear a fold view
+  detectFoldRegions: (opts?: { maxPeriod?: number; minRepeats?: number; tolerance?: number; minHidden?: number }) => Promise<{ success: boolean; regions?: FoldRegion[]; totalLines?: number; foldableLines?: number; error?: string }>;
+  setFoldFilter: (lines: number[]) => Promise<{ success: boolean; filteredLines?: number; filteredLineNumbers?: number[] | null; error?: string }>;
 
   // Evidence pack (native "📋 Brief") — same briefing the AI's logan_evidence_pack builds
   getEvidencePack: (options?: { thresholdSeconds?: number; topFields?: number; topGaps?: number; topComponents?: number; fieldSampleSize?: number; analyzerName?: string; baselineId?: string }) => Promise<{ success: boolean; pack?: EvidencePack; error?: string }>;

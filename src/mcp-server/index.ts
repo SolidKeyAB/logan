@@ -382,6 +382,28 @@ server.tool(
   }
 );
 
+// === Tool: logan_fold_regions ===
+server.tool(
+  'logan_fold_regions',
+  'Detect contiguous REPEATING BLOCKS running down the log — a k-line block repeating back-to-back (k=1 is identical-line spam, k>1 is a repeating request/boot cycle). Returns each region as a 0-based inclusive line span with its block length, repeat ×count, how many lines it would hide if collapsed, and a sample first line. This is what the viewer\'s in-place folding uses (collapse a region to its first block + a "×N" header). Use it to spot and skip noisy repetition, or to point a finding at where a loop starts/ends.',
+  {
+    maxPeriod: z.number().int().min(1).optional().describe('Largest block length to look for. Default 50.'),
+    minRepeats: z.number().int().min(2).optional().describe('Minimum block copies before a region is reported. Default 3.'),
+    minHidden: z.number().int().min(1).optional().describe('Only report a region that would hide at least this many lines. Default 3.'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+  },
+  async ({ maxPeriod, minRepeats, minHidden, redact }) => {
+    try {
+      const opts = { maxPeriod, minRepeats, minHidden };
+      const result = await apiCall('POST', '/api/fold-regions', { opts });
+      const output = redact ? maybeRedact(result, true) : result;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_filter ===
 server.tool(
   'logan_filter',
