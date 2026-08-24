@@ -10602,8 +10602,15 @@ kbd {
 .workflow-header { cursor: move; }   /* drag the header to reposition the floating panel */
 .workflow-title { font-weight: 700; font-family: var(--font-mono); color: var(--accent-hover); }
 .workflow-meta { font-size: 11px; color: var(--text-muted); }
-.workflow-close {
+.workflow-tweak {
   margin-left: auto;
+  padding: 3px 10px; border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-hover); color: var(--accent-hover);
+  font-size: 11px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.workflow-tweak:hover { border-color: var(--accent-color); }
+.workflow-close {
   width: 24px; height: 24px;
   border: none; border-radius: 5px;
   background: transparent; color: var(--text-secondary);
