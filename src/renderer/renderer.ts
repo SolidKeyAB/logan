@@ -7529,6 +7529,13 @@ async function loadInvestigationTemplates(): Promise<void> {
     run.innerHTML = `▶ ${escapeHtml(t.name)} <span class="investigate-pattern-count">${stepCount}</span>`;
     run.addEventListener('click', () => { void runInvestigationTemplate(t.name); });
     chip.appendChild(run);
+    // ⋔ Steps — open the read-only workflow step-list ("see what this hunt does").
+    const steps = document.createElement('button');
+    steps.className = 'investigate-pattern-steps';
+    steps.textContent = '⋔';
+    steps.title = 'Show the steps (read-only workflow)';
+    steps.addEventListener('click', (e) => { e.stopPropagation(); void showInvestigationWorkflow(t.name); });
+    chip.appendChild(steps);
     // Preflight badge — only for patterns that declare a requirements manifest. Shows
     // whether THIS open log satisfies the pattern's required template (✓ / ✗ blocked).
     if (t.requirements && (t.requirements.fileTemplate || (t.requirements.entities || []).length)) {
@@ -7573,6 +7580,145 @@ async function refreshInvestigationBadge(name: string, badge: HTMLElement): Prom
     badge.className = 'investigation-req-badge';
     badge.textContent = '';
   }
+}
+
+// ── Workflow step-list overlay (Phase 2): read-only "see what the hunt does" ──
+// Fetch a saved investigation's WorkflowGraph (workflowGraph.ts model, via the same
+// /api/workflow-show the agent's logan_show_workflow uses) and draw it as a vertical
+// commit-log of nodes — verb + tweakable nouns, sequence order, dataflow/reference
+// annotations, entity chips that reveal where the entity lives. Rendered in a centered
+// overlay (not the short bottom panel) so the vertical list gets real height.
+
+// The graph's entity kinds (EntityKind) differ slightly from the Saved-panel reveal
+// map keys; bridge the two so an entity chip can open where it lives.
+const WORKFLOW_ENTITY_REVEAL_KIND: Record<string, string> = { highlight: 'highlightGroup', bookmark: 'bookmarkSet' };
+
+function wfTrunc(s: string, n: number): string { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+
+function closeWorkflowOverlay(): void {
+  document.getElementById('workflow-overlay')?.setAttribute('hidden', '');
+}
+
+// Make the floating (non-modal) workflow panel draggable by its header, so it can be
+// parked out of the way while you keep working the log. Clicking the × still closes.
+function enableWorkflowDrag(header: HTMLElement, panel: HTMLElement, closeBtn: HTMLElement): void {
+  header.addEventListener('mousedown', (e) => {
+    if (closeBtn.contains(e.target as Node)) return;
+    e.preventDefault();
+    const rect = panel.getBoundingClientRect();
+    const offX = e.clientX - rect.left;
+    const offY = e.clientY - rect.top;
+    panel.style.right = 'auto';
+    const move = (ev: MouseEvent) => {
+      panel.style.left = Math.max(0, Math.min(window.innerWidth - 80, ev.clientX - offX)) + 'px';
+      panel.style.top = Math.max(0, Math.min(window.innerHeight - 40, ev.clientY - offY)) + 'px';
+    };
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+}
+
+async function showInvestigationWorkflow(name: string): Promise<void> {
+  const overlay = document.getElementById('workflow-overlay');
+  const body = document.getElementById('workflow-body');
+  if (!overlay || !body) return;
+  overlay.removeAttribute('hidden');
+  body.innerHTML = '<p class="workflow-hint">Loading steps…</p>';
+  trackUsage('workflow:show');
+  try {
+    const res = await window.api.showWorkflow(name);
+    if (!res.success || !res.graph) { body.innerHTML = `<p class="workflow-hint">${escapeHtml(res.error || 'Could not build the workflow')}</p>`; return; }
+    renderWorkflowGraph(res.graph, name, body);
+  } catch (e) {
+    body.innerHTML = `<p class="workflow-hint">Error: ${escapeHtml(String(e))}</p>`;
+  }
+}
+
+function renderWorkflowGraph(graph: any, name: string, body: HTMLElement): void {
+  const stepNodes = (graph.nodes || []).filter((n: any) => n.kind === 'step');
+  const entityNodes = (graph.nodes || []).filter((n: any) => n.kind === 'entity');
+  const edges = graph.edges || [];
+  const dataflowInto = new Set(edges.filter((e: any) => e.kind === 'dataflow').map((e: any) => e.to));
+  const refsByStep: Record<string, string[]> = {};
+  for (const e of edges) if (e.kind === 'reference') (refsByStep[e.from] = refsByStep[e.from] || []).push(e.to);
+  const entityById: Record<string, any> = {};
+  for (const n of entityNodes) entityById[n.id] = n;
+
+  body.innerHTML = '';
+  const header = document.createElement('div');
+  header.className = 'workflow-header';
+  header.innerHTML = `<span class="workflow-title">⋔ ${escapeHtml(name)}</span>`
+    + `<span class="workflow-meta">${graph.meta?.steps ?? stepNodes.length} step${(graph.meta?.steps ?? stepNodes.length) === 1 ? '' : 's'}${graph.meta?.dropped ? ` · ${graph.meta.dropped} skipped` : ''}</span>`;
+  const close = document.createElement('button');
+  close.className = 'workflow-close'; close.textContent = '×'; close.title = 'Close';
+  close.addEventListener('click', closeWorkflowOverlay);
+  header.appendChild(close);
+  body.appendChild(header);
+  // Drag the header to park the floating (non-modal) panel anywhere.
+  const panel = body.closest('.workflow-panel') as HTMLElement | null;
+  if (panel) enableWorkflowDrag(header, panel, close);
+
+  if (stepNodes.length === 0) {
+    const none = document.createElement('p'); none.className = 'workflow-hint'; none.textContent = 'No meaningful steps in this hunt.';
+    body.appendChild(none);
+    return;
+  }
+
+  const listEl = document.createElement('div');
+  listEl.className = 'workflow-steps';
+  stepNodes.forEach((n: any, i: number) => {
+    const row = document.createElement('div');
+    row.className = 'workflow-step';
+    const head = document.createElement('div');
+    head.className = 'workflow-step-head';
+    head.innerHTML = `<span class="workflow-step-idx">${i + 1}</span><span class="workflow-step-verb">${escapeHtml(n.verb)}</span>`;
+    if (dataflowInto.has(n.id)) {
+      const df = document.createElement('span'); df.className = 'workflow-step-tag dataflow';
+      df.textContent = '↳ prev result'; df.title = 'Consumes the previous step’s active scope';
+      head.appendChild(df);
+    }
+    row.appendChild(head);
+    if (n.nouns && n.nouns.length) {
+      const nounsEl = document.createElement('div'); nounsEl.className = 'workflow-step-nouns';
+      for (const nn of n.nouns) {
+        const chip = document.createElement('span'); chip.className = `workflow-noun kind-${escapeHtml(String(nn.kind))}`;
+        chip.textContent = `${nn.key}: ${wfTrunc(String(nn.value), 40)}`;
+        nounsEl.appendChild(chip);
+      }
+      row.appendChild(nounsEl);
+    }
+    const refs = refsByStep[n.id] || [];
+    if (refs.length) {
+      const refsEl = document.createElement('div'); refsEl.className = 'workflow-step-refs';
+      for (const rid of refs) { const ent = entityById[rid]; if (ent) refsEl.appendChild(makeWorkflowEntityChip(ent)); }
+      row.appendChild(refsEl);
+    }
+    listEl.appendChild(row);
+  });
+  body.appendChild(listEl);
+
+  // Entity nodes not referenced by a specific step (declared preconditions) → footer.
+  const referenced = new Set(Object.values(refsByStep).flat());
+  const unlinked = entityNodes.filter((n: any) => !referenced.has(n.id));
+  if (unlinked.length) {
+    const foot = document.createElement('div'); foot.className = 'workflow-entities';
+    const lbl = document.createElement('span'); lbl.className = 'workflow-entities-label'; lbl.textContent = 'Expects:';
+    foot.appendChild(lbl);
+    for (const ent of unlinked) foot.appendChild(makeWorkflowEntityChip(ent));
+    body.appendChild(foot);
+  }
+}
+
+function makeWorkflowEntityChip(ent: any): HTMLElement {
+  const chip = document.createElement('button');
+  chip.className = 'workflow-entity-chip';
+  const kind = ent.entityRef?.kind || ent.verb;
+  const nm = ent.entityRef?.name || ent.entityRef?.id || '?';
+  chip.textContent = `${kind}: ${wfTrunc(String(nm), 30)}`;
+  chip.title = 'Open where it lives';
+  chip.addEventListener('click', () => { revealSavedEntity(WORKFLOW_ENTITY_REVEAL_KIND[kind] || kind); });
+  return chip;
 }
 
 async function saveCurrentInvestigation(): Promise<void> {
