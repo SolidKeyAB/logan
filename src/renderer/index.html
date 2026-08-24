@@ -1814,6 +1814,15 @@
       <div class="entity-palette-hint"><span>↑↓ move</span><span>⏎ apply / open</span><span>⇧⏎ open where it lives</span><span>Esc close</span></div>
     </div>
   </div>
+
+  <!-- Workflow step-list overlay (Phase 2) — a roomy, read-only commit-log view of a
+       saved investigation's WorkflowGraph. Opened by the ⋔ button on an investigation;
+       centered so the vertical step-list gets real height (the bottom panel is too short). -->
+  <div id="workflow-overlay" class="workflow-overlay" hidden>
+    <div class="workflow-panel" role="dialog" aria-modal="true" aria-label="Investigation workflow">
+      <div id="workflow-body" class="workflow-body"></div>
+    </div>
+  </div>
   <script src="renderer.js"></script>
 </body>
 </html>
