@@ -7334,6 +7334,7 @@ const OPTIONAL_FEATURES: OptionalFeatureDef[] = [
   { id: 'time-align', label: 'Time Align',   description: 'Align search-config results on draggable timeline lanes.',              defaultEnabled: false, bottomTab: 'time-align' },
   { id: 'history',    label: 'History',      description: 'Action history (searches, filters, runs) with replay.',                defaultEnabled: false, panel: 'history' },
   { id: 'auto-segment', label: 'Auto-composite big files', description: 'For very large files, index only the segments near the viewport (bounded RAM) instead of the whole-file line index. Experimental.', defaultEnabled: false },
+  { id: 'triage-on-open', label: 'Triage on open', description: 'When a log opens, auto-run the briefing and pop a floating “Start here” card — top crashes / errors / components / time gaps, click to jump. Skipped on very large files.', defaultEnabled: true },
 ];
 
 const FEATURES_LS_KEY = 'logan-features';
@@ -17885,6 +17886,9 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       // Kick off the background severity index (jump-to-problem via F8).
       void prefetchSeverityIndex();
 
+      // Quick-start triage — auto-run the briefing and pop a "Start here" card.
+      void prefetchTriage();
+
       // Auto-analyze if enabled in settings
       if (userSettings.autoAnalyze && !isMarkdownFile) {
         hideProgress();
@@ -19478,6 +19482,83 @@ let severitySeenForFile: string | null = null;
 function severityBucketCount(): number {
   const h = minimapCanvasElement?.height || 600;
   return Math.max(100, Math.min(2000, Math.round(h)));
+}
+
+// ─── Quick-start triage ("Start here" card) ──────────────────────────────────
+// The analyst's first move = "where do I look first?", zero input, the instant the
+// file opens. On open we auto-run the SAME evidence-pack the 📋 Brief uses (already
+// grouped + ranked) and pop a compact, dismissable floating card with the top few
+// "look here first" jump targets (crashes → worst components → biggest gap). Gated
+// by the "Triage on open" feature; skipped on very large files (a full auto-analyze
+// would be heavy — the analyst can still run the Brief by hand there).
+const TRIAGE_AUTO_MAX_LINES = 5_000_000;
+
+function hideTriageCard(): void {
+  document.getElementById('triage-card')?.setAttribute('hidden', '');
+}
+
+async function prefetchTriage(): Promise<void> {
+  hideTriageCard(); // clear any prior file's card first
+  if (!isFeatureEnabled('triage-on-open') || !state.filePath) return;
+  if (getTotalLines() > TRIAGE_AUTO_MAX_LINES) return; // too big to auto-analyze
+  const forFile = state.filePath;
+  try {
+    const res = await window.api.getEvidencePack();
+    if (!res?.success || !res.pack) return;
+    if (state.filePath !== forFile) return; // file changed while building
+    showTriageCard(res.pack);
+  } catch { /* triage is best-effort; never blocks open */ }
+}
+
+function showTriageCard(pack: EvidencePack): void {
+  const el = document.getElementById('triage-card');
+  if (!el) return;
+  const crashes = (pack.crashes || []).filter(c => c.viewerLine);
+  const comps = (pack.topComponents || []).filter(c => (c.errorCount || 0) > 0 && c.sampleLine);
+  const gaps = (pack.timeGaps || []).filter(g => g.viewerLine);
+  const errorCount = Number(pack.levels?.error || 0);
+  const warnCount = Number(pack.levels?.warning || 0);
+  const sev = pack.severity || 'healthy';
+  // Only surface when there's actually something to look at.
+  if (sev === 'healthy' && crashes.length === 0 && comps.length === 0 && errorCount === 0) return;
+
+  // Up to 5 ranked "look here first" rows: crashes → worst components → biggest gap.
+  const rows: Array<{ icon: string; text: string; line: number; cls: string }> = [];
+  for (const c of crashes.slice(0, 3)) rows.push({ icon: '💥', cls: 'crash', line: c.viewerLine!, text: `${c.count ? `×${c.count} ` : ''}${c.keyword || 'crash'}` });
+  for (const c of comps.slice(0, 3)) rows.push({ icon: '⛔', cls: 'comp', line: c.sampleLine!, text: `${c.name} — ${c.errorCount} err${c.warningCount ? ` / ${c.warningCount} warn` : ''}` });
+  if (gaps.length) rows.push({ icon: '⏱', cls: 'gap', line: gaps[0].viewerLine!, text: `${Math.round(gaps[0].gapSeconds || 0)}s time gap` });
+  const capped = rows.slice(0, 5);
+
+  el.innerHTML = '';
+  const header = document.createElement('div');
+  header.className = 'triage-head';
+  header.innerHTML = `<span class="triage-dot sev-${escapeHtml(sev)}"></span><span class="triage-title">Start here</span>`
+    + `<span class="triage-verdict">${errorCount ? `⛔ ${errorCount.toLocaleString()}` : ''}${warnCount ? ` ⚠ ${warnCount.toLocaleString()}` : ''}${crashes.length ? ` 💥 ${crashes.length}` : ''}</span>`;
+  const brief = document.createElement('button');
+  brief.className = 'triage-brief'; brief.textContent = '📋 Full brief'; brief.title = 'Open the full briefing in the Analysis panel';
+  brief.addEventListener('click', () => { openBottomTab('analysis'); void showBrief(); });
+  const close = document.createElement('button');
+  close.className = 'triage-close'; close.textContent = '×'; close.title = 'Dismiss';
+  close.addEventListener('click', hideTriageCard);
+  header.appendChild(brief); header.appendChild(close);
+  el.appendChild(header);
+
+  if (pack.summary) { const s = document.createElement('div'); s.className = 'triage-summary'; s.textContent = pack.summary; el.appendChild(s); }
+
+  if (capped.length) {
+    const list = document.createElement('div'); list.className = 'triage-rows';
+    for (const r of capped) {
+      const row = document.createElement('button');
+      row.className = `triage-row ${r.cls}`;
+      row.title = `Jump to line ${r.line}`;
+      row.innerHTML = `<span class="triage-row-icon">${r.icon}</span><span class="triage-row-text">${escapeHtml(r.text)}</span><span class="triage-row-line">L${r.line}</span>`;
+      row.addEventListener('click', () => { void navigateTo(r.line - 1); });
+      list.appendChild(row);
+    }
+    el.appendChild(list);
+  }
+  el.removeAttribute('hidden');
+  trackUsage('triage:show');
 }
 
 // Kick off the background problem-index build right after open and, once per file,
