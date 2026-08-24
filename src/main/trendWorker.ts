@@ -2,6 +2,7 @@ import { parentPort, workerData } from 'worker_threads';
 import { discoverFields, discoverAxes, extractSeries, extractSignalSeries, detectTransitions, correlate } from './trendEngine';
 import { parseTimestampFast } from './timestampParse';
 import { WorkerFileReader, CompositeWorkerReader, ScanContext } from './trendWorkerReaders';
+import { foldScope } from './summarizeScan';
 import type { FileHandler } from './fileHandler';
 
 /**
@@ -50,6 +51,16 @@ try {
       break;
     case 'correlate':
       result = correlate(handler, args.field, args.event, args);
+      break;
+    case 'summarize':
+      // Semantic template fold — same engine the main process uses, run here so a
+      // whole-file scan never blocks the Electron UI event loop.
+      result = foldScope(reader, args.scope, {
+        maxTemplates: args.opts?.maxTemplates,
+        maxExamples: args.opts?.maxExamples,
+        detectSeverity: args.opts?.detectSeverity,
+        detectTimestamp: args.opts?.detectTimestamp,
+      });
       break;
     default:
       throw new Error(`Unknown trend job kind: ${kind}`);

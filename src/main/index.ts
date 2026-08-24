@@ -47,10 +47,10 @@ import { parseTimestampFast } from './timestampParse';
 import { carryForwardTimestamps, buildOriginTags, formatWallClock } from './mergeTimeline';
 import { compileColumnPattern, makeColumnExtractor, refinePaintPattern, CompiledColumnPattern, ColumnPatternSpec } from './columnPattern';
 import { parseVtraceToFile } from './vtraceParse';
-import { runTrendJob } from './trendWorkerClient';
+import { runTrendJob, runSummarizeJob, cancelSummarizeJob, canSummarizeOffThread } from './trendWorkerClient';
 import { resolveScope, isWholeFile, scopeInfo, forEachScopeLine, ScopeResolverContext } from './scope';
 import { analyzeScope } from './analyzers/scopedAnalysis';
-import { TemplateFolder } from './logTemplates';
+import { TemplateFolder, type TemplateSummary } from './logTemplates';
 import { detectColumns } from './analyzers/lineClassify';
 import { GapDetector } from './timeGaps';
 // Native-dependent modules — lazy-loaded to prevent SIGSEGV if bindings aren't built
@@ -1403,30 +1403,49 @@ app.whenReady().then(() => {
       }
     },
     // Summarize (semantic compression): fold the scanned lines into their distinct
-    // message templates via the shared TemplateFolder. Scans in batches over the
-    // active scope (whole file / filter / range / indices) through getReadHandler,
-    // so it honours scope and works on a composite/segmented view — same path as
-    // detectTimeGaps. viewerLine is 1-based (scan lineNumber is 0-based).
+    // message templates via the shared TemplateFolder. Scans the active scope
+    // (whole file / filter / range / indices) resolved through getReadHandler.
+    // The fold is CPU-bound and reads the whole file, so it runs OFF the main
+    // thread in the trend worker (kind:'summarize') — the Electron UI never blocks
+    // and ⏹ Cancel can terminate it. Auto-segmented files hold no whole-file index
+    // to hand the worker, so they fall back to the (batched) main-thread scan.
+    // viewerLine is 1-based (scan lineNumber is 0-based).
     summarize: async (opts?: any, scope?: ScopeDescriptor) => {
       const handler = getReadHandler();
       if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
       summarizeSignal = { cancelled: false };
       try {
         const resolved = resolveCurrentScope(scope);
-        const folder = new TemplateFolder({
+        const folderOpts = {
           maxTemplates: opts?.maxTemplates,
           maxExamples: opts?.maxExamples,
           detectSeverity: opts?.detectSeverity,
           detectTimestamp: opts?.detectTimestamp,
-        });
-        let cancelled = false;
-        forEachScopeLine(handler, resolved, (text, lineNumber) => {
-          if (summarizeSignal.cancelled) { cancelled = true; return false; }
-          folder.feed(text, lineNumber + 1);
-          return true;
-        });
-        if (cancelled) return { success: false, error: 'Cancelled' };
-        let summary = folder.finish();
+        };
+        let summary: TemplateSummary;
+        if (canSummarizeOffThread(handler)) {
+          // Off-thread: hand the resolved scope (range or explicit index-set) to the worker.
+          const scopeArg = resolved.kind === 'range'
+            ? { kind: 'range' as const, startLine: resolved.startLine, endLine: resolved.endLine }
+            : { kind: 'indices' as const, lines: resolved.lines };
+          try {
+            summary = await runSummarizeJob(handler, folderOpts, scopeArg);
+          } catch (e) {
+            if (String(e).includes('Cancelled')) return { success: false, error: 'Cancelled' };
+            throw e;
+          }
+        } else {
+          // Segmented fallback: batched scan on the main thread (rare path).
+          const folder = new TemplateFolder(folderOpts);
+          let cancelled = false;
+          forEachScopeLine(handler, resolved, (text, lineNumber) => {
+            if (summarizeSignal.cancelled) { cancelled = true; return false; }
+            folder.feed(text, lineNumber + 1);
+            return true;
+          });
+          if (cancelled) return { success: false, error: 'Cancelled' };
+          summary = folder.finish();
+        }
         // Optional post-filter view: keep only templates whose shape contains
         // `contains` (case-insensitive). A lens over the fold — the full-run
         // counts/coverage/«other» are unchanged; `matchedTemplates` reports the view.
@@ -5649,8 +5668,10 @@ ipcMain.handle(IPC.SUMMARIZE, async (_, opts?: any, scope?: ScopeDescriptor) => 
 });
 
 // Cancel an in-flight summary (the ⏹/Cancel button on the Summarize panel).
+// Flips the main-thread scan's flag AND terminates the off-thread worker.
 ipcMain.handle(IPC.SUMMARIZE_CANCEL, async () => {
   summarizeSignal.cancelled = true;
+  cancelSummarizeJob();
   return { success: true };
 });
 
