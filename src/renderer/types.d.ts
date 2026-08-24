@@ -880,6 +880,9 @@ interface Api {
   detectFoldRegions: (opts?: { maxPeriod?: number; minRepeats?: number; tolerance?: number; minHidden?: number }) => Promise<{ success: boolean; regions?: FoldRegion[]; totalLines?: number; foldableLines?: number; error?: string }>;
   setFoldFilter: (lines: number[]) => Promise<{ success: boolean; filteredLines?: number; filteredLineNumbers?: number[] | null; error?: string }>;
 
+  // Component/text health — human twin of logan_investigate_component
+  investigateComponent: (opts: { component: string; maxSamplesPerLevel?: number; includeErrorContext?: boolean; contextLines?: number }) => Promise<{ success: boolean; component?: string; found?: boolean; totalMentions?: number; levelBreakdown?: Record<string, number>; timeRange?: { firstSeen: string; lastSeen: string } | null; isTopFailer?: boolean; samplesByLevel?: Record<string, { lineNumber: number; text: string }[]>; errorSites?: any[]; error?: string }>;
+
   // Evidence pack (native "📋 Brief") — same briefing the AI's logan_evidence_pack builds
   getEvidencePack: (options?: { thresholdSeconds?: number; topFields?: number; topGaps?: number; topComponents?: number; fieldSampleSize?: number; analyzerName?: string; baselineId?: string }) => Promise<{ success: boolean; pack?: EvidencePack; error?: string }>;
 

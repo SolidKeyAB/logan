@@ -865,6 +865,9 @@ const elements = {
   analysisResults: document.getElementById('analysis-results') as HTMLDivElement,
   briefResults: document.getElementById('brief-results') as HTMLDivElement,
   btnBrief: document.getElementById('btn-brief') as HTMLButtonElement,
+  healthInput: document.getElementById('health-input') as HTMLInputElement,
+  btnHealthLookup: document.getElementById('btn-health-lookup') as HTMLButtonElement,
+  healthResults: document.getElementById('health-results') as HTMLDivElement,
   summarizeResults: document.getElementById('summarize-results') as HTMLDivElement,
   btnRunSummarize: document.getElementById('btn-run-summarize') as HTMLButtonElement,
   btnFoldRepeats: document.getElementById('btn-fold-repeats') as HTMLButtonElement,
@@ -4787,6 +4790,14 @@ function handleContextMenu(event: MouseEvent): void {
       menu.remove();
     });
     menu.appendChild(copySelection);
+
+    // Health lookup — "does this component/text have crashes/errors?" Opens the
+    // Analysis panel's Health box, pre-filled + run, so both entry points share
+    // one result card. Reuses the same backend as logan_investigate_component.
+    const healthLabel = displayText.length > 24 ? displayText.substring(0, 24) + '…' : displayText;
+    const health = menuItem('\u{1FA7A}', `Crashes & errors for "${healthLabel}"`);
+    health.addEventListener('click', () => { openComponentHealth(selectedText.trim()); menu.remove(); });
+    menu.appendChild(health);
 
     // Earn-from-context: chart the selected field/value straight from the viewer, so Trends
     // is reached WHERE you already are instead of via a blank Discover → pick-field panel.
@@ -22186,6 +22197,154 @@ function updateAnalysisUI(): void {
 // ── 📋 Brief (native counterpart to the AI's logan_evidence_pack) ──
 // Fetches the SAME compact briefing the agent gets and renders it below the
 // analysis output, with clickable rows that jump to the referenced viewerLine.
+// ─── Component/text health lookup (human twin of logan_investigate_component) ──
+// Type a component name or any text → the SAME backend the AI uses returns its
+// per-level counts (fatal/error/warning/…), sample lines, and whether it's a top
+// failing component. We render a compact card with clickable samples so you can
+// jump straight to a problem site. Reached two ways: the Analysis-panel "Health"
+// box, and a right-click "Crashes & errors for …" on any selection (which fills
+// the same box) — one shared result surface.
+
+// Levels shown as prominent chips, in order. Levels not listed here
+// (info/debug/trace/verbose/other) fold into the muted "N mentions" total.
+const HEALTH_LEVELS: Array<{ key: string; icon: string; label: string; cls: string }> = [
+  { key: 'fatal', icon: '\u{1F4A5}', label: 'crashes', cls: 'fatal' },
+  { key: 'error', icon: '\u{26D4}', label: 'errors', cls: 'error' },
+  { key: 'warning', icon: '\u{26A0}\u{FE0F}', label: 'warnings', cls: 'warning' },
+];
+
+async function runHealthLookup(rawTerm: string): Promise<void> {
+  const el = elements.healthResults;
+  if (!el) return;
+  const term = (rawTerm || '').trim();
+  if (!term) { el.innerHTML = '<p class="health-hint">Type a component or text, then Check.</p>'; return; }
+  if (!state.filePath) { el.innerHTML = '<p class="health-hint">Open a log file first.</p>'; return; }
+  if (elements.healthInput && elements.healthInput.value !== term) elements.healthInput.value = term;
+  el.innerHTML = `<p class="health-hint">Checking “${escapeHtml(term)}”…</p>`;
+  trackUsage('health-lookup');
+  if (elements.btnHealthLookup) elements.btnHealthLookup.disabled = true;
+  try {
+    const res = await window.api.investigateComponent({ component: term });
+    if (!res?.success) { el.innerHTML = `<p class="health-hint" style="color:var(--error-color)">Lookup failed: ${escapeHtml(res?.error || 'unknown error')}</p>`; return; }
+    renderHealthCard(res, term);
+  } catch (error) {
+    el.innerHTML = `<p class="health-hint" style="color:var(--error-color)">Lookup error: ${escapeHtml(String(error))}</p>`;
+  } finally {
+    if (elements.btnHealthLookup) elements.btnHealthLookup.disabled = false;
+  }
+}
+
+// Build the health card as DOM (clickable sample rows → navigateTo). Sample
+// lineNumbers from the backend are 0-based; navigateTo takes a 0-based abs line,
+// and we show L{n+1} to match the viewer gutter.
+function renderHealthCard(res: any, term: string): void {
+  const el = elements.healthResults;
+  if (!el) return;
+  el.innerHTML = '';
+  const card = document.createElement('div');
+  card.className = 'health-card';
+
+  if (!res.found || !res.totalMentions) {
+    const none = document.createElement('div');
+    none.className = 'health-none';
+    none.textContent = `No lines mention “${term}”.`;
+    card.appendChild(none);
+    el.appendChild(card);
+    return;
+  }
+
+  const bd: Record<string, number> = res.levelBreakdown || {};
+  const problem = (bd.fatal || 0) + (bd.error || 0) + (bd.warning || 0);
+
+  // Header: term + optional "top failer" + a verdict badge
+  const header = document.createElement('div');
+  header.className = 'health-header';
+  const title = document.createElement('span');
+  title.className = 'health-term';
+  title.textContent = term;
+  header.appendChild(title);
+  if (res.isTopFailer) {
+    const badge = document.createElement('span');
+    badge.className = 'health-badge topfailer';
+    badge.textContent = '\u{1F525} top failer';
+    badge.title = 'Among the top failing components in this log';
+    header.appendChild(badge);
+  }
+  const verdict = document.createElement('span');
+  verdict.className = 'health-badge ' + (problem ? 'bad' : 'ok');
+  verdict.textContent = problem ? `${problem.toLocaleString()} problem lines` : 'no errors/warnings';
+  header.appendChild(verdict);
+  card.appendChild(header);
+
+  // Severity chips (crashes/errors/warnings) + a muted total-mentions chip
+  const chips = document.createElement('div');
+  chips.className = 'health-chips';
+  for (const lv of HEALTH_LEVELS) {
+    const n = bd[lv.key] || 0;
+    const chip = document.createElement('span');
+    chip.className = 'health-chip ' + lv.cls + (n ? '' : ' zero');
+    chip.textContent = `${lv.icon} ${n.toLocaleString()} ${lv.label}`;
+    chips.appendChild(chip);
+  }
+  const otherCount = Object.entries(bd).reduce((s, [k, v]) => HEALTH_LEVELS.some(l => l.key === k) ? s : s + (v as number), 0);
+  const totalChip = document.createElement('span');
+  totalChip.className = 'health-chip total';
+  totalChip.textContent = `${res.totalMentions.toLocaleString()} mentions`;
+  if (otherCount) totalChip.title = `${otherCount.toLocaleString()} at info/debug/other levels`;
+  chips.appendChild(totalChip);
+  card.appendChild(chips);
+
+  if (res.timeRange && res.timeRange.firstSeen) {
+    const tr = document.createElement('div');
+    tr.className = 'health-timerange';
+    tr.textContent = `⏱ ${res.timeRange.firstSeen} → ${res.timeRange.lastSeen}`;
+    card.appendChild(tr);
+  }
+
+  // Sample lines grouped by level (problem levels first), each clickable → jump.
+  const samples: Record<string, { lineNumber: number; text: string }[]> = res.samplesByLevel || {};
+  const order = [...HEALTH_LEVELS.map(l => l.key), ...Object.keys(samples).filter(k => !HEALTH_LEVELS.some(l => l.key === k))];
+  for (const level of order) {
+    const items = samples[level];
+    if (!items || !items.length) continue;
+    const group = document.createElement('div');
+    group.className = 'health-samples';
+    const gh = document.createElement('div');
+    gh.className = 'health-samples-head';
+    const meta = HEALTH_LEVELS.find(l => l.key === level);
+    gh.textContent = `${meta ? meta.icon + ' ' : ''}${level}`;
+    group.appendChild(gh);
+    for (const it of items) {
+      const row = document.createElement('div');
+      row.className = 'health-sample-row';
+      row.title = `Jump to line ${it.lineNumber + 1}`;
+      const ln = document.createElement('span');
+      ln.className = 'health-sample-line';
+      ln.textContent = 'L' + (it.lineNumber + 1);
+      const txt = document.createElement('span');
+      txt.className = 'health-sample-text';
+      txt.textContent = it.text;
+      row.appendChild(ln);
+      row.appendChild(txt);
+      row.addEventListener('click', () => { void navigateTo(it.lineNumber); });
+      group.appendChild(row);
+    }
+    card.appendChild(group);
+  }
+
+  el.appendChild(card);
+}
+
+// Right-click entry: reveal the Analysis panel, fill the Health box with the
+// selected text, and run the lookup — so both entry points share one result card.
+function openComponentHealth(term: string): void {
+  const t = (term || '').trim();
+  if (!t) return;
+  openBottomTab('analysis');
+  if (elements.healthInput) elements.healthInput.value = t;
+  void runHealthLookup(t);
+}
+
 async function showBrief(): Promise<void> {
   const el = elements.briefResults;
   if (!el) return;
@@ -25134,6 +25293,12 @@ function init(): void {
   onCancelableClick(elements.btnAnalyze, () => { void analyzeFile(); });
   document.getElementById('btn-run-analysis')?.addEventListener('click', analyzeFile);
   elements.btnBrief?.addEventListener('click', showBrief);
+
+  // Component/text health lookup — Check button + Enter in the input
+  elements.btnHealthLookup?.addEventListener('click', () => { void runHealthLookup(elements.healthInput?.value || ''); });
+  elements.healthInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); void runHealthLookup(elements.healthInput.value); }
+  });
 
   // Summarize (semantic template fold) — run/cancel toggle + client-side filter/sort
   elements.btnRunSummarize?.addEventListener('click', () => {
