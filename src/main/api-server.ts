@@ -8,6 +8,7 @@ import { FileHandler } from './fileHandler';
 import { type BaselineStore, buildFingerprint } from './baselineStore';
 import { AnalysisResult } from './analyzers/types';
 import { JournalEntry, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps } from './investigationStore';
+import { investigationToGraph } from './workflowGraph';
 import { listSequences, saveSequence, appendClue, deleteSequence } from './sequenceStore';
 import { evaluateRequirements, suggestRequirements, mergeRequirements, RequirementCheckContext, EntityRef } from './investigationRequirements';
 import { EntityDescriptor, toDescriptors } from './entityRegistry';
@@ -47,6 +48,7 @@ const USAGE_SKIP_PATHS = new Set<string>([
   '/api/agent-memory', '/api/agent-memory-clear',
   '/api/investigation-log', '/api/investigation-clear',
   '/api/investigation-check', '/api/investigation-suggest-requirements', '/api/investigation-set-requirements',
+  '/api/workflow-show',   // introspection (journal → graph), not a log-investigation verb
 ]);
 
 function journalLabel(p: string, body: Record<string, any>): string {
@@ -802,6 +804,24 @@ export function startApiServer(ctx: ApiContext): void {
         if (url === '/api/investigation-clear') {
           agentJournal = [];
           sendJson(res, { success: true });
+          return;
+        }
+        // Workflow Canvas Phase 1 — project a hunt into the typed WorkflowGraph model
+        // (workflowGraph.ts). Source = a named saved investigation (its steps +
+        // requirements) or, by default, the agent's current session journal. Read-only
+        // introspection; a Workflow is a PROJECTION of the investigation entity (no new
+        // store). The visual step-list/canvas is Phase 2.
+        if (url === '/api/workflow-show') {
+          const name = body.investigation || body.name || body.slug;
+          if (name) {
+            const tpl = getTemplate(name);
+            if (!tpl) return sendError(res, `No saved investigation named "${name}"`);
+            const graph = investigationToGraph(tpl.steps, tpl.requirements);
+            sendJson(res, { success: true, graph, source: { kind: 'investigation', name: tpl.name } });
+          } else {
+            const graph = investigationToGraph(agentJournal);
+            sendJson(res, { success: true, graph, source: { kind: 'journal', steps: agentJournal.length } });
+          }
           return;
         }
         if (url === '/api/investigation-save') {
