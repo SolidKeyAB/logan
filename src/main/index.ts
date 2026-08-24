@@ -5704,6 +5704,18 @@ ipcMain.handle(IPC.DETECT_FOLD_REGIONS, async (_, opts?: any) => {
   }
 });
 
+// Component/text health — human twin of logan_investigate_component. Reuses the
+// EXACT ApiContext.investigateComponent the agent calls (term → level breakdown +
+// per-level samples + isTopFailer), so the panel and the AI agree.
+ipcMain.handle(IPC.INVESTIGATE_COMPONENT, async (_, opts: { component: string; maxSamplesPerLevel?: number; includeErrorContext?: boolean; contextLines?: number }) => {
+  if (!apiContext) return { success: false, error: 'Not ready' };
+  try {
+    return await apiContext.investigateComponent(opts);
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
 // Apply the folded VIEW as an explicit line-set filter: the renderer computes the
 // visible lines (all lines minus each collapsed region's interior) and hands them
 // here, so the existing filtered read path maps display↔file with no new plumbing.
