@@ -10276,3 +10276,31 @@ kbd {
 .sum-examples-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px; margin-right: 4px; }
 .sum-ex-chip { padding: 2px 8px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 10px; font-size: 10.5px; font-variant-numeric: tabular-nums; }
 .sum-ex-chip:hover { border-color: var(--accent-color); text-decoration: none; }
+
+/* ═══ In-place viewer folding (collapse repeating blocks) ═══════════════════ */
+/* A repeat-region's first line gets a subtle tint + accent so it reads as a
+   fold header; the clickable ▶ ×N chip is an absolutely-positioned overlay. */
+.log-line.fold-anchor,
+.log-line.fold-anchor-open {
+  background: color-mix(in srgb, var(--accent-color) 8%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent-color);
+}
+.fold-badge { font-family: var(--font-family); }
+.fold-chip {
+  pointer-events: auto;
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 7px;
+  border-radius: 9px;
+  background: var(--accent-color);
+  color: #fff;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0.92;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+  user-select: none;
+}
+.fold-chip:hover { opacity: 1; }
+.fold-chip.expanded { background: var(--bg-hover); color: var(--text-secondary); }
+#btn-fold-repeats.active { border-color: var(--accent-color); color: var(--accent-hover); }
