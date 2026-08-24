@@ -10652,6 +10652,10 @@ kbd {
 }
 .workflow-step-tag.dataflow { color: var(--info-color); background: color-mix(in srgb, var(--info-color) 14%, transparent); }
 .workflow-step-nouns { display: flex; flex-wrap: wrap; gap: 5px; margin: 5px 0 0; }
+.workflow-step-result {
+  margin: 4px 0 0; font-size: 11px; font-family: var(--font-mono);
+  color: var(--info-color); opacity: 0.9;
+}
 .workflow-noun {
   font-size: 11px; font-family: var(--font-mono);
   padding: 1px 7px; border-radius: 5px;
