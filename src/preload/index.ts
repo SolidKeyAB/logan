@@ -129,6 +129,8 @@ const IPC = {
   // In-place viewer folding
   DETECT_FOLD_REGIONS: 'detect-fold-regions',
   SET_FOLD_FILTER: 'set-fold-filter',
+  // Component/text health lookup (human twin of logan_investigate_component)
+  INVESTIGATE_COMPONENT: 'investigate-component',
   // Evidence pack (native "📋 Brief")
   EVIDENCE_PACK: 'evidence-pack',
   // Usage Monitor (per-feature usage counts, split human vs AI)
@@ -1048,6 +1050,11 @@ const api = {
     ipcRenderer.invoke(IPC.DETECT_FOLD_REGIONS, opts),
   setFoldFilter: (lines: number[]): Promise<{ success: boolean; filteredLines?: number; filteredLineNumbers?: number[]; error?: string }> =>
     ipcRenderer.invoke(IPC.SET_FOLD_FILTER, lines),
+
+  // Component/text health — human twin of logan_investigate_component. Give it a
+  // term → error/warning/crash counts + per-level sample lines to jump to.
+  investigateComponent: (opts: { component: string; maxSamplesPerLevel?: number; includeErrorContext?: boolean; contextLines?: number }): Promise<{ success: boolean; component?: string; found?: boolean; totalMentions?: number; levelBreakdown?: Record<string, number>; timeRange?: { firstSeen: string; lastSeen: string } | null; isTopFailer?: boolean; samplesByLevel?: Record<string, { lineNumber: number; text: string }[]>; errorSites?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.INVESTIGATE_COMPONENT, opts),
 
   // Evidence pack — native "📋 Brief" (same briefing the AI's logan_evidence_pack builds)
   getEvidencePack: (options?: { thresholdSeconds?: number; topFields?: number; topGaps?: number; topComponents?: number; fieldSampleSize?: number; analyzerName?: string; baselineId?: string }): Promise<{ success: boolean; pack?: any; error?: string }> =>
