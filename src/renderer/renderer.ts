@@ -7650,6 +7650,12 @@ function renderWorkflowGraph(graph: any, name: string, body: HTMLElement): void 
   header.className = 'workflow-header';
   header.innerHTML = `<span class="workflow-title">⋔ ${escapeHtml(name)}</span>`
     + `<span class="workflow-meta">${graph.meta?.steps ?? stepNodes.length} step${(graph.meta?.steps ?? stepNodes.length) === 1 ? '' : 's'}${graph.meta?.dropped ? ` · ${graph.meta.dropped} skipped` : ''}</span>`;
+  // ✎ Tweak & replay — jump to the inline tweak-form (retarget nouns → Run, or ⑂ fork).
+  const tweak = document.createElement('button');
+  tweak.className = 'workflow-tweak'; tweak.textContent = '✎ Tweak & replay';
+  tweak.title = 'Retarget the nouns → run on this log, or save as a new instance';
+  tweak.addEventListener('click', () => { openBottomTab('investigate'); void runInvestigationTemplate(name); });
+  header.appendChild(tweak);
   const close = document.createElement('button');
   close.className = 'workflow-close'; close.textContent = '×'; close.title = 'Close';
   close.addEventListener('click', closeWorkflowOverlay);
@@ -7812,24 +7818,45 @@ function renderReplayParamForm(container: HTMLElement | null, name: string, para
     + `<div class="investigate-replay-title">Rerun “${escapeHtml(name)}” on this log — adjust the window / nouns</div>`
     + `<div class="investigate-req-note">Leave a field as-is to reuse the captured value; edit to retarget the hunt onto this incident.</div>`
     + rows
-    + `<div class="investigate-req-actions"><button class="secondary-btn small" id="btn-replay-reset">Reset</button><button class="primary-btn small" id="btn-replay-run">▶ Run replay</button></div>`
+    + `<div class="investigate-req-actions"><button class="secondary-btn small" id="btn-replay-reset">Reset</button><button class="secondary-btn small" id="btn-replay-fork" title="Save these tweaked values as a NEW saved investigation (a fork)">⑂ Save as new…</button><button class="primary-btn small" id="btn-replay-run">▶ Run replay</button></div>`
     + `</div>`;
   container.querySelector('#btn-replay-reset')?.addEventListener('click', () => renderReplayParamForm(container, name, params, force));
   container.querySelector('#btn-replay-run')?.addEventListener('click', () => {
-    const overrides: Record<string, any> = {};
-    container.querySelectorAll('.replay-param-input').forEach(el => {
-      const input = el as HTMLInputElement;
-      const key = input.getAttribute('data-param-key') || '';
-      // UNTOUCHED field (still equals the rendered capture) → do NOT override, so the
-      // step keeps its own captured value verbatim. Only genuinely edited fields
-      // become overrides (which resolveSteps then applies to every step using the key).
-      if (!key || input.value === input.defaultValue) return;
-      const raw = input.value.trim();
-      if (raw === '') return; // cleared → also keep the captured default
-      overrides[key] = (input.getAttribute('data-param-numeric') === '1' && !isNaN(Number(raw))) ? Number(raw) : raw;
-    });
-    void runInvestigationTemplate(name, force, overrides);
+    void runInvestigationTemplate(name, force, collectReplayOverrides(container));
   });
+  container.querySelector('#btn-replay-fork')?.addEventListener('click', () => { void forkInvestigationFromForm(name, container); });
+}
+
+// Collect only genuinely-EDITED, non-empty fields as overrides (an untouched field
+// keeps the step's captured value; resolveSteps applies an override to every step
+// using that key). Shared by ▶ Run replay and ⑂ Save-as-new-instance (fork).
+function collectReplayOverrides(container: HTMLElement): Record<string, any> {
+  const overrides: Record<string, any> = {};
+  container.querySelectorAll('.replay-param-input').forEach(el => {
+    const input = el as HTMLInputElement;
+    const key = input.getAttribute('data-param-key') || '';
+    if (!key || input.value === input.defaultValue) return;
+    const raw = input.value.trim();
+    if (raw === '') return;
+    overrides[key] = (input.getAttribute('data-param-numeric') === '1' && !isNaN(Number(raw))) ? Number(raw) : raw;
+  });
+  return overrides;
+}
+
+// Phase 3 fork — persist the tweaked values as a NEW saved investigation (its new
+// captured defaults), so a retargeted hunt becomes reusable rather than one-off.
+async function forkInvestigationFromForm(name: string, container: HTMLElement): Promise<void> {
+  const overrides = collectReplayOverrides(container);
+  const suggested = Object.keys(overrides).length
+    ? `${name} (${Object.entries(overrides).map(([k, v]) => `${k}=${v}`).join(', ')})`
+    : `${name} copy`;
+  const newName = ((await showInputPrompt('Name the new investigation instance:', suggested)) || '').trim();
+  if (!newName) return;
+  const res = await window.api.forkInvestigation(name, newName, overrides);
+  if (!res.success) { showToast(res.error || 'Fork failed'); return; }
+  trackUsage('investigation:fork');
+  showToast(`Saved new instance “${newName}” — ${Object.keys(overrides).length} tweak${Object.keys(overrides).length === 1 ? '' : 's'} baked in`);
+  void loadInvestigationTemplates();
 }
 
 // Render a requirements report (array of checks) as a compact ✓/✗ list.

@@ -61,6 +61,7 @@ const IPC = {
   INVESTIGATION_SAVE: 'investigation-save',
   INVESTIGATION_RUN: 'investigation-run',
   INVESTIGATION_DELETE: 'investigation-delete',
+  INVESTIGATION_FORK: 'investigation-fork',
   INVESTIGATION_CHECK: 'investigation-check',
   INVESTIGATION_SET_REQS: 'investigation-set-requirements',
   INVESTIGATION_SUGGEST_REQS: 'investigation-suggest-requirements',
@@ -808,6 +809,10 @@ const api = {
     ipcRenderer.invoke(IPC.INVESTIGATION_RUN, name, params, force),
   deleteInvestigation: (name: string): Promise<{ success: boolean }> =>
     ipcRenderer.invoke(IPC.INVESTIGATION_DELETE, name),
+  // Fork a saved investigation into a new named instance with tweaked nouns (params)
+  // baked in as the new defaults.
+  forkInvestigation: (name: string, newName: string, params?: Record<string, any>, description?: string): Promise<{ success: boolean; template?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.INVESTIGATION_FORK, name, newName, params, description),
   checkInvestigation: (name: string): Promise<{ success: boolean; name?: string; manifest?: any; requirements?: any; error?: string }> =>
     ipcRenderer.invoke(IPC.INVESTIGATION_CHECK, name),
   setInvestigationRequirements: (name: string, requirements: any): Promise<{ success: boolean; template?: any; error?: string }> =>

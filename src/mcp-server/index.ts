@@ -879,6 +879,26 @@ server.tool(
   }
 );
 
+// === Tool: logan_fork_investigation ===
+server.tool(
+  'logan_fork_investigation',
+  'Fork a saved investigation into a NEW named instance with tweaked nouns baked in as its new captured defaults ("save as a new instance"). Applies `params` overrides to the source template\'s steps and saves the result under `newName` — the killer replay ergonomic: adapt a past root-cause hunt (e.g. a new time window / component) and keep it as a reusable pattern instead of re-tweaking every time. Requirements manifest carries over. Does NOT run it — use logan_run_investigation to replay. Returns the new template.',
+  {
+    name: z.string().describe('Existing saved template name (or slug) to fork'),
+    newName: z.string().describe('Name for the new forked instance'),
+    params: z.record(z.string(), z.any()).optional().describe('Noun overrides baked in as the new defaults, e.g. { "component": "auth", "startTime": "…" }'),
+    description: z.string().optional().describe('Optional description for the new instance'),
+  },
+  async ({ name, newName, params, description }) => {
+    try {
+      const result = await apiCall('POST', '/api/investigation-fork', { name, newName, params: params || {}, description });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_check_investigation ===
 server.tool(
   'logan_check_investigation',
