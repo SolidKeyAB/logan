@@ -7695,6 +7695,13 @@ function renderWorkflowGraph(graph: any, name: string, body: HTMLElement): void 
       }
       row.appendChild(nounsEl);
     }
+    // Build 2 — the step's outcome (what it found), so the node reads as a result, not just a verb.
+    if (n.result) {
+      const resEl = document.createElement('div');
+      resEl.className = 'workflow-step-result';
+      resEl.textContent = `→ ${n.result}`;
+      row.appendChild(resEl);
+    }
     const refs = refsByStep[n.id] || [];
     if (refs.length) {
       const refsEl = document.createElement('div'); refsEl.className = 'workflow-step-refs';

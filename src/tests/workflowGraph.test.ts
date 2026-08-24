@@ -87,4 +87,13 @@ describe('investigationToGraph', () => {
     expect(investigationToGraph([]).nodes).toEqual([]);
     expect(investigationToGraph(null).meta).toEqual({ steps: 0, entities: 0, dropped: 0 });
   });
+
+  it('carries a captured result onto the step node (Build 2)', () => {
+    const g = investigationToGraph([
+      { path: '/api/search', body: { pattern: 'x' }, result: '42 matches', label: 'search x' },
+      { path: '/api/filter', body: { levels: ['error'] }, label: 'filter' }, // no result
+    ]);
+    expect(g.nodes[0].result).toBe('42 matches');
+    expect(g.nodes[1].result).toBeUndefined();
+  });
 });
