@@ -10553,3 +10553,117 @@ kbd {
   font-size: 11px;
   color: var(--text-muted);
 }
+
+/* ═══ Workflow step-list overlay (Phase 2) ═════════════════════════════════ */
+/* Read-only, roomy commit-log view of a saved investigation's WorkflowGraph. */
+.workflow-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 8vh 16px 16px;
+  background: rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(1.5px);
+}
+.workflow-overlay[hidden] { display: none; }
+.workflow-panel {
+  width: 720px;
+  max-width: 94vw;
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.workflow-body { overflow-y: auto; padding: 0; }
+.workflow-hint { color: var(--text-muted); font-size: 13px; padding: 20px; text-align: center; }
+
+.workflow-header {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  z-index: 1;
+}
+.workflow-title { font-weight: 700; font-family: var(--font-mono); color: var(--accent-hover); }
+.workflow-meta { font-size: 11px; color: var(--text-muted); }
+.workflow-close {
+  margin-left: auto;
+  width: 24px; height: 24px;
+  border: none; border-radius: 5px;
+  background: transparent; color: var(--text-secondary);
+  font-size: 18px; line-height: 1; cursor: pointer;
+}
+.workflow-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* The commit-log spine — a vertical rail with a node dot per step. */
+.workflow-steps { padding: 10px 16px 4px; }
+.workflow-step {
+  position: relative;
+  padding: 8px 0 12px 22px;
+  border-left: 2px solid var(--border-color);
+  margin-left: 8px;
+}
+.workflow-step:last-child { border-left-color: transparent; }
+.workflow-step::before {
+  content: '';
+  position: absolute;
+  left: -7px; top: 12px;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  box-shadow: 0 0 0 3px var(--bg-secondary);
+}
+.workflow-step-head { display: flex; align-items: center; gap: 8px; }
+.workflow-step-idx {
+  font-size: 10px; font-weight: 700; color: var(--text-muted);
+  min-width: 16px;
+}
+.workflow-step-verb {
+  font-family: var(--font-mono); font-weight: 600; font-size: 13px; color: var(--text-primary);
+}
+.workflow-step-tag {
+  font-size: 10px; padding: 1px 6px; border-radius: 8px;
+  background: var(--bg-hover); color: var(--text-muted); white-space: nowrap;
+}
+.workflow-step-tag.dataflow { color: var(--info-color); background: color-mix(in srgb, var(--info-color) 14%, transparent); }
+.workflow-step-nouns { display: flex; flex-wrap: wrap; gap: 5px; margin: 5px 0 0; }
+.workflow-noun {
+  font-size: 11px; font-family: var(--font-mono);
+  padding: 1px 7px; border-radius: 5px;
+  background: var(--bg-hover); color: var(--text-secondary);
+  white-space: nowrap;
+}
+/* Tint the "money" nouns — time window + component lead the replay tweak. */
+.workflow-noun.kind-time, .workflow-noun.kind-range { color: var(--warning-color); background: color-mix(in srgb, var(--warning-color) 13%, transparent); }
+.workflow-noun.kind-component { color: var(--accent-color); background: color-mix(in srgb, var(--accent-color) 13%, transparent); }
+.workflow-step-refs { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+
+.workflow-entities {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 10px 16px 14px; border-top: 1px solid var(--border-color); margin-top: 4px;
+}
+.workflow-entities-label { font-size: 11px; color: var(--text-muted); }
+.workflow-entity-chip {
+  font-size: 11px; font-family: var(--font-mono);
+  padding: 2px 8px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--border-color);
+  background: var(--bg-hover); color: var(--text-secondary);
+}
+.workflow-entity-chip:hover { border-color: var(--accent-color); color: var(--accent-hover); }
+
+/* The ⋔ steps button on an investigation chip. */
+.investigate-pattern-steps {
+  border: none; background: transparent; cursor: pointer;
+  color: var(--text-secondary); font-size: 12px; padding: 0 4px;
+}
+.investigate-pattern-steps:hover { color: var(--accent-hover); }
