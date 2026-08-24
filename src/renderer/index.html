@@ -1803,6 +1803,17 @@
       <button id="btn-panel-color-reset" class="panel-color-reset-btn" title="Reset to default" aria-label="Reset panel color">Reset</button>
     </div>
   </div>
+
+  <!-- Entity command palette (Ctrl+P) — one keystroke to fuzzy-find ANY saved entity
+       from the registry and apply / open / copy it. A single generic access surface
+       over the whole Entity Registry (reuses applySavedEntity/revealSavedEntity). -->
+  <div id="entity-palette" class="entity-palette-overlay" hidden>
+    <div class="entity-palette" role="dialog" aria-modal="true" aria-label="Entity command palette">
+      <input id="entity-palette-input" type="text" class="entity-palette-input" placeholder="Search saved entities — apply · open · copy…" spellcheck="false" autocomplete="off" />
+      <div id="entity-palette-list" class="entity-palette-list"></div>
+      <div class="entity-palette-hint"><span>↑↓ move</span><span>⏎ apply / open</span><span>⇧⏎ open where it lives</span><span>Esc close</span></div>
+    </div>
+  </div>
   <script src="renderer.js"></script>
 </body>
 </html>
