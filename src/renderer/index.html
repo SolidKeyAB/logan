@@ -446,6 +446,17 @@
             <button id="btn-run-analysis" class="secondary-btn small">Run Analysis</button>
             <button id="btn-brief" class="secondary-btn small" title="One-glance briefing: severity, levels, crashes, top failing components, time gaps, discovered fields — click any row to jump there.">📋 Brief</button>
           </div>
+          <!-- Component/text health lookup — type a component name or any text and see
+               its crash / error / warning counts + clickable sample lines to jump to.
+               Human twin of logan_investigate_component (same backend). -->
+          <div class="health-lookup">
+            <div class="health-input-row">
+              <span class="health-icon" title="Component / text health">🩺</span>
+              <input id="health-input" type="text" class="health-input" placeholder="Component or text → crashes, errors, failures…" spellcheck="false" />
+              <button id="btn-health-lookup" class="secondary-btn small" title="Find crashes / errors / warnings mentioning this text">Check</button>
+            </div>
+            <div id="health-results" class="health-results"></div>
+          </div>
           <div id="analysis-results" class="analysis-content">
             <p class="placeholder">Run analysis to see results</p>
           </div>
