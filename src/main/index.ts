@@ -5636,6 +5636,24 @@ ipcMain.handle(IPC.TRIAGE_RECIPE, async (_, options: RecipeOptions) => {
   }
 });
 
+// Semantic summary — human twin of logan_summarize. Reuses the exact same
+// ApiContext.summarize the agent's /api/summarize route calls (streaming
+// TemplateFolder over forEachScopeLine), so the panel and the AI agree.
+ipcMain.handle(IPC.SUMMARIZE, async (_, opts?: any, scope?: ScopeDescriptor) => {
+  if (!apiContext) return { success: false, error: 'Not ready' };
+  try {
+    return await apiContext.summarize(opts, scope || undefined);
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+// Cancel an in-flight summary (the ⏹/Cancel button on the Summarize panel).
+ipcMain.handle(IPC.SUMMARIZE_CANCEL, async () => {
+  summarizeSignal.cancelled = true;
+  return { success: true };
+});
+
 // Evidence pack (native "📋 Brief") — reuses the SAME buildEvidencePack the AI's
 // /api/evidence-pack path uses. Sensible defaults match the MCP tool; redaction
 // is off (this is the local human view).
