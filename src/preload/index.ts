@@ -64,6 +64,7 @@ const IPC = {
   INVESTIGATION_CHECK: 'investigation-check',
   INVESTIGATION_SET_REQS: 'investigation-set-requirements',
   INVESTIGATION_SUGGEST_REQS: 'investigation-suggest-requirements',
+  WORKFLOW_SHOW: 'workflow-show',
   ENTITIES_LIST: 'entities-list',
   SERIAL_LIST_PORTS: 'serial-list-ports',
   LOGCAT_LIST_DEVICES: 'logcat-list-devices',
@@ -813,6 +814,10 @@ const api = {
     ipcRenderer.invoke(IPC.INVESTIGATION_SET_REQS, name, requirements),
   suggestInvestigationRequirements: (): Promise<{ success: boolean; requirements?: any; error?: string }> =>
     ipcRenderer.invoke(IPC.INVESTIGATION_SUGGEST_REQS),
+  // Workflow canvas — project a saved investigation (by name) into a WorkflowGraph
+  // for the read-only step-list. Omit the name for the current session journal.
+  showWorkflow: (investigation?: string): Promise<{ success: boolean; graph?: any; source?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.WORKFLOW_SHOW, investigation),
 
   // Entity Registry — the saved-entities browse catalog
   listEntities: (kind?: string): Promise<{ success: boolean; count?: number; entities?: any[]; error?: string }> =>

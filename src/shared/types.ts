@@ -431,6 +431,7 @@ export const IPC = {
   INVESTIGATION_CHECK: 'investigation-check',                          // preflight requirements vs open log
   INVESTIGATION_SET_REQS: 'investigation-set-requirements',           // attach/replace requirements manifest
   INVESTIGATION_SUGGEST_REQS: 'investigation-suggest-requirements',   // suggest a starter manifest from open file
+  WORKFLOW_SHOW: 'workflow-show',                                     // project a hunt (journal or saved investigation) → WorkflowGraph
   // Entity Registry — one browse catalog over every saved entity
   ENTITIES_LIST: 'entities-list',
   // Device discovery (kept per-source)
