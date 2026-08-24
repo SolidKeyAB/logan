@@ -1394,8 +1394,8 @@ let cachedLines = new LRUCache<number, LogLine>(CACHE_SIZE);
 // Detected repeating blocks + which are collapsed. Folding reuses the FILTER
 // machinery: a collapsed region's interior is hidden by applying the visible
 // line-set as a fold filter (SET_FOLD_FILTER), and each region's first line gets
-// a clickable "▶ ×N" header (foldHeaderMap: fileLine → region index). Not
-// persisted across tabs in v1 (reset on tab switch / clear filter).
+// a code-editor-style ▾/▸ fold chevron in the gutter (foldHeaderMap: fileLine →
+// region index). Not persisted across tabs in v1 (reset on tab switch / clear).
 interface FoldViewState { regions: FoldRegion[]; collapsed: boolean[]; }
 let foldView: FoldViewState | null = null;
 let foldActive = false;
@@ -2799,14 +2799,15 @@ function renderVisibleLines(): void {
 
       fragment.appendChild(lineElement);
 
-      // Fold header — a clickable "▶ ×N" chip on a repeat-region's first line.
+      // Fold control — a gutter ▾/▸ chevron on a repeat-region's first line,
+      // like code-editor scope folding. Click to collapse/expand that region.
       if (foldActive && foldHeaderMap.size > 0) {
         const regionIdx = foldHeaderMap.get(line.lineNumber);
         if (regionIdx !== undefined && foldView) {
           const collapsed = foldView.collapsed[regionIdx];
           lineElement.classList.add(collapsed ? 'fold-anchor' : 'fold-anchor-open');
           if (!wordWrapEnabled && !jsonFormattingEnabled) {
-            fragment.appendChild(createFoldBadge(foldView.regions[regionIdx], regionIdx, collapsed, top));
+            fragment.appendChild(createFoldGutter(foldView.regions[regionIdx], regionIdx, collapsed, top));
           }
         }
       }
@@ -7124,12 +7125,10 @@ function toggleSummarizeExamples(row: HTMLElement): void {
 
 // ─── In-place viewer folding (collapse repeating blocks) ─────────────────────
 // Surfaces the RepeatRegion engine: "Fold repeats" detects contiguous repeating
-// blocks off-thread and collapses each to its first block + a "▶ ×N" header the
-// user can expand/collapse. Implemented on the filter machinery — a collapsed
+// blocks off-thread and collapses each to its first block + a gutter ▾/▸ chevron
+// the user can expand/collapse. Implemented on the filter machinery — a collapsed
 // region's interior lines are hidden via SET_FOLD_FILTER (an explicit line-set),
 // so the read path maps display↔file with no new plumbing.
-
-const FOLD_GUTTER_LEFT = 64; // px — start of the text area, past the line-number gutter
 
 function rebuildFoldHeaderMap(): void {
   foldHeaderMap.clear();
@@ -7166,21 +7165,31 @@ function currentTopFileLine(): number {
   return disp;
 }
 
-function createFoldBadge(region: FoldRegion, idx: number, collapsed: boolean, top: number): HTMLDivElement {
-  const badge = document.createElement('div');
-  badge.className = 'fold-badge';
-  badge.style.cssText = `position:absolute;left:${FOLD_GUTTER_LEFT}px;top:${top}px;height:${getLineHeight()}px;display:flex;align-items:center;pointer-events:none;z-index:3;`;
-  const chip = document.createElement('span');
-  chip.className = 'fold-chip' + (collapsed ? ' collapsed' : ' expanded');
-  chip.textContent = collapsed
-    ? `▶ ×${region.repeatCount} · +${region.hiddenLines.toLocaleString()}`
-    : `▼ ×${region.repeatCount}`;
-  chip.title = collapsed
-    ? `${region.hiddenLines.toLocaleString()} repeated lines hidden (L${region.start + 1}–L${region.end + 1}). Click to expand.`
-    : `Repeating block L${region.start + 1}–L${region.end + 1}. Click to collapse.`;
-  chip.addEventListener('click', (e) => { e.stopPropagation(); void toggleFoldRegion(idx); });
-  badge.appendChild(chip);
-  return badge;
+// A code-editor-style fold control in the LEFT gutter of a repeat-region's first
+// line: a ▾/▸ chevron (click to collapse/expand that region), plus — when
+// collapsed — a subtle "⋯ ×N" count so you can see how much is hidden at a glance
+// (full detail in the tooltip). Rendered as an absolute overlay so it never
+// perturbs the virtual scroller's layout/read path.
+function createFoldGutter(region: FoldRegion, idx: number, collapsed: boolean, top: number): HTMLDivElement {
+  const gutter = document.createElement('div');
+  gutter.className = 'fold-gutter';
+  gutter.style.cssText = `position:absolute;left:0;top:${top}px;height:${getLineHeight()}px;display:flex;align-items:center;gap:5px;padding-left:2px;pointer-events:none;z-index:4;`;
+  const chevron = document.createElement('span');
+  chevron.className = 'fold-chevron' + (collapsed ? ' collapsed' : ' expanded');
+  chevron.textContent = collapsed ? '▸' : '▾'; // ▸ / ▾
+  chevron.title = collapsed
+    ? `${region.hiddenLines.toLocaleString()} repeated lines folded — ×${region.repeatCount} blocks (L${region.start + 1}–L${region.end + 1}). Click to expand.`
+    : `Repeating block ×${region.repeatCount} (L${region.start + 1}–L${region.end + 1}). Click to fold.`;
+  chevron.addEventListener('click', (e) => { e.stopPropagation(); void toggleFoldRegion(idx); });
+  gutter.appendChild(chevron);
+  if (collapsed) {
+    const tag = document.createElement('span');
+    tag.className = 'fold-count';
+    tag.textContent = `⋯ ×${region.repeatCount}`; // ⋯ ×N
+    tag.title = `+${region.hiddenLines.toLocaleString()} lines hidden`;
+    gutter.appendChild(tag);
+  }
+  return gutter;
 }
 
 // Push the fold view-set to main (as an explicit line filter) and repaint,
