@@ -67,10 +67,17 @@ function journalLabel(p: string, body: Record<string, any>): string {
   return name;
 }
 
-function recordJournal(p: string, body: Record<string, any>): void {
-  if (!INVESTIGATIVE_PATHS.has(p)) return;
-  agentJournal.push({ path: p, body: { ...body }, ts: Date.now(), label: journalLabel(p, body) });
+// Build 2: after a recorded investigative call responds, capture a compact result
+// summary onto its journal entry. recordJournal returns the entry; the dispatch site
+// maps it to the response object here, and sendJson fills in `.result` when it fires.
+const resultPendingByRes = new WeakMap<http.ServerResponse, JournalEntry>();
+
+function recordJournal(p: string, body: Record<string, any>): JournalEntry | null {
+  if (!INVESTIGATIVE_PATHS.has(p)) return null;
+  const entry: JournalEntry = { path: p, body: { ...body }, ts: Date.now(), label: journalLabel(p, body) };
+  agentJournal.push(entry);
   if (agentJournal.length > JOURNAL_CAP) agentJournal = agentJournal.slice(-JOURNAL_CAP);
+  return entry;
 }
 
 // Replay one step as an internal HTTP call to ourselves (reuses all endpoint
@@ -99,6 +106,14 @@ function summarizeReplay(p: string, r: any): string {
   if (p === '/api/analyze') return r.analysis?.summary || 'analyzed';
   if (p === '/api/time-gaps') return `${r.gaps?.length ?? 0} gaps`;
   if (p.startsWith('/api/trend')) return `${r.totalPoints ?? r.fields?.length ?? r.transitions?.length ?? 0} points/items`;
+  if (p === '/api/investigate-component') {
+    if (r.found === false) return 'not found';
+    const err = r.levelBreakdown?.error ? `, ${r.levelBreakdown.error} err` : '';
+    return `${r.totalMentions ?? 0} mentions${err}`;
+  }
+  if (p === '/api/fold-regions') return `${r.regions?.length ?? 0} repeat regions`;
+  if (p === '/api/evidence-pack') return r.pack?.severity ? `${r.pack.severity}` : 'brief';
+  if (p === '/api/investigate-crashes') return `${r.crashes?.length ?? r.groups?.length ?? 0} crash groups`;
   return 'ok';
 }
 
@@ -416,6 +431,9 @@ function parseBody(req: http.IncomingMessage): Promise<any> {
 }
 
 function sendJson(res: http.ServerResponse, data: any, status = 200): void {
+  // Build 2: attach a compact result summary to this call's journal entry, if any.
+  const pending = resultPendingByRes.get(res);
+  if (pending) { resultPendingByRes.delete(res); try { pending.result = summarizeReplay(pending.path, data); } catch { /* ignore */ } }
   const body = JSON.stringify(data);
   res.writeHead(status, {
     'Content-Type': 'application/json',
@@ -779,7 +797,8 @@ export function startApiServer(ctx: ApiContext): void {
         // Record investigative calls into the journal — unless this is a replay
         // (internal call from runTemplate), which would pollute the recording.
         if (req.headers['x-logan-replay'] !== '1') {
-          recordJournal(url, body);
+          const journaled = recordJournal(url, body);
+          if (journaled) resultPendingByRes.set(res, journaled); // fill .result at sendJson
           // Usage Monitor: count every real AI tool call (verb = path minus
           // '/api/'). Skip replay + housekeeping paths. Fire-and-forget.
           if (url?.startsWith('/api/') && !USAGE_SKIP_PATHS.has(url)) {
