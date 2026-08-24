@@ -502,6 +502,8 @@ export const IPC = {
   // In-place viewer folding — detect repeating blocks + apply a fold view as an explicit line-set filter
   DETECT_FOLD_REGIONS: 'detect-fold-regions',
   SET_FOLD_FILTER: 'set-fold-filter',
+  // Component/text health lookup — human twin of logan_investigate_component
+  INVESTIGATE_COMPONENT: 'investigate-component',
   // Evidence pack (native "📋 Brief" — same briefing the AI's logan_evidence_pack builds)
   EVIDENCE_PACK: 'evidence-pack',
   // Usage Monitor (per-feature usage counts, split human vs AI)
