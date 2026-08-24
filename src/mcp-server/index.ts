@@ -404,6 +404,25 @@ server.tool(
   }
 );
 
+// === Tool: logan_show_workflow ===
+server.tool(
+  'logan_show_workflow',
+  'Render your investigation PROCESS as a typed workflow graph — the reusable "recipe" of HOW you investigated, not the log findings. By default it projects the current session\'s journal (the investigative tool calls you made, in order); pass `investigation` to project a saved investigation template by name instead. Returns { graph: { nodes, edges, meta }, source }: each meaningful step is a node (verb + its tweakable nouns — time window / component / field / pattern — plus config), saved entities the investigation references become entity nodes, and edges are typed sequence (order) | dataflow (a step consuming the prior step\'s active scope) | reference (a step using a saved entity). Navigation/fetch/chat noise is dropped (counted in meta.dropped). Use it to show the user the shape of your hunt, or to review your own path before saving it as a replayable investigation. (Read-only introspection; a Workflow is a projection of the investigation entity — the visual canvas is a later phase.)',
+  {
+    investigation: z.string().optional().describe('Name of a saved investigation template to project into a graph. Omit to project the current session journal.'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+  },
+  async ({ investigation, redact }) => {
+    try {
+      const result = await apiCall('POST', '/api/workflow-show', { investigation });
+      const output = redact ? maybeRedact(result, true) : result;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_filter ===
 server.tool(
   'logan_filter',
