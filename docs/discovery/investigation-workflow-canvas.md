@@ -88,8 +88,9 @@ Mostly no: `investigation` is already a Tier-1 registry entity with a requiremen
 
 ## Proposed path (primitive-first, surfaces earned — same process as Entity Registry)
 
-**Phase 0 — Model (pure primitive, no UI).**
+**Phase 0 — Model (pure primitive, no UI). ✅ BUILT 2026-08-24.**
 Define `WorkflowGraph` = `nodes[]` (`{id, kind: step|entity, verb, nouns/config, entityRef?}`) + `edges[]` (`sequence | dataflow | reference`). Write a **pure projection** `investigationToGraph(journal, requirements)`. Parity contract only. Zero visual.
+> Shipped as `src/main/workflowGraph.ts` (+ `src/tests/workflowGraph.test.ts`, 8 golden tests). Pure, Electron-free (mirrors `columnPattern.ts`). Projects a journal (or a template's steps) into typed nodes+edges: meaningful steps only (noise paths — get-lines/navigate/chat — dropped, counted in `meta.dropped`), `sequence` spine, `dataflow` edge when a step consumes `scope:'active'`, and requirements-referenced entities as `entity` nodes with a `reference` edge from any step that names them. Nouns share `PARAM_KEYS`/`paramKind` with the investigation template (one source of truth), so the graph's tweakable nouns == the replay tweak-form's params. **Build 0 (declared `params[]` noun-schema) was already shipped** — confirmed live in `investigationStore.ts` (`ParamDef.kind` + `paramKind` + back-fill). No UI / agent verb / store yet — those are Phase 1+ (tools & UI), deferred per steering.
 
 **Phase 1 — Agent + registry.**
 `logan_show_workflow` (agent renders its journal as a graph, like `trend_show`) + `/api/workflow-show`. Workflows are either a new entity kind or a **graph projection of the existing `investigation` kind** (prefer projection — no new store). Agent verb + registry list.
