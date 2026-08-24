@@ -24937,10 +24937,43 @@ function setupHelpTooltips(): void {
   });
 }
 
+// Make every modal draggable by its header. Delegated on document, so it covers
+// BOTH the static modals in index.html AND any modal built at runtime (they all use
+// .modal > .modal-content > .modal-header). Dragging offsets .modal-content via a
+// transform (doesn't fight the flex-centered layout); the offset persists per element.
+function setupDraggableModals(): void {
+  document.addEventListener('mousedown', (e) => {
+    const target = e.target as HTMLElement;
+    const header = target.closest('.modal-header') as HTMLElement | null;
+    if (!header) return;
+    // Don't start a drag from an interactive control in the header (close ×, inputs…).
+    if (target.closest('button, input, select, textarea, a, .modal-close')) return;
+    const content = header.closest('.modal-content') as HTMLElement | null;
+    if (!content) return;
+    e.preventDefault();
+    const base = (content as any)._dragOffset || { x: 0, y: 0 };
+    const startX = e.clientX, startY = e.clientY;
+    const move = (ev: MouseEvent) => {
+      const x = base.x + (ev.clientX - startX);
+      const y = base.y + (ev.clientY - startY);
+      (content as any)._dragOffset = { x, y };
+      content.style.transform = `translate(${x}px, ${y}px)`;
+    };
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+}
+
 function init(): void {
   // Detect platform and setup window controls
   setupWindowControls();
   applyMutedSize(); // restore the saved muted-line size (default: as is)
+  setupDraggableModals(); // every modal is movable by its header
+
+  // Load user settings from localStorage
+  loadSettings();
+  applySettings();
 
   // Load user settings from localStorage
   loadSettings();
