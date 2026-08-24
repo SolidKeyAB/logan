@@ -428,6 +428,7 @@ export const IPC = {
   INVESTIGATION_SAVE: 'investigation-save',
   INVESTIGATION_RUN: 'investigation-run',
   INVESTIGATION_DELETE: 'investigation-delete',
+  INVESTIGATION_FORK: 'investigation-fork',                            // save-as-new-instance with tweaked nouns
   INVESTIGATION_CHECK: 'investigation-check',                          // preflight requirements vs open log
   INVESTIGATION_SET_REQS: 'investigation-set-requirements',           // attach/replace requirements manifest
   INVESTIGATION_SUGGEST_REQS: 'investigation-suggest-requirements',   // suggest a starter manifest from open file

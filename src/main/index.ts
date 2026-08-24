@@ -8178,6 +8178,7 @@ ipcMain.handle(IPC.INVESTIGATION_LIST, async () => callApiServer('/api/investiga
 ipcMain.handle(IPC.INVESTIGATION_SAVE, async (_e, name: string, description?: string, requirements?: any, autoDetect?: boolean) => callApiServer('/api/investigation-save', { name, description, requirements, autoDetect }));
 ipcMain.handle(IPC.INVESTIGATION_RUN, async (_e, name: string, params?: Record<string, any>, force?: boolean) => callApiServer('/api/investigation-run', { name, params: params || {}, force: force || false }));
 ipcMain.handle(IPC.INVESTIGATION_DELETE, async (_e, name: string) => callApiServer('/api/investigation-delete', { name }));
+ipcMain.handle(IPC.INVESTIGATION_FORK, async (_e, name: string, newName: string, params?: Record<string, any>, description?: string) => callApiServer('/api/investigation-fork', { name, newName, params: params || {}, description }));
 ipcMain.handle(IPC.INVESTIGATION_CHECK, async (_e, name: string) => callApiServer('/api/investigation-check', { name }));
 ipcMain.handle(IPC.INVESTIGATION_SET_REQS, async (_e, name: string, requirements: any) => callApiServer('/api/investigation-set-requirements', { name, requirements }));
 ipcMain.handle(IPC.INVESTIGATION_SUGGEST_REQS, async () => callApiServer('/api/investigation-suggest-requirements', {}));
