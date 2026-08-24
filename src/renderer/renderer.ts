@@ -7595,13 +7595,28 @@ const WORKFLOW_ENTITY_REVEAL_KIND: Record<string, string> = { highlight: 'highli
 
 function wfTrunc(s: string, n: number): string { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 
-function workflowOverlayOpen(): boolean {
-  const el = document.getElementById('workflow-overlay');
-  return !!el && !el.hasAttribute('hidden');
-}
-
 function closeWorkflowOverlay(): void {
   document.getElementById('workflow-overlay')?.setAttribute('hidden', '');
+}
+
+// Make the floating (non-modal) workflow panel draggable by its header, so it can be
+// parked out of the way while you keep working the log. Clicking the × still closes.
+function enableWorkflowDrag(header: HTMLElement, panel: HTMLElement, closeBtn: HTMLElement): void {
+  header.addEventListener('mousedown', (e) => {
+    if (closeBtn.contains(e.target as Node)) return;
+    e.preventDefault();
+    const rect = panel.getBoundingClientRect();
+    const offX = e.clientX - rect.left;
+    const offY = e.clientY - rect.top;
+    panel.style.right = 'auto';
+    const move = (ev: MouseEvent) => {
+      panel.style.left = Math.max(0, Math.min(window.innerWidth - 80, ev.clientX - offX)) + 'px';
+      panel.style.top = Math.max(0, Math.min(window.innerHeight - 40, ev.clientY - offY)) + 'px';
+    };
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
 }
 
 async function showInvestigationWorkflow(name: string): Promise<void> {
@@ -7636,10 +7651,13 @@ function renderWorkflowGraph(graph: any, name: string, body: HTMLElement): void 
   header.innerHTML = `<span class="workflow-title">⋔ ${escapeHtml(name)}</span>`
     + `<span class="workflow-meta">${graph.meta?.steps ?? stepNodes.length} step${(graph.meta?.steps ?? stepNodes.length) === 1 ? '' : 's'}${graph.meta?.dropped ? ` · ${graph.meta.dropped} skipped` : ''}</span>`;
   const close = document.createElement('button');
-  close.className = 'workflow-close'; close.textContent = '×'; close.title = 'Close (Esc)';
+  close.className = 'workflow-close'; close.textContent = '×'; close.title = 'Close';
   close.addEventListener('click', closeWorkflowOverlay);
   header.appendChild(close);
   body.appendChild(header);
+  // Drag the header to park the floating (non-modal) panel anywhere.
+  const panel = body.closest('.workflow-panel') as HTMLElement | null;
+  if (panel) enableWorkflowDrag(header, panel, close);
 
   if (stepNodes.length === 0) {
     const none = document.createElement('p'); none.className = 'workflow-hint'; none.textContent = 'No meaningful steps in this hunt.';
@@ -24469,8 +24487,6 @@ function setupKeyboardShortcuts(): void {
     if (e.key === 'Escape') {
       // Entity palette takes priority — close it first if open.
       if (entityPaletteIsOpen()) { closeEntityPalette(); return; }
-      // Workflow overlay — close if open.
-      if (workflowOverlayOpen()) { closeWorkflowOverlay(); return; }
       // Close search panel first if it's open
       if (!elements.searchPanel.classList.contains('hidden')) {
         hideSearchPanel();
@@ -25637,11 +25653,6 @@ function init(): void {
   onCancelableClick(elements.btnAnalyze, () => { void analyzeFile(); });
   document.getElementById('btn-run-analysis')?.addEventListener('click', analyzeFile);
   elements.btnBrief?.addEventListener('click', showBrief);
-
-  // Workflow overlay — click the backdrop (outside the panel) to close.
-  document.getElementById('workflow-overlay')?.addEventListener('mousedown', (e) => {
-    if (e.target === e.currentTarget) closeWorkflowOverlay();
-  });
 
   // Component/text health lookup — Check button + Enter in the input
   elements.btnHealthLookup?.addEventListener('click', () => { void runHealthLookup(elements.healthInput?.value || ''); });

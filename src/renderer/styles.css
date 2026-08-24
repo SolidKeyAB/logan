@@ -10556,22 +10556,26 @@ kbd {
 
 /* ═══ Workflow step-list overlay (Phase 2) ═════════════════════════════════ */
 /* Read-only, roomy commit-log view of a saved investigation's WorkflowGraph. */
+/* Non-modal: a full-screen layer that passes clicks THROUGH (pointer-events:none),
+   so the panel floats above the app without blocking it — keep it open while you
+   work the log. Only the panel itself is interactive. */
 .workflow-overlay {
   position: fixed;
   inset: 0;
   z-index: 10000;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding: 8vh 16px 16px;
-  background: rgba(0, 0, 0, 0.42);
-  backdrop-filter: blur(1.5px);
+  pointer-events: none;
 }
 .workflow-overlay[hidden] { display: none; }
 .workflow-panel {
-  width: 720px;
-  max-width: 94vw;
-  max-height: 82vh;
+  pointer-events: auto;
+  position: fixed;
+  top: 64px;
+  right: 20px;
+  width: 560px;
+  max-width: 92vw;
+  max-height: 78vh;
+  min-width: 320px;
+  min-height: 120px;
   display: flex;
   flex-direction: column;
   background: var(--bg-secondary);
@@ -10579,6 +10583,7 @@ kbd {
   border-radius: 10px;
   box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
   overflow: hidden;
+  resize: both;   /* drag the corner to resize */
 }
 .workflow-body { overflow-y: auto; padding: 0; }
 .workflow-hint { color: var(--text-muted); font-size: 13px; padding: 20px; text-align: center; }
@@ -10594,6 +10599,7 @@ kbd {
   border-bottom: 1px solid var(--border-color);
   z-index: 1;
 }
+.workflow-header { cursor: move; }   /* drag the header to reposition the floating panel */
 .workflow-title { font-weight: 700; font-family: var(--font-mono); color: var(--accent-hover); }
 .workflow-meta { font-size: 11px; color: var(--text-muted); }
 .workflow-close {
