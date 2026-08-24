@@ -126,6 +126,9 @@ const IPC = {
   // Semantic summary (human twin of logan_summarize)
   SUMMARIZE: 'summarize',
   SUMMARIZE_CANCEL: 'summarize-cancel',
+  // In-place viewer folding
+  DETECT_FOLD_REGIONS: 'detect-fold-regions',
+  SET_FOLD_FILTER: 'set-fold-filter',
   // Evidence pack (native "📋 Brief")
   EVIDENCE_PACK: 'evidence-pack',
   // Usage Monitor (per-feature usage counts, split human vs AI)
@@ -1039,6 +1042,12 @@ const api = {
     ipcRenderer.invoke(IPC.SUMMARIZE, opts, scope),
   summarizeCancel: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke(IPC.SUMMARIZE_CANCEL),
+
+  // In-place viewer folding — detect repeating blocks, then apply/clear a fold view
+  detectFoldRegions: (opts?: { maxPeriod?: number; minRepeats?: number; tolerance?: number; minHidden?: number }): Promise<{ success: boolean; regions?: any[]; totalLines?: number; foldableLines?: number; error?: string }> =>
+    ipcRenderer.invoke(IPC.DETECT_FOLD_REGIONS, opts),
+  setFoldFilter: (lines: number[]): Promise<{ success: boolean; filteredLines?: number; filteredLineNumbers?: number[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.SET_FOLD_FILTER, lines),
 
   // Evidence pack — native "📋 Brief" (same briefing the AI's logan_evidence_pack builds)
   getEvidencePack: (options?: { thresholdSeconds?: number; topFields?: number; topGaps?: number; topComponents?: number; fieldSampleSize?: number; analyzerName?: string; baselineId?: string }): Promise<{ success: boolean; pack?: any; error?: string }> =>
