@@ -57,3 +57,72 @@ export function runTrendJob(kind: TrendJobKind, handler: FileHandler | Composite
     worker.on('exit', (code) => { if (code !== 0) finish(new Error(`trend worker exited with code ${code}`)); });
   });
 }
+
+// ─── Summarize (semantic template fold) off-thread ───────────────────────────
+// Runs the TemplateFolder in the SAME worker (kind:'summarize') so a whole-file
+// fold never blocks the Electron UI. `scope` is the already-resolved scope from
+// the main process (a contiguous range or an explicit 0-based index set); the
+// worker reads only those lines. Segmented big files hold no whole-file index to
+// hand over, so the caller keeps its main-thread path for them.
+type SummarizeScopeArg =
+  | { kind: 'range'; startLine: number; endLine: number }
+  | { kind: 'indices'; lines: number[] };
+
+let activeSummarizeWorker: Worker | null = null;
+let summarizeCancelled = false;
+
+/** Terminate an in-flight summarize worker (the ⏹/Cancel button). No-op if idle. */
+export function cancelSummarizeJob(): void {
+  if (activeSummarizeWorker) {
+    summarizeCancelled = true;
+    try { activeSummarizeWorker.terminate(); } catch { /* already gone */ }
+  }
+}
+
+/** True when the current handler can be summarized off-thread (not auto-segmented). */
+export function canSummarizeOffThread(handler: FileHandler | CompositeFileHandler | SegmentedFileHandler): boolean {
+  return !(handler instanceof SegmentedFileHandler);
+}
+
+export function runSummarizeJob(
+  handler: FileHandler | CompositeFileHandler | SegmentedFileHandler,
+  opts: { maxTemplates?: number; maxExamples?: number; detectSeverity?: boolean; detectTimestamp?: boolean },
+  scope: SummarizeScopeArg,
+): Promise<any> {
+  if (handler instanceof SegmentedFileHandler) {
+    return Promise.reject(new Error('Summarize is not available off-thread for auto-segmented large files.'));
+  }
+  let workerData: { kind: 'summarize'; args: { opts: typeof opts; scope: SummarizeScopeArg }; scan?: unknown; scans?: unknown[] };
+  if (handler instanceof CompositeFileHandler) {
+    const scans = handler.getMemberScanContexts();
+    if (scans.length === 0 || scans.some((s) => !s)) {
+      return Promise.reject(new Error('Single session has no readable member index'));
+    }
+    workerData = { kind: 'summarize', args: { opts, scope }, scans };
+  } else {
+    const scan = handler.getScanContext();
+    if (!scan) return Promise.reject(new Error('No file open'));
+    workerData = { kind: 'summarize', args: { opts, scope }, scan };
+  }
+  summarizeCancelled = false;
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(path.join(__dirname, 'trendWorker.js'), { workerData });
+    activeSummarizeWorker = worker;
+    let settled = false;
+    const finish = (err?: Error, result?: any): void => {
+      if (settled) return;
+      settled = true;
+      if (activeSummarizeWorker === worker) activeSummarizeWorker = null;
+      worker.terminate();
+      if (err) reject(err); else resolve(result);
+    };
+    worker.on('message', (msg: { type: string; result?: any; message?: string }) => {
+      if (msg?.type === 'done') finish(undefined, msg.result);
+      else if (msg?.type === 'error') finish(new Error(msg.message || 'summarize worker error'));
+    });
+    worker.on('error', (err) => finish(err instanceof Error ? err : new Error(String(err))));
+    worker.on('exit', (code) => {
+      if (code !== 0) finish(new Error(summarizeCancelled ? 'Cancelled' : `summarize worker exited with code ${code}`));
+    });
+  });
+}
