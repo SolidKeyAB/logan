@@ -123,6 +123,9 @@ const IPC = {
   TREND_CORRELATE: 'trend-correlate',
   // Guided triage
   TRIAGE_RECIPE: 'triage-recipe',
+  // Semantic summary (human twin of logan_summarize)
+  SUMMARIZE: 'summarize',
+  SUMMARIZE_CANCEL: 'summarize-cancel',
   // Evidence pack (native "📋 Brief")
   EVIDENCE_PACK: 'evidence-pack',
   // Usage Monitor (per-feature usage counts, split human vs AI)
@@ -1030,6 +1033,12 @@ const api = {
   // Guided triage — run a symptom recipe and pin findings
   triageRecipe: (options: { symptom: string; domain?: string; component?: string; sinceLine?: number; field?: string; expect?: string; baselineId?: string; maxFindings?: number; pin?: boolean }): Promise<{ success: boolean; [key: string]: any }> =>
     ipcRenderer.invoke(IPC.TRIAGE_RECIPE, options),
+
+  // Semantic summary — fold the log into distinct message templates (human twin of logan_summarize)
+  summarize: (opts?: { maxTemplates?: number; maxExamples?: number; detectSeverity?: boolean; detectTimestamp?: boolean; contains?: string }, scope?: ScopeDescriptor | null): Promise<{ success: boolean; summary?: any; scope?: ScopeInfo; error?: string }> =>
+    ipcRenderer.invoke(IPC.SUMMARIZE, opts, scope),
+  summarizeCancel: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.SUMMARIZE_CANCEL),
 
   // Evidence pack — native "📋 Brief" (same briefing the AI's logan_evidence_pack builds)
   getEvidencePack: (options?: { thresholdSeconds?: number; topFields?: number; topGaps?: number; topComponents?: number; fieldSampleSize?: number; analyzerName?: string; baselineId?: string }): Promise<{ success: boolean; pack?: any; error?: string }> =>

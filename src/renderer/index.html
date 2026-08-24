@@ -407,6 +407,7 @@
       <div class="bottom-panel-header">
         <div class="bottom-panel-tabs">
           <button class="bottom-tab-btn" data-bottom-tab="analysis" data-help="Log level distribution, crash detection, component breakdown, and timestamp analysis.&#10;Click Run Analysis to scan the entire file.">Analysis</button>
+          <button class="bottom-tab-btn" data-bottom-tab="summarize" data-help="Semantic summary — fold the whole log into its distinct message TEMPLATES. Near-duplicate lines (differing only by timestamp, id, or number) collapse into one shape with a count, so a million-line log becomes a scannable page.&#10;Click a template to jump to it. No AI required.">Summarize</button>
           <button class="bottom-tab-btn" data-bottom-tab="investigate" data-help="Guided root-cause finding. Pick a symptom (it crashed, it froze, it's slow…) and LOGAN runs a recipe that searches, checks time gaps, and trends fields — then pins clickable findings.&#10;No expertise needed.">Investigate</button>
           <button class="bottom-tab-btn" data-bottom-tab="conclusion" data-help="One-click native root-cause report. LOGAN scans the file itself (analysis + time gaps + your pinned findings), finds the FIRST anomaly (the trigger), orders the key events on a timeline, and writes a plain verdict.&#10;No AI required — click any event to jump to that line. Export the report as .md/.pdf.">Conclusion</button>
           <button class="bottom-tab-btn" data-bottom-tab="trends" data-help="Trend any field over time. Click Discover to auto-find log variables (key=value, JSON), then chart a field as value-over-time, value flips, or correlation.&#10;Click a chart point to jump to that line.">Trends</button>
@@ -453,6 +454,37 @@
             <div class="section-divider">Baselines</div>
             <div id="baseline-controls"></div>
             <div id="baseline-comparison-results"></div>
+          </div>
+        </div>
+        <!-- Summarize tab (semantic template fold) -->
+        <div class="bottom-tab-view summarize-view" data-bottom-tab="summarize">
+          <div class="bottom-tab-sub-header summarize-toolbar">
+            <button id="btn-run-summarize" class="primary-btn small">Summarize log</button>
+            <div class="summarize-filter">
+              <span class="summarize-filter-icon">⌕</span>
+              <input id="summarize-contains" type="text" class="summarize-input" placeholder="Filter templates…" spellcheck="false" disabled />
+            </div>
+            <label class="summarize-sort">
+              <span>Sort</span>
+              <select id="summarize-sort" class="summarize-select" disabled>
+                <option value="count">Most lines</option>
+                <option value="last">Most recent</option>
+                <option value="first">First seen</option>
+                <option value="severity">Severity</option>
+              </select>
+            </label>
+            <label class="summarize-scope-toggle" title="Summarize only the active scope (filter / search / range) instead of the whole file.">
+              <input type="checkbox" id="summarize-use-scope" /><span>Active scope</span>
+            </label>
+            <span class="summarize-spacer"></span>
+            <span id="summarize-status" class="summarize-status"></span>
+          </div>
+          <div id="summarize-results" class="summarize-content">
+            <div class="summarize-empty">
+              <div class="summarize-empty-glyph">≡</div>
+              <div class="summarize-empty-title">Semantic summary</div>
+              <div class="summarize-empty-sub">Fold the log into its distinct message templates. Near-duplicate lines — differing only by a timestamp, id, or number — collapse into one shape with a count, turning a huge log into a page you can read. Click <b>Summarize log</b> to scan the file.</div>
+            </div>
           </div>
         </div>
         <!-- Investigate tab (guided triage) -->
