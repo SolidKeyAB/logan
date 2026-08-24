@@ -10278,29 +10278,52 @@ kbd {
 .sum-ex-chip:hover { border-color: var(--accent-color); text-decoration: none; }
 
 /* ═══ In-place viewer folding (collapse repeating blocks) ═══════════════════ */
-/* A repeat-region's first line gets a subtle tint + accent so it reads as a
-   fold header; the clickable ▶ ×N chip is an absolutely-positioned overlay. */
+/* A repeat-region's first line gets a subtle tint + left accent so it reads as a
+   fold header; a code-editor-style ▾/▸ chevron sits in the left gutter as an
+   absolutely-positioned overlay (createFoldGutter). */
 .log-line.fold-anchor,
 .log-line.fold-anchor-open {
   background: color-mix(in srgb, var(--accent-color) 8%, transparent);
   box-shadow: inset 3px 0 0 var(--accent-color);
 }
-.fold-badge { font-family: var(--font-family); }
-.fold-chip {
+.fold-gutter { font-family: var(--font-family); }
+/* The clickable fold chevron in the gutter — sized like an editor fold arrow. */
+.fold-chevron {
   pointer-events: auto;
   cursor: pointer;
-  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: 11px;
   line-height: 1;
-  padding: 2px 7px;
-  border-radius: 9px;
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 14%, transparent);
+  user-select: none;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.fold-chevron:hover {
   background: var(--accent-color);
   color: #fff;
+}
+.fold-chevron.expanded {
+  color: var(--text-muted);
+  background: transparent;
+}
+.fold-chevron.expanded:hover {
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 14%, transparent);
+}
+/* Subtle "⋯ ×N" count shown next to a collapsed region's chevron. */
+.fold-count {
+  pointer-events: none;
+  font-size: 10px;
   font-weight: 600;
+  color: var(--accent-color);
+  opacity: 0.85;
   white-space: nowrap;
-  opacity: 0.92;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.35);
   user-select: none;
 }
-.fold-chip:hover { opacity: 1; }
-.fold-chip.expanded { background: var(--bg-hover); color: var(--text-secondary); }
 #btn-fold-repeats.active { border-color: var(--accent-color); color: var(--accent-hover); }
