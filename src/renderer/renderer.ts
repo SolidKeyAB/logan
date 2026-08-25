@@ -7620,6 +7620,32 @@ function enableWorkflowDrag(header: HTMLElement, panel: HTMLElement, closeBtn: H
   });
 }
 
+// Make any floating (non-modal) card draggable by a handle (e.g. its header) — sibling
+// of enableWorkflowDrag, but excludes ANY interactive control in the handle so header
+// buttons (× / actions) still work. Clamps to the viewport, and converts a
+// translate-centered card to explicit left/top on first grab so it doesn't jump.
+function enableFloatingDrag(handle: HTMLElement, panel: HTMLElement): void {
+  handle.addEventListener('mousedown', (e) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('button, input, select, textarea, a')) return;
+    e.preventDefault();
+    const rect = panel.getBoundingClientRect();
+    const offX = e.clientX - rect.left;
+    const offY = e.clientY - rect.top;
+    panel.style.right = 'auto';
+    panel.style.transform = 'none'; // drop any translateX(-50%) centering
+    panel.style.left = rect.left + 'px';
+    panel.style.top = rect.top + 'px';
+    const move = (ev: MouseEvent) => {
+      panel.style.left = Math.max(0, Math.min(window.innerWidth - 80, ev.clientX - offX)) + 'px';
+      panel.style.top = Math.max(0, Math.min(window.innerHeight - 40, ev.clientY - offY)) + 'px';
+    };
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+}
+
 async function showInvestigationWorkflow(name: string): Promise<void> {
   const overlay = document.getElementById('workflow-overlay');
   const body = document.getElementById('workflow-body');
@@ -19549,6 +19575,7 @@ function showTriageCard(pack: EvidencePack): void {
   close.addEventListener('click', hideTriageCard);
   header.appendChild(brief); header.appendChild(close);
   el.appendChild(header);
+  enableFloatingDrag(header, el); // drag the card around by its header
 
   if (pack.summary) { const s = document.createElement('div'); s.className = 'triage-summary'; s.textContent = pack.summary; el.appendChild(s); }
 
