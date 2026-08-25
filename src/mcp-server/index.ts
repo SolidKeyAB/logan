@@ -1519,6 +1519,35 @@ server.tool(
   }
 );
 
+// === Tool: logan_save_report ===
+server.tool(
+  'logan_save_report',
+  'Save the current investigation as a self-contained markdown DOCUMENT (a report) in the open log\'s .logan/reports/ folder. Give it a clear NAME (title), the AIM (what you set out to find or prove) and the REASON (why — the trigger, symptom, or context), plus an optional TICKET. By default it also folds in your pinned findings and the recorded investigation steps; pass `body` for your narrative write-up and set includeConclusion:true to also run and embed the native root-cause verdict + timeline. Use this to leave a durable, shareable write-up the user can read or attach to a ticket. Returns the saved file path.',
+  {
+    name: z.string().describe('Clear document title, e.g. "Auth token-expiry root cause"'),
+    aim: z.string().describe('What this investigation set out to find or prove'),
+    reason: z.string().describe('Why it was run — the trigger, symptom, or context'),
+    ticket: z.string().optional().describe('Ticket id/name if one exists, e.g. "SUS-1234"'),
+    body: z.string().optional().describe('Your narrative / findings write-up in markdown (the main content)'),
+    includeFindings: z.boolean().default(true).describe('Embed pinned findings/annotations as a section'),
+    includeSteps: z.boolean().default(true).describe('Embed the recorded investigation steps (what you did)'),
+    includeConclusion: z.boolean().default(false).describe('Also run the native root-cause conclusion and embed the verdict + timeline'),
+  },
+  async ({ name, aim, reason, ticket, body, includeFindings, includeSteps, includeConclusion }) => {
+    try {
+      const result = await apiCall('POST', '/api/save-report', {
+        name, aim, reason, ticket, body, includeFindings, includeSteps, includeConclusion,
+      });
+      if (!result.success) {
+        return { content: [{ type: 'text', text: `Error: ${result.error || 'save report failed'}` }], isError: true };
+      }
+      return { content: [{ type: 'text', text: `Report saved: ${result.filePath}\n(${result.findings} finding(s), ${result.steps} step(s)${result.conclusion ? ', verdict' : ''} embedded)` }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_memory_read ===
 server.tool(
   'logan_memory_read',
