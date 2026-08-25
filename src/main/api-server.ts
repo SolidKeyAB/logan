@@ -20,6 +20,7 @@ import { canonicalizeAiVerb } from '../shared/verbRegistry';
 import { compilePattern, CompileInput } from './compilePattern';
 import { logPattern } from './patternLog';
 import { synthesizeConclusion, type ConclusionReport, type ConclusionGap, type ConclusionAnnotation, type ConclusionEvent } from './conclusion';
+import { buildReportMarkdown, reportFileName, type ReportFinding, type ReportLogLine, type ReportStep, type ReportComponent } from './reportDoc';
 
 export const API_PORT = 19532;
 const PORT_FILE = path.join(os.homedir(), '.logan', 'mcp-port');
@@ -372,6 +373,9 @@ export interface ApiContext {
   clearHighlights(): any;
   loadNotes(): Promise<any>;
   saveNotes(content: string): Promise<any>;
+  // Write an agent-authored report doc into the log's .logan/reports/ (read-only
+  // fallback to ~/.logan/reports/<basename>/). Shared by /api/save-report.
+  saveReport(fileName: string, content: string): Promise<{ success: boolean; filePath?: string; error?: string }>;
   getAgentMemory(): any;
   saveAgentMemory(content: string, agentName?: string): any;
   clearAgentMemory(): any;
@@ -1321,6 +1325,184 @@ export function startApiServer(ctx: ApiContext): void {
           ctx.clearAgentMemory();
           notifyMemoryChanged(ctx);
           sendJson(res, { success: true });
+          return;
+        }
+
+        // Save the current investigation as a self-contained markdown DOC — LOGAN's
+        // universal Log Analysis Report (see docs/LOGAN_REPORT_FORMAT.md), written to
+        // the log's .logan/reports/. The agent supplies name/aim/reason (+ optional
+        // ticket + narrative); we fold in its pinned findings — each with the REAL
+        // related log-line SEQUENCE (match + context) pulled from the file — the
+        // recorded steps, and (opt-in) the native root-cause verdict with its evidence
+        // lines. Human parity: the saved doc lands in the chat panel (clickable path)
+        // and is a plain .md the user opens, shares, or pastes into Jira.
+        if (url === '/api/save-report') {
+          if (!body.name || typeof body.name !== 'string') return sendError(res, 'name required');
+          if (!ctx.getCurrentFilePath()) return sendError(res, 'No file open');
+
+          const includeFindings = body.includeFindings !== false;
+          const includeSteps = body.includeSteps !== false;
+          const includeConclusion = body.includeConclusion === true; // opt-in (runs analysis)
+
+          const readHandler = ctx.getReadHandler();
+          const total = readHandler ? readHandler.getTotalLines() : 0;
+          // Context lines shown around each finding's match line(s) (0 = match only).
+          const ctxLines = Math.max(0, Math.min(20, body.context ?? 3));
+          const MAX_SPAN = 60;            // cap a single finding's rendered match span
+          const MAX_TOTAL_LOGLINES = 500; // safety cap on embedded lines across the doc
+
+          // Steps = the recorded investigation journal (what the agent did).
+          const steps: ReportStep[] = includeSteps
+            ? agentJournal.map((e) => ({ label: e.label, ...(e.result ? { result: e.result } : {}) }))
+            : [];
+
+          let conclusion: ConclusionReport | null = null;
+          if (includeConclusion) {
+            const c = await buildConclusion(ctx, {});
+            if (c.success && c.conclusion) conclusion = c.conclusion;
+          }
+
+          // Plan which raw lines to fetch: a context window per finding (deduped),
+          // plus the verdict's first-anomaly / root-cause lines. One batched read.
+          const wanted = new Set<number>();
+          const rawFindings: { ann: Annotation; matchStart0: number; matchEnd0: number; win: [number, number] }[] = [];
+          if (includeFindings) {
+            let budget = MAX_TOTAL_LOGLINES;
+            for (const a of ctx.getAnnotations().values()) {
+              const ln0 = a.lineNumber;
+              const end0 = a.endLine !== undefined ? a.endLine : ln0;
+              const matchStart0 = Math.max(0, Math.min(ln0, end0));
+              const spanLen = Math.max(ln0, end0) - matchStart0 + 1;
+              const matchEnd0 = matchStart0 + Math.min(spanLen, MAX_SPAN) - 1; // rendered match end
+              const winStart = Math.max(0, matchStart0 - ctxLines);
+              const winEnd = Math.min(total - 1, matchEnd0 + ctxLines);
+              const winSize = winEnd - winStart + 1;
+              if (readHandler && total > 0 && winSize <= budget) {
+                budget -= winSize;
+                for (let n = winStart; n <= winEnd; n++) wanted.add(n);
+                rawFindings.push({ ann: a, matchStart0, matchEnd0, win: [winStart, winEnd] });
+              } else {
+                // Over budget / no reader: keep the finding, skip its embedded lines.
+                rawFindings.push({ ann: a, matchStart0, matchEnd0, win: [matchStart0, matchStart0 - 1] });
+              }
+            }
+          }
+          const eventViewerLines: number[] = [];
+          for (const ev of [conclusion?.firstAnomaly, conclusion?.rootCause]) {
+            if (!ev) continue;
+            const vl = ev.viewerLine ?? ev.lineNumber + 1;
+            eventViewerLines.push(vl);
+            if (readHandler && vl - 1 >= 0 && vl - 1 < total) wanted.add(vl - 1);
+          }
+
+          // One batched read for every needed raw line (0-based → text).
+          const lineText = new Map<number, string>();
+          if (wanted.size && readHandler) {
+            const nums = Array.from(wanted).sort((a, b) => a - b);
+            const fetched = await readHandler.getLinesByNumbers(nums);
+            for (const ld of fetched) lineText.set(ld.lineNumber, ld.text);
+          }
+
+          // Assemble findings with their related log-line sequences.
+          const findings: ReportFinding[] = rawFindings.map((rf) => {
+            const [winStart, winEnd] = rf.win;
+            const logLines: ReportLogLine[] = [];
+            for (let n = winStart; n <= winEnd; n++) {
+              const text = lineText.get(n);
+              if (text === undefined) continue;
+              logLines.push({ viewerLine: n + 1, text, isMatch: n >= rf.matchStart0 && n <= rf.matchEnd0 });
+            }
+            return {
+              viewerLine: rf.ann.lineNumber + 1,
+              ...(rf.ann.endLine !== undefined ? { endLine: rf.ann.endLine + 1 } : {}),
+              title: rf.ann.text,
+              ...(rf.ann.detail ? { detail: rf.ann.detail } : {}),
+              ...(rf.ann.severity ? { severity: rf.ann.severity } : {}),
+              ...(logLines.length ? { logLines } : {}),
+            };
+          });
+
+          // Verdict evidence lines: viewerLine (1-based) → raw text.
+          const eventLines: Record<number, string> = {};
+          for (const vl of eventViewerLines) {
+            const text = lineText.get(vl - 1);
+            if (text !== undefined) eventLines[vl] = text;
+          }
+
+          // Components potentially responsible: agent-supplied wins; otherwise
+          // derive from the verdict's top failing components (sampleLine is
+          // 0-based internally → +1 for the viewer). Agent-supplied sampleLine is
+          // already a 1-based viewerLine, like everywhere else in the agent API.
+          let components: ReportComponent[] = [];
+          if (Array.isArray(body.components) && body.components.length) {
+            components = body.components
+              .map((c: any) => (typeof c === 'string'
+                ? { name: c }
+                : (c && c.name
+                    ? {
+                        name: String(c.name),
+                        ...(c.reason ? { reason: String(c.reason) } : {}),
+                        ...(typeof c.sampleLine === 'number' ? { sampleLine: c.sampleLine } : {}),
+                      }
+                    : null)))
+              .filter(Boolean)
+              .slice(0, 50) as ReportComponent[];
+          } else if (conclusion && conclusion.topComponents?.length) {
+            components = conclusion.topComponents.map((c) => {
+              const bits: string[] = [];
+              if (c.errorCount) bits.push(`${c.errorCount} error${c.errorCount === 1 ? '' : 's'}`);
+              if (c.warningCount) bits.push(`${c.warningCount} warning${c.warningCount === 1 ? '' : 's'}`);
+              return {
+                name: c.name,
+                ...(bits.length ? { reason: bits.join(' / ') } : {}),
+                ...(typeof c.sampleLine === 'number' && c.sampleLine >= 0 ? { sampleLine: c.sampleLine + 1 } : {}),
+              };
+            });
+          }
+
+          // Open questions / follow-ups (agent-supplied).
+          const questions: string[] = Array.isArray(body.questions)
+            ? body.questions.filter((q: any) => typeof q === 'string' && q.trim()).map((q: string) => q.trim()).slice(0, 50)
+            : [];
+
+          const md = buildReportMarkdown({
+            name: body.name,
+            aim: body.aim || '',
+            reason: body.reason || '',
+            ticket: body.ticket,
+            body: body.body,
+            sourceFilePath: ctx.getCurrentFilePath(),
+            totalLines: total || undefined,
+            generatedAtIso: new Date().toISOString(),
+            agentName: activeAgent?.name,
+            findings,
+            steps,
+            conclusion,
+            eventLines,
+            components,
+            questions,
+          });
+
+          const saved = await ctx.saveReport(reportFileName(body.name), md);
+          if (!saved.success) return sendError(res, saved.error || 'Failed to save report');
+
+          // Surface it to the human in the chat panel (no new IPC channel needed).
+          const source = activeAgent?.name || 'Agent';
+          if (!activeAgent) touchPollingAgent(source, ctx);
+          const msg = addChatMessage('agent', `**📄 Saved report — ${body.name}**\n\n\`${saved.filePath}\``);
+          const win = ctx.getMainWindow();
+          if (win && !win.isDestroyed()) win.webContents.send('agent-message', msg);
+
+          sendJson(res, {
+            success: true,
+            filePath: saved.filePath,
+            name: body.name,
+            findings: findings.length,
+            steps: steps.length,
+            conclusion: !!conclusion,
+            components: components.length,
+            questions: questions.length,
+          });
           return;
         }
 
