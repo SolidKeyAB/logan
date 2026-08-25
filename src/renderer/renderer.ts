@@ -1030,6 +1030,10 @@ const elements = {
   // Agent Chat (in bottom panel)
   chatMessages: document.getElementById('chat-messages') as HTMLDivElement,
   chatInput: document.getElementById('chat-input') as HTMLInputElement,
+  chatQueue: document.getElementById('chat-queue') as HTMLDivElement,
+  chatQueueList: document.getElementById('chat-queue-list') as HTMLDivElement,
+  chatQueueTitle: document.getElementById('chat-queue-title') as HTMLSpanElement,
+  chatQueueClear: document.getElementById('chat-queue-clear') as HTMLButtonElement,
   chatSendBtn: document.getElementById('chat-send-btn') as HTMLButtonElement,
   chatInterruptBtn: document.getElementById('chat-interrupt-btn') as HTMLButtonElement,
   chatAgentDot: document.getElementById('chat-agent-dot') as HTMLSpanElement,
@@ -10287,7 +10291,7 @@ function formatAgentText(raw: string): string {
 }
 
 function addChatMessage(msg: { id?: string; from: string; text: string; timestamp: number }): HTMLDivElement {
-  if (msg.from === 'agent') hideTypingIndicator();
+  if (msg.from === 'agent') { hideTypingIndicator(); onAgentReplyReceived(); }
   const el = document.createElement('div');
   el.className = `chat-message from-${msg.from}`;
   if (msg.id) el.dataset.msgId = msg.id;
@@ -10340,10 +10344,29 @@ function hideTypingIndicator(): void {
   chatTypingIndicator = null;
 }
 
+// True between delivering a message to the agent and the agent's next reply.
+// While true, further messages the user submits are QUEUED (see chatQueue)
+// instead of fired immediately — otherwise the agent, busy on the current
+// message, silently drops the extras.
+let awaitingAgentReply = false;
+
+// Messages the user typed while the agent was busy. Each waits in a visible
+// list; the user sends or cancels them once the agent has replied.
+interface QueuedChatMessage { id: number; text: string; }
+const chatQueue: QueuedChatMessage[] = [];
+let chatQueueSeq = 0;
+
 function sendChatMessage(): void {
   const text = elements.chatInput.value.trim();
   if (!text) return;
   elements.chatInput.value = '';
+
+  // Agent is mid-answer → queue it (visibly) rather than let it be swallowed.
+  if (awaitingAgentReply && agentConnected) {
+    chatQueue.push({ id: ++chatQueueSeq, text });
+    renderChatQueue();
+    return;
+  }
   deliverChatMessage(text);
 }
 
@@ -10359,11 +10382,93 @@ function deliverChatMessage(text: string): void {
     return;
   }
 
+  awaitingAgentReply = true;
+  renderChatQueue();
   showTypingIndicator();
   window.api.sendAgentMessage(text).catch(() => {
+    awaitingAgentReply = false;
     hideTypingIndicator();
     markUserMessageFailed(el, text);
+    renderChatQueue();
   });
+}
+
+// Called when an agent message arrives: the turn is "answered", so queued
+// messages become sendable. We do NOT auto-send — the user decides, after
+// reading the reply, whether each queued follow-up is still relevant.
+function onAgentReplyReceived(): void {
+  if (!awaitingAgentReply) return;
+  awaitingAgentReply = false;
+  renderChatQueue();
+}
+
+function cancelQueuedMessage(id: number): void {
+  const i = chatQueue.findIndex(q => q.id === id);
+  if (i >= 0) chatQueue.splice(i, 1);
+  renderChatQueue();
+}
+
+function sendQueuedMessage(id: number): void {
+  const i = chatQueue.findIndex(q => q.id === id);
+  if (i < 0) return;
+  const [item] = chatQueue.splice(i, 1);
+  renderChatQueue();
+  deliverChatMessage(item.text); // re-enters the busy state; the rest stay queued
+}
+
+// Render the pending-message queue below the transcript. Hidden when empty.
+// While awaiting a reply, items show only a Cancel (✕); once the agent has
+// answered, each item also gets a Send button so the user can dispatch them
+// one at a time.
+function renderChatQueue(): void {
+  const box = elements.chatQueue;
+  const list = elements.chatQueueList;
+  if (!box || !list) return;
+
+  if (chatQueue.length === 0) {
+    box.classList.add('hidden');
+    list.replaceChildren();
+    return;
+  }
+  box.classList.remove('hidden');
+  box.classList.toggle('waiting', awaitingAgentReply);
+  if (elements.chatQueueTitle) {
+    elements.chatQueueTitle.textContent = awaitingAgentReply
+      ? `Queued (${chatQueue.length}) — waiting for the agent to reply…`
+      : `Queued (${chatQueue.length}) — agent replied; send or cancel`;
+  }
+
+  list.replaceChildren();
+  for (const item of chatQueue) {
+    const row = document.createElement('div');
+    row.className = 'chat-queue-item';
+
+    const txt = document.createElement('span');
+    txt.className = 'chat-queue-text';
+    txt.textContent = item.text;
+    txt.title = item.text;
+    row.appendChild(txt);
+
+    // Send is offered only once the agent is free — sending while still busy
+    // would just re-create the swallowing problem.
+    if (!awaitingAgentReply) {
+      const send = document.createElement('button');
+      send.className = 'chat-queue-send';
+      send.textContent = 'Send';
+      send.title = 'Send this message now';
+      send.addEventListener('click', () => sendQueuedMessage(item.id));
+      row.appendChild(send);
+    }
+
+    const cancel = document.createElement('button');
+    cancel.className = 'chat-queue-cancel';
+    cancel.textContent = '✕';
+    cancel.title = 'Cancel this queued message';
+    cancel.addEventListener('click', () => cancelQueuedMessage(item.id));
+    row.appendChild(cancel);
+
+    list.appendChild(row);
+  }
 }
 
 // Turn a user message bubble into an undelivered state: disconnection note + Resend.
@@ -10405,6 +10510,14 @@ function updateAgentConnectionStatus(connected: boolean, _count: number, name?: 
   }
   // Stop is only meaningful while an agent is connected.
   if (elements.chatInterruptBtn) elements.chatInterruptBtn.disabled = !connected;
+
+  // If the agent drops mid-turn, stop "awaiting" so any queued messages unlock
+  // (the user can then send — which surfaces the disconnected/Resend state — or cancel).
+  if (!connected && awaitingAgentReply) {
+    awaitingAgentReply = false;
+    hideTypingIndicator();
+    renderChatQueue();
+  }
 }
 
 async function interruptAgent(): Promise<void> {
@@ -25282,6 +25395,10 @@ function init(): void {
   // Agent Chat event listeners
   elements.chatSendBtn.addEventListener('click', sendChatMessage);
   elements.chatInterruptBtn?.addEventListener('click', interruptAgent);
+  elements.chatQueueClear?.addEventListener('click', () => {
+    chatQueue.length = 0;
+    renderChatQueue();
+  });
   elements.chatInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
