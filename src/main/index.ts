@@ -1378,6 +1378,25 @@ app.whenReady().then(() => {
       fs.writeFileSync(notesPath, content, 'utf-8');
       return { success: true };
     },
+    saveReport: async (fileName: string, content: string) => {
+      if (!currentFilePath) return { success: false, error: 'No file open' };
+      // Prefer the file's sidecar .logan/reports/; if that dir isn't writable
+      // (read-only mount), fall back to the global ~/.logan/reports/<basename>/.
+      let reportsDir: string;
+      if (ensureLocalLoganDir(currentFilePath)) {
+        reportsDir = path.join(getLocalLoganDir(currentFilePath), 'reports');
+      } else {
+        reportsDir = path.join(os.homedir(), '.logan', 'reports', path.basename(currentFilePath));
+      }
+      try {
+        fs.mkdirSync(reportsDir, { recursive: true });
+        const reportPath = path.join(reportsDir, fileName);
+        fs.writeFileSync(reportPath, content, 'utf-8');
+        return { success: true, filePath: reportPath };
+      } catch (err: any) {
+        return { success: false, error: err?.message || 'Failed to write report' };
+      }
+    },
     detectTimeGaps: async (options: any) => {
       const handler = getReadHandler();
       if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
