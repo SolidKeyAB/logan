@@ -10798,6 +10798,7 @@ kbd {
   gap: 8px;
   padding: 9px 12px;
   border-bottom: 1px solid var(--border-color);
+  cursor: move; /* draggable by its header (enableFloatingDrag) */
 }
 .triage-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-muted); flex: 0 0 auto; }
 .triage-dot.sev-healthy { background: var(--info-color); }
