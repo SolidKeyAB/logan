@@ -79,7 +79,7 @@ describe('buildReportMarkdown', () => {
     expect(md).toContain('The refresh call fired 5m early.');
   });
 
-  it('renders findings with severity and viewer-line refs (incl. ranges)', () => {
+  it('renders findings as sub-sections with severity, location, and description', () => {
     const md = buildReportMarkdown({
       ...BASE,
       findings: [
@@ -88,9 +88,46 @@ describe('buildReportMarkdown', () => {
       ],
     });
     expect(md).toContain('## Findings (2)');
-    expect(md).toContain('**[error]** Token expired — line 8047');
+    expect(md).toContain('### 1. [error] Token expired');
+    expect(md).toContain('**Location** — line 8047');
     expect(md).toContain('exp < now');
-    expect(md).toContain('**[warning]** Retry loop — lines 100–120');
+    expect(md).toContain('### 2. [warning] Retry loop');
+    expect(md).toContain('**Location** — lines 100–120');
+  });
+
+  it('embeds the related log-line sequence with a gutter and ► match marker', () => {
+    const md = buildReportMarkdown({
+      ...BASE,
+      findings: [
+        {
+          viewerLine: 8047,
+          title: 'Token expired',
+          severity: 'error',
+          logLines: [
+            { viewerLine: 8046, text: 'INFO refresh scheduled' },
+            { viewerLine: 8047, text: 'ERROR token expired exp<now', isMatch: true },
+            { viewerLine: 8048, text: 'WARN retrying auth' },
+          ],
+        },
+      ],
+    });
+    expect(md).toContain('```text');
+    // context lines get a leading space; the match line gets a ► marker
+    expect(md).toContain('  8046 | INFO refresh scheduled');
+    expect(md).toContain('► 8047 | ERROR token expired exp<now');
+    expect(md).toContain('  8048 | WARN retrying auth');
+  });
+
+  it('clips a pathologically long log line', () => {
+    const long = 'x'.repeat(5000);
+    const md = buildReportMarkdown({
+      ...BASE,
+      findings: [
+        { viewerLine: 5, title: 'huge', logLines: [{ viewerLine: 5, text: long, isMatch: true }] },
+      ],
+    });
+    expect(md).toContain('…[+1000 chars]');
+    expect(md).not.toContain('x'.repeat(4001));
   });
 
   it('renders steps as a numbered list with results', () => {
@@ -122,11 +159,18 @@ describe('buildReportMarkdown', () => {
       ],
       topComponents: [],
     };
-    const md = buildReportMarkdown({ ...BASE, conclusion });
+    const md = buildReportMarkdown({
+      ...BASE,
+      conclusion,
+      eventLines: { 4047: 'ERROR 401 unauthorized', 8047: 'ERROR token exp<now' },
+    });
     expect(md).toContain('## Verdict');
     expect(md).toContain('**Token expiry storm**');
     expect(md).toContain('**First anomaly** — first 401 (line 4047)');
     expect(md).toContain('**Likely root cause** — token exp (line 8047)');
+    expect(md).toContain('**Evidence lines**');
+    expect(md).toContain('► 4047 | ERROR 401 unauthorized');
+    expect(md).toContain('► 8047 | ERROR token exp<now');
     expect(md).toContain('### Timeline');
     expect(md).toContain('- line 4047 · first 401');
   });
