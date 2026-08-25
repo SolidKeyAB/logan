@@ -51,7 +51,7 @@ import { runTrendJob, runSummarizeJob, cancelSummarizeJob, canSummarizeOffThread
 import { resolveScope, isWholeFile, scopeInfo, forEachScopeLine, ScopeResolverContext } from './scope';
 import { analyzeScope } from './analyzers/scopedAnalysis';
 import { TemplateFolder, type TemplateSummary } from './logTemplates';
-import { detectColumns } from './analyzers/lineClassify';
+import { detectLogFormat } from './analyzers/lineClassify';
 import { GapDetector } from './timeGaps';
 // Native-dependent modules — lazy-loaded to prevent SIGSEGV if bindings aren't built
 let SerialHandler: any = null;
@@ -1183,8 +1183,8 @@ app.whenReady().then(() => {
       // Scoped analysis: run the shared classifier over only the resolved subset.
       // Does NOT overwrite the whole-file analysis cache used for baselines.
       if (handler && scope && scope.type !== 'all' && !isWholeFile(resolved, total)) {
-        const columns = await detectColumns(currentFilePath).catch(() => []);
-        const result = analyzeScope(handler, resolved, columns);
+        const fmt = await detectLogFormat(currentFilePath).catch(() => ({ columns: [], logcat: false }));
+        const result = analyzeScope(handler, resolved, fmt.columns, 'column-aware-scoped', fmt.logcat);
         logActivity(currentFilePath, 'analysis_run', { analyzerName: 'column-aware-scoped', scope: resolved.label });
         return { success: true, result, scope: scopeInfo(resolved) };
       }
