@@ -20,7 +20,7 @@ import { canonicalizeAiVerb } from '../shared/verbRegistry';
 import { compilePattern, CompileInput } from './compilePattern';
 import { logPattern } from './patternLog';
 import { synthesizeConclusion, type ConclusionReport, type ConclusionGap, type ConclusionAnnotation, type ConclusionEvent } from './conclusion';
-import { buildReportMarkdown, reportFileName, type ReportFinding, type ReportLogLine, type ReportStep } from './reportDoc';
+import { buildReportMarkdown, reportFileName, type ReportFinding, type ReportLogLine, type ReportStep, type ReportComponent } from './reportDoc';
 
 export const API_PORT = 19532;
 const PORT_FILE = path.join(os.homedir(), '.logan', 'mcp-port');
@@ -1429,6 +1429,42 @@ export function startApiServer(ctx: ApiContext): void {
             if (text !== undefined) eventLines[vl] = text;
           }
 
+          // Components potentially responsible: agent-supplied wins; otherwise
+          // derive from the verdict's top failing components (sampleLine is
+          // 0-based internally → +1 for the viewer). Agent-supplied sampleLine is
+          // already a 1-based viewerLine, like everywhere else in the agent API.
+          let components: ReportComponent[] = [];
+          if (Array.isArray(body.components) && body.components.length) {
+            components = body.components
+              .map((c: any) => (typeof c === 'string'
+                ? { name: c }
+                : (c && c.name
+                    ? {
+                        name: String(c.name),
+                        ...(c.reason ? { reason: String(c.reason) } : {}),
+                        ...(typeof c.sampleLine === 'number' ? { sampleLine: c.sampleLine } : {}),
+                      }
+                    : null)))
+              .filter(Boolean)
+              .slice(0, 50) as ReportComponent[];
+          } else if (conclusion && conclusion.topComponents?.length) {
+            components = conclusion.topComponents.map((c) => {
+              const bits: string[] = [];
+              if (c.errorCount) bits.push(`${c.errorCount} error${c.errorCount === 1 ? '' : 's'}`);
+              if (c.warningCount) bits.push(`${c.warningCount} warning${c.warningCount === 1 ? '' : 's'}`);
+              return {
+                name: c.name,
+                ...(bits.length ? { reason: bits.join(' / ') } : {}),
+                ...(typeof c.sampleLine === 'number' && c.sampleLine >= 0 ? { sampleLine: c.sampleLine + 1 } : {}),
+              };
+            });
+          }
+
+          // Open questions / follow-ups (agent-supplied).
+          const questions: string[] = Array.isArray(body.questions)
+            ? body.questions.filter((q: any) => typeof q === 'string' && q.trim()).map((q: string) => q.trim()).slice(0, 50)
+            : [];
+
           const md = buildReportMarkdown({
             name: body.name,
             aim: body.aim || '',
@@ -1443,6 +1479,8 @@ export function startApiServer(ctx: ApiContext): void {
             steps,
             conclusion,
             eventLines,
+            components,
+            questions,
           });
 
           const saved = await ctx.saveReport(reportFileName(body.name), md);
@@ -1462,6 +1500,8 @@ export function startApiServer(ctx: ApiContext): void {
             findings: findings.length,
             steps: steps.length,
             conclusion: !!conclusion,
+            components: components.length,
+            questions: questions.length,
           });
           return;
         }

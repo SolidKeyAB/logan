@@ -1522,7 +1522,7 @@ server.tool(
 // === Tool: logan_save_report ===
 server.tool(
   'logan_save_report',
-  'Save the current investigation as LOGAN\'s universal Log Analysis Report — a self-contained markdown DOCUMENT in the open log\'s .logan/reports/ folder, ready to read, share, or paste into Jira. Give it a clear NAME (title), the AIM (what you set out to find or prove) and the REASON (why — the trigger, symptom, or context), plus an optional TICKET. Each pinned finding is rendered with its ACTUAL related log-line sequence (the matched line(s) plus `context` lines of surrounding log, with a line-number gutter) followed by your description — so the doc shows the complete logs, not just line numbers. By default it also folds in the recorded investigation steps; pass `body` for a narrative and set includeConclusion:true to also run and embed the native root-cause verdict + evidence lines + timeline. Returns the saved file path. Pin findings first (logan_report_finding / logan_import_findings) so they appear with their log lines.',
+  'Save the current investigation as LOGAN\'s universal Log Analysis Report — a self-contained markdown DOCUMENT in the open log\'s .logan/reports/ folder, ready to read, share, or paste into Jira. Give it a clear NAME (title), the AIM (what you set out to find or prove) and the REASON (why — the trigger, symptom, or context), plus an optional TICKET. Each pinned finding is rendered with its ACTUAL related log-line sequence (the matched line(s) plus `context` lines of surrounding log, with a line-number gutter) followed by your description — so the doc shows the complete logs, not just line numbers. Pass `components` to name the subsystems potentially responsible for the conclusion (or let LOGAN fill them from the verdict when includeConclusion is set), and `questions` for the open follow-ups to investigate next. By default it also folds in the recorded investigation steps; pass `body` for a narrative and set includeConclusion:true to also run and embed the native root-cause verdict + evidence lines + timeline. Returns the saved file path. Pin findings first (logan_report_finding / logan_import_findings) so they appear with their log lines.',
   {
     name: z.string().describe('Clear document title, e.g. "Auth token-expiry root cause"'),
     aim: z.string().describe('What this investigation set out to find or prove'),
@@ -1530,19 +1530,29 @@ server.tool(
     ticket: z.string().optional().describe('Ticket id/name if one exists, e.g. "SUS-1234"'),
     body: z.string().optional().describe('Your narrative / findings write-up in markdown (the main content)'),
     context: z.number().int().min(0).max(20).default(3).describe('Log lines of surrounding context to show around each finding\'s matched line(s) (0 = just the match)'),
+    components: z.array(z.object({
+      name: z.string().describe('Component / subsystem name'),
+      reason: z.string().optional().describe('Why it is implicated in the conclusion'),
+      sampleLine: z.number().int().min(1).optional().describe('1-based viewer line of an example occurrence'),
+    })).optional().describe('Components/subsystems potentially responsible for the conclusion (the areas to investigate). If omitted and includeConclusion is set, LOGAN fills this from the verdict\'s top failing components.'),
+    questions: z.array(z.string()).optional().describe('Open questions / follow-ups to investigate next (rendered as a checklist)'),
     includeFindings: z.boolean().default(true).describe('Embed pinned findings — each with its related log-line sequence + description'),
     includeSteps: z.boolean().default(true).describe('Embed the recorded investigation steps (what you did)'),
     includeConclusion: z.boolean().default(false).describe('Also run the native root-cause conclusion and embed the verdict + evidence lines + timeline'),
   },
-  async ({ name, aim, reason, ticket, body, context, includeFindings, includeSteps, includeConclusion }) => {
+  async ({ name, aim, reason, ticket, body, context, components, questions, includeFindings, includeSteps, includeConclusion }) => {
     try {
       const result = await apiCall('POST', '/api/save-report', {
-        name, aim, reason, ticket, body, context, includeFindings, includeSteps, includeConclusion,
+        name, aim, reason, ticket, body, context, components, questions, includeFindings, includeSteps, includeConclusion,
       });
       if (!result.success) {
         return { content: [{ type: 'text', text: `Error: ${result.error || 'save report failed'}` }], isError: true };
       }
-      return { content: [{ type: 'text', text: `Report saved: ${result.filePath}\n(${result.findings} finding(s), ${result.steps} step(s)${result.conclusion ? ', verdict' : ''} embedded)` }] };
+      const parts = [`${result.findings} finding(s)`, `${result.steps} step(s)`];
+      if (result.components) parts.push(`${result.components} component(s)`);
+      if (result.questions) parts.push(`${result.questions} question(s)`);
+      if (result.conclusion) parts.push('verdict');
+      return { content: [{ type: 'text', text: `Report saved: ${result.filePath}\n(${parts.join(', ')} embedded)` }] };
     } catch (err: any) {
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
     }

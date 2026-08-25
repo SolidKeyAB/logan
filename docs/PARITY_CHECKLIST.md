@@ -143,8 +143,10 @@ when each is next touched):
   self-contained `.md` doc — LOGAN's universal Log Analysis Report, see
   `docs/LOGAN_REPORT_FORMAT.md`: clear name + AIM + REASON + optional ticket, each pinned
   finding rendered with its **real related log-line sequence** — matched line(s) + context,
-  fetched from the file via `getLinesByNumbers` — plus a description, the recorded steps, and —
-  opt-in — the native root-cause verdict with its evidence lines + timeline). Agent surface:
+  fetched from the file via `getLinesByNumbers` — plus a description, a **Components —
+  potentially responsible** section (agent-supplied or derived from the verdict's top failing
+  components), an **Open questions** checklist, the recorded steps, and — opt-in — the native
+  root-cause verdict with its evidence lines + timeline). Agent surface:
   MCP `logan_save_report` + `/api/save-report` (gathers annotations + journal + optional
   conclusion, batches ONE raw-line read for all finding windows) → pure `reportDoc.ts` builder →
   `ctx.saveReport` writes to the log's `.logan/reports/<slug>.report.md` (read-only fallback to
