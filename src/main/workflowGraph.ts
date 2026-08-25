@@ -68,6 +68,7 @@ export interface WorkflowStepInput {
   body?: Record<string, any>;
   label?: string;
   ts?: number;
+  result?: string;   // compact outcome captured at record time (Build 2)
 }
 
 // Non-investigative calls that are just navigation / fetching / chat plumbing. They
@@ -172,6 +173,7 @@ export function investigationToGraph(
       sourceIndex,
       nouns: nouns.length ? nouns : undefined,
       config: Object.keys(config).length ? config : undefined,
+      result: entry.result || undefined,
     };
     // dataflow edge: this step reads the prior step's active scope.
     if (stepIndex > 0 && usesActiveScope(body)) {
