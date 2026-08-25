@@ -931,6 +931,13 @@
               <button id="chat-reconnect-dismiss" class="chat-reconnect-dismiss" title="Dismiss">✕</button>
             </div>
             <div id="chat-messages" class="chat-messages"></div>
+            <div id="chat-queue" class="chat-queue hidden">
+              <div class="chat-queue-head">
+                <span id="chat-queue-title" class="chat-queue-title">Queued</span>
+                <button id="chat-queue-clear" class="chat-queue-clear" title="Cancel all queued messages">Cancel all</button>
+              </div>
+              <div id="chat-queue-list" class="chat-queue-list"></div>
+            </div>
             <div class="chat-input-bar">
               <input id="chat-input" type="text" placeholder="Message the AI agent..." />
               <button id="chat-interrupt-btn" class="chat-interrupt-btn" title="Stop the agent's current task (keeps the session — it returns to waiting for you)" disabled>⏹ Stop</button>
