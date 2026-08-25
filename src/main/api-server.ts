@@ -20,7 +20,7 @@ import { canonicalizeAiVerb } from '../shared/verbRegistry';
 import { compilePattern, CompileInput } from './compilePattern';
 import { logPattern } from './patternLog';
 import { synthesizeConclusion, type ConclusionReport, type ConclusionGap, type ConclusionAnnotation, type ConclusionEvent } from './conclusion';
-import { buildReportMarkdown, reportFileName, type ReportFinding, type ReportStep } from './reportDoc';
+import { buildReportMarkdown, reportFileName, type ReportFinding, type ReportLogLine, type ReportStep } from './reportDoc';
 
 export const API_PORT = 19532;
 const PORT_FILE = path.join(os.homedir(), '.logan', 'mcp-port');
@@ -1328,11 +1328,14 @@ export function startApiServer(ctx: ApiContext): void {
           return;
         }
 
-        // Save the current investigation as a self-contained markdown DOC (report)
-        // in the log's .logan/reports/. The agent supplies name/aim/reason (+ optional
-        // ticket + narrative); we fold in its pinned findings, the recorded steps, and
-        // — opt-in — the native root-cause verdict. Human parity: the saved doc lands
-        // in the chat panel (clickable path) and is a plain .md the user opens/attaches.
+        // Save the current investigation as a self-contained markdown DOC — LOGAN's
+        // universal Log Analysis Report (see docs/LOGAN_REPORT_FORMAT.md), written to
+        // the log's .logan/reports/. The agent supplies name/aim/reason (+ optional
+        // ticket + narrative); we fold in its pinned findings — each with the REAL
+        // related log-line SEQUENCE (match + context) pulled from the file — the
+        // recorded steps, and (opt-in) the native root-cause verdict with its evidence
+        // lines. Human parity: the saved doc lands in the chat panel (clickable path)
+        // and is a plain .md the user opens, shares, or pastes into Jira.
         if (url === '/api/save-report') {
           if (!body.name || typeof body.name !== 'string') return sendError(res, 'name required');
           if (!ctx.getCurrentFilePath()) return sendError(res, 'No file open');
@@ -1341,16 +1344,12 @@ export function startApiServer(ctx: ApiContext): void {
           const includeSteps = body.includeSteps !== false;
           const includeConclusion = body.includeConclusion === true; // opt-in (runs analysis)
 
-          // Findings = pinned annotations, mapped to 1-based viewer lines.
-          const findings: ReportFinding[] = includeFindings
-            ? Array.from(ctx.getAnnotations().values()).map((a) => ({
-                viewerLine: a.lineNumber + 1,
-                ...(a.endLine !== undefined ? { endLine: a.endLine + 1 } : {}),
-                title: a.text,
-                ...(a.detail ? { detail: a.detail } : {}),
-                ...(a.severity ? { severity: a.severity } : {}),
-              }))
-            : [];
+          const readHandler = ctx.getReadHandler();
+          const total = readHandler ? readHandler.getTotalLines() : 0;
+          // Context lines shown around each finding's match line(s) (0 = match only).
+          const ctxLines = Math.max(0, Math.min(20, body.context ?? 3));
+          const MAX_SPAN = 60;            // cap a single finding's rendered match span
+          const MAX_TOTAL_LOGLINES = 500; // safety cap on embedded lines across the doc
 
           // Steps = the recorded investigation journal (what the agent did).
           const steps: ReportStep[] = includeSteps
@@ -1363,7 +1362,73 @@ export function startApiServer(ctx: ApiContext): void {
             if (c.success && c.conclusion) conclusion = c.conclusion;
           }
 
-          const readHandler = ctx.getReadHandler();
+          // Plan which raw lines to fetch: a context window per finding (deduped),
+          // plus the verdict's first-anomaly / root-cause lines. One batched read.
+          const wanted = new Set<number>();
+          const rawFindings: { ann: Annotation; matchStart0: number; matchEnd0: number; win: [number, number] }[] = [];
+          if (includeFindings) {
+            let budget = MAX_TOTAL_LOGLINES;
+            for (const a of ctx.getAnnotations().values()) {
+              const ln0 = a.lineNumber;
+              const end0 = a.endLine !== undefined ? a.endLine : ln0;
+              const matchStart0 = Math.max(0, Math.min(ln0, end0));
+              const spanLen = Math.max(ln0, end0) - matchStart0 + 1;
+              const matchEnd0 = matchStart0 + Math.min(spanLen, MAX_SPAN) - 1; // rendered match end
+              const winStart = Math.max(0, matchStart0 - ctxLines);
+              const winEnd = Math.min(total - 1, matchEnd0 + ctxLines);
+              const winSize = winEnd - winStart + 1;
+              if (readHandler && total > 0 && winSize <= budget) {
+                budget -= winSize;
+                for (let n = winStart; n <= winEnd; n++) wanted.add(n);
+                rawFindings.push({ ann: a, matchStart0, matchEnd0, win: [winStart, winEnd] });
+              } else {
+                // Over budget / no reader: keep the finding, skip its embedded lines.
+                rawFindings.push({ ann: a, matchStart0, matchEnd0, win: [matchStart0, matchStart0 - 1] });
+              }
+            }
+          }
+          const eventViewerLines: number[] = [];
+          for (const ev of [conclusion?.firstAnomaly, conclusion?.rootCause]) {
+            if (!ev) continue;
+            const vl = ev.viewerLine ?? ev.lineNumber + 1;
+            eventViewerLines.push(vl);
+            if (readHandler && vl - 1 >= 0 && vl - 1 < total) wanted.add(vl - 1);
+          }
+
+          // One batched read for every needed raw line (0-based → text).
+          const lineText = new Map<number, string>();
+          if (wanted.size && readHandler) {
+            const nums = Array.from(wanted).sort((a, b) => a - b);
+            const fetched = await readHandler.getLinesByNumbers(nums);
+            for (const ld of fetched) lineText.set(ld.lineNumber, ld.text);
+          }
+
+          // Assemble findings with their related log-line sequences.
+          const findings: ReportFinding[] = rawFindings.map((rf) => {
+            const [winStart, winEnd] = rf.win;
+            const logLines: ReportLogLine[] = [];
+            for (let n = winStart; n <= winEnd; n++) {
+              const text = lineText.get(n);
+              if (text === undefined) continue;
+              logLines.push({ viewerLine: n + 1, text, isMatch: n >= rf.matchStart0 && n <= rf.matchEnd0 });
+            }
+            return {
+              viewerLine: rf.ann.lineNumber + 1,
+              ...(rf.ann.endLine !== undefined ? { endLine: rf.ann.endLine + 1 } : {}),
+              title: rf.ann.text,
+              ...(rf.ann.detail ? { detail: rf.ann.detail } : {}),
+              ...(rf.ann.severity ? { severity: rf.ann.severity } : {}),
+              ...(logLines.length ? { logLines } : {}),
+            };
+          });
+
+          // Verdict evidence lines: viewerLine (1-based) → raw text.
+          const eventLines: Record<number, string> = {};
+          for (const vl of eventViewerLines) {
+            const text = lineText.get(vl - 1);
+            if (text !== undefined) eventLines[vl] = text;
+          }
+
           const md = buildReportMarkdown({
             name: body.name,
             aim: body.aim || '',
@@ -1371,12 +1436,13 @@ export function startApiServer(ctx: ApiContext): void {
             ticket: body.ticket,
             body: body.body,
             sourceFilePath: ctx.getCurrentFilePath(),
-            totalLines: readHandler ? readHandler.getTotalLines() : undefined,
+            totalLines: total || undefined,
             generatedAtIso: new Date().toISOString(),
             agentName: activeAgent?.name,
             findings,
             steps,
             conclusion,
+            eventLines,
           });
 
           const saved = await ctx.saveReport(reportFileName(body.name), md);

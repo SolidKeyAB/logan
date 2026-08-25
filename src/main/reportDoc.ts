@@ -1,23 +1,34 @@
-// ─── Agent report doc: bundle an investigation into one self-contained .md ────
+// ─── LOGAN Log Analysis Report: the canonical, shareable .md format ──────────
 // Pure, deterministic markdown assembly used by /api/save-report →
 // logan_save_report. No fs, no electron, no Date.now() — the caller supplies the
-// timestamp and the main process resolves the sidecar path and writes the string
-// this returns. Trivially unit-testable (see src/tests/reportDoc.test.ts).
+// timestamp AND the raw log-line text (fetched from the file handler), so this
+// module stays trivially unit-testable (see src/tests/reportDoc.test.ts).
 //
-// The doc gives the agent a durable, human-readable write-up of "what it has":
-// a clear title, the AIM (what it set out to find/prove), the REASON (why — the
-// trigger/context), an optional ticket, its narrative, and — folded in — the
-// pinned findings, the recorded investigation steps, and (opt-in) the native
-// root-cause verdict. Front-matter carries the same metadata for machine reuse.
+// This is LOGAN's universal report shape (see docs/LOGAN_REPORT_FORMAT.md):
+//   front-matter → title → aim/reason → metadata → summary → verdict →
+//   FINDINGS (each with the actual related log-line SEQUENCE + description) →
+//   timeline → steps taken.
+// Every finding embeds its real log lines (the match + surrounding context) in a
+// fenced code block so the doc is self-contained and pastes cleanly into Jira.
 
 import type { ConclusionReport } from './conclusion';
 
-export interface ReportFinding {
+export const LOGAN_REPORT_FORMAT_VERSION = 1;
+
+// A single raw log line in a finding's related sequence.
+export interface ReportLogLine {
   viewerLine: number;         // 1-based, as shown in the viewer
+  text: string;               // the raw log line
+  isMatch?: boolean;          // true for the finding line(s), false for context
+}
+
+export interface ReportFinding {
+  viewerLine: number;         // 1-based
   endLine?: number;           // 1-based inclusive range end, if a span
   title: string;
   detail?: string;
   severity?: string;          // error | warning | info
+  logLines?: ReportLogLine[]; // the related log sequence (match + context)
 }
 
 export interface ReportStep {
@@ -38,7 +49,12 @@ export interface ReportDocInput {
   findings?: ReportFinding[];
   steps?: ReportStep[];
   conclusion?: ConclusionReport | null;
+  // viewerLine (1-based) → raw log text, for the verdict's key evidence lines.
+  eventLines?: Record<number, string>;
 }
+
+// Longest single log line we embed verbatim before eliding the tail.
+const MAX_LINE_CHARS = 4000;
 
 // Filesystem-safe, human-readable slug for the report filename.
 export function slugifyReportName(name: string): string {
@@ -78,12 +94,34 @@ function lineRef(viewerLine: number, endLine?: number): string {
   return endLine && endLine !== viewerLine ? `lines ${viewerLine}–${endLine}` : `line ${viewerLine}`;
 }
 
+// One log line, trimmed of a trailing CR and capped so a pathological 100k-char
+// line can't blow up the doc.
+function clipText(text: string): string {
+  const t = (text ?? '').replace(/\r$/, '');
+  if (t.length <= MAX_LINE_CHARS) return t;
+  return `${t.slice(0, MAX_LINE_CHARS)} …[+${t.length - MAX_LINE_CHARS} chars]`;
+}
+
+// Render a sequence of raw log lines as a fenced block with a line-number gutter.
+// The finding line(s) are flagged with a ► marker; context lines get a space.
+// Pastes verbatim into Jira / GitHub code blocks.
+function renderLogSequence(lines: ReportLogLine[]): string[] {
+  const width = Math.max(...lines.map((l) => String(l.viewerLine).length));
+  const out: string[] = ['```text'];
+  for (const l of lines) {
+    const marker = l.isMatch ? '►' : ' ';
+    out.push(`${marker} ${String(l.viewerLine).padStart(width)} | ${clipText(l.text)}`);
+  }
+  out.push('```');
+  return out;
+}
+
 // Assemble the full markdown document.
 export function buildReportMarkdown(input: ReportDocInput): string {
   const {
     name, aim, reason, ticket, body,
     sourceFilePath, totalLines, generatedAtIso, agentName,
-    findings = [], steps = [], conclusion = null,
+    findings = [], steps = [], conclusion = null, eventLines = {},
   } = input;
 
   const author = agentName || 'LOGAN agent';
@@ -91,6 +129,7 @@ export function buildReportMarkdown(input: ReportDocInput): string {
 
   // --- YAML front-matter (metadata, machine-readable) ---
   out.push('---');
+  out.push(`logan_report: ${LOGAN_REPORT_FORMAT_VERSION}`);
   out.push(`title: ${yamlValue(name)}`);
   out.push(`aim: ${yamlValue(aim)}`);
   out.push(`reason: ${yamlValue(reason)}`);
@@ -103,6 +142,8 @@ export function buildReportMarkdown(input: ReportDocInput): string {
 
   // --- Title + aim/reason callout ---
   out.push(`# ${name}`);
+  out.push('');
+  out.push('*LOGAN Log Analysis Report*');
   out.push('');
   out.push(`> **Aim** — ${aim || '_(not stated)_'}`);
   out.push(`>`);
@@ -147,6 +188,26 @@ export function buildReportMarkdown(input: ReportDocInput): string {
     }
     out.push('');
 
+    // The actual log lines behind the verdict, if the caller resolved them.
+    const keyLines: ReportLogLine[] = [];
+    const seen = new Set<number>();
+    for (const ev of [conclusion.firstAnomaly, conclusion.rootCause]) {
+      if (!ev) continue;
+      const vl = ev.viewerLine ?? ev.lineNumber + 1;
+      const text = eventLines[vl];
+      if (text !== undefined && !seen.has(vl)) {
+        seen.add(vl);
+        keyLines.push({ viewerLine: vl, text, isMatch: true });
+      }
+    }
+    if (keyLines.length) {
+      out.push('**Evidence lines**');
+      out.push('');
+      keyLines.sort((a, b) => a.viewerLine - b.viewerLine);
+      out.push(...renderLogSequence(keyLines));
+      out.push('');
+    }
+
     if (conclusion.timeline && conclusion.timeline.length) {
       out.push('### Timeline');
       out.push('');
@@ -159,17 +220,24 @@ export function buildReportMarkdown(input: ReportDocInput): string {
     }
   }
 
-  // --- Findings (pinned annotations) ---
+  // --- Findings — each with its related log-line SEQUENCE + description ---
   if (findings.length) {
     out.push(`## Findings (${findings.length})`);
     out.push('');
-    for (const f of findings) {
-      out.push(`- **${severityTag(f.severity)}** ${f.title} — ${lineRef(f.viewerLine, f.endLine)}`);
+    findings.forEach((f, i) => {
+      out.push(`### ${i + 1}. ${severityTag(f.severity)} ${f.title}`);
+      out.push('');
+      out.push(`**Location** — ${lineRef(f.viewerLine, f.endLine)}`);
+      out.push('');
       if (f.detail && f.detail.trim()) {
-        out.push(`  ${f.detail.trim().replace(/\n/g, '\n  ')}`);
+        out.push(f.detail.trim());
+        out.push('');
       }
-    }
-    out.push('');
+      if (f.logLines && f.logLines.length) {
+        out.push(...renderLogSequence(f.logLines));
+        out.push('');
+      }
+    });
   }
 
   // --- Steps taken (recorded investigation journal) ---
