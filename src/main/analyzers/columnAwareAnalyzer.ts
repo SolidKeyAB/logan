@@ -8,7 +8,7 @@ import {
 import {
   AnalysisAccumulator,
   ColumnInfo,
-  detectColumns,
+  detectLogFormat,
   looksLikeHeader,
 } from './lineClassify';
 
@@ -28,8 +28,11 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
       onProgress?.({ phase: 'reading', percent: 0, message: 'Detecting column structure...' });
 
       let columns: ColumnInfo[] = [];
+      let logcat = false;
       try {
-        columns = await detectColumns(filePath);
+        const fmt = await detectLogFormat(filePath);
+        columns = fmt.columns;
+        logcat = fmt.logcat;
       } catch (e) {
         console.error('Error detecting columns:', e);
       }
@@ -43,7 +46,7 @@ export class ColumnAwareAnalyzer implements LogAnalyzer {
 
       // Classification (level counts, crashes, component errors, timestamp span)
       // is delegated to the shared accumulator so the scoped analyzer stays in lockstep.
-      const acc = new AnalysisAccumulator(columns);
+      const acc = new AnalysisAccumulator(columns, logcat);
 
       // Density buckets — adaptive count based on file size (500–10,000)
       // Used by the minimap to draw a heat map by log level. These stay here because

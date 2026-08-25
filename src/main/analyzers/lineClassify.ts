@@ -12,6 +12,56 @@ import { CrashEntry, FailingComponent, FilterSuggestion, AnalysisInsights } from
 export const CRASH_REGEX = /\b(fatal|crash|exception|panic|oom|out.of.memory|segfault|abort|core.dump|stack.overflow|unhandled|killed|sigsegv)\b/i;
 export const MAX_CRASHES = 50;
 
+// --- Android logcat parsing ---------------------------------------------------
+//
+// Logcat has NO header row, and it separates its PID/TID/level/tag fields with
+// SINGLE spaces. So header-based column detection finds nothing, and splitLine()
+// (which only breaks on tabs or 2+ spaces) glues the tag into the message field.
+// The consequence: the tag — the real "component" — is never isolated, so a
+// crash like "E AndroidRuntime: FATAL EXCEPTION" is still counted (its text
+// matches CRASH_REGEX) but is attributed to NO component. Every component-scoped
+// view — top failing components, "Errors from X" suggestions, the health box,
+// the triage card's worst-components — therefore misses it. parseLogcatLine
+// extracts (level, component=tag, message) positionally so logcat crashes get
+// the same component attribution every columnar format already gets.
+//
+// Supported forms (each may carry a leading capture-host stamp like "[21:10:44.413] "):
+//   threadtime:  MM-DD HH:MM:SS.mmm  PID  TID  L  Tag: message
+//   brief/tag:   MM-DD HH:MM:SS.mmm  L/Tag( PID): message
+const LOGCAT_LEVEL_LETTER: Record<string, string> = {
+  V: 'verbose', D: 'debug', I: 'info', W: 'warning', E: 'error', F: 'fatal', A: 'fatal',
+};
+// Optional esotrace/capture host stamp prefixed to each line, e.g. "[21:10:44.413] ".
+const LOGCAT_HOST_PREFIX = /^\s*(?:\[[0-9:.]+\]\s+)?/;
+const LOGCAT_THREADTIME = /^\d{2}-\d{2}\s+\d{1,2}:\d{2}:\d{2}\.\d+\s+\d+\s+\d+\s+([VDIWEFA])\s+([^:\s][^:]*?):\s?(.*)$/;
+const LOGCAT_BRIEF = /^\d{2}-\d{2}\s+\d{1,2}:\d{2}:\d{2}\.\d+\s+([VDIWEFA])\/([^(]+?)\(\s*\d+\):\s?(.*)$/;
+
+export interface LogcatParsed { level: string; component: string; message: string; }
+
+// Parse one Android logcat line into level/component(tag)/message, or null if it
+// isn't a logcat line (e.g. a "--------- beginning of main" separator).
+export function parseLogcatLine(line: string): LogcatParsed | null {
+  const body = line.replace(LOGCAT_HOST_PREFIX, '');
+  const m = body.match(LOGCAT_THREADTIME) || body.match(LOGCAT_BRIEF);
+  if (!m) return null;
+  return { level: LOGCAT_LEVEL_LETTER[m[1]], component: m[2].trim(), message: m[3].trim() };
+}
+
+// Sniff whether a set of sample lines is Android logcat: a majority parse as
+// logcat lines. Blank/comment/separator lines are ignored so they don't dilute
+// the ratio.
+export function looksLikeLogcat(sampleLines: string[]): boolean {
+  let considered = 0;
+  let matched = 0;
+  for (const l of sampleLines) {
+    const t = l.trim();
+    if (!t || t.startsWith('#') || /^-{3,}/.test(t.replace(LOGCAT_HOST_PREFIX, ''))) continue;
+    considered++;
+    if (parseLogcatLine(l)) matched++;
+  }
+  return considered >= 5 && matched >= considered * 0.5;
+}
+
 export const KNOWN_COLUMNS = {
   // timestamp MUST come before channel — 'LoggerTime' contains 'logger' (channel keyword)
   // but should be classified as timestamp. More-specific types go first.
@@ -88,24 +138,40 @@ export function detectColumnsFromHeaderLine(headerLine: string): ColumnInfo[] {
   return columns;
 }
 
-// Read the first bytes of a file and detect its columns from the header row (if any).
-export async function detectColumns(filePath: string): Promise<ColumnInfo[]> {
-  const buf = Buffer.alloc(8192);
+export interface LogFormat {
+  columns: ColumnInfo[];
+  // True when the file is header-less Android logcat — the accumulator then
+  // parses component/level/message positionally instead of by column index.
+  logcat: boolean;
+}
+
+// Read the first bytes of a file and detect its structure: a header row (→ named
+// columns) if present, else sniff for header-less Android logcat.
+export async function detectLogFormat(filePath: string): Promise<LogFormat> {
+  const CAP = 65536; // 64KB — enough to clear a few very long logcat lines when sniffing
+  const buf = Buffer.alloc(CAP);
   const fd = fs.openSync(filePath, 'r');
-  let headerLine: string | null = null;
+  let lines: string[] = [];
   try {
-    const bytesRead = fs.readSync(fd, buf, 0, 8192, 0);
+    const bytesRead = fs.readSync(fd, buf, 0, CAP, 0);
     const text = buf.toString('utf-8', 0, bytesRead);
-    const lines = text.split(/\r?\n/).slice(0, 10);
-    for (const line of lines) {
-      if (line.startsWith('#')) continue;
-      if (looksLikeHeader(line)) { headerLine = line; break; }
-    }
+    lines = text.split(/\r?\n/);
   } finally {
     fs.closeSync(fd);
   }
-  if (!headerLine) return [];
-  return detectColumnsFromHeaderLine(headerLine);
+  for (const line of lines.slice(0, 10)) {
+    if (line.startsWith('#')) continue;
+    if (looksLikeHeader(line)) {
+      return { columns: detectColumnsFromHeaderLine(line), logcat: false };
+    }
+  }
+  // No header row — could be Android logcat (no header, single-space fields).
+  return { columns: [], logcat: looksLikeLogcat(lines.slice(0, 60)) };
+}
+
+// Read the first bytes of a file and detect its columns from the header row (if any).
+export async function detectColumns(filePath: string): Promise<ColumnInfo[]> {
+  return (await detectLogFormat(filePath)).columns;
 }
 
 // Accumulates level counts, crashes, per-component errors and the timestamp span
@@ -125,12 +191,14 @@ export class AnalysisAccumulator {
   private readonly sourceCol?: ColumnInfo;
   private readonly levelCol?: ColumnInfo;
   private readonly messageCol?: ColumnInfo;
+  private readonly logcat: boolean;
 
-  constructor(columns: ColumnInfo[] = []) {
+  constructor(columns: ColumnInfo[] = [], logcat = false) {
     this.channelCol = columns.find(c => c.type === 'channel');
     this.sourceCol = columns.find(c => c.type === 'source');
     this.levelCol = columns.find(c => c.type === 'level');
     this.messageCol = columns.find(c => c.type === 'message');
+    this.logcat = logcat;
   }
 
   // Classify one line and fold it into the running totals. Returns the detected
@@ -141,36 +209,48 @@ export class AnalysisAccumulator {
   feed(line: string, lineNumber: number): string | null {
     if (!line.trim() || line.startsWith('#')) return null;
 
-    const fields = splitLine(line);
-
-    // Component (channel first, then source)
     let componentName: string | undefined;
-    if (this.channelCol && fields[this.channelCol.index]) {
-      const ch = fields[this.channelCol.index].trim();
-      if (ch && ch !== '--' && ch !== '-') componentName = ch;
-    }
-    if (!componentName && this.sourceCol && fields[this.sourceCol.index]) {
-      const src = fields[this.sourceCol.index].trim();
-      if (src && src !== '--' && src !== '-') componentName = simplifySource(src);
-    }
-
-    // Level (column-based if a level column exists, else from text)
     let level: string | undefined;
-    if (this.levelCol && fields[this.levelCol.index]) {
-      const rawLevel = fields[this.levelCol.index].trim().toLowerCase();
-      level = normalizeLevel(rawLevel) || undefined;
-    } else {
-      level = detectLevelFromText(line) || undefined;
-    }
-    if (level) this.levelCounts[level]++;
-
-    // Message text
     let message = '';
-    if (this.messageCol && fields[this.messageCol.index]) {
-      message = fields[this.messageCol.index].trim();
-    } else if (fields.length > 0) {
-      message = fields[fields.length - 1].trim();
+
+    // Android logcat: parse tag/level/message positionally (no header, single-space
+    // fields) so the tag becomes the component. Falls through to generic columnar
+    // parsing for lines that aren't logcat (e.g. "--------- beginning of main").
+    const lc = this.logcat ? parseLogcatLine(line) : null;
+    if (lc) {
+      componentName = lc.component || undefined;
+      level = lc.level || undefined;
+      message = lc.message;
+    } else {
+      const fields = splitLine(line);
+
+      // Component (channel first, then source)
+      if (this.channelCol && fields[this.channelCol.index]) {
+        const ch = fields[this.channelCol.index].trim();
+        if (ch && ch !== '--' && ch !== '-') componentName = ch;
+      }
+      if (!componentName && this.sourceCol && fields[this.sourceCol.index]) {
+        const src = fields[this.sourceCol.index].trim();
+        if (src && src !== '--' && src !== '-') componentName = simplifySource(src);
+      }
+
+      // Level (column-based if a level column exists, else from text)
+      if (this.levelCol && fields[this.levelCol.index]) {
+        const rawLevel = fields[this.levelCol.index].trim().toLowerCase();
+        level = normalizeLevel(rawLevel) || undefined;
+      } else {
+        level = detectLevelFromText(line) || undefined;
+      }
+
+      // Message text
+      if (this.messageCol && fields[this.messageCol.index]) {
+        message = fields[this.messageCol.index].trim();
+      } else if (fields.length > 0) {
+        message = fields[fields.length - 1].trim();
+      }
     }
+
+    if (level) this.levelCounts[level]++;
 
     // Crash keyword detection
     if (this.crashes.length < MAX_CRASHES) {
