@@ -17,8 +17,9 @@ export function analyzeScope(
   resolved: ResolvedScope,
   columns: ColumnInfo[] = [],
   analyzerName = 'column-aware-scoped',
+  logcat = false,
 ): AnalysisResult {
-  const acc = new AnalysisAccumulator(columns);
+  const acc = new AnalysisAccumulator(columns, logcat);
   let count = 0;
 
   forEachScopeLine(reader, resolved, (text, lineNumber) => {
