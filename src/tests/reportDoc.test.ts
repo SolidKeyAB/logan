@@ -175,12 +175,42 @@ describe('buildReportMarkdown', () => {
     expect(md).toContain('- line 4047 · first 401');
   });
 
+  it('renders a Components — potentially responsible section', () => {
+    const md = buildReportMarkdown({
+      ...BASE,
+      components: [
+        { name: 'auth', reason: '38 errors / 4 warnings', sampleLine: 8047 },
+        { name: 'session', reason: '12 errors' },
+        { name: 'gateway' },
+      ],
+    });
+    expect(md).toContain('## Components — potentially responsible');
+    expect(md).toContain('- **auth** — 38 errors / 4 warnings (e.g. line 8047)');
+    expect(md).toContain('- **session** — 12 errors');
+    expect(md).toContain('- **gateway**');
+  });
+
+  it('renders an Open questions checklist', () => {
+    const md = buildReportMarkdown({
+      ...BASE,
+      questions: [
+        'Did the 2.14 deploy change the refresh TTL?',
+        'Are other services using the same expiry calc affected?',
+      ],
+    });
+    expect(md).toContain('## Open questions');
+    expect(md).toContain('- [ ] Did the 2.14 deploy change the refresh TTL?');
+    expect(md).toContain('- [ ] Are other services using the same expiry calc affected?');
+  });
+
   it('omits optional sections when empty', () => {
     const md = buildReportMarkdown(BASE);
     expect(md).not.toContain('## Summary');
     expect(md).not.toContain('## Findings');
     expect(md).not.toContain('## Steps taken');
     expect(md).not.toContain('## Verdict');
+    expect(md).not.toContain('## Components');
+    expect(md).not.toContain('## Open questions');
   });
 
   it('keeps front-matter single-line for multi-line reasons', () => {
