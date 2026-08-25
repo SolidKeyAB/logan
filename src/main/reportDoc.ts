@@ -36,6 +36,13 @@ export interface ReportStep {
   result?: string;            // compact result summary, if captured
 }
 
+// A component/subsystem implicated in the conclusion — the area to investigate.
+export interface ReportComponent {
+  name: string;
+  reason?: string;            // why it's implicated ("38 errors / 4 warnings", or agent's reasoning)
+  sampleLine?: number;        // 1-based viewer line for an example occurrence
+}
+
 export interface ReportDocInput {
   name: string;               // report title (also the basis for the filename)
   aim: string;                // what the investigation set out to find/prove
@@ -51,6 +58,10 @@ export interface ReportDocInput {
   conclusion?: ConclusionReport | null;
   // viewerLine (1-based) → raw log text, for the verdict's key evidence lines.
   eventLines?: Record<number, string>;
+  // Components/subsystems potentially responsible for the conclusion.
+  components?: ReportComponent[];
+  // Open questions / follow-ups to investigate next.
+  questions?: string[];
 }
 
 // Longest single log line we embed verbatim before eliding the tail.
@@ -122,6 +133,7 @@ export function buildReportMarkdown(input: ReportDocInput): string {
     name, aim, reason, ticket, body,
     sourceFilePath, totalLines, generatedAtIso, agentName,
     findings = [], steps = [], conclusion = null, eventLines = {},
+    components = [], questions = [],
   } = input;
 
   const author = agentName || 'LOGAN agent';
@@ -220,6 +232,20 @@ export function buildReportMarkdown(input: ReportDocInput): string {
     }
   }
 
+  // --- Components potentially responsible for the conclusion ---
+  if (components.length) {
+    out.push('## Components — potentially responsible');
+    out.push('');
+    out.push('_The subsystems most likely behind the conclusion — the areas to investigate._');
+    out.push('');
+    for (const c of components) {
+      const reasonPart = c.reason ? ` — ${c.reason}` : '';
+      const wherePart = typeof c.sampleLine === 'number' ? ` (e.g. line ${c.sampleLine})` : '';
+      out.push(`- **${c.name}**${reasonPart}${wherePart}`);
+    }
+    out.push('');
+  }
+
   // --- Findings — each with its related log-line SEQUENCE + description ---
   if (findings.length) {
     out.push(`## Findings (${findings.length})`);
@@ -248,6 +274,16 @@ export function buildReportMarkdown(input: ReportDocInput): string {
       const result = s.result ? ` → ${s.result}` : '';
       out.push(`${i + 1}. ${s.label}${result}`);
     });
+    out.push('');
+  }
+
+  // --- Open questions / follow-ups ---
+  if (questions.length) {
+    out.push('## Open questions');
+    out.push('');
+    for (const q of questions) {
+      out.push(`- [ ] ${q}`);
+    }
     out.push('');
   }
 
