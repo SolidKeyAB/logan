@@ -14,6 +14,7 @@ export interface JournalEntry {
   body: Record<string, any>;    // the call's params
   ts: number;
   label: string;                // human summary, e.g. 'search "auth fail"'
+  result?: string;              // compact outcome of the call, e.g. '42 matches' (Build 2)
 }
 
 // Classification of a fill-in noun — drives ordering + typing of the human
@@ -32,6 +33,7 @@ export interface TemplateStep {
   path: string;
   body: Record<string, any>;
   label: string;
+  result?: string;              // outcome captured when the step was recorded (Build 2)
 }
 
 export interface InvestigationTemplate {
@@ -84,7 +86,7 @@ function ensureDir(): void {
 
 // Turn a recorded journal into a parameterised template.
 export function buildTemplate(name: string, journal: JournalEntry[], sourceFile?: string, description?: string, requirements?: RequirementsManifest): InvestigationTemplate {
-  const steps: TemplateStep[] = journal.map(e => ({ path: e.path, body: { ...e.body }, label: e.label }));
+  const steps: TemplateStep[] = journal.map(e => ({ path: e.path, body: { ...e.body }, label: e.label, result: e.result }));
   const params: ParamDef[] = [];
   steps.forEach((step, i) => {
     for (const key of PARAM_KEYS) {
