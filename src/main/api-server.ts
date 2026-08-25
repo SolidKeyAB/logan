@@ -20,6 +20,7 @@ import { canonicalizeAiVerb } from '../shared/verbRegistry';
 import { compilePattern, CompileInput } from './compilePattern';
 import { logPattern } from './patternLog';
 import { synthesizeConclusion, type ConclusionReport, type ConclusionGap, type ConclusionAnnotation, type ConclusionEvent } from './conclusion';
+import { buildReportMarkdown, reportFileName, type ReportFinding, type ReportStep } from './reportDoc';
 
 export const API_PORT = 19532;
 const PORT_FILE = path.join(os.homedir(), '.logan', 'mcp-port');
@@ -372,6 +373,9 @@ export interface ApiContext {
   clearHighlights(): any;
   loadNotes(): Promise<any>;
   saveNotes(content: string): Promise<any>;
+  // Write an agent-authored report doc into the log's .logan/reports/ (read-only
+  // fallback to ~/.logan/reports/<basename>/). Shared by /api/save-report.
+  saveReport(fileName: string, content: string): Promise<{ success: boolean; filePath?: string; error?: string }>;
   getAgentMemory(): any;
   saveAgentMemory(content: string, agentName?: string): any;
   clearAgentMemory(): any;
@@ -1321,6 +1325,78 @@ export function startApiServer(ctx: ApiContext): void {
           ctx.clearAgentMemory();
           notifyMemoryChanged(ctx);
           sendJson(res, { success: true });
+          return;
+        }
+
+        // Save the current investigation as a self-contained markdown DOC (report)
+        // in the log's .logan/reports/. The agent supplies name/aim/reason (+ optional
+        // ticket + narrative); we fold in its pinned findings, the recorded steps, and
+        // — opt-in — the native root-cause verdict. Human parity: the saved doc lands
+        // in the chat panel (clickable path) and is a plain .md the user opens/attaches.
+        if (url === '/api/save-report') {
+          if (!body.name || typeof body.name !== 'string') return sendError(res, 'name required');
+          if (!ctx.getCurrentFilePath()) return sendError(res, 'No file open');
+
+          const includeFindings = body.includeFindings !== false;
+          const includeSteps = body.includeSteps !== false;
+          const includeConclusion = body.includeConclusion === true; // opt-in (runs analysis)
+
+          // Findings = pinned annotations, mapped to 1-based viewer lines.
+          const findings: ReportFinding[] = includeFindings
+            ? Array.from(ctx.getAnnotations().values()).map((a) => ({
+                viewerLine: a.lineNumber + 1,
+                ...(a.endLine !== undefined ? { endLine: a.endLine + 1 } : {}),
+                title: a.text,
+                ...(a.detail ? { detail: a.detail } : {}),
+                ...(a.severity ? { severity: a.severity } : {}),
+              }))
+            : [];
+
+          // Steps = the recorded investigation journal (what the agent did).
+          const steps: ReportStep[] = includeSteps
+            ? agentJournal.map((e) => ({ label: e.label, ...(e.result ? { result: e.result } : {}) }))
+            : [];
+
+          let conclusion: ConclusionReport | null = null;
+          if (includeConclusion) {
+            const c = await buildConclusion(ctx, {});
+            if (c.success && c.conclusion) conclusion = c.conclusion;
+          }
+
+          const readHandler = ctx.getReadHandler();
+          const md = buildReportMarkdown({
+            name: body.name,
+            aim: body.aim || '',
+            reason: body.reason || '',
+            ticket: body.ticket,
+            body: body.body,
+            sourceFilePath: ctx.getCurrentFilePath(),
+            totalLines: readHandler ? readHandler.getTotalLines() : undefined,
+            generatedAtIso: new Date().toISOString(),
+            agentName: activeAgent?.name,
+            findings,
+            steps,
+            conclusion,
+          });
+
+          const saved = await ctx.saveReport(reportFileName(body.name), md);
+          if (!saved.success) return sendError(res, saved.error || 'Failed to save report');
+
+          // Surface it to the human in the chat panel (no new IPC channel needed).
+          const source = activeAgent?.name || 'Agent';
+          if (!activeAgent) touchPollingAgent(source, ctx);
+          const msg = addChatMessage('agent', `**📄 Saved report — ${body.name}**\n\n\`${saved.filePath}\``);
+          const win = ctx.getMainWindow();
+          if (win && !win.isDestroyed()) win.webContents.send('agent-message', msg);
+
+          sendJson(res, {
+            success: true,
+            filePath: saved.filePath,
+            name: body.name,
+            findings: findings.length,
+            steps: steps.length,
+            conclusion: !!conclusion,
+          });
           return;
         }
 
