@@ -1522,21 +1522,22 @@ server.tool(
 // === Tool: logan_save_report ===
 server.tool(
   'logan_save_report',
-  'Save the current investigation as a self-contained markdown DOCUMENT (a report) in the open log\'s .logan/reports/ folder. Give it a clear NAME (title), the AIM (what you set out to find or prove) and the REASON (why — the trigger, symptom, or context), plus an optional TICKET. By default it also folds in your pinned findings and the recorded investigation steps; pass `body` for your narrative write-up and set includeConclusion:true to also run and embed the native root-cause verdict + timeline. Use this to leave a durable, shareable write-up the user can read or attach to a ticket. Returns the saved file path.',
+  'Save the current investigation as LOGAN\'s universal Log Analysis Report — a self-contained markdown DOCUMENT in the open log\'s .logan/reports/ folder, ready to read, share, or paste into Jira. Give it a clear NAME (title), the AIM (what you set out to find or prove) and the REASON (why — the trigger, symptom, or context), plus an optional TICKET. Each pinned finding is rendered with its ACTUAL related log-line sequence (the matched line(s) plus `context` lines of surrounding log, with a line-number gutter) followed by your description — so the doc shows the complete logs, not just line numbers. By default it also folds in the recorded investigation steps; pass `body` for a narrative and set includeConclusion:true to also run and embed the native root-cause verdict + evidence lines + timeline. Returns the saved file path. Pin findings first (logan_report_finding / logan_import_findings) so they appear with their log lines.',
   {
     name: z.string().describe('Clear document title, e.g. "Auth token-expiry root cause"'),
     aim: z.string().describe('What this investigation set out to find or prove'),
     reason: z.string().describe('Why it was run — the trigger, symptom, or context'),
     ticket: z.string().optional().describe('Ticket id/name if one exists, e.g. "SUS-1234"'),
     body: z.string().optional().describe('Your narrative / findings write-up in markdown (the main content)'),
-    includeFindings: z.boolean().default(true).describe('Embed pinned findings/annotations as a section'),
+    context: z.number().int().min(0).max(20).default(3).describe('Log lines of surrounding context to show around each finding\'s matched line(s) (0 = just the match)'),
+    includeFindings: z.boolean().default(true).describe('Embed pinned findings — each with its related log-line sequence + description'),
     includeSteps: z.boolean().default(true).describe('Embed the recorded investigation steps (what you did)'),
-    includeConclusion: z.boolean().default(false).describe('Also run the native root-cause conclusion and embed the verdict + timeline'),
+    includeConclusion: z.boolean().default(false).describe('Also run the native root-cause conclusion and embed the verdict + evidence lines + timeline'),
   },
-  async ({ name, aim, reason, ticket, body, includeFindings, includeSteps, includeConclusion }) => {
+  async ({ name, aim, reason, ticket, body, context, includeFindings, includeSteps, includeConclusion }) => {
     try {
       const result = await apiCall('POST', '/api/save-report', {
-        name, aim, reason, ticket, body, includeFindings, includeSteps, includeConclusion,
+        name, aim, reason, ticket, body, context, includeFindings, includeSteps, includeConclusion,
       });
       if (!result.success) {
         return { content: [{ type: 'text', text: `Error: ${result.error || 'save report failed'}` }], isError: true };
