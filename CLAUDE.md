@@ -70,6 +70,7 @@ Use `logan_report_finding` for each distinct finding, then send a summary via `l
 | `logan_annotate` | Add annotation to a line/range (use logan_report_finding instead when possible) |
 | `logan_baseline_save` / `logan_baseline_compare` | Save and compare baselines |
 | `logan_get_notes` / `logan_save_notes` | Read/write freeform notes |
+| `logan_save_report` | Save the investigation as LOGAN's universal **Log Analysis Report** (`.md` in `.logan/reports/`, see `docs/LOGAN_REPORT_FORMAT.md`): clear name + AIM + REASON + optional ticket; **each finding shows its real related log-line sequence** (match + context) with a description; a **Components — potentially responsible** section (agent-supplied or derived from the verdict) and an **Open questions** checklist; plus recorded steps and (opt-in) the root-cause verdict + evidence lines. Self-contained, Jira-paste-ready. Pin findings first |
 | `logan_trend_fields` | Statically discover log variables (key=value, key: value, JSON) with inferred type/frequency — start here |
 | `logan_trend_series` | Trend one field over time (adaptive time buckets + sampled points). Accepts a `pattern` regex for unlabeled values |
 | `logan_trend_transitions` | Detect every value change ("flip") of a field — any type; great for "what changed before the bug" |

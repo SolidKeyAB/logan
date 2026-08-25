@@ -138,3 +138,23 @@ when each is next touched):
   (a human doesn't batch-import an external agent's findings) — **written exemption**; the
   human already creates single findings by hand, and fully operates the review/consume
   surface. Done-toggle + clear have both IPC (human) and an api route (agent) for symmetry.
+
+- **Agent save report — `logan_save_report`** (bundle the current investigation into one
+  self-contained `.md` doc — LOGAN's universal Log Analysis Report, see
+  `docs/LOGAN_REPORT_FORMAT.md`: clear name + AIM + REASON + optional ticket, each pinned
+  finding rendered with its **real related log-line sequence** — matched line(s) + context,
+  fetched from the file via `getLinesByNumbers` — plus a description, a **Components —
+  potentially responsible** section (agent-supplied or derived from the verdict's top failing
+  components), an **Open questions** checklist, the recorded steps, and — opt-in — the native
+  root-cause verdict with its evidence lines + timeline). Agent surface:
+  MCP `logan_save_report` + `/api/save-report` (gathers annotations + journal + optional
+  conclusion, batches ONE raw-line read for all finding windows) → pure `reportDoc.ts` builder →
+  `ctx.saveReport` writes to the log's `.logan/reports/<slug>.report.md` (read-only fallback to
+  `~/.logan/reports/<basename>/`). Human surface: the saved doc is announced in the **chat
+  panel** with its clickable path, and is a plain markdown file (fenced log blocks paste
+  verbatim into Jira) the user opens (markdown handler), shares, or attaches to a ticket.
+  **Written create-side exemption:** the report is the *agent's* work product — it captures the
+  agent's session journal + pinned findings, which a human doesn't author. The human's own
+  authoring surfaces already exist at parity (Conclusion panel `.md`/`.pdf` export, Notes
+  drawer), so no separate human "compose report" UI ships here; the human fully *consumes* the
+  doc (open/read/share/paste). Re-running with the same name overwrites, so the agent owns naming.
