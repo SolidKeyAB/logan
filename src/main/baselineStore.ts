@@ -3,6 +3,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { AnalysisResult } from './analyzers/types';
 import { FileHandler } from './fileHandler';
+import { diffEnv, envDiffIsEmpty, envDiffToStrings } from './contextManifest';
 
 // --- Types ---
 
@@ -20,6 +21,7 @@ export interface BaselineFingerprint {
   channelCounts: Record<string, number>;
   sampleLines: Record<string, string[]>; // level -> sample lines (up to 10)
   componentSamples: Record<string, string[]>; // component -> sample error lines (up to 5)
+  env?: Record<string, string>; // static-env snapshot (build/firmware/flags/config) from the context manifest, if attached
 }
 
 export interface BaselineRecord {
@@ -39,7 +41,7 @@ export interface BaselineRecordFull extends BaselineRecord {
 
 export interface ComparisonFinding {
   severity: 'critical' | 'warning' | 'info';
-  category: 'level-shift' | 'new-crash' | 'new-component' | 'missing-component' | 'error-rate' | 'time-pattern' | 'general';
+  category: 'level-shift' | 'new-crash' | 'new-component' | 'missing-component' | 'error-rate' | 'time-pattern' | 'env-diff' | 'general';
   title: string;
   detail: string;
   baselineValue?: string;
@@ -96,7 +98,8 @@ function parseTimestamp(text: string): Date | null {
 export function buildFingerprint(
   filePath: string,
   analysisResult: AnalysisResult,
-  fileHandler: FileHandler
+  fileHandler: FileHandler,
+  env?: Record<string, string>
 ): BaselineFingerprint {
   const totalLines = fileHandler.getTotalLines();
   const fileInfo = fileHandler.getFileInfo();
@@ -219,6 +222,7 @@ export function buildFingerprint(
     channelCounts,
     sampleLines,
     componentSamples,
+    ...(env && Object.keys(env).length ? { env } : {}),
   };
 }
 
@@ -521,6 +525,26 @@ export class BaselineStore {
           category: 'time-pattern',
           title: 'Activity pattern changed',
           detail: `Timestamp density variance is ${(curVariance / blVariance).toFixed(1)}x baseline — activity is more bursty or irregular`,
+        });
+      }
+    }
+
+    // 7. Environment / context drift — only when the baseline actually recorded env
+    // (a legacy baseline with no env can't be drift-checked). Emitted as info so a
+    // build/firmware/flag change is surfaced for weighting rather than counted as an
+    // anomaly: some of the deltas above may follow from the env change, not a regression.
+    if (blFp.env && Object.keys(blFp.env).length > 0) {
+      const envDiff = diffEnv(blFp.env, currentFingerprint.env);
+      if (!envDiffIsEmpty(envDiff)) {
+        const bits = envDiffToStrings(envDiff);
+        const shown = bits.slice(0, 4).join(', ');
+        findings.push({
+          severity: 'info',
+          category: 'env-diff',
+          title: `Environment differs: ${shown}${bits.length > 4 ? `, +${bits.length - 4} more` : ''}`,
+          detail: 'Static environment (build / firmware / flags / config) changed vs baseline. Weigh the deltas above against this — some differences may follow from the environment change rather than a regression.',
+          baselineValue: JSON.stringify(blFp.env),
+          currentValue: JSON.stringify(currentFingerprint.env || {}),
         });
       }
     }

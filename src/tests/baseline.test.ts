@@ -791,3 +791,70 @@ describe('BaselineStore edge cases', () => {
     expect(report.summary.critical + report.summary.warning + report.summary.info).toBe(report.findings.length);
   });
 });
+
+// --- Environment / context drift (P3 ContextManifest injection) ---
+
+describe('buildFingerprint() env snapshot', () => {
+  const mockHandler = {
+    getTotalLines: () => 1,
+    getFileInfo: () => ({ size: 10 }),
+    getLines: () => [{ lineNumber: 0, text: '2024-01-15 10:00:00 hello', level: 'info' }],
+  } as any;
+  const analysisResult = {
+    stats: { totalLines: 1, analyzedLines: 1 },
+    levelCounts: { info: 1 },
+    analyzerName: 'test',
+    analyzedAt: 0,
+    insights: { crashes: [], topFailingComponents: [], filterSuggestions: [] },
+  } as any;
+
+  it('stores the env map when provided', () => {
+    const fp = buildFingerprint('/tmp/x.log', analysisResult, mockHandler, { build: '4.2', firmware: 'rev-88' });
+    expect(fp.env).toEqual({ build: '4.2', firmware: 'rev-88' });
+  });
+
+  it('omits env when absent or empty (back-compat)', () => {
+    expect(buildFingerprint('/tmp/x.log', analysisResult, mockHandler).env).toBeUndefined();
+    expect(buildFingerprint('/tmp/x.log', analysisResult, mockHandler, {}).env).toBeUndefined();
+  });
+});
+
+describe('BaselineStore.compare() env-diff', () => {
+  beforeEach(() => {
+    tmpDir = makeTmpDir();
+    store = new BaselineStore(path.join(tmpDir, 'env.json'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('reports an info env-diff when build/firmware differ', () => {
+    const blFp = makeFingerprint({ env: { build: '4.1', firmware: 'rev-88' } });
+    const id = store.save('baseline', '', [], blFp);
+    const curFp = makeFingerprint({ env: { build: '4.2', firmware: 'rev-88' } });
+
+    const report = store.compare(curFp, id)!;
+    const env = report.findings.find(f => f.category === 'env-diff')!;
+    expect(env).toBeDefined();
+    expect(env.severity).toBe('info');
+    expect(env.title).toContain('build 4.1 → 4.2');
+  });
+
+  it('emits no env-diff when env is identical', () => {
+    const blFp = makeFingerprint({ env: { build: '4.1' } });
+    const id = store.save('baseline', '', [], blFp);
+    const curFp = makeFingerprint({ env: { build: '4.1' } });
+
+    const report = store.compare(curFp, id)!;
+    expect(report.findings.some(f => f.category === 'env-diff')).toBe(false);
+  });
+
+  it('does not drift-check when the baseline recorded no env (legacy)', () => {
+    const blFp = makeFingerprint(); // no env
+    const id = store.save('baseline', '', [], blFp);
+    const curFp = makeFingerprint({ env: { build: '4.2' } });
+
+    const report = store.compare(curFp, id)!;
+    expect(report.findings.some(f => f.category === 'env-diff')).toBe(false);
+  });
+});

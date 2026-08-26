@@ -37,6 +37,13 @@ author:  "<agent name>"
 | Generated | <ISO> |
 | Author | … |
 
+## Environment        (optional — the log's static-env context manifest)
+- **build** — 4.2.1 _(header line 3)_    ← key — value _(provenance)_
+- **firmware** — rev-88
+                     ← build/firmware/flags/config the log was captured under;
+                       auto-filled from the file's context manifest (logan_context_attach),
+                       so the findings below are read against a known environment.
+
 ## Summary            (optional — the agent's narrative)
 
 ## Verdict            (optional — includeConclusion:true)

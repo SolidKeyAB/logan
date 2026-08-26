@@ -41,6 +41,7 @@ import { saveConstant, getConstants, deleteConstant, flushConstants } from './co
 import { flushSequences } from './sequenceStore';
 import { loadColumnLayouts, upsertColumnLayout, deleteColumnLayout, ColumnLayoutSaved } from './columnLayoutsStore';
 import { EntityDescriptor, EntityKind, toDescriptors } from './entityRegistry';
+import { ContextManifest, mergeFacts, factsToPlain, factCount } from './contextManifest';
 import { getPatternLog, clearPatternLog, logPattern, PatternLogEntry, flushPatternLog } from './patternLog';
 import { compilePattern, CompileInput } from './compilePattern';
 import { parseTimestampFast } from './timestampParse';
@@ -1377,6 +1378,20 @@ app.whenReady().then(() => {
     saveAgentMemory: (content: string, agentName?: string) =>
       saveAgentMemory(currentFilePath, content, agentName),
     clearAgentMemory: () => clearAgentMemory(currentFilePath),
+    getContextManifest: () => getContextManifest(currentFilePath),
+    attachContextManifest: (patch, opts) => {
+      const existing = getContextManifest(currentFilePath);
+      const merged = mergeFacts(existing, patch || {}, {
+        provenance: opts?.provenance,
+        source: opts?.source,
+        replace: opts?.replace,
+        agentName: opts?.agentName,
+        now: Date.now(),
+      });
+      const ok = saveContextManifestFile(currentFilePath, merged);
+      return { success: ok, manifest: ok ? merged : null, facts: ok ? factCount(merged) : 0 };
+    },
+    clearContextManifest: () => ({ success: clearContextManifestFile(currentFilePath) }),
     saveNotes: async (content: string) => {
       if (!currentFilePath) return { success: false, error: 'No file open' };
       if (!ensureLocalLoganDir(currentFilePath)) {
@@ -1566,6 +1581,13 @@ app.whenReady().then(() => {
         add('pattern', loadPatternLibraryStore());
         add('contextDef', loadContextDefinitionsStore()[GLOBAL_CONTEXT_KEY] || []);
         add('baseline', baselineStore.list());
+        // Context manifest is per-file (not a global store) — surface the open file's, if any.
+        if (currentFilePath) {
+          const cm = getContextManifest(currentFilePath);
+          if (cm && factCount(cm) > 0) {
+            add('contextManifest', [{ id: 'context-manifest', name: path.basename(currentFilePath), facts: cm.facts }]);
+          }
+        }
       } catch (e) {
         console.error('listSavedEntities failed:', e);
       }
@@ -5299,6 +5321,39 @@ function clearAgentMemory(filePath: string | null): boolean {
   try { if (fs.existsSync(p)) fs.unlinkSync(p); return true; } catch { return false; }
 }
 
+// === Context Manifest (static-env sidecar) ===
+// Per-file store of the static environment a log was captured under (build id, firmware,
+// device, feature flags, config). Mirrors the agent-memory sidecar pattern; the merge/diff
+// semantics live in the pure ./contextManifest module.
+
+function contextManifestPath(filePath: string | null): string | null {
+  if (!filePath) return null;
+  return path.join(getLocalLoganDir(filePath), path.basename(filePath) + '.context-manifest.json');
+}
+
+function getContextManifest(filePath: string | null): ContextManifest | null {
+  const p = contextManifestPath(filePath);
+  if (!p) return null;
+  try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch { return null; }
+}
+
+function saveContextManifestFile(filePath: string | null, manifest: ContextManifest): boolean {
+  if (!filePath) return false;
+  if (!ensureLocalLoganDir(filePath)) return false;
+  const p = contextManifestPath(filePath)!;
+  try { fs.writeFileSync(p, JSON.stringify(manifest, null, 2), 'utf-8'); return true; } catch { return false; }
+}
+
+function clearContextManifestFile(filePath: string | null): boolean {
+  const p = contextManifestPath(filePath);
+  if (!p) return false;
+  try { if (fs.existsSync(p)) fs.unlinkSync(p); return true; } catch { return false; }
+}
+
+ipcMain.handle('context-manifest-get', () => {
+  return getContextManifest(currentFilePath) || null;
+});
+
 ipcMain.handle('agent-memory-get', () => {
   const mem = getAgentMemory(currentFilePath);
   return mem || null;
@@ -5851,7 +5906,8 @@ ipcMain.handle(IPC.BASELINE_SAVE, async (_, name: string, description: string, t
   const analysisResult = analysisResultCache.get(currentFilePath);
   if (!analysisResult) return { success: false, error: 'Run analysis first' };
   try {
-    const fingerprint = buildFingerprint(currentFilePath, analysisResult, handler);
+    const env = factsToPlain(getContextManifest(currentFilePath));
+    const fingerprint = buildFingerprint(currentFilePath, analysisResult, handler, env);
     const id = baselineStore.save(name, description, tags, fingerprint);
     return { success: true, id };
   } catch (error) {
@@ -5894,7 +5950,8 @@ ipcMain.handle(IPC.BASELINE_COMPARE, async (_, baselineId: string) => {
   const analysisResult = analysisResultCache.get(currentFilePath);
   if (!analysisResult) return { success: false, error: 'Run analysis first' };
   try {
-    const currentFp = buildFingerprint(currentFilePath, analysisResult, handler);
+    const env = factsToPlain(getContextManifest(currentFilePath));
+    const currentFp = buildFingerprint(currentFilePath, analysisResult, handler, env);
     const report = baselineStore.compare(currentFp, baselineId);
     if (!report) return { success: false, error: 'Baseline not found' };
     return { success: true, report };
