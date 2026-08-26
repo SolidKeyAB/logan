@@ -1630,6 +1630,32 @@ app.whenReady().then(() => {
       }
       return out;
     },
+    // Apply a saved LENS entity (filter / highlightGroup / columnLayout / session) to the
+    // open view — the agent-parity write-half of listSavedEntities. Resolves the ref, then
+    // pushes `entity-apply` to the renderer, whose handler runs the SAME applySavedEntity
+    // the human ▶ Apply uses (one impl, two operators). Other applyable kinds have dedicated
+    // verbs (investigation → logan_run_investigation, composite → logan_single_session).
+    applyEntityRef: (ref: { kind: string; id?: string; name?: string }) => {
+      const LENS: Record<string, () => any[]> = {
+        filter: loadFilterPresets,
+        highlightGroup: loadHighlightGroups,
+        columnLayout: loadColumnLayouts,
+        session: loadGlobalSearchConfigSessions,
+      };
+      if (!ref || !LENS[ref.kind]) {
+        return { success: false, error: `apply supports lens entities only (filter, highlightGroup, columnLayout, session). Use logan_run_investigation for an investigation, logan_single_session for a composite.` };
+      }
+      if (!currentFilePath) return { success: false, error: 'No file open' };
+      if (!ref.id && !ref.name) return { success: false, error: 'id or name required' };
+      const rows = LENS[ref.kind]() || [];
+      const match = rows.find((r: any) => (ref.id && String(r.id) === String(ref.id)) || (ref.name && r.name === ref.name));
+      if (!match) return { success: false, error: `No ${ref.kind} named "${ref.name || ref.id}"` };
+      const id = String(match.id ?? '');
+      const name = String(match.name ?? '');
+      // Push to the renderer's shared apply dispatcher (set-semantics — apply, never toggle off).
+      mainWindow?.webContents.send('entity-apply', { kind: ref.kind, id, name });
+      return { success: true, applied: true, entity: { kind: ref.kind, id, name } };
+    },
     investigateCrashes: async (options) => {
       // getReadHandler so this runs over an active single-session composite too: analysis
       // fans out per-member (analyzeCurrentTarget) with crash lines already rebased into the
