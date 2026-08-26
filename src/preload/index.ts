@@ -809,7 +809,7 @@ const api = {
     ipcRenderer.invoke(IPC.INVESTIGATION_SAVE, name, description, requirements, autoDetect, aim),
   setInvestigationAim: (name: string, aim: string): Promise<{ success: boolean; template?: any; error?: string }> =>
     ipcRenderer.invoke(IPC.INVESTIGATION_SET_AIM, name, aim),
-  runInvestigation: (name: string, params?: Record<string, any>, force?: boolean): Promise<{ success: boolean; ran?: string; steps?: any[]; blocked?: boolean; requirements?: any; message?: string; error?: string }> =>
+  runInvestigation: (name: string, params?: Record<string, any>, force?: boolean): Promise<{ success: boolean; ran?: string; steps?: any[]; applied?: any[]; blocked?: boolean; requirements?: any; message?: string; error?: string }> =>
     ipcRenderer.invoke(IPC.INVESTIGATION_RUN, name, params, force),
   deleteInvestigation: (name: string): Promise<{ success: boolean }> =>
     ipcRenderer.invoke(IPC.INVESTIGATION_DELETE, name),

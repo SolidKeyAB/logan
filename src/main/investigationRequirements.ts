@@ -30,7 +30,7 @@ export interface EntityRef {
   kind: EntityKind;
   id?: string;          // stable id when known
   name?: string;        // human name / label — fallback match key
-  autoApply?: boolean;  // hint: apply it before replaying (reserved for a later slice)
+  autoApply?: boolean;  // "outfit": auto-apply this lens (filter/highlight/columns/session) to the view before replaying
   note?: string;
 }
 
