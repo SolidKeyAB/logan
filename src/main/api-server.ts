@@ -7,7 +7,7 @@ import { SearchOptions, Bookmark, Highlight, Annotation, ScopeDescriptor, Resolv
 import { FileHandler } from './fileHandler';
 import { type BaselineStore, buildFingerprint } from './baselineStore';
 import { AnalysisResult } from './analyzers/types';
-import { JournalEntry, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps } from './investigationStore';
+import { JournalEntry, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps, setTemplateParams } from './investigationStore';
 import { investigationToGraph } from './workflowGraph';
 import { listSequences, saveSequence, appendClue, deleteSequence } from './sequenceStore';
 import { evaluateRequirements, suggestRequirements, mergeRequirements, RequirementCheckContext, EntityRef } from './investigationRequirements';
@@ -957,6 +957,18 @@ export function startApiServer(ctx: ApiContext): void {
           const win = ctx.getMainWindow();
           if (win && !win.isDestroyed()) win.webContents.send('investigation-templates-changed');
           sendJson(res, { success: true, template: tpl });
+          return;
+        }
+        if (url === '/api/investigation-set-params') {
+          // Curate a saved investigation's params so it becomes a REAL template:
+          // retype a param variable/constant, set a description, PROMOTE an arbitrary
+          // (stepIndex,key) body value into a fill-in, or DEMOTE one back to pinned.
+          // Does not touch the recorded step VALUES — only what's exposed on replay.
+          const patchRes = setTemplateParams(body.name || body.slug || '', Array.isArray(body.patches) ? body.patches : []);
+          if (!patchRes) return sendError(res, `No saved investigation named "${body.name || body.slug}"`);
+          const win = ctx.getMainWindow();
+          if (win && !win.isDestroyed()) win.webContents.send('investigation-templates-changed');
+          sendJson(res, { success: true, template: patchRes.tpl, applied: patchRes.applied, errors: patchRes.errors });
           return;
         }
 

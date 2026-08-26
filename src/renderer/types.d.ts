@@ -765,6 +765,7 @@ interface Api {
   forkInvestigation: (name: string, newName: string, params?: Record<string, any>, description?: string) => Promise<{ success: boolean; template?: any; error?: string }>;
   showWorkflow: (investigation?: string) => Promise<{ success: boolean; graph?: any; source?: any; error?: string }>;
   setInvestigationRequirements: (name: string, requirements: any) => Promise<{ success: boolean; template?: any; error?: string }>;
+  setInvestigationParams: (name: string, patches: any[]) => Promise<{ success: boolean; template?: any; applied?: number; errors?: string[]; error?: string }>;
   suggestInvestigationRequirements: () => Promise<{ success: boolean; requirements?: any; error?: string }>;
   listEntities: (kind?: string) => Promise<{ success: boolean; count?: number; entities?: any[]; error?: string }>;
   onInvestigationTemplatesChanged: (callback: () => void) => () => void;
