@@ -8058,12 +8058,59 @@ function renderHubOutput(body: HTMLElement, res: any, aim?: string): void {
   if (findings > 0) {
     html += `<div class="hub-output-findings">📌 ${findings} finding${findings === 1 ? '' : 's'} in the viewer <button class="secondary-btn small" id="hub-view-findings">View</button></div>`;
   }
+  // A CONCLUSION that answers the aim — LOGAN's native verdict (first anomaly / likely root
+  // cause). Auto-drawn when analysis is already cached (cheap); a one-click button otherwise.
+  html += `<div class="hub-output-conclude"><button class="secondary-btn small" id="hub-conclude">🔎 Draw conclusion</button></div>`;
+  html += `<div class="hub-conclusion" id="hub-conclusion" hidden></div>`;
   el.innerHTML = html;
   el.hidden = false;
   el.querySelector('#hub-view-findings')?.addEventListener('click', () => {
     const first = (state.annotations || [])[0];
     if (first && typeof first.lineNumber === 'number') { void navigateTo(first.lineNumber); if (first.id) setActiveAnnotation(first.id); }
   });
+  el.querySelector('#hub-conclude')?.addEventListener('click', () => { void drawRecipeConclusion(body); });
+  if (state.analysisResult) void drawRecipeConclusion(body); // instant when the run already analyzed
+}
+
+// Draw LOGAN's native, deterministic verdict INTO the recipe Output — the conclusion the
+// recipe reached toward its aim. Reuses the exact same synthesizeConclusion the Conclusion
+// panel uses (no AI), so panel + recipe agree.
+async function drawRecipeConclusion(body: HTMLElement): Promise<void> {
+  const el = body.querySelector('#hub-conclusion') as HTMLElement | null;
+  const btn = body.querySelector('#hub-conclude') as HTMLButtonElement | null;
+  if (!el) return;
+  if (btn) { btn.disabled = true; btn.textContent = '🔎 Concluding…'; }
+  try {
+    if (!state.analysisResult) {
+      const res = await window.api.analyzeFile();
+      if (res.success && res.result) state.analysisResult = res.result;
+    }
+    let gaps: TimeGap[] = [];
+    try { const g = await window.api.detectTimeGaps({ thresholdSeconds: 10 }); if (g.success && g.gaps) gaps = g.gaps as TimeGap[]; } catch { /* gaps optional */ }
+    const annotations: any[] = Array.isArray(state.annotations) ? state.annotations : [];
+    const report = synthesizeConclusion(state.analysisResult, gaps, annotations);
+    await enrichConclusionTimestamps(report);
+    const v = report.verdict;
+    let h = `<div class="hub-concl-head">🔎 Conclusion</div>`;
+    h += `<div class="hub-concl-verdict sev-${escapeHtml(v.severity)}">${escapeHtml(v.headline)}</div>`;
+    const evRow = (icon: string, lbl: string, ev: any) =>
+      `<div class="hub-concl-row" data-jump="${ev.lineNumber}">${icon} ${lbl} — ${escapeHtml(ev.label)} <span class="hub-concl-line">line ${ev.lineNumber + 1}</span></div>`;
+    if (report.firstAnomaly) h += evRow('🎯', 'First anomaly', report.firstAnomaly);
+    if (report.rootCause && (!report.firstAnomaly || report.rootCause.lineNumber !== report.firstAnomaly.lineNumber)) {
+      h += evRow('🧩', 'Likely root cause', report.rootCause);
+    }
+    el.innerHTML = h;
+    el.hidden = false;
+    el.querySelectorAll('.hub-concl-row[data-jump]').forEach(r => r.addEventListener('click', () => {
+      const ln = parseInt((r as HTMLElement).dataset.jump || '', 10);
+      if (!isNaN(ln)) void navigateTo(ln);
+    }));
+    if (btn) btn.style.display = 'none';
+  } catch (e) {
+    el.innerHTML = `<div class="hub-concl-verdict sev-error">Couldn’t draw a conclusion: ${escapeHtml(String(e))}</div>`;
+    el.hidden = false;
+    if (btn) { btn.disabled = false; btn.textContent = '🔎 Draw conclusion'; }
+  }
 }
 
 function renderTemplateHub(tpl: any, body: HTMLElement): void {
