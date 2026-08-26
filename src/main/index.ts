@@ -44,7 +44,7 @@ import { EntityDescriptor, EntityKind, toDescriptors } from './entityRegistry';
 import { getPatternLog, clearPatternLog, logPattern, PatternLogEntry, flushPatternLog } from './patternLog';
 import { compilePattern, CompileInput } from './compilePattern';
 import { parseTimestampFast } from './timestampParse';
-import { carryForwardTimestamps, buildOriginTags, formatWallClock } from './mergeTimeline';
+import { carryForwardTimestamps, buildOriginTags, formatWallClock, sortMergeEntries, type MergeEntry } from './mergeTimeline';
 import { compileColumnPattern, makeColumnExtractor, refinePaintPattern, CompiledColumnPattern, ColumnPatternSpec } from './columnPattern';
 import { parseVtraceToFile } from './vtraceParse';
 import { runTrendJob, runSummarizeJob, cancelSummarizeJob, canSummarizeOffThread, runFoldRegionsJob } from './trendWorkerClient';
@@ -385,6 +385,44 @@ async function buildComposite(
     analysisResultCache.delete(COMPOSITE_ID);
   }
   return { id: activeCompositeId, info: activeComposite.getFileInfo(), boundaries: activeComposite.boundaries() };
+}
+
+// Open a plain file, make it the active read target, load its sidecars, and tell the
+// renderer to display it. Shared by the agent openFile verb and any main-side flow that
+// needs to "open this path as the current file" — e.g. the merged wall-clock timeline
+// produced by logan_single_session order:"wallclock". Returns the FileInfo.
+async function openFileAsCurrent(filePath: string): Promise<FileInfo | null> {
+  let fileHandler = fileHandlerCache.get(filePath);
+  let info: FileInfo | null;
+  // Re-index if the file changed on disk since it was cached (avoids stale content).
+  if (fileHandler && fileHandler.isStale()) {
+    evictFromCache(filePath);
+    fileHandler = undefined;
+  }
+  if (fileHandler) {
+    currentFilePath = filePath;
+    info = fileHandler.getFileInfo();
+  } else {
+    fileHandler = new FileHandler();
+    const opened = await openWithAdapter(fileHandler, filePath, () => {});
+    info = opened.info;
+    sourceRegistry.set(filePath, opened.source);
+    addToCache(filePath, fileHandler);
+    currentFilePath = filePath;
+  }
+  loadBookmarksForFile(filePath);
+  loadHighlightsForFile(filePath);
+  loadAnnotationsForFile(filePath);
+  pushAnnotationsToRenderer();
+  if (canWriteLocal(filePath)) {
+    const localData = loadLocalFileData(filePath);
+    localData.lastOpened = new Date().toISOString();
+    saveLocalFileData(filePath, localData);
+  }
+  logActivity(filePath, 'file_opened', { filePath });
+  // Notify renderer to load the file in the UI
+  mainWindow?.webContents.send('open-file-from-cli', filePath);
+  return info;
 }
 
 function addToCache(filePath: string, handler: FileHandler): void {
@@ -1092,37 +1130,8 @@ app.whenReady().then(() => {
     getBookmarks: () => bookmarks,
     getHighlights: () => highlights,
     openFile: async (filePath: string) => {
-      // Reuse the same logic as the IPC.OPEN_FILE handler
-      let fileHandler = fileHandlerCache.get(filePath);
-      let info;
-      // Re-index if the file changed on disk since it was cached (avoids stale content).
-      if (fileHandler && fileHandler.isStale()) {
-        evictFromCache(filePath);
-        fileHandler = undefined;
-      }
-      if (fileHandler) {
-        currentFilePath = filePath;
-        info = fileHandler.getFileInfo();
-      } else {
-        fileHandler = new FileHandler();
-        const opened = await openWithAdapter(fileHandler, filePath, () => {});
-        info = opened.info;
-        sourceRegistry.set(filePath, opened.source);
-        addToCache(filePath, fileHandler);
-        currentFilePath = filePath;
-      }
-      loadBookmarksForFile(filePath);
-      loadHighlightsForFile(filePath);
-      loadAnnotationsForFile(filePath);
-      pushAnnotationsToRenderer();
-      if (canWriteLocal(filePath)) {
-        const localData = loadLocalFileData(filePath);
-        localData.lastOpened = new Date().toISOString();
-        saveLocalFileData(filePath, localData);
-      }
-      logActivity(filePath, 'file_opened', { filePath });
-      // Notify renderer to load the file in the UI
-      mainWindow?.webContents.send('open-file-from-cli', filePath);
+      // Reuse the same logic as the IPC.OPEN_FILE handler (shared openFileAsCurrent).
+      const info = await openFileAsCurrent(filePath);
       return { success: true, info };
     },
     getLines: (startLine: number, count: number) => {
@@ -2073,6 +2082,55 @@ app.whenReady().then(() => {
       } catch (error) {
         activeComposite = null;
         activeCompositeId = null;
+        return { success: false, error: String(error) };
+      }
+    },
+    // Agent parity for the human "⬇ Merge to file…" button (Time Sync): interleave N
+    // files onto ONE wall-clock timeline, write the merged .log, and open it as the
+    // active file so every downstream verb (search/analyze/trends/investigate/…) runs
+    // on the correlated view. Reuses the SAME engine as the human button
+    // (collectMergeTimeline + writeMergeEntriesToFile). This is logan_single_session's
+    // order:"wallclock" path — materialize-and-open, unlike the sequential composite.
+    mergeTimeline: async (filePaths, label) => {
+      if (!Array.isArray(filePaths) || filePaths.length < 2) {
+        return { success: false, error: 'Pick at least 2 files to merge onto a wall-clock timeline' };
+      }
+      const missing = filePaths.filter((fp) => !fs.existsSync(fp));
+      if (missing.length) return { success: false, error: `File(s) not found: ${missing.join(', ')}` };
+      try {
+        const collected = await collectMergeTimeline(filePaths);
+        if (!collected.ok) return { success: false, error: collected.error };
+        const c = collected.data;
+
+        // Write into a .logan/merged/ subdir next to the first file (so merged artifacts
+        // don't clutter the log folder); fall back to the system temp dir if that isn't
+        // writable. A stamped filename avoids clobbering across re-runs.
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+        const safeLabel = (label || '').replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+        const fileName = `${safeLabel ? safeLabel + '_' : ''}merged-timeline_${stamp}.log`;
+        let outDir = path.join(path.dirname(filePaths[0]), '.logan', 'merged');
+        try { fs.mkdirSync(outDir, { recursive: true }); } catch { outDir = os.tmpdir(); }
+        const outPath = path.join(outDir, fileName);
+
+        const written = writeMergeEntriesToFile(outPath, filePaths, c, { includeHeader: true });
+        if (currentFilePath) logActivity(currentFilePath, 'files_merged', { files: c.contributed.size, lines: written, agent: true });
+
+        // Open the merged file as the active read target + push it to the renderer, so a
+        // follow-up agent call (search/analyze/…) and the human both land on the timeline.
+        const info = await openFileAsCurrent(outPath);
+        return {
+          success: true,
+          filePath: outPath,
+          info,
+          lineCount: written,
+          fileCount: c.contributed.size,
+          skipped: c.skipped,
+          collectCapped: c.collectCapped,
+          scanCapped: c.scanCapped,
+          from: formatWallClock(c.minMs),
+          to: formatWallClock(c.maxMs),
+        };
+      } catch (error) {
         return { success: false, error: String(error) };
       }
     },
@@ -7268,89 +7326,155 @@ ipcMain.handle('time-sync-merge', async (_, filePaths: string[], opts?: { maxRow
 //     <normalized timestamp> | <origin> | <original line>
 // Untimestamped lines inherit the previous timestamp (carry-forward) so multi-line
 // entries (stack traces, wrapped messages) stay intact and adjacent to their anchor.
+// The collected + time-sorted result of interleaving N files onto one wall-clock
+// timeline. `handlers`/`tags` are parallel to the input paths; `entries` is the
+// global order. Shared by the human "Merge to file" IPC and the agent
+// logan_single_session order:"wallclock" path — one engine, two callers.
+interface CollectedTimeline {
+  handlers: (FileHandler | null)[];
+  tags: string[];
+  entries: MergeEntry[];        // interleaved, time-sorted (sortMergeEntries)
+  contributed: Set<number>;     // file indices that actually placed lines
+  skipped: string[];            // human-readable reasons per skipped file
+  minMs: number;
+  maxMs: number;
+  collectCapped: boolean;       // hit the 3M-line collect ceiling
+  scanCapped: boolean;          // a file exceeded the 3M-line scan ceiling
+}
+
+// Open each file, collect every line with an effective (carry-forward) wall-clock
+// timestamp, and interleave them into one time-sorted order. No file is written.
+// Returns an error when nothing is placeable (e.g. no timestamps anywhere).
+async function collectMergeTimeline(
+  filePaths: string[],
+): Promise<{ ok: true; data: CollectedTimeline } | { ok: false; error: string }> {
+  const SCAN_CAP = 3_000_000;    // max lines scanned per file
+  const COLLECT_CAP = 3_000_000; // max lines held before the sort
+  const BATCH = 8000;
+
+  // Resolve a FileHandler per path: reuse the cache, else open through the
+  // adapter layer (so binary formats normalize to text) and cache it.
+  const handlers: (FileHandler | null)[] = [];
+  for (const fp of filePaths) {
+    let h = fileHandlerCache.get(fp);
+    if (h && h.isStale()) { evictFromCache(fp); h = undefined; }
+    if (!h) {
+      try {
+        const nh = new FileHandler();
+        const opened = await openWithAdapter(nh, fp, () => {});
+        sourceRegistry.set(fp, opened.source);
+        addToCache(fp, nh);
+        h = nh;
+      } catch { handlers.push(null); continue; }
+    }
+    handlers.push(h);
+  }
+
+  const tags = buildOriginTags(filePaths);
+  const entries: MergeEntry[] = [];
+  const skipped: string[] = [];
+  const contributed = new Set<number>();
+  let collectCapped = false;
+  let scanCapped = false;
+
+  for (let fi = 0; fi < handlers.length; fi++) {
+    const h = handlers[fi];
+    if (!h) { skipped.push(`${tags[fi]} (couldn't open)`); continue; }
+    const total = h.getTotalLines();
+    const scanTo = Math.min(total, SCAN_CAP);
+    if (total > SCAN_CAP) scanCapped = true;
+
+    // Collect the file's lines with their raw (possibly-null) timestamps.
+    const lns: number[] = [];
+    const msRaw: (number | null)[] = [];
+    let tsCount = 0;
+    for (let start = 0; start < scanTo && !collectCapped; start += BATCH) {
+      const batch = h.getLines(start, Math.min(BATCH, scanTo - start));
+      for (const line of batch) {
+        const parsed = parseTimestampFast(line.text);
+        const ms = parsed ? parsed.date.getTime() : null;
+        if (ms !== null) tsCount++;
+        lns.push(line.lineNumber);
+        msRaw.push(ms);
+      }
+    }
+    if (tsCount === 0) { skipped.push(`${tags[fi]} (no timestamps)`); continue; }
+
+    // Fill untimestamped lines by carry-forward, then queue every line.
+    const eff = carryForwardTimestamps(msRaw);
+    for (let i = 0; i < eff.length; i++) {
+      const ms = eff[i];
+      if (ms === null) continue;
+      if (entries.length >= COLLECT_CAP) { collectCapped = true; break; }
+      entries.push({ f: fi, ln: lns[i], ms });
+      contributed.add(fi);
+    }
+    if (collectCapped) break;
+  }
+
+  if (entries.length === 0) {
+    return { ok: false, error: 'No timestamped lines to merge' + (skipped.length ? ` — skipped: ${skipped.join(', ')}` : '') };
+  }
+
+  // Stable merge by time; tie-break by file then line keeps each file's own
+  // order (and carried-forward continuation lines) intact.
+  sortMergeEntries(entries);
+  return {
+    ok: true,
+    data: { handlers, tags, entries, contributed, skipped, minMs: entries[0].ms, maxMs: entries[entries.length - 1].ms, collectCapped, scanCapped },
+  };
+}
+
+// Stream a collected timeline to `outPath` as `<timestamp>SEP<origin>SEP<line>`,
+// with an optional provenance header. Returns the number of lines written.
+function writeMergeEntriesToFile(
+  outPath: string,
+  filePaths: string[],
+  c: CollectedTimeline,
+  opts?: { includeHeader?: boolean; separator?: string },
+): number {
+  const SEP = typeof opts?.separator === 'string' ? opts.separator : ' | ';
+  const includeHeader = opts?.includeHeader !== false;
+  const { handlers, tags, entries, contributed, skipped, minMs, maxMs } = c;
+  const padWidth = tags.reduce((m, t, i) => (contributed.has(i) ? Math.max(m, t.length) : m), 0);
+  const fd = fs.openSync(outPath, 'w');
+  let written = 0;
+  try {
+    let buf = '';
+    const flush = () => { if (buf) { fs.writeSync(fd, buf); buf = ''; } };
+    const emit = (s: string) => { buf += s + '\n'; if (buf.length >= SAVE_RANGE_FLUSH_CHARS) flush(); };
+
+    if (includeHeader) {
+      emit(`# LOGAN merged timeline · ${contributed.size} files · ${entries.length.toLocaleString('en-US')} lines · ${formatWallClock(minMs)} → ${formatWallClock(maxMs)}`);
+      for (let i = 0; i < filePaths.length; i++) {
+        if (contributed.has(i)) emit(`#   ${tags[i]} ⟵ ${filePaths[i]}`);
+      }
+      if (skipped.length) emit(`#   skipped: ${skipped.join(', ')}`);
+      emit(`# format: <timestamp>${SEP}<origin>${SEP}<original line>`);
+    }
+
+    for (const e of entries) {
+      const h = handlers[e.f];
+      let text = '';
+      if (h) { const ls = h.getLines(e.ln, 1); if (ls.length) text = ls[0].text; }
+      emit(`${formatWallClock(e.ms)}${SEP}${tags[e.f].padEnd(padWidth)}${SEP}${text}`);
+      written++;
+    }
+    flush();
+  } finally {
+    fs.closeSync(fd);
+  }
+  return written;
+}
+
 ipcMain.handle('merge-files-to-file', async (_, filePaths: string[], opts?: { includeHeader?: boolean; separator?: string }) => {
   try {
     if (!Array.isArray(filePaths) || filePaths.length < 1) {
       return { success: false, error: 'Add at least one file to merge' };
     }
-    const SEP = typeof opts?.separator === 'string' ? (opts as any).separator : ' | ';
-    const includeHeader = opts?.includeHeader !== false;
-    const SCAN_CAP = 3_000_000;    // max lines scanned per file
-    const COLLECT_CAP = 3_000_000; // max lines held before the sort
-    const BATCH = 8000;
-
-    // Resolve a FileHandler per path: reuse the cache, else open through the
-    // adapter layer (so binary formats normalize to text) and cache it.
-    const handlers: (FileHandler | null)[] = [];
-    for (const fp of filePaths) {
-      let h = fileHandlerCache.get(fp);
-      if (h && h.isStale()) { evictFromCache(fp); h = undefined; }
-      if (!h) {
-        try {
-          const nh = new FileHandler();
-          const opened = await openWithAdapter(nh, fp, () => {});
-          sourceRegistry.set(fp, opened.source);
-          addToCache(fp, nh);
-          h = nh;
-        } catch { handlers.push(null); continue; }
-      }
-      handlers.push(h);
-    }
-
-    const tags = buildOriginTags(filePaths);
-    const entries: { f: number; ln: number; ms: number }[] = [];
-    const skipped: string[] = [];
-    const contributed = new Set<number>();
-    let collectCapped = false;
-    let scanCapped = false;
-
-    for (let fi = 0; fi < handlers.length; fi++) {
-      const h = handlers[fi];
-      if (!h) { skipped.push(`${tags[fi]} (couldn't open)`); continue; }
-      const total = h.getTotalLines();
-      const scanTo = Math.min(total, SCAN_CAP);
-      if (total > SCAN_CAP) scanCapped = true;
-
-      // Collect the file's lines with their raw (possibly-null) timestamps.
-      const lns: number[] = [];
-      const msRaw: (number | null)[] = [];
-      let tsCount = 0;
-      for (let start = 0; start < scanTo && !collectCapped; start += BATCH) {
-        const batch = h.getLines(start, Math.min(BATCH, scanTo - start));
-        for (const line of batch) {
-          const parsed = parseTimestampFast(line.text);
-          const ms = parsed ? parsed.date.getTime() : null;
-          if (ms !== null) tsCount++;
-          lns.push(line.lineNumber);
-          msRaw.push(ms);
-        }
-      }
-      if (tsCount === 0) { skipped.push(`${tags[fi]} (no timestamps)`); continue; }
-
-      // Fill untimestamped lines by carry-forward, then queue every line.
-      const eff = carryForwardTimestamps(msRaw);
-      for (let i = 0; i < eff.length; i++) {
-        const ms = eff[i];
-        if (ms === null) continue;
-        if (entries.length >= COLLECT_CAP) { collectCapped = true; break; }
-        entries.push({ f: fi, ln: lns[i], ms });
-        contributed.add(fi);
-      }
-      if (collectCapped) break;
-    }
-
-    if (entries.length === 0) {
-      return {
-        success: false,
-        error: 'No timestamped lines to merge' + (skipped.length ? ` — skipped: ${skipped.join(', ')}` : ''),
-      };
-    }
-
-    // Stable merge by time; tie-break by file then line keeps each file's own
-    // order (and carried-forward continuation lines) intact.
-    entries.sort((a, b) => a.ms - b.ms || a.f - b.f || a.ln - b.ln);
-    const minMs = entries[0].ms;
-    const maxMs = entries[entries.length - 1].ms;
+    const collected = await collectMergeTimeline(filePaths);
+    if (!collected.ok) return { success: false, error: collected.error };
+    const c = collected.data;
 
     // Ask where to write; default next to the first file.
     const firstDir = path.dirname(filePaths[0]);
@@ -7363,47 +7487,19 @@ ipcMain.handle('merge-files-to-file', async (_, filePaths: string[], opts?: { in
     if (dialogRes.canceled || !dialogRes.filePath) return { success: false, error: 'Cancelled' };
     const outPath = dialogRes.filePath;
 
-    const padWidth = tags.reduce((m, t, i) => (contributed.has(i) ? Math.max(m, t.length) : m), 0);
-    const fd = fs.openSync(outPath, 'w');
-    let written = 0;
-    try {
-      let buf = '';
-      const flush = () => { if (buf) { fs.writeSync(fd, buf); buf = ''; } };
-      const emit = (s: string) => { buf += s + '\n'; if (buf.length >= SAVE_RANGE_FLUSH_CHARS) flush(); };
-
-      if (includeHeader) {
-        emit(`# LOGAN merged timeline · ${contributed.size} files · ${entries.length.toLocaleString('en-US')} lines · ${formatWallClock(minMs)} → ${formatWallClock(maxMs)}`);
-        for (let i = 0; i < filePaths.length; i++) {
-          if (contributed.has(i)) emit(`#   ${tags[i]} ⟵ ${filePaths[i]}`);
-        }
-        if (skipped.length) emit(`#   skipped: ${skipped.join(', ')}`);
-        emit(`# format: <timestamp>${SEP}<origin>${SEP}<original line>`);
-      }
-
-      for (const e of entries) {
-        const h = handlers[e.f];
-        let text = '';
-        if (h) { const ls = h.getLines(e.ln, 1); if (ls.length) text = ls[0].text; }
-        emit(`${formatWallClock(e.ms)}${SEP}${tags[e.f].padEnd(padWidth)}${SEP}${text}`);
-        written++;
-      }
-      flush();
-    } finally {
-      fs.closeSync(fd);
-    }
-
-    if (currentFilePath) logActivity(currentFilePath, 'files_merged', { files: contributed.size, lines: written });
+    const written = writeMergeEntriesToFile(outPath, filePaths, c, opts);
+    if (currentFilePath) logActivity(currentFilePath, 'files_merged', { files: c.contributed.size, lines: written });
 
     return {
       success: true,
       filePath: outPath,
       lineCount: written,
-      fileCount: contributed.size,
-      minMs,
-      maxMs,
-      skipped,
-      collectCapped,
-      scanCapped,
+      fileCount: c.contributed.size,
+      minMs: c.minMs,
+      maxMs: c.maxMs,
+      skipped: c.skipped,
+      collectCapped: c.collectCapped,
+      scanCapped: c.scanCapped,
     };
   } catch (error) {
     return { success: false, error: String(error) };
