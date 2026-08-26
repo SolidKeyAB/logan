@@ -217,28 +217,27 @@ when each is next touched):
   dedicated human "compare two summaries" view is a natural extension of the Summarize panel,
   earnable with usage.
 
-- **Column mute — right-click "Mute column" / Columns-window toggle** (dim a column in place
-  AND drop it from tool actions — search / extract exclude a muted column exactly like a
-  hidden one; the column-level sibling of line mute). Human surface: right-click a column in
-  the viewer → Mute/Unmute (+ "Unmute all"), or the 🔇 toggle per row in the Columns window;
-  rendered dim via one instant CSS rule (`updateColumnMuteStyle`, twin of the column-hide
-  rule), persisted in the saved column layout (`muted?` on `ColumnLayoutSaved.columns`), and
-  folded into the tool-facing `columnConfig` (`visible && !muted`) so search/extract skip it.
-  **Written exemption (same class as column visibility):** column mute/hide is a
-  human-viewport concern — which columns the human de-emphasizes while reading. The AI has no
-  viewport and reads column values directly via its tools; it does not need a "mute a column"
-  verb (column-layout *apply* is already human-only per the `logan_column_layouts` exemption).
-  Parity is preserved through effect, not a verb: a muted column shapes the active
-  `columnConfig`, so the AI's `scope:"active"` search/extract inherit the exclusion — the same
-  way the human's active filter already scopes the AI. If real use shows the AI should set
-  mute, a generic `apply`/`mute` entity verb earns its way in then.
-  NB: muted *lines* (the pattern-based line mute) now discard from **Extract** — the mute
-  patterns are mirrored to main (`SET_MUTE_PATTERNS`, matched with the shared tested
-  `lineMatchesMute`), and `runFilteredExtract` drops muted rows so you extract the clean
-  working set. Extending line-mute discard to the READ/ANALYSIS tools (search / analyze /
-  trends / time-gaps) is a broader scope-layer change (each has its own line path — ripgrep,
-  the trends worker — not one choke point) and a deliberate next build, kept separate so it
-  can't silently skew analyze counts / search results without its own tests.
+- **Column mute — right-click "Mute column" / Columns-window toggle** (dim a column IN PLACE —
+  a **View-layer**, visualization-only de-emphasis; it does NOT change what tools see). Human
+  surface: right-click a column in the viewer → Mute/Unmute (+ "Unmute all"), or the 🔇 toggle
+  per row in the Columns window; rendered dim via one instant CSS rule
+  (`updateColumnMuteStyle`, twin of the column-hide rule), persisted in the saved column layout
+  (`muted?` on `ColumnLayoutSaved.columns`). **Written exemption (View-layer, human-viewport):**
+  mute is a read-aid — which columns the human greys out while reading. It's deliberately
+  visual-only (2026-08-27 decision — see below): removing a column from tool actions is what
+  **Hide** (columns → gone from view + tools) and **Filter/Extract** (rows) already do, so mute
+  doesn't overlap. The AI has no viewport and reads column values directly; it needs no
+  "mute a column" verb.
+  NB — **effect-layer classification (2026-08-27):** LOGAN tools are being framed by their
+  EFFECT AREA — **View** (visual only: mute, highlight, bookmark, fold) · **Scope** (narrows
+  what tools operate on: filter, hide-columns, active-scope) · **Read** (compute, no mutation:
+  search, analyze, trends, time-gaps, investigate-*, summarize, diff-runs) · **Produce**
+  (writes an artifact/entity: extract, merge-to-file, save-report, save-investigation,
+  single-session) · **Mark** (pins findings: report_finding, annotate, import_findings). This
+  answers "does X affect tools?" definitionally: **mute is View → visual-only** (so an earlier
+  slice that discarded muted columns/lines from search/extract was reverted). "Discard / shrink
+  the working set" is the job of Scope (Hide/Filter) + Produce (Extract). Design axis; may be
+  surfaced (badges/grouping) + enforced on new tools.
 
 - **Apply a saved lens entity — `logan_apply_entity`** (the write-half of `logan_entities`,
   which only lists). CLOSES a real parity debt: the agent previously had **no** way to apply a
