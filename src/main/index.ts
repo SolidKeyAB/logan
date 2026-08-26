@@ -47,7 +47,6 @@ import { compilePattern, CompileInput } from './compilePattern';
 import { parseTimestampFast } from './timestampParse';
 import { carryForwardTimestamps, buildOriginTags, formatWallClock, sortMergeEntries, type MergeEntry } from './mergeTimeline';
 import { ColumnPatternSpec } from './columnPattern';
-import { lineMatchesMute } from '../shared/muteMatch';
 import { parseVtraceToFile } from './vtraceParse';
 import { runTrendJob, runSummarizeJob, cancelSummarizeJob, canSummarizeOffThread, runFoldRegionsJob, runColumnPreviewJob, canColumnPreviewOffThread } from './trendWorkerClient';
 import { computeColumnPreview } from './columnPreview';
@@ -5345,25 +5344,13 @@ function streamFilteredExtractToFd(
 async function runFilteredExtract(opts?: { includeLineNumbers?: boolean; columnConfig?: ColumnConfig }): Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }> {
   const handler = getFileHandler();
   if (!handler) return { success: false, error: 'No file open' };
-  const filteredRaw = getFilteredLines();
-  if (!filteredRaw || filteredRaw.length === 0) {
+  const filtered = getFilteredLines();
+  if (!filtered || filtered.length === 0) {
     return { success: false, error: 'No active filter — apply a filter first, then Extract.' };
   }
   try {
     const fileInfo = handler.getFileInfo();
     if (!fileInfo) return { success: false, error: 'No file info' };
-
-    // Discard MUTED lines from the extract — the derived file is the clean working set
-    // (muted rows are noise the user parked). Excluded once, up front, so the header count
-    // and the streamed lines agree. No mute patterns → the full filtered set.
-    let filtered = filteredRaw;
-    if (backendMutePatterns.length) {
-      const fetched = await handler.getLinesByNumbers(filteredRaw);
-      const muted = new Set<number>();
-      for (const ld of fetched) if (lineMatchesMute(ld.text, backendMutePatterns)) muted.add(ld.lineNumber);
-      filtered = filteredRaw.filter(ln => !muted.has(ln));
-      if (filtered.length === 0) return { success: false, error: 'Every filtered line is muted — nothing to extract.' };
-    }
     const dir = path.dirname(fileInfo.path);
     const base = path.basename(fileInfo.path).replace(/\.[^.]+$/, '');
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -5389,15 +5376,6 @@ async function runFilteredExtract(opts?: { includeLineNumbers?: boolean; columnC
 
 ipcMain.handle(IPC.EXTRACT_FILTERED_TO_FILE, async (_, opts?: { includeLineNumbers?: boolean; columnConfig?: ColumnConfig }) => {
   return runFilteredExtract(opts);
-});
-
-// The active row-mute patterns, mirrored from the renderer so main-side tools can DISCARD
-// muted lines (not just dim them) — v1: EXTRACT drops them from the derived file, so you
-// extract the clean working set. Matched with the SAME tested spec (lineMatchesMute).
-let backendMutePatterns: string[] = [];
-ipcMain.handle(IPC.SET_MUTE_PATTERNS, (_e, patterns: string[]) => {
-  backendMutePatterns = Array.isArray(patterns) ? patterns.filter(p => typeof p === 'string' && p.trim()) : [];
-  return { success: true };
 });
 
 // === Agent Memory ===
