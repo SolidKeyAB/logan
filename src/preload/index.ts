@@ -65,6 +65,7 @@ const IPC = {
   INVESTIGATION_CHECK: 'investigation-check',
   INVESTIGATION_SET_REQS: 'investigation-set-requirements',
   INVESTIGATION_SET_PARAMS: 'investigation-set-params',
+  INVESTIGATION_SET_AIM: 'investigation-set-aim',
   INVESTIGATION_SUGGEST_REQS: 'investigation-suggest-requirements',
   WORKFLOW_SHOW: 'workflow-show',
   ENTITIES_LIST: 'entities-list',
@@ -804,8 +805,10 @@ const api = {
   // Investigation templates
   listInvestigations: (): Promise<{ success: boolean; templates?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.INVESTIGATION_LIST),
-  saveInvestigation: (name: string, description?: string, requirements?: any, autoDetect?: boolean): Promise<{ success: boolean; template?: any; error?: string }> =>
-    ipcRenderer.invoke(IPC.INVESTIGATION_SAVE, name, description, requirements, autoDetect),
+  saveInvestigation: (name: string, description?: string, requirements?: any, autoDetect?: boolean, aim?: string): Promise<{ success: boolean; template?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.INVESTIGATION_SAVE, name, description, requirements, autoDetect, aim),
+  setInvestigationAim: (name: string, aim: string): Promise<{ success: boolean; template?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.INVESTIGATION_SET_AIM, name, aim),
   runInvestigation: (name: string, params?: Record<string, any>, force?: boolean): Promise<{ success: boolean; ran?: string; steps?: any[]; blocked?: boolean; requirements?: any; message?: string; error?: string }> =>
     ipcRenderer.invoke(IPC.INVESTIGATION_RUN, name, params, force),
   deleteInvestigation: (name: string): Promise<{ success: boolean }> =>

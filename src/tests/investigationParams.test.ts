@@ -30,6 +30,16 @@ describe('paramKind classifier', () => {
   });
 });
 
+describe('buildTemplate aim', () => {
+  it('carries the aim (what the recipe is for) when provided', () => {
+    const tpl = buildTemplate('T', journal, undefined, undefined, undefined, 'find the root-cause component');
+    expect(tpl.aim).toBe('find the root-cause component');
+  });
+  it('leaves aim undefined when not provided (back-compat)', () => {
+    expect(buildTemplate('T', journal).aim).toBeUndefined();
+  });
+});
+
 describe('buildTemplate param promotion', () => {
   const tpl = buildTemplate('T', journal);
   const byKey = (k: string) => tpl.params.find(p => p.key === k);
