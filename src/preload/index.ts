@@ -835,6 +835,12 @@ const api = {
     ipcRenderer.on('investigation-templates-changed', handler);
     return () => ipcRenderer.removeListener('investigation-templates-changed', handler);
   },
+  // Live per-step replay progress → the template popup lights each step as it runs.
+  onInvestigationRunStep: (callback: (payload: any) => void): (() => void) => {
+    const handler = (_e: any, payload: any) => callback(payload);
+    ipcRenderer.on('investigation-run-step', handler);
+    return () => ipcRenderer.removeListener('investigation-run-step', handler);
+  },
 
   // Clue sequences (ordered evidence trails) — human side of the `sequence` entity.
   listSequences: (): Promise<{ success: boolean; sequences?: any[]; error?: string }> =>
