@@ -7517,6 +7517,9 @@ function initInvestigatePanel(): void {
   // Saved investigation patterns (templates of the agent's recorded steps).
   document.getElementById('btn-save-investigation')?.addEventListener('click', () => { void saveCurrentInvestigation(); });
   window.api.onInvestigationTemplatesChanged(() => { void loadInvestigationTemplates(); });
+  // The agent applied a saved lens entity → run the SAME dispatcher the human ▶ Apply uses
+  // (set-semantics, so a re-apply is idempotent). One impl, two operators.
+  window.api.onEntityApply((p) => { if (p && p.kind) void applySavedEntity(p.kind, p.id, p.name, { set: true }); });
   void loadInvestigationTemplates();
 }
 
@@ -24554,7 +24557,7 @@ function insertConstantIntoSearch(value: string, name: string): void {
 // Apply / run a saved entity straight from the catalog (the "same instrument" the human
 // reaches for in each entity's own panel — routed here for the kinds where a one-click
 // apply is clean and self-contained). Reuses the existing per-kind apply functions.
-async function applySavedEntity(kind: string, id: string, name: string): Promise<void> {
+async function applySavedEntity(kind: string, id: string, name: string, opts?: { set?: boolean }): Promise<void> {
   trackUsage(`saved:apply:${kind}`);
   try {
     if (kind === 'investigation') {
@@ -24562,7 +24565,7 @@ async function applySavedEntity(kind: string, id: string, name: string): Promise
       await runInvestigationTemplate(name);
     } else if (kind === 'highlightGroup') {
       await loadHighlightGroups();           // ensure the group set is in memory
-      await applyHighlightGroup(id);          // applies (or toggles off if already active)
+      await applyHighlightGroup(id, opts?.set); // set=true (agent apply) is idempotent — apply, never toggle off
       showToast(`Applied highlight group “${name}”`);
     } else if (kind === 'session') {
       await loadSearchConfigSessions();       // ensure the session set is in memory
@@ -26880,9 +26883,11 @@ function updateHighlightGroupsUI(): void {
   });
 }
 
-async function applyHighlightGroup(groupId: string): Promise<void> {
-  // Toggle off if already active (unload)
+async function applyHighlightGroup(groupId: string, forceOn = false): Promise<void> {
+  // Already active: the human ▶ toggles it OFF; an idempotent apply (forceOn — agent /
+  // outfit) leaves it ON (a re-apply must never silently un-highlight).
   if (activeHighlightGroupId === groupId) {
+    if (forceOn) return;
     await window.api.clearAllHighlights();
     state.highlights = [];
     activeHighlightGroupId = null;
