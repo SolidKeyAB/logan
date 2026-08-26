@@ -36,6 +36,14 @@ export interface ReportStep {
   result?: string;            // compact result summary, if captured
 }
 
+// A single static-environment fact (build id, firmware, flag, config value) the log
+// was captured under — from the file's context manifest.
+export interface ReportEnvFact {
+  key: string;
+  value: string;
+  source?: string;            // provenance, e.g. "header line 3"
+}
+
 // A component/subsystem implicated in the conclusion — the area to investigate.
 export interface ReportComponent {
   name: string;
@@ -62,6 +70,9 @@ export interface ReportDocInput {
   components?: ReportComponent[];
   // Open questions / follow-ups to investigate next.
   questions?: string[];
+  // Static environment the log was captured under (build/firmware/flags/config) —
+  // rendered as an "Environment" section that conditions the findings.
+  envContext?: ReportEnvFact[];
 }
 
 // Longest single log line we embed verbatim before eliding the tail.
@@ -133,7 +144,7 @@ export function buildReportMarkdown(input: ReportDocInput): string {
     name, aim, reason, ticket, body,
     sourceFilePath, totalLines, generatedAtIso, agentName,
     findings = [], steps = [], conclusion = null, eventLines = {},
-    components = [], questions = [],
+    components = [], questions = [], envContext = [],
   } = input;
 
   const author = agentName || 'LOGAN agent';
@@ -171,6 +182,19 @@ export function buildReportMarkdown(input: ReportDocInput): string {
   out.push(`| Generated | ${generatedAtIso} |`);
   out.push(`| Author | ${author} |`);
   out.push('');
+
+  // --- Environment / context the log was captured under ---
+  if (envContext.length) {
+    out.push('## Environment');
+    out.push('');
+    out.push('_Static context this log was captured under — the findings below are conditioned on these._');
+    out.push('');
+    for (const e of envContext) {
+      const prov = e.source ? ` _(${e.source})_` : '';
+      out.push(`- **${e.key}** — ${e.value}${prov}`);
+    }
+    out.push('');
+  }
 
   // --- Narrative ---
   if (body && body.trim()) {
