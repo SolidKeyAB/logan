@@ -810,6 +810,7 @@ server.tool(
   'Save the investigative steps recorded so far as a NAMED, re-runnable template (an "investigate pattern"). Values like component/field/pattern/event become fill-in parameters so the template can be replayed on a different log. Optionally attach `requirements` — the preconditions the log must meet for this investigation to apply (e.g. the file must match a saved column template / format), plus the saved entities (searches, filters, highlights, column layouts…) it expects. On replay, LOGAN preflights these and blocks a mismatched log. Call this after investigating a ticket when the user wants to reuse the approach.',
   {
     name: z.string().describe('Template name, e.g. "Auth token-expiry investigation"'),
+    aim: z.string().optional().describe('What this recipe is FOR — the question it sets out to answer, e.g. "find the root-cause component of the 401 storm" or "confirm whether the crash is OOM". Shown up front so anyone (human or AI) knows the recipe\'s purpose at a glance. Always set this.'),
     description: z.string().optional().describe('Optional note on what this pattern is for / when to use it'),
     requirements: z.object({
       fileTemplate: z.object({
@@ -838,9 +839,9 @@ server.tool(
     }).optional().describe('Preconditions carried with the saved investigation'),
     autoDetect: z.boolean().optional().describe("Auto-attach a starter file-template from the open log (format adapter + filename glob), merged UNDER any explicit requirements"),
   },
-  async ({ name, description, requirements, autoDetect }) => {
+  async ({ name, aim, description, requirements, autoDetect }) => {
     try {
-      const result = await apiCall('POST', '/api/investigation-save', { name, description, requirements, autoDetect });
+      const result = await apiCall('POST', '/api/investigation-save', { name, aim, description, requirements, autoDetect });
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err: any) {
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };

@@ -884,7 +884,7 @@ export function startApiServer(ctx: ApiContext): void {
             const suggested = suggestRequirements({ filePath: fp, adapterId: fp ? pickAdapter(fp).id : null });
             requirements = mergeRequirements(requirements, suggested);
           }
-          const tpl = buildTemplate(body.name, agentJournal, ctx.getCurrentFilePath() || undefined, body.description, requirements);
+          const tpl = buildTemplate(body.name, agentJournal, ctx.getCurrentFilePath() || undefined, body.description, requirements, body.aim);
           saveTemplate(tpl);
           // Notify the renderer so the Investigate panel can refresh its list.
           const win = ctx.getMainWindow();
@@ -951,7 +951,19 @@ export function startApiServer(ctx: ApiContext): void {
           if (!newName) return sendError(res, 'newName required');
           const resolved = resolveSteps(src, body.params || {});
           const journal = resolved.map(s => ({ path: s.path, body: s.body, ts: 0, label: s.label }));
-          const tpl = buildTemplate(newName, journal, src.sourceFile, body.description || src.description, src.requirements);
+          const tpl = buildTemplate(newName, journal, src.sourceFile, body.description || src.description, src.requirements, body.aim || src.aim);
+          saveTemplate(tpl);
+          const win = ctx.getMainWindow();
+          if (win && !win.isDestroyed()) win.webContents.send('investigation-templates-changed');
+          sendJson(res, { success: true, template: tpl });
+          return;
+        }
+        // Set/edit a recipe's AIM (what it's for) — the one thing that says why the recipe
+        // exists. Reachable by both operators (human "Edit aim", agent at save via `aim`).
+        if (url === '/api/investigation-set-aim') {
+          const tpl = getTemplate(body.name || body.slug || '');
+          if (!tpl) return sendError(res, `No saved investigation named "${body.name || body.slug}"`);
+          tpl.aim = typeof body.aim === 'string' ? body.aim.trim() : undefined;
           saveTemplate(tpl);
           const win = ctx.getMainWindow();
           if (win && !win.isDestroyed()) win.webContents.send('investigation-templates-changed');
