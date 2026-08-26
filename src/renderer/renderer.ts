@@ -7549,10 +7549,11 @@ async function loadInvestigationTemplates(): Promise<void> {
     chip.className = 'investigate-pattern-chip';
     const stepCount = (t.steps || []).length;
     const stepsPreview = (t.steps || []).map((s: any) => s.label).join(' → ');
-    chip.title = `${stepCount} steps: ${stepsPreview}\nRight-click to edit requirements`;
+    chip.title = `${t.aim ? `🎯 ${t.aim}\n\n` : ''}${stepCount} steps: ${stepsPreview}\nRight-click to edit requirements`;
     const run = document.createElement('button');
     run.className = 'investigate-pattern-run';
-    run.innerHTML = `▶ ${escapeHtml(t.name)} <span class="investigate-pattern-count">${stepCount}</span>`;
+    // 🎯 marker when the recipe states its aim (its purpose is known at a glance).
+    run.innerHTML = `▶ ${t.aim ? '🎯 ' : ''}${escapeHtml(t.name)} <span class="investigate-pattern-count">${stepCount}</span>`;
     run.addEventListener('click', () => { void openTemplateHub(t.name); });
     chip.appendChild(run);
     // ⋔ Steps — open the template hub: the whole flow + inline variable boxes + live run.
@@ -7789,7 +7790,9 @@ function makeWorkflowEntityChip(ent: any): HTMLElement {
 async function saveCurrentInvestigation(): Promise<void> {
   const name = ((await showInputPrompt('Name this recipe (the steps taken so far):')) || '').trim();
   if (!name) return;
-  const res = await window.api.saveInvestigation(name);
+  // The aim is the point of the recipe — what it sets out to find. Capture it up front.
+  const aim = ((await showInputPrompt('🎯 What is this recipe aimed at? (e.g. find the root-cause component of the 401 storm)')) || '').trim();
+  const res = await window.api.saveInvestigation(name, undefined, undefined, undefined, aim || undefined);
   if (!res.success) { showToast(res.error || 'Nothing to save yet — run an investigation first'); return; }
   showToast(`Saved recipe “${name}” (${res.template?.steps?.length || 0} steps)`);
   void loadInvestigationTemplates();
@@ -8030,13 +8033,25 @@ function deriveRecipeOutputs(steps: Array<{ path?: string }>): string[] {
 // Fill the hub's Output panel after a run — the recipe's RESULT: the data-bearing step
 // outcomes rolled up, plus any findings pinned in the viewer (click to jump). A recipe is
 // inputs → steps → OUTPUTS; this is the outputs the user asked to see.
-function renderHubOutput(body: HTMLElement, res: any): void {
+// ✎ Set/edit a recipe's aim (what it's for) — persisted, re-rendered.
+async function editRecipeAim(tpl: any, body: HTMLElement): Promise<void> {
+  const aim = ((await showInputPrompt('🎯 What is this recipe aimed at? (e.g. find the root-cause component)', tpl.aim || '')) || '').trim();
+  const res = await window.api.setInvestigationAim(tpl.name, aim);
+  if (!res || !res.success) { showToast(res?.error || 'Could not set the aim'); return; }
+  syncTemplateCache(res.template);
+  const overlay = document.getElementById('workflow-overlay');
+  if (res.template && body && overlay && !overlay.hasAttribute('hidden')) renderTemplateHub(res.template, body);
+  void loadInvestigationTemplates();
+}
+
+function renderHubOutput(body: HTMLElement, res: any, aim?: string): void {
   const el = body.querySelector('#hub-output') as HTMLElement | null;
   if (!el) return;
   const steps = res.steps || [];
   const results = steps.filter((s: any) => s.ok && s.summary && s.summary !== 'ok').map((s: any) => String(s.summary));
   const findings = Array.isArray(state.annotations) ? state.annotations.length : 0;
   let html = `<div class="hub-output-head">📤 Output</div>`;
+  if (aim) html += `<div class="hub-output-aim">🎯 ${escapeHtml(aim)}</div>`;
   html += results.length
     ? `<div class="hub-output-result">${results.map((r: string) => `<span class="hub-output-item">${escapeHtml(r)}</span>`).join('')}</div>`
     : `<div class="hub-output-result hub-output-empty">Steps ran, but produced no counts to report.</div>`;
@@ -8070,6 +8085,16 @@ function renderTemplateHub(tpl: any, body: HTMLElement): void {
   body.appendChild(header);
   const panel = body.closest('.workflow-panel') as HTMLElement | null;
   if (panel) enableWorkflowDrag(header, panel, close);
+
+  // The AIM — what this recipe is FOR. The single most important thing about a recipe, so
+  // it leads. Inline ✎ to set/edit (empty prompts you to fill it).
+  const aimEl = document.createElement('div');
+  aimEl.className = 'hub-aim' + (tpl.aim ? '' : ' hub-aim-empty');
+  aimEl.innerHTML = `<span class="hub-aim-icon">🎯</span>`
+    + `<span class="hub-aim-text">${tpl.aim ? escapeHtml(tpl.aim) : 'No aim set — what is this recipe for?'}</span>`
+    + `<button class="hub-aim-edit" title="Edit the aim">✎</button>`;
+  body.appendChild(aimEl);
+  aimEl.querySelector('.hub-aim-edit')?.addEventListener('click', () => { void editRecipeAim(tpl, body); });
 
   // What this recipe YIELDS (derived from its steps) — shown up front so you know the
   // result shape before running. A recipe = inputs → steps → outputs.
@@ -8263,8 +8288,8 @@ async function runTemplateHub(tpl: any, body: HTMLElement, force = false): Promi
     statusEl.className = 'hub-status ' + (failed ? 'fail' : 'ok');
     statusEl.textContent = failed ? `${failed} of ${(res.steps || []).length} step${failed === 1 ? '' : 's'} failed` : `All ${(res.steps || []).length} steps ✓`;
   }
-  // Surface the run's RESULT as an explicit Output (rolled-up outcomes + findings).
-  renderHubOutput(body, res);
+  // Surface the run's RESULT as an explicit Output (framed by the aim it set out to answer).
+  renderHubOutput(body, res, tpl.aim);
 }
 
 // ✎/🔒 — flip one step's noun between variable and constant, persist, re-render.

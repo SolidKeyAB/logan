@@ -8417,7 +8417,8 @@ function callApiServer(apiPath: string, body: any): Promise<any> {
 }
 
 ipcMain.handle(IPC.INVESTIGATION_LIST, async () => callApiServer('/api/investigations', {}));
-ipcMain.handle(IPC.INVESTIGATION_SAVE, async (_e, name: string, description?: string, requirements?: any, autoDetect?: boolean) => callApiServer('/api/investigation-save', { name, description, requirements, autoDetect }));
+ipcMain.handle(IPC.INVESTIGATION_SAVE, async (_e, name: string, description?: string, requirements?: any, autoDetect?: boolean, aim?: string) => callApiServer('/api/investigation-save', { name, description, requirements, autoDetect, aim }));
+ipcMain.handle(IPC.INVESTIGATION_SET_AIM, async (_e, name: string, aim: string) => callApiServer('/api/investigation-set-aim', { name, aim }));
 ipcMain.handle(IPC.INVESTIGATION_RUN, async (_e, name: string, params?: Record<string, any>, force?: boolean) => callApiServer('/api/investigation-run', { name, params: params || {}, force: force || false }));
 ipcMain.handle(IPC.INVESTIGATION_DELETE, async (_e, name: string) => callApiServer('/api/investigation-delete', { name }));
 ipcMain.handle(IPC.INVESTIGATION_FORK, async (_e, name: string, newName: string, params?: Record<string, any>, description?: string) => callApiServer('/api/investigation-fork', { name, newName, params: params || {}, description }));
