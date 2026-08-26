@@ -8036,6 +8036,92 @@ function deriveRecipeOutputs(steps: Array<{ path?: string }>): string[] {
 // Fill the hub's Output panel after a run — the recipe's RESULT: the data-bearing step
 // outcomes rolled up, plus any findings pinned in the viewer (click to jump). A recipe is
 // inputs → steps → OUTPUTS; this is the outputs the user asked to see.
+// ── Outfit composer — the human authors which saved LENSES a recipe auto-applies ──
+// The "outfit" is a recipe with autoApply lens refs on its requirements manifest; here the
+// human picks/toggles/removes them (agent parity for the autoApply flag it sets at save).
+
+const HUB_LENS_KINDS = ['filter', 'highlightGroup', 'columnLayout', 'session'];
+// Stored refs may use the MCP 'highlight' alias; normalize to the registry kind.
+function normLensKind(kind: string): string { return kind === 'highlight' ? 'highlightGroup' : kind; }
+function isLensRef(kind: string): boolean { return HUB_LENS_KINDS.includes(normLensKind(kind)); }
+function lensRefs(tpl: any): any[] { return (tpl.requirements?.entities || []).filter((e: any) => e && isLensRef(e.kind)); }
+
+function renderHubLenses(tpl: any, body: HTMLElement): void {
+  const wrap = document.createElement('div');
+  wrap.className = 'hub-lenses';
+  let inner = `<span class="hub-lenses-label">🧥 Lenses</span>`;
+  for (const r of lensRefs(tpl)) {
+    const on = !!r.autoApply;
+    const nm = r.name || r.id || '';
+    inner += `<span class="hub-lens ${on ? 'on' : 'off'}" data-lk="${escapeHtml(r.kind)}" data-ln="${escapeHtml(nm)}" title="${on ? 'Auto-applied on run — click to disable' : 'Not auto-applied — click to enable'}">${on ? '🧥 ' : ''}${escapeHtml(nm)}<button class="hub-lens-x" title="Remove">×</button></span>`;
+  }
+  inner += `<button class="hub-lens-add" title="Add a saved lens (filter / highlight / columns / session) to auto-apply when this recipe runs">+ lens</button>`;
+  wrap.innerHTML = inner;
+  body.appendChild(wrap);
+  wrap.querySelectorAll('.hub-lens').forEach(el => el.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement).classList.contains('hub-lens-x')) return;
+    const h = el as HTMLElement; void toggleRecipeLens(tpl, h.dataset.lk || '', h.dataset.ln || '', body);
+  }));
+  wrap.querySelectorAll('.hub-lens-x').forEach(el => el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const h = (el as HTMLElement).closest('.hub-lens') as HTMLElement;
+    void removeRecipeLens(tpl, h.dataset.lk || '', h.dataset.ln || '', body);
+  }));
+  wrap.querySelector('.hub-lens-add')?.addEventListener('click', (e) => { void addRecipeLensPicker(tpl, body, e as MouseEvent); });
+}
+
+// Persist the recipe's lens set (as autoApply refs on the requirements manifest) + re-render.
+async function saveRecipeLensRefs(tpl: any, entities: any[], body: HTMLElement): Promise<void> {
+  const manifest = { ...(tpl.requirements || {}), entities };
+  const res = await window.api.setInvestigationRequirements(tpl.name, manifest);
+  if (!res || !res.success) { showToast((res as any)?.error || 'Could not update lenses'); return; }
+  syncTemplateCache(res.template);
+  const overlay = document.getElementById('workflow-overlay');
+  if (res.template && overlay && !overlay.hasAttribute('hidden')) renderTemplateHub(res.template, body);
+}
+
+async function toggleRecipeLens(tpl: any, kind: string, name: string, body: HTMLElement): Promise<void> {
+  const entities = (tpl.requirements?.entities || []).map((e: any) =>
+    (e.kind === kind && (e.name || e.id || '') === name) ? { ...e, autoApply: !e.autoApply } : e);
+  await saveRecipeLensRefs(tpl, entities, body);
+}
+
+async function removeRecipeLens(tpl: any, kind: string, name: string, body: HTMLElement): Promise<void> {
+  const entities = (tpl.requirements?.entities || []).filter((e: any) => !(e.kind === kind && (e.name || e.id || '') === name));
+  await saveRecipeLensRefs(tpl, entities, body);
+}
+
+// "+ lens" — a small menu of every saved lens entity; pick one to add it as an autoApply ref.
+async function addRecipeLensPicker(tpl: any, body: HTMLElement, ev: MouseEvent): Promise<void> {
+  document.querySelectorAll('.hub-lens-menu').forEach(el => el.remove());
+  const lists = await Promise.all(HUB_LENS_KINDS.map(async k => ({ kind: k, entities: ((await window.api.listEntities(k)).entities || []) })));
+  const existing = new Set(lensRefs(tpl).map((r: any) => `${normLensKind(r.kind)}::${r.name || r.id}`));
+  const menu = document.createElement('div');
+  menu.className = 'hub-lens-menu context-menu';
+  menu.style.left = `${ev.clientX}px`; menu.style.top = `${ev.clientY}px`;
+  let any = false;
+  for (const { kind, entities } of lists) {
+    for (const e of entities) {
+      const nm = e.name || e.id || '';
+      if (!nm || existing.has(`${kind}::${nm}`)) continue;
+      any = true;
+      const item = document.createElement('div');
+      item.className = 'context-menu-item';
+      item.innerHTML = `<span class="context-menu-icon">🧥</span><span>${escapeHtml(kind)}: ${escapeHtml(nm)}</span>`;
+      item.addEventListener('click', () => {
+        menu.remove();
+        const entities2 = [...(tpl.requirements?.entities || []), { kind, id: e.id, name: nm, autoApply: true }];
+        void saveRecipeLensRefs(tpl, entities2, body);
+      });
+      menu.appendChild(item);
+    }
+  }
+  if (!any) { const p = document.createElement('div'); p.className = 'context-menu-item'; p.textContent = 'No more saved lenses to add'; menu.appendChild(p); }
+  document.body.appendChild(menu);
+  const close = (e: MouseEvent) => { if (!menu.contains(e.target as Node)) { menu.remove(); document.removeEventListener('click', close); } };
+  setTimeout(() => document.addEventListener('click', close), 0);
+}
+
 // ✎ Set/edit a recipe's aim (what it's for) — persisted, re-rendered.
 async function editRecipeAim(tpl: any, body: HTMLElement): Promise<void> {
   const aim = ((await showInputPrompt('🎯 What is this recipe aimed at? (e.g. find the root-cause component)', tpl.aim || '')) || '').trim();
@@ -8161,6 +8247,9 @@ function renderTemplateHub(tpl: any, body: HTMLElement): void {
       + yields.map(o => `<span class="hub-yield-chip">${escapeHtml(o)}</span>`).join('');
     body.appendChild(yEl);
   }
+
+  // 🧥 Lenses (the "outfit") — saved lenses this recipe auto-applies to the view on run.
+  renderHubLenses(tpl, body);
 
   if (steps.length === 0) {
     const none = document.createElement('p'); none.className = 'workflow-hint'; none.textContent = 'No steps in this template.';
