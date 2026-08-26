@@ -64,6 +64,7 @@ const IPC = {
   INVESTIGATION_FORK: 'investigation-fork',
   INVESTIGATION_CHECK: 'investigation-check',
   INVESTIGATION_SET_REQS: 'investigation-set-requirements',
+  INVESTIGATION_SET_PARAMS: 'investigation-set-params',
   INVESTIGATION_SUGGEST_REQS: 'investigation-suggest-requirements',
   WORKFLOW_SHOW: 'workflow-show',
   ENTITIES_LIST: 'entities-list',
@@ -817,6 +818,8 @@ const api = {
     ipcRenderer.invoke(IPC.INVESTIGATION_CHECK, name),
   setInvestigationRequirements: (name: string, requirements: any): Promise<{ success: boolean; template?: any; error?: string }> =>
     ipcRenderer.invoke(IPC.INVESTIGATION_SET_REQS, name, requirements),
+  setInvestigationParams: (name: string, patches: any[]): Promise<{ success: boolean; template?: any; applied?: number; errors?: string[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.INVESTIGATION_SET_PARAMS, name, patches),
   suggestInvestigationRequirements: (): Promise<{ success: boolean; requirements?: any; error?: string }> =>
     ipcRenderer.invoke(IPC.INVESTIGATION_SUGGEST_REQS),
   // Workflow canvas — project a saved investigation (by name) into a WorkflowGraph
