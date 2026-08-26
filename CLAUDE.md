@@ -17,6 +17,16 @@ Use this pattern for interactive conversations with the LOGAN user:
 4. Repeat from step 2 until user says goodbye
 ```
 
+### Session Memory — persist context across reconnects
+
+LOGAN gives each open log a small **per-file agent-memory scratchpad** (stored at `.logan/<file>.agent-memory.json`, surfaced in the Chat panel's memory bar). It is **NOT** filled automatically — it stays empty until you write to it. Use it so you can resume naturally if the session drops and reconnects.
+
+- **At the start** of a session (and after any reconnect), call `logan_memory_read` to recall what a prior session established.
+- **After each significant finding or task**, call `logan_memory_write(content=...)` with a brief note of what the user asked and what you found. Each write **replaces** the previous note — write the full running summary, not just a delta.
+- Memory is **per-file**: it's keyed to the currently open log, so a note written while one file is open won't appear when a different file is open. Writing with no file open is a no-op.
+
+> If the memory bar "keeps empty," it's almost always because no agent ever called `logan_memory_write` — the plumbing round-trips fine, it just isn't automatic.
+
 ### Surfacing Findings — CRITICAL RULE
 
 **Whenever you identify a specific critical point, anomaly, or root cause in the log, you MUST call `logan_report_finding` to pin it in the viewer.** Do NOT just describe findings in chat text — call `logan_report_finding` first, then follow up with explanation. This creates a visible annotation in the log viewer so the user can click to navigate directly to the issue.
@@ -70,6 +80,7 @@ Use `logan_report_finding` for each distinct finding, then send a summary via `l
 | `logan_annotate` | Add annotation to a line/range (use logan_report_finding instead when possible) |
 | `logan_baseline_save` / `logan_baseline_compare` | Save and compare baselines |
 | `logan_get_notes` / `logan_save_notes` | Read/write freeform notes |
+| `logan_memory_read` / `logan_memory_write` | Read / **replace** the per-file **session-memory** scratchpad (survives reconnects; shown in the Chat memory bar). Read at session start; write a brief running summary after each significant finding. Stays empty until you write — it is not automatic |
 | `logan_save_report` | Save the investigation as LOGAN's universal **Log Analysis Report** (`.md` in `.logan/reports/`, see `docs/LOGAN_REPORT_FORMAT.md`): clear name + AIM + REASON + optional ticket; **each finding shows its real related log-line sequence** (match + context) with a description; a **Components — potentially responsible** section (agent-supplied or derived from the verdict) and an **Open questions** checklist; plus recorded steps and (opt-in) the root-cause verdict + evidence lines. Self-contained, Jira-paste-ready. Pin findings first |
 | `logan_trend_fields` | Statically discover log variables (key=value, key: value, JSON) with inferred type/frequency — start here |
 | `logan_trend_series` | Trend one field over time (adaptive time buckets + sampled points). Accepts a `pattern` regex for unlabeled values |
