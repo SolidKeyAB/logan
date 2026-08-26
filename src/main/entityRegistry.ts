@@ -23,11 +23,13 @@ export type EntityKind =
   | 'contextDef'      // ContextDefinition (global)
   | 'baseline'        // BaselineRecord
   | 'investigation'   // InvestigationTemplate
-  | 'sequence';       // ClueSequence (ordered evidence trail — the evidence twin of an investigation)
+  | 'sequence'        // ClueSequence (ordered evidence trail — the evidence twin of an investigation)
+  | 'contextManifest'; // ContextManifest (per-file static-env facts: build/firmware/flags/config)
 
 export const ENTITY_KINDS: EntityKind[] = [
   'search', 'session', 'composite', 'filter', 'highlightGroup', 'bookmarkSet', 'columnLayout',
   'columnPattern', 'constant', 'trendProperty', 'pattern', 'contextDef', 'baseline', 'investigation', 'sequence',
+  'contextManifest',
 ];
 
 // Human labels for each kind (for grouping headers in a UI / agent readout).
@@ -47,6 +49,7 @@ export const ENTITY_KIND_LABELS: Record<EntityKind, string> = {
   baseline: 'Baselines',
   investigation: 'Investigations',
   sequence: 'Clue sequences',
+  contextManifest: 'Environment context',
 };
 
 export interface EntityDescriptor {
@@ -121,6 +124,12 @@ export function toDescriptor(kind: EntityKind, raw: any): EntityDescriptor {
     case 'sequence':
       return { kind, id: String(r.id ?? r.name ?? ''), name: r.name || '(unnamed)', description: r.description, scope: r.scope || 'global',
         summary: `${(r.clues || []).length} clues`, count: (r.clues || []).length };
+    case 'contextManifest': {
+      const keys = Object.keys(r.facts || {});
+      const preview = keys.slice(0, 4).join(', ');
+      return { kind, id: String(r.id ?? 'context-manifest'), name: r.name || '(environment)', description: r.description, scope: 'file',
+        summary: clip(`${keys.length} env fact${keys.length === 1 ? '' : 's'}${preview ? ` · ${preview}` : ''}`), count: keys.length };
+    }
     default:
       return { kind, id: String(r.id ?? ''), name: r.name || r.label || '(unknown)', description: r.description, scope: 'global' };
   }
