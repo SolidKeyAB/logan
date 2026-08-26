@@ -166,3 +166,59 @@ export function runSummarizeJob(
     });
   });
 }
+
+// ─── Column-pattern preview (validate + refine over the file) off-thread ─────
+// The heavy "✓ Test over file" / Save path: scan the file head + run a possibly-
+// backtracking column regex over it. Off-thread so it never blocks the UI, with a
+// WATCHDOG that terminates the worker if a catastrophic-backtracking regex hangs it
+// (only the worker thread hangs; the client surfaces a clear error).
+
+/** True when the handler can be previewed off-thread (has a whole-file index). */
+export function canColumnPreviewOffThread(handler: FileHandler | CompositeFileHandler | SegmentedFileHandler): boolean {
+  return !(handler instanceof SegmentedFileHandler);
+}
+
+export function runColumnPreviewJob(
+  handler: FileHandler | CompositeFileHandler | SegmentedFileHandler,
+  spec: any,
+  opts: { sampleLines?: number; timeoutMs?: number } = {},
+): Promise<any> {
+  if (handler instanceof SegmentedFileHandler) {
+    return Promise.reject(new Error('Off-thread column preview is unavailable for auto-segmented large files.'));
+  }
+  const args = { spec, opts: { sampleLines: opts.sampleLines } };
+  let workerData: { kind: 'columnPreview'; args: typeof args; scan?: unknown; scans?: unknown[] };
+  if (handler instanceof CompositeFileHandler) {
+    const scans = handler.getMemberScanContexts();
+    if (scans.length === 0 || scans.some((s) => !s)) {
+      return Promise.reject(new Error('Single session has no readable member index'));
+    }
+    workerData = { kind: 'columnPreview', args, scans };
+  } else {
+    const scan = handler.getScanContext();
+    if (!scan) return Promise.reject(new Error('No file open'));
+    workerData = { kind: 'columnPreview', args, scan };
+  }
+  const timeoutMs = Math.max(1000, opts.timeoutMs ?? 6000);
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(path.join(__dirname, 'trendWorker.js'), { workerData });
+    let settled = false;
+    const finish = (err?: Error, result?: any): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      worker.terminate();
+      if (err) reject(err); else resolve(result);
+    };
+    const timer = setTimeout(
+      () => finish(new Error('Pattern took too long over this file (possible catastrophic backtracking) — simplify the column pattern.')),
+      timeoutMs,
+    );
+    worker.on('message', (msg: { type: string; result?: any; message?: string }) => {
+      if (msg?.type === 'done') finish(undefined, msg.result);
+      else if (msg?.type === 'error') finish(new Error(msg.message || 'column preview worker error'));
+    });
+    worker.on('error', (err) => finish(err instanceof Error ? err : new Error(String(err))));
+    worker.on('exit', (code) => { if (code !== 0 && !settled) finish(new Error(`column preview worker exited with code ${code}`)); });
+  });
+}
