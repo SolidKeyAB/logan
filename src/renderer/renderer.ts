@@ -197,6 +197,7 @@ interface ColumnConfig {
     sample: string[];
     visible: boolean;
     name?: string; // user-assigned column name (Columns panel) — drives labels, save/template, filter
+    muted?: boolean; // dim this column in place (view-only de-emphasis; the column-level line-mute)
   }>;
   // Pattern mode (Phase 2): columns come from a regex/grok/paint pattern's capture groups
   // instead of a delimiter. When set, the viewer segments lines by the pattern; `columns[].index`
@@ -4768,6 +4769,26 @@ function handleContextMenu(event: MouseEvent): void {
     return sep;
   }
 
+  // Column mute — right-click a column (when a column layout is active) to dim/undim it
+  // in place: the column-level sibling of "Mute lines". data-col is set on each column
+  // span by renderColumnAwareContent.
+  const colEl = target.closest('.log-col') as HTMLElement | null;
+  const colIndex = colEl ? parseInt(colEl.dataset.col || '', 10) : NaN;
+  if (state.columnConfig && Number.isInteger(colIndex) && colIndex >= 0) {
+    const col = state.columnConfig.columns.find(c => c.index === colIndex);
+    const label = col?.name ? `column "${col.name}"` : `column ${colIndex + 1}`;
+    const isMuted = !!col?.muted;
+    const muteItem = menuItem('\u{1F507}', isMuted ? `Unmute ${label}` : `Mute ${label}`);
+    muteItem.addEventListener('click', () => { toggleColumnMute(colIndex); menu.remove(); });
+    menu.appendChild(muteItem);
+    if (state.columnConfig.columns.some(c => c.muted)) {
+      const unmuteAll = menuItem('\u{1F50A}', 'Unmute all columns');
+      unmuteAll.addEventListener('click', () => { unmuteAllColumns(); menu.remove(); });
+      menu.appendChild(unmuteAll);
+    }
+    menu.appendChild(menuSeparator());
+  }
+
   // If text is selected, show highlight option
   if (selectedText) {
     const displayText = selectedText.trim();
@@ -5213,8 +5234,8 @@ async function saveSelectedLinesToFile(): Promise<void> {
     return;
   }
 
-  const colConfig = state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible)
-    ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible })) }
+  const colConfig = state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible || c.muted)
+    ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible && !c.muted })) }
     : undefined;
   const result = await window.api.saveSelectedLines(state.selectionStart, state.selectionEnd, colConfig);
 
@@ -5314,8 +5335,8 @@ async function saveToNotesWithRange(startLine: number, endLine: number): Promise
   const modalResult = await showNotesModal(startLine, endLine);
   if (modalResult === null) return; // User cancelled
 
-  const colConfig = state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible)
-    ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible })) }
+  const colConfig = state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible || c.muted)
+    ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible && !c.muted })) }
     : undefined;
   const result = await window.api.saveToNotes(
     startLine,
@@ -18801,6 +18822,7 @@ async function showColumnsModal(): Promise<void> {
           if (i < state.columnConfig.columns.length) {
             columns[i].visible = state.columnConfig.columns[i].visible;
             (columns[i] as any).name = state.columnConfig.columns[i].name;
+            (columns[i] as any).muted = state.columnConfig.columns[i].muted;
           }
         }
       }
@@ -18818,6 +18840,10 @@ async function showColumnsModal(): Promise<void> {
             <label class="checkbox-label">
               <input type="checkbox" data-col-index="${idx}" ${col.visible ? 'checked' : ''}>
               <span class="column-index">${label}</span>
+            </label>
+            <label class="checkbox-label col-mute-label" title="Dim this column and drop it from searches / analysis / extract (kept visible for context)">
+              <input type="checkbox" class="col-mute-cb" data-col-mute="${idx}" ${(col as any).muted ? 'checked' : ''}>
+              <span>🔇 mute</span>
             </label>
             <input type="text" class="column-name-input" data-col-index="${idx}" placeholder="name…" value="${escapeHtml(colName || '')}" title="Name this column">
             <div class="column-samples">${samples.map((s: string) => `<code>${escapeHtml(s)}</code>`).join(' ')}</div>
@@ -18867,6 +18893,10 @@ function renderPatternColumnsModal(cfg: ColumnConfig): void {
           <input type="checkbox" data-col-index="${col.index}" ${col.visible ? 'checked' : ''}>
           <span class="column-index">${label}</span>
         </label>
+        <label class="checkbox-label col-mute-label" title="Dim this column and drop it from searches / analysis / extract (kept visible for context)">
+          <input type="checkbox" class="col-mute-cb" data-col-mute="${col.index}" ${col.muted ? 'checked' : ''}>
+          <span>🔇 mute</span>
+        </label>
       </div>`;
   }).join('');
   (elements.columnsModal as any)._tempConfig = { pattern: true };
@@ -18887,18 +18917,29 @@ async function applyColumnsConfig(): Promise<void> {
       const col = state.columnConfig!.columns.find(c => c.index === idx);
       if (col) col.visible = cb.checked;
     });
+    elements.columnsList.querySelectorAll<HTMLInputElement>('.col-mute-cb').forEach((cb) => {
+      const idx = parseInt(cb.dataset.colMute || '0', 10);
+      const col = state.columnConfig!.columns.find(c => c.index === idx);
+      if (col) col.muted = cb.checked;
+    });
     updateColumnHideStyle();
     hideColumnsModal();
     return;
   }
 
-  // Read checkbox states
-  const checkboxes = elements.columnsList.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+  // Read checkbox states (visibility)
+  const checkboxes = elements.columnsList.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-col-index]');
   checkboxes.forEach((cb) => {
     const idx = parseInt(cb.dataset.colIndex || '0', 10);
     if (idx < tempConfig.columns.length) {
       tempConfig.columns[idx].visible = cb.checked;
     }
+  });
+
+  // Read mute states (dim + drop from tools)
+  elements.columnsList.querySelectorAll<HTMLInputElement>('.col-mute-cb').forEach((cb) => {
+    const idx = parseInt(cb.dataset.colMute || '0', 10);
+    if (idx < tempConfig.columns.length) tempConfig.columns[idx].muted = cb.checked;
   });
 
   // Read per-column names
@@ -18927,6 +18968,7 @@ async function applyColumnsConfig(): Promise<void> {
       sample: c.sample,
       visible: c.visible,
       name: c.name,
+      muted: !!c.muted,
     })),
   };
 
@@ -19047,6 +19089,10 @@ async function saveCurrentColumnLayout(): Promise<void> {
     const v = inp.value.trim();
     if (v) nameById.set(parseInt(inp.dataset.colIndex || '0', 10), v);
   });
+  const muteById = new Map<number, boolean>();
+  elements.columnsList.querySelectorAll<HTMLInputElement>('.col-mute-cb').forEach((cb) => {
+    muteById.set(parseInt(cb.dataset.colMute || '0', 10), cb.checked);
+  });
   const name = await showInputPrompt('Name this column layout (e.g. "access-log", "sensor"):');
   if (!name) return;
   const layout = {
@@ -19059,6 +19105,7 @@ async function saveCurrentColumnLayout(): Promise<void> {
       index: c.index,
       name: nameById.get(c.index),
       visible: visById.has(c.index) ? visById.get(c.index)! : (c.visible !== false),
+      ...(muteById.get(c.index) ? { muted: true } : {}),
     })),
   };
   const res = await (window.api as any).columnLayoutSave(layout);
@@ -19075,11 +19122,11 @@ function applyColumnPattern(
   regex: string,
   flags: string,
   fields: string[],
-  columns?: Array<{ index: number; name?: string; visible: boolean }>,
+  columns?: Array<{ index: number; name?: string; visible: boolean; muted?: boolean }>,
 ): void {
   if (!fields.length) { showToast('Pattern has no columns'); return; }
   const cols = (columns && columns.length)
-    ? columns.map(c => ({ index: c.index, sample: [] as string[], visible: c.visible !== false, name: c.name }))
+    ? columns.map(c => ({ index: c.index, sample: [] as string[], visible: c.visible !== false, name: c.name, muted: !!c.muted }))
     : fields.map((f, i) => ({ index: i, sample: [] as string[], visible: true, name: f }));
   state.columnConfig = { delimiter: '', delimiterName: 'pattern', pattern: { regex, flags, fields }, columns: cols };
   activeColumnPatternSig = null; // force recompile of the viewport regex
@@ -19360,6 +19407,41 @@ function updateColumnHideStyle(): void {
   columnHideStyleEl.textContent = hidden.length
     ? hidden.map(i => `.log-col[data-col="${i}"]`).join(',') + '{display:none}'
     : '';
+  updateColumnMuteStyle(); // keep the mute rule in sync with every hide refresh
+}
+
+// The single CSS rule that DIMS muted columns in place — the column-level sibling of
+// the line mute, and the instant-toggle twin of updateColumnHideStyle (no re-render).
+// MIRROR of buildColumnMuteCss() in src/shared/columnMute.ts — keep in sync.
+let columnMuteStyleEl: HTMLStyleElement | null = null;
+function updateColumnMuteStyle(): void {
+  if (!columnMuteStyleEl) {
+    columnMuteStyleEl = document.createElement('style');
+    columnMuteStyleEl.id = 'logan-col-mute';
+    document.head.appendChild(columnMuteStyleEl);
+  }
+  const cfg = state.columnConfig;
+  const muted = cfg ? cfg.columns.filter(c => c.muted).map(c => c.index) : [];
+  columnMuteStyleEl.textContent = muted.length
+    ? muted.map(i => `.log-col[data-col="${i}"]`).join(',') + '{opacity:0.35}'
+    : '';
+}
+
+// Toggle / clear column mute (right-click in the viewer, or the Columns window).
+// Mutating the flag + rewriting the CSS rule is the whole thing — no row re-render.
+function toggleColumnMute(colIndex: number): void {
+  const cfg = state.columnConfig;
+  if (!cfg) return;
+  const col = cfg.columns.find(c => c.index === colIndex);
+  if (!col) return;
+  col.muted = !col.muted;
+  updateColumnMuteStyle();
+}
+function unmuteAllColumns(): void {
+  const cfg = state.columnConfig;
+  if (!cfg) return;
+  for (const c of cfg.columns) c.muted = false;
+  updateColumnMuteStyle();
 }
 
 // Search
@@ -19497,7 +19579,7 @@ let timeGapEndHistory: InputHistory | null = null;
 // filter both change what matches, so they're part of the key; start line and
 // direction only affect which match is selected, so they're deliberately excluded.
 function findSignature(pattern: string): string {
-  const colSig = (state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible))
+  const colSig = (state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible || c.muted))
     ? `${state.columnConfig.delimiter}:${state.columnConfig.columns.map(c => (c.visible ? '1' : '0')).join('')}`
     : '';
   return [
@@ -19609,10 +19691,10 @@ async function performSearch(): Promise<void> {
     };
 
     // Add column config if columns are filtered
-    if (state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible)) {
+    if (state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible || c.muted)) {
       searchOptions.columnConfig = {
         delimiter: state.columnConfig.delimiter,
-        columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible })),
+        columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible && !c.muted })),
       };
     }
 
@@ -20199,8 +20281,8 @@ async function extractFilterToFile(): Promise<void> {
     showToast('Apply a filter first, then Extract to file.');
     return;
   }
-  const colConfig = state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible)
-    ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible })) }
+  const colConfig = state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible || c.muted)
+    ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible && !c.muted })) }
     : undefined;
   // Keep the modal open with the button's busy ring spinning while it writes,
   // then close + open the new file on success.
@@ -24309,7 +24391,7 @@ async function applyColumnLayoutToView(layout: any): Promise<void> {
   state.columnConfig = {
     delimiter: layout.delimiter,
     delimiterName: layout.delimiterName,
-    columns: (layout.columns || []).map((c: any) => ({ index: c.index, sample: c.sample, visible: c.visible !== false, name: c.name })),
+    columns: (layout.columns || []).map((c: any) => ({ index: c.index, sample: c.sample, visible: c.visible !== false, name: c.name, muted: !!c.muted })),
   };
   updateColumnHideStyle();
   if (prevDelimiter !== state.columnConfig.delimiter) {
