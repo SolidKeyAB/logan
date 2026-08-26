@@ -197,3 +197,22 @@ when each is next touched):
   fully *consumes* the manifest (Saved panel + report + baseline env-diff). If real use shows a
   human needs to author/correct facts by hand, a small "Edit environment" form earns its way in
   then — tracked as deferred in the P3 design.
+
+- **Agent run-vs-run diff — `logan_diff_runs`** (template-level differential of two runs —
+  "what does the failing run contain that the good run doesn't", P2 of
+  `docs/discovery/multi-log-correlation.md`). Agent surface: MCP `logan_diff_runs` +
+  `/api/diff-runs` → `ApiContext.diffRuns` → folds the active file (target) and a reference
+  log (by path, opened on demand via `getOrOpenHandlerForPath`) through the shared
+  `foldHandlerTemplates` (same TemplateFolder engine as `logan_summarize`, so the two folds
+  are comparable), then the pure `runDiff.ts#diffRuns` set-diffs the shapes into
+  onlyInTarget / onlyInReference / changed. Registered as investigative logic (journal +
+  saveable template step). Human surface: the two human-form ways to compare runs already
+  exist — the **split/diff** view (`viewMode:'diff'`, raw visual line diff via the `diff`
+  package, ≤100k lines) and **baseline_compare** (fingerprint deltas in the analysis panel).
+  **Written parity exemption:** a template-level *structural* diff is the agent-form — the
+  agent cannot eyeball a scrolling visual diff, and the human cannot hand-fold two
+  million-line logs into comparable template sets; each operator gets the diff shape that
+  fits it. The agent's results reach the human the same way `evidence_pack`'s do — the agent
+  pins notable deltas with `logan_report_finding` (every delta carries target viewerLines). A
+  dedicated human "compare two summaries" view is a natural extension of the Summarize panel,
+  earnable with usage.
