@@ -10881,6 +10881,13 @@ kbd {
 }
 .hub-aim-edit:hover { color: var(--accent-hover); }
 .hub-output-aim { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+/* 🧥 The "outfit" — lenses the recipe auto-applied to the view before its steps. */
+.hub-output-lenses { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+.hub-lens-chip {
+  font-size: 11px; font-family: var(--font-mono);
+  padding: 1px 7px; border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-color) 14%, transparent); color: var(--accent-hover);
+}
 
 /* "→ yields" — the recipe's output signature (what it produces), shown up front. */
 .hub-yields {
