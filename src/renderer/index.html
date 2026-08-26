@@ -505,9 +505,9 @@
             <span class="investigate-label">What's the symptom?</span>
             <div id="investigate-symptoms" class="investigate-symptoms"></div>
           </div>
-          <div class="bottom-tab-sub-header investigate-patterns-bar" data-help="Saved investigation patterns. The agent records the steps it takes for a ticket (search → filter → trend → investigate); save that as a named template and replay it on any log — one click. Values like component/field become fill-ins.">
-            <span class="investigate-label">Saved patterns</span>
-            <button id="btn-save-investigation" class="secondary-btn small" title="Save the steps taken so far as a reusable template">💾 Save current</button>
+          <div class="bottom-tab-sub-header investigate-patterns-bar" data-help="Saved recipes. The agent records the steps it takes for a ticket (search → filter → trend → investigate); save that as a named recipe and replay it on any log — one click. A recipe is inputs (the params you tweak) → steps → outputs (what it yields). Values like component/field become fill-ins.">
+            <span class="investigate-label">Recipes</span>
+            <button id="btn-save-investigation" class="secondary-btn small" title="Save the steps taken so far as a reusable recipe">💾 Save current</button>
             <div id="investigate-patterns-list" class="investigate-patterns-list"></div>
           </div>
           <div id="investigate-results" class="investigate-content">
@@ -1371,7 +1371,7 @@
             <div class="shortcut-list">
               <div class="shortcut-item"><span><strong>Trends</strong> tab → Discover Fields, then type in <strong>Pick a field</strong> to search; chart value-over-time, flips, or correlation. Booleans (e.g. <code>isTokenExpired=false</code>) chart as a 0/1 step line.</span></div>
               <div class="shortcut-item"><span><strong>Signals</strong> tab → overlays numeric signals (incl. MF4 channels) on one shared time axis; Discover Signals auto-finds them.</span></div>
-              <div class="shortcut-item"><span><strong>Investigate</strong> tab → pick a symptom for a guided recipe. The AI agent's steps are recorded; <strong>💾 Save current</strong> turns them into a re-runnable <em>pattern</em> you replay (▶) on any log.</span></div>
+              <div class="shortcut-item"><span><strong>Investigate</strong> tab → pick a symptom for a guided recipe. The AI agent's steps are recorded; <strong>💾 Save current</strong> turns them into a re-runnable <em>recipe</em> you replay (▶) on any log.</span></div>
               <div class="shortcut-item"><span><strong>Chat</strong> → <kbd>⏹ Stop</kbd> interrupts the agent's current task without ending the session. The agent can also push trend charts straight into the Trends panel.</span></div>
               <div class="shortcut-item"><span><strong>Video</strong> tab → plays MP4/WebM/Ogg directly; AVI/MKV/WMV are auto-converted to MP4 via ffmpeg.</span></div>
               <div class="shortcut-item"><span>Bottom panel <strong>color dot</strong> → recolor the panel; text/labels/buttons auto-adjust for contrast.</span></div>
