@@ -216,3 +216,22 @@ when each is next touched):
   pins notable deltas with `logan_report_finding` (every delta carries target viewerLines). A
   dedicated human "compare two summaries" view is a natural extension of the Summarize panel,
   earnable with usage.
+
+- **Column mute — right-click "Mute column" / Columns-window toggle** (dim a column in place
+  AND drop it from tool actions — search / extract exclude a muted column exactly like a
+  hidden one; the column-level sibling of line mute). Human surface: right-click a column in
+  the viewer → Mute/Unmute (+ "Unmute all"), or the 🔇 toggle per row in the Columns window;
+  rendered dim via one instant CSS rule (`updateColumnMuteStyle`, twin of the column-hide
+  rule), persisted in the saved column layout (`muted?` on `ColumnLayoutSaved.columns`), and
+  folded into the tool-facing `columnConfig` (`visible && !muted`) so search/extract skip it.
+  **Written exemption (same class as column visibility):** column mute/hide is a
+  human-viewport concern — which columns the human de-emphasizes while reading. The AI has no
+  viewport and reads column values directly via its tools; it does not need a "mute a column"
+  verb (column-layout *apply* is already human-only per the `logan_column_layouts` exemption).
+  Parity is preserved through effect, not a verb: a muted column shapes the active
+  `columnConfig`, so the AI's `scope:"active"` search/extract inherit the exclusion — the same
+  way the human's active filter already scopes the AI. If real use shows the AI should set
+  mute, a generic `apply`/`mute` entity verb earns its way in then.
+  NB (follow-up, tracked): muted *lines* (the pattern-based line mute) are still dim-only —
+  making all tools discard muted LINES too is a scope-layer change (muted lines become an
+  exclusion resolved into every tool's line set), a separate focused build.
