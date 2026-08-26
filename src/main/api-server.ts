@@ -918,11 +918,24 @@ export function startApiServer(ctx: ApiContext): void {
             return;
           }
           const steps = resolveSteps(tpl, body.params || {});
+          // Live per-step progress → the renderer's template popup lights each step green
+          // (red on failure) as it runs, instead of all-at-once. Pushed for BOTH operators:
+          // when the agent replays, an open human popup for the same template animates too.
+          const win = ctx.getMainWindow();
+          const pushStep = (payload: Record<string, any>) => {
+            if (win && !win.isDestroyed()) win.webContents.send('investigation-run-step', { name: tpl.name, slug: tpl.slug, ...payload });
+          };
+          pushStep({ phase: 'start', total: steps.length });
           const results: any[] = [];
-          for (const step of steps) {
+          for (let i = 0; i < steps.length; i++) {
+            const step = steps[i];
             const r = await replayStep(step);
-            results.push({ step: step.label, path: step.path, ok: r?.success !== false, summary: summarizeReplay(step.path, r) });
+            const ok = r?.success !== false;
+            const summary = summarizeReplay(step.path, r);
+            results.push({ step: step.label, path: step.path, ok, summary });
+            pushStep({ phase: 'step', index: i, ok, summary, label: step.label });
           }
+          pushStep({ phase: 'done', total: steps.length });
           sendJson(res, { success: true, ran: tpl.name, steps: results, requirements });
           return;
         }
@@ -989,9 +1002,9 @@ export function startApiServer(ctx: ApiContext): void {
         }
         if (url === '/api/investigation-set-params') {
           // Curate a saved investigation's params so it becomes a REAL template:
-          // retype a param variable/constant, set a description, PROMOTE an arbitrary
-          // (stepIndex,key) body value into a fill-in, or DEMOTE one back to pinned.
-          // Does not touch the recorded step VALUES — only what's exposed on replay.
+          // retype a param variable/constant, set a description, set a new default value
+          // ("Save" the tweaks in the hub), PROMOTE an arbitrary (stepIndex,key) body
+          // value into a fill-in, or DEMOTE one back to pinned.
           const patchRes = setTemplateParams(body.name || body.slug || '', Array.isArray(body.patches) ? body.patches : []);
           if (!patchRes) return sendError(res, `No saved investigation named "${body.name || body.slug}"`);
           const win = ctx.getMainWindow();

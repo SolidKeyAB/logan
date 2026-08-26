@@ -769,6 +769,7 @@ interface Api {
   suggestInvestigationRequirements: () => Promise<{ success: boolean; requirements?: any; error?: string }>;
   listEntities: (kind?: string) => Promise<{ success: boolean; count?: number; entities?: any[]; error?: string }>;
   onInvestigationTemplatesChanged: (callback: () => void) => () => void;
+  onInvestigationRunStep: (callback: (payload: { name?: string; slug?: string; phase?: string; index?: number; total?: number; ok?: boolean; summary?: string; label?: string }) => void) => () => void;
   getAgentRunning: () => Promise<{ running: boolean }>;
   detectAgentEnvironment: () => Promise<{
     hasClaudeCli: boolean;
