@@ -10866,6 +10866,22 @@ kbd {
 .hub-status.blocked { color: var(--warning-color); }
 .hub-blocked-title { font-weight: 700; margin-bottom: 4px; }
 
+/* 🎯 Aim — what the recipe is FOR. Leads the hub, so its purpose is unmissable. */
+.hub-aim {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 16px; border-bottom: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--accent-color) 8%, transparent);
+}
+.hub-aim-icon { flex-shrink: 0; }
+.hub-aim-text { flex: 1; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.hub-aim.hub-aim-empty .hub-aim-text { font-weight: 400; font-style: italic; color: var(--text-muted); }
+.hub-aim-edit {
+  flex-shrink: 0; border: none; background: transparent; cursor: pointer;
+  color: var(--text-muted); font-size: 12px; padding: 2px 4px;
+}
+.hub-aim-edit:hover { color: var(--accent-hover); }
+.hub-output-aim { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+
 /* "→ yields" — the recipe's output signature (what it produces), shown up front. */
 .hub-yields {
   display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
