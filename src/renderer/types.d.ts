@@ -771,6 +771,7 @@ interface Api {
   listEntities: (kind?: string) => Promise<{ success: boolean; count?: number; entities?: any[]; error?: string }>;
   onInvestigationTemplatesChanged: (callback: () => void) => () => void;
   onInvestigationRunStep: (callback: (payload: { name?: string; slug?: string; phase?: string; index?: number; total?: number; ok?: boolean; summary?: string; label?: string }) => void) => () => void;
+  onEntityApply: (callback: (payload: { kind: string; id: string; name: string }) => void) => () => void;
   getAgentRunning: () => Promise<{ running: boolean }>;
   detectAgentEnvironment: () => Promise<{
     hasClaudeCli: boolean;
