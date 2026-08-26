@@ -7541,7 +7541,7 @@ async function loadInvestigationTemplates(): Promise<void> {
   investigationTemplatesCache = templates;
   list.innerHTML = '';
   if (templates.length === 0) {
-    list.innerHTML = '<span class="investigate-patterns-empty">none yet — ask the agent to investigate, then “Save current”</span>';
+    list.innerHTML = '<span class="investigate-patterns-empty">no recipes yet — ask the agent to investigate, then “Save current”</span>';
     return;
   }
   for (const t of templates) {
@@ -7787,11 +7787,11 @@ function makeWorkflowEntityChip(ent: any): HTMLElement {
 }
 
 async function saveCurrentInvestigation(): Promise<void> {
-  const name = ((await showInputPrompt('Name this investigation pattern (the steps taken so far):')) || '').trim();
+  const name = ((await showInputPrompt('Name this recipe (the steps taken so far):')) || '').trim();
   if (!name) return;
   const res = await window.api.saveInvestigation(name);
   if (!res.success) { showToast(res.error || 'Nothing to save yet — run an investigation first'); return; }
-  showToast(`Saved pattern “${name}” (${res.template?.steps?.length || 0} steps)`);
+  showToast(`Saved recipe “${name}” (${res.template?.steps?.length || 0} steps)`);
   void loadInvestigationTemplates();
 }
 
@@ -8007,6 +8007,50 @@ function hubVerb(step: any): string {
   return String(step.path || '').replace('/api/', '') || (step.label || 'step');
 }
 
+// The output kinds a recipe YIELDS, derived from its step verbs (its output signature).
+// MIRROR of deriveRecipeOutputs() in src/shared/recipeOutputs.ts — keep in sync.
+const HUB_OUTPUT_LABEL: Record<string, string> = {
+  '/api/search': 'matches', '/api/filter': 'filtered view', '/api/analyze': 'level breakdown',
+  '/api/time-gaps': 'time gaps', '/api/investigate-crashes': 'crash findings',
+  '/api/investigate-component': 'component health', '/api/investigate-timerange': 'timerange findings',
+  '/api/triage': 'triage', '/api/build-conclusion': 'verdict', '/api/summarize': 'templates',
+  '/api/evidence-pack': 'evidence pack', '/api/diff-runs': 'run diff',
+};
+function hubOutputLabel(path: string | undefined): string | null {
+  if (!path) return null;
+  if (HUB_OUTPUT_LABEL[path]) return HUB_OUTPUT_LABEL[path];
+  return path.startsWith('/api/trend') ? 'trend' : null;
+}
+function deriveRecipeOutputs(steps: Array<{ path?: string }>): string[] {
+  const out: string[] = [];
+  for (const s of steps || []) { const l = hubOutputLabel(s?.path); if (l && !out.includes(l)) out.push(l); }
+  return out;
+}
+
+// Fill the hub's Output panel after a run — the recipe's RESULT: the data-bearing step
+// outcomes rolled up, plus any findings pinned in the viewer (click to jump). A recipe is
+// inputs → steps → OUTPUTS; this is the outputs the user asked to see.
+function renderHubOutput(body: HTMLElement, res: any): void {
+  const el = body.querySelector('#hub-output') as HTMLElement | null;
+  if (!el) return;
+  const steps = res.steps || [];
+  const results = steps.filter((s: any) => s.ok && s.summary && s.summary !== 'ok').map((s: any) => String(s.summary));
+  const findings = Array.isArray(state.annotations) ? state.annotations.length : 0;
+  let html = `<div class="hub-output-head">📤 Output</div>`;
+  html += results.length
+    ? `<div class="hub-output-result">${results.map((r: string) => `<span class="hub-output-item">${escapeHtml(r)}</span>`).join('')}</div>`
+    : `<div class="hub-output-result hub-output-empty">Steps ran, but produced no counts to report.</div>`;
+  if (findings > 0) {
+    html += `<div class="hub-output-findings">📌 ${findings} finding${findings === 1 ? '' : 's'} in the viewer <button class="secondary-btn small" id="hub-view-findings">View</button></div>`;
+  }
+  el.innerHTML = html;
+  el.hidden = false;
+  el.querySelector('#hub-view-findings')?.addEventListener('click', () => {
+    const first = (state.annotations || [])[0];
+    if (first && typeof first.lineNumber === 'number') { void navigateTo(first.lineNumber); if (first.id) setActiveAnnotation(first.id); }
+  });
+}
+
 function renderTemplateHub(tpl: any, body: HTMLElement): void {
   const name = tpl.name;
   const steps = tpl.steps || [];
@@ -8027,6 +8071,17 @@ function renderTemplateHub(tpl: any, body: HTMLElement): void {
   const panel = body.closest('.workflow-panel') as HTMLElement | null;
   if (panel) enableWorkflowDrag(header, panel, close);
 
+  // What this recipe YIELDS (derived from its steps) — shown up front so you know the
+  // result shape before running. A recipe = inputs → steps → outputs.
+  const yields = deriveRecipeOutputs(steps);
+  if (yields.length) {
+    const yEl = document.createElement('div');
+    yEl.className = 'hub-yields';
+    yEl.innerHTML = `<span class="hub-yields-label">→ yields</span>`
+      + yields.map(o => `<span class="hub-yield-chip">${escapeHtml(o)}</span>`).join('');
+    body.appendChild(yEl);
+  }
+
   if (steps.length === 0) {
     const none = document.createElement('p'); none.className = 'workflow-hint'; none.textContent = 'No steps in this template.';
     body.appendChild(none);
@@ -8037,6 +8092,11 @@ function renderTemplateHub(tpl: any, body: HTMLElement): void {
   listEl.className = 'workflow-steps hub-steps';
   steps.forEach((step: any, i: number) => listEl.appendChild(renderHubStep(step, i, paramsByStep[i] || [], name)));
   body.appendChild(listEl);
+
+  // Output panel — filled with the run's result (populated by renderHubOutput on Run).
+  const outputEl = document.createElement('div');
+  outputEl.className = 'hub-output'; outputEl.id = 'hub-output'; outputEl.hidden = true;
+  body.appendChild(outputEl);
 
   const footer = document.createElement('div');
   footer.className = 'hub-actions';
@@ -8160,6 +8220,8 @@ async function runTemplateHub(tpl: any, body: HTMLElement, force = false): Promi
   const statusEl = body.querySelector('#hub-status') as HTMLElement | null;
   steps.forEach((_: any, i: number) => setHubStepStatus(body, i, 'pending'));
   if (statusEl) { statusEl.className = 'hub-status running'; statusEl.textContent = `Running ${steps.length} step${steps.length === 1 ? '' : 's'}…`; }
+  const outEl = body.querySelector('#hub-output') as HTMLElement | null;
+  if (outEl) { outEl.hidden = true; outEl.innerHTML = ''; } // clear last run's output
   hubRunning = true;
   setHubBusy(body, true);
 
@@ -8201,6 +8263,8 @@ async function runTemplateHub(tpl: any, body: HTMLElement, force = false): Promi
     statusEl.className = 'hub-status ' + (failed ? 'fail' : 'ok');
     statusEl.textContent = failed ? `${failed} of ${(res.steps || []).length} step${failed === 1 ? '' : 's'} failed` : `All ${(res.steps || []).length} steps ✓`;
   }
+  // Surface the run's RESULT as an explicit Output (rolled-up outcomes + findings).
+  renderHubOutput(body, res);
 }
 
 // ✎/🔒 — flip one step's noun between variable and constant, persist, re-render.
