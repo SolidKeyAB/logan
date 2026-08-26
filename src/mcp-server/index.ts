@@ -513,7 +513,7 @@ server.tool(
 // === Tool: logan_column_layouts ===
 server.tool(
   'logan_column_layouts',
-  'Manage saved Column Layouts (named column definitions — delimiter OR regex/paint pattern + per-column name/visibility) — the same store the human Column Layouts builder / Columns window uses. list · save · delete. (Applying a layout to the human viewer is human-only.)',
+  'Manage saved Column Layouts (named column definitions — delimiter OR regex/paint pattern + per-column name/visibility) — the same store the human Column Layouts builder / Columns window uses. list · save · delete. (To APPLY a saved layout to the view, use logan_apply_entity kind:"columnLayout".)',
   {
     action: z.enum(['list', 'save', 'delete']).describe('list all · save one · delete one'),
     layout: z.any().optional().describe('layout object for save: {id, name, method:"delimiter"|"pattern", delimiter?/pattern?, columns:[{index,name?,visible}], description?}. Include an optional `description` note on what the layout is for.'),
@@ -990,6 +990,27 @@ server.tool(
     try {
       const result = await apiCall('POST', '/api/entities', { kind });
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_apply_entity ===
+server.tool(
+  'logan_apply_entity',
+  'Apply a saved LENS entity to the open view — the write-half of logan_entities (which only lists). Supported kinds: `filter` (apply a saved filter preset), `highlightGroup` (paint a saved highlight set), `columnLayout` (show/name columns per a saved layout), `session` (apply a saved search-config session). Identify it by `id` or `name` (from logan_entities). Idempotent: applying an already-applied lens is a no-op, never a toggle-off. This runs the SAME action the human ▶ Apply button runs, so the human sees the view change too. (For other kinds: an investigation → logan_run_investigation; a composite/single-session → logan_single_session.)',
+  {
+    kind: z.enum(['filter', 'highlightGroup', 'columnLayout', 'session']).describe('The lens kind to apply.'),
+    id: z.string().optional().describe('The saved entity id (from logan_entities). Provide id or name.'),
+    name: z.string().optional().describe('The saved entity name (from logan_entities). Provide id or name.'),
+  },
+  async ({ kind, id, name }) => {
+    try {
+      const result = await apiCall('POST', '/api/apply-entity', { kind, id, name });
+      if (!result?.success) return { content: [{ type: 'text', text: `Could not apply ${kind}: ${result?.error || 'unknown error'}` }] };
+      const e = result.entity || {};
+      return { content: [{ type: 'text', text: `Applied ${kind} “${e.name || id || name}” to the view.` }] };
     } catch (err: any) {
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
     }

@@ -235,3 +235,21 @@ when each is next touched):
   NB (follow-up, tracked): muted *lines* (the pattern-based line mute) are still dim-only —
   making all tools discard muted LINES too is a scope-layer change (muted lines become an
   exclusion resolved into every tool's line set), a separate focused build.
+
+- **Apply a saved lens entity — `logan_apply_entity`** (the write-half of `logan_entities`,
+  which only lists). CLOSES a real parity debt: the agent previously had **no** way to apply a
+  saved highlightGroup / filter preset / column layout / search session (zero `/api` routes;
+  column-layout even carried a written "human-only" exemption — now retired). Agent surface:
+  MCP `logan_apply_entity` (kind ∈ filter | highlightGroup | columnLayout | session, by
+  id/name) → `/api/apply-entity` → `ApiContext.applyEntityRef` resolves the ref and pushes an
+  `entity-apply` IPC. Human surface: the renderer's `entity-apply` handler runs the **same
+  `applySavedEntity`** the Saved-panel ▶ Apply / Ctrl+P palette already call — **one impl, two
+  operators** (so an agent apply visibly changes the human's view too). **Idempotent set-
+  semantics:** a re-apply is a no-op, never a toggle-off (`applyHighlightGroup(id, forceOn)`
+  gained a `forceOn` so the agent/outfit path can't silently un-highlight). Scope: the 4
+  **lens** kinds only — idempotent view-state setters. Other applyable kinds keep their
+  dedicated verbs (investigation → `logan_run_investigation`, composite → `logan_single_session`);
+  copy-only / modal-home kinds (constant, columnPattern, bookmarkSet, …) are out by design.
+  This is Fable-reviewed **P0** of the "outfit" idea: build the apply-engine + close the debt
+  first; a bundle/"outfit" then falls out of the reserved `EntityRef.autoApply` on the
+  requirements manifest (P1, deferred) with no new entity kind.
