@@ -252,4 +252,21 @@ when each is next touched):
   copy-only / modal-home kinds (constant, columnPattern, bookmarkSet, …) are out by design.
   This is Fable-reviewed **P0** of the "outfit" idea: build the apply-engine + close the debt
   first; a bundle/"outfit" then falls out of the reserved `EntityRef.autoApply` on the
-  requirements manifest (P1, deferred) with no new entity kind.
+  requirements manifest (P1) with no new entity kind.
+
+- **The "outfit" — `EntityRef.autoApply` honored on recipe run (P1).** A recipe (saved
+  investigation) whose requirements list lens refs marked `autoApply` now **dresses the log in
+  those lenses before its steps run**: `/api/investigation-run`, after the preflight, calls the
+  P0 `applyEntityRef` for each autoApply lens (filter / highlight / columnLayout / session;
+  non-lens refs skipped), then runs the steps against the dressed view. The run response
+  carries `applied[]`, surfaced in the recipe hub Output as "🧥 Applied …". Because it routes
+  through the same apply-engine → `entity-apply` IPC → human `applySavedEntity`, the human's
+  view visibly dresses up too. No new entity kind — an "outfit" IS a recipe with autoApply
+  lens refs. **Agent authoring** is at parity (the `autoApply` flag on
+  `logan_save_investigation` / `logan_set_investigation_requirements` entity refs).
+  **Human authoring — written exemption (deferred):** the requirements modal is
+  file-template-focused and deliberately *preserves* agent-authored entity refs; there's no
+  human UI yet to add lens refs + mark them autoApply. The human fully *consumes* the outfit
+  (the lenses apply to their view + the "Applied" readout), and can already apply any single
+  lens from the Saved panel. A human "manage recipe lenses" editor (an entity picker + an
+  autoApply toggle, homed in the recipe hub) is the natural next slice, earnable with usage.

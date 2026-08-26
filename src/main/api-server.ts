@@ -920,6 +920,22 @@ export function startApiServer(ctx: ApiContext): void {
             });
             return;
           }
+          // P1 "outfit": honor autoApply refs — dress the log in the recipe's saved LENSES
+          // (filter / highlight / columns / session) BEFORE the steps run, via the shared
+          // apply-engine (the same action as the human ▶ Apply). Non-lens refs are skipped.
+          const AUTO_LENS: Record<string, string> = {
+            filter: 'filter', highlight: 'highlightGroup', highlightGroup: 'highlightGroup',
+            columnLayout: 'columnLayout', session: 'session',
+          };
+          const appliedLenses: any[] = [];
+          for (const ref of (tpl.requirements?.entities || [])) {
+            if (!ref || !ref.autoApply) continue;
+            const kind = AUTO_LENS[ref.kind as string];
+            if (!kind) { appliedLenses.push({ kind: ref.kind, name: ref.name || ref.id, applied: false, reason: 'not an applyable lens' }); continue; }
+            const ar = ctx.applyEntityRef({ kind, id: ref.id, name: ref.name });
+            appliedLenses.push({ kind, name: ref.name || ref.id, applied: !!ar.success, ...(ar.success ? {} : { reason: ar.error }) });
+          }
+
           const steps = resolveSteps(tpl, body.params || {});
           // Live per-step progress → the renderer's template popup lights each step green
           // (red on failure) as it runs, instead of all-at-once. Pushed for BOTH operators:
@@ -939,7 +955,7 @@ export function startApiServer(ctx: ApiContext): void {
             pushStep({ phase: 'step', index: i, ok, summary, label: step.label });
           }
           pushStep({ phase: 'done', total: steps.length });
-          sendJson(res, { success: true, ran: tpl.name, steps: results, requirements });
+          sendJson(res, { success: true, ran: tpl.name, steps: results, requirements, applied: appliedLenses });
           return;
         }
         // Fork (Workflow Canvas Phase 3) — "save as a new instance": derive a NEW saved
