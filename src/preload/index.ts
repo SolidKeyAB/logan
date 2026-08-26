@@ -844,6 +844,12 @@ const api = {
     ipcRenderer.on('investigation-run-step', handler);
     return () => ipcRenderer.removeListener('investigation-run-step', handler);
   },
+  // The agent applied a saved lens entity → run the SAME human apply dispatcher.
+  onEntityApply: (callback: (payload: { kind: string; id: string; name: string }) => void): (() => void) => {
+    const handler = (_e: any, payload: any) => callback(payload);
+    ipcRenderer.on('entity-apply', handler);
+    return () => ipcRenderer.removeListener('entity-apply', handler);
+  },
 
   // Clue sequences (ordered evidence trails) — human side of the `sequence` entity.
   listSequences: (): Promise<{ success: boolean; sequences?: any[]; error?: string }> =>
