@@ -178,3 +178,22 @@ when each is next touched):
   authoring surfaces already exist at parity (Conclusion panel `.md`/`.pdf` export, Notes
   drawer), so no separate human "compose report" UI ships here; the human fully *consumes* the
   doc (open/read/share/paste). Re-running with the same name overwrites, so the agent owns naming.
+
+- **Agent context manifest — `logan_context_attach` / `logan_context_read`** (attach the
+  STATIC environment a log was captured under — build id, firmware, device, feature flags,
+  config — as typed key→value facts with provenance; the "logs + env" half of coverage, P3 of
+  `docs/discovery/multi-log-correlation.md`). Agent surface: MCP `logan_context_attach` /
+  `logan_context_read` + `/api/context-manifest` (POST merges/replaces, GET reads) →
+  `ApiContext.attachContextManifest` / `getContextManifest` → pure merge in
+  `contextManifest.ts` → per-file sidecar `.logan/<file>.context-manifest.json`. The facts are
+  **auto-injected** into three surfaces both operators already share: the evidence pack (`env`
+  block up front), the saved report (an **Environment** section), and the baseline fingerprint
+  (an info **`env-diff`** finding, "build 4.1 → 4.2", so env drift isn't misread as a
+  regression). Human surface: the manifest appears in the entity registry (kind
+  `contextManifest`) → the **Saved panel** when its file is open, and its facts surface in the
+  report's Environment section + the baseline compare view. **Written create-side exemption:**
+  static-env capture is the *agent's* job (it reads the build/firmware/flags out of the log
+  header or is told them); a human doesn't hand-key an env manifest through a form. The human
+  fully *consumes* the manifest (Saved panel + report + baseline env-diff). If real use shows a
+  human needs to author/correct facts by hand, a small "Edit environment" form earns its way in
+  then — tracked as deferred in the P3 design.

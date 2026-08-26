@@ -1621,6 +1621,39 @@ server.tool(
   }
 );
 
+// === Tool: logan_context_read ===
+server.tool(
+  'logan_context_read',
+  'Read the static-environment context manifest for the current log file — the build id, firmware, device model, feature flags and config the log was captured under. These facts are auto-included in logan_evidence_pack, written into logan_save_report, and stored in baseline fingerprints. Returns the attached facts (with any provenance), or a note that none are attached yet.',
+  {},
+  async () => {
+    const result = await apiCall('GET', '/api/context-manifest');
+    const facts = result?.manifest?.facts;
+    if (!facts || Object.keys(facts).length === 0) {
+      return { content: [{ type: 'text', text: 'No environment context attached to this file yet. Use logan_context_attach to record build id, firmware, device, feature flags, config, etc.' }] };
+    }
+    return { content: [{ type: 'text', text: JSON.stringify(result.manifest, null, 2) }] };
+  }
+);
+
+// === Tool: logan_context_attach ===
+server.tool(
+  'logan_context_attach',
+  'Attach STATIC-environment facts to the current log file — build id, firmware, device model, feature flags, config values: the "what was this system" context that conditions the whole analysis (time-varying signals belong in trends/Signals instead). Facts are key→value strings, e.g. {"build":"4.2.1","firmware":"rev-88","device":"X100","feature.tls":"on"}. Merges into any existing facts by default; set replace=true to overwrite the whole manifest, and pass a blank value to delete a key. Optionally give provenance (key→where-it-came-from, e.g. {"build":"header line 3"}) or a single source note applied to all keys. Attached facts are auto-surfaced up front in logan_evidence_pack, written into an Environment section of logan_save_report, and recorded in baseline fingerprints — so a build/firmware/flag change is reported as env drift ("build 4.1 → 4.2") instead of being misread as an anomaly.',
+  {
+    facts: z.record(z.string(), z.string()).describe('Environment facts as key→value string pairs, e.g. {"build":"4.2.1","firmware":"rev-88","device":"X100","feature.tls":"on"}. A blank value removes that key.'),
+    provenance: z.record(z.string(), z.string()).optional().describe('Optional per-key provenance: key→where the fact came from, e.g. {"build":"header line 3","firmware":"line 42"}.'),
+    source: z.string().optional().describe('Optional single provenance note applied to every key without its own provenance entry (e.g. "device boot banner").'),
+    replace: z.boolean().optional().describe('Replace the entire manifest instead of merging into the existing facts (default false).'),
+  },
+  async ({ facts, provenance, source, replace }) => {
+    const result = await apiCall('POST', '/api/context-manifest', { facts, provenance, source, replace });
+    if (!result?.success) return { content: [{ type: 'text', text: `Failed to attach context: ${result?.error || 'unknown error'}` }] };
+    const n = result.facts ?? (result.manifest?.facts ? Object.keys(result.manifest.facts).length : 0);
+    return { content: [{ type: 'text', text: `Environment context saved — ${n} fact${n === 1 ? '' : 's'} now attached to this log.` }] };
+  }
+);
+
 // === Tool: logan_remove_bookmark ===
 server.tool(
   'logan_remove_bookmark',
