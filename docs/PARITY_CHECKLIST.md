@@ -232,9 +232,13 @@ when each is next touched):
   `columnConfig`, so the AI's `scope:"active"` search/extract inherit the exclusion — the same
   way the human's active filter already scopes the AI. If real use shows the AI should set
   mute, a generic `apply`/`mute` entity verb earns its way in then.
-  NB (follow-up, tracked): muted *lines* (the pattern-based line mute) are still dim-only —
-  making all tools discard muted LINES too is a scope-layer change (muted lines become an
-  exclusion resolved into every tool's line set), a separate focused build.
+  NB: muted *lines* (the pattern-based line mute) now discard from **Extract** — the mute
+  patterns are mirrored to main (`SET_MUTE_PATTERNS`, matched with the shared tested
+  `lineMatchesMute`), and `runFilteredExtract` drops muted rows so you extract the clean
+  working set. Extending line-mute discard to the READ/ANALYSIS tools (search / analyze /
+  trends / time-gaps) is a broader scope-layer change (each has its own line path — ripgrep,
+  the trends worker — not one choke point) and a deliberate next build, kept separate so it
+  can't silently skew analyze counts / search results without its own tests.
 
 - **Apply a saved lens entity — `logan_apply_entity`** (the write-half of `logan_entities`,
   which only lists). CLOSES a real parity debt: the agent previously had **no** way to apply a
