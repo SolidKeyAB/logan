@@ -489,7 +489,6 @@ export const IPC = {
   READ_FILE_TEXT: 'read-file-text',
   // Extract the active filter's subset into a new file
   EXTRACT_FILTERED_TO_FILE: 'extract-filtered-to-file',
-  SET_MUTE_PATTERNS: 'set-mute-patterns',   // renderer → main: the active row-mute patterns, so tools can discard muted lines
   // File-handler registry (plugin actions on a clicked file/folder)
   FILE_HANDLERS_RESOLVE: 'file-handlers-resolve',
   FILE_HANDLER_RUN: 'file-handler-run',
