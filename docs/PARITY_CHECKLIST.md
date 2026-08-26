@@ -264,9 +264,9 @@ when each is next touched):
   view visibly dresses up too. No new entity kind — an "outfit" IS a recipe with autoApply
   lens refs. **Agent authoring** is at parity (the `autoApply` flag on
   `logan_save_investigation` / `logan_set_investigation_requirements` entity refs).
-  **Human authoring — written exemption (deferred):** the requirements modal is
-  file-template-focused and deliberately *preserves* agent-authored entity refs; there's no
-  human UI yet to add lens refs + mark them autoApply. The human fully *consumes* the outfit
-  (the lenses apply to their view + the "Applied" readout), and can already apply any single
-  lens from the Saved panel. A human "manage recipe lenses" editor (an entity picker + an
-  autoApply toggle, homed in the recipe hub) is the natural next slice, earnable with usage.
+  **Human authoring — now at parity:** the recipe hub has a **🧥 Lenses** composer — a
+  `+ lens` picker (lists every saved filter / highlightGroup / columnLayout / session via
+  `listEntities`) adds a lens as an autoApply ref; each lens chip toggles autoApply on/off or
+  removes it, persisted through `setInvestigationRequirements`. So both operators author the
+  outfit (agent via the `autoApply` flag at save, human via the hub composer), and both
+  consume it (the lenses apply to the view + the "Applied" readout).

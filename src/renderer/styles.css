@@ -10889,6 +10889,28 @@ kbd {
   background: color-mix(in srgb, var(--accent-color) 14%, transparent); color: var(--accent-hover);
 }
 
+/* 🧥 Lenses (the outfit composer) — saved lenses a recipe auto-applies on run. */
+.hub-lenses {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
+  padding: 6px 16px; border-bottom: 1px solid var(--border-color);
+}
+.hub-lenses-label { font-size: 11px; color: var(--text-muted); }
+.hub-lens {
+  display: inline-flex; align-items: center; gap: 3px; cursor: pointer;
+  font-size: 11px; font-family: var(--font-mono);
+  padding: 1px 4px 1px 7px; border-radius: 10px; border: 1px solid transparent;
+}
+.hub-lens.on { background: color-mix(in srgb, var(--accent-color) 16%, transparent); color: var(--accent-hover); }
+.hub-lens.off { background: var(--bg-hover); color: var(--text-muted); }
+.hub-lens.off:hover { border-color: var(--accent-color); }
+.hub-lens-x { border: none; background: transparent; cursor: pointer; color: inherit; opacity: 0.6; font-size: 12px; padding: 0 2px; line-height: 1; }
+.hub-lens-x:hover { opacity: 1; }
+.hub-lens-add {
+  font-size: 11px; padding: 1px 8px; border-radius: 10px; cursor: pointer;
+  border: 1px dashed var(--border-color); background: transparent; color: var(--text-secondary);
+}
+.hub-lens-add:hover { border-color: var(--accent-color); color: var(--accent-hover); }
+
 /* "→ yields" — the recipe's output signature (what it produces), shown up front. */
 .hub-yields {
   display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
