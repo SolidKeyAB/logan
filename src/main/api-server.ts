@@ -405,6 +405,8 @@ export interface ApiContext {
   // Build a "single session" composite from an ordered file-set and open it (agent parity
   // for the human 🔗 button). Shares buildComposite + autoSaveSingleSession with the human path.
   createComposite(filePaths: string[], label?: string): Promise<{ success: boolean; id?: string; info?: any; boundaries?: any[]; error?: string }>;
+  // Wall-clock interleave of N files → a materialized merged .log, opened as active.
+  mergeTimeline(filePaths: string[], label?: string): Promise<{ success: boolean; filePath?: string; info?: any; lineCount?: number; fileCount?: number; skipped?: string[]; collectCapped?: boolean; scanCapped?: boolean; from?: string; to?: string; error?: string }>;
   getAnnotations(): Map<string, Annotation>;
   addAnnotation(annotation: Annotation): any;
   addAnnotations(annotations: Annotation[]): any;
@@ -1606,6 +1608,14 @@ export function startApiServer(ctx: ApiContext): void {
         if (url === '/api/composite-create') {
           if (!Array.isArray(body.files) || body.files.length < 2) {
             return sendError(res, 'files: an array of at least 2 absolute file paths is required');
+          }
+          // order:"wallclock" → materialize the time-interleaved merge + open it (parity
+          // with the human "Merge to file" button). Default → the virtual sequential
+          // concatenation composite (no file written).
+          if (body.order === 'wallclock') {
+            const merged = await ctx.mergeTimeline(body.files, body.label);
+            sendJson(res, merged);
+            return;
           }
           const result = await ctx.createComposite(body.files, body.label);
           sendJson(res, result);

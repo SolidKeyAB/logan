@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { carryForwardTimestamps, buildOriginTags, formatWallClock } from '../main/mergeTimeline';
+import { carryForwardTimestamps, buildOriginTags, formatWallClock, sortMergeEntries, type MergeEntry } from '../main/mergeTimeline';
 
 describe('carryForwardTimestamps', () => {
   it('keeps real timestamps and carries the previous one onto untimestamped lines', () => {
@@ -47,5 +47,42 @@ describe('formatWallClock', () => {
     // Build from local components so the assertion is timezone-independent.
     const d = new Date(2026, 7, 4, 9, 8, 7, 6); // 2026-08-04 09:08:07.006 local
     expect(formatWallClock(d.getTime())).toBe('2026-08-04 09:08:07.006');
+  });
+});
+
+describe('sortMergeEntries (wall-clock interleave)', () => {
+  it('interleaves lines from different files into one time-ordered stream', () => {
+    // File 0 @ 100,300 ; file 1 @ 150,200 → global order should be time-sorted.
+    const entries: MergeEntry[] = [
+      { f: 0, ln: 0, ms: 100 },
+      { f: 0, ln: 1, ms: 300 },
+      { f: 1, ln: 0, ms: 150 },
+      { f: 1, ln: 1, ms: 200 },
+    ];
+    sortMergeEntries(entries);
+    expect(entries.map(e => [e.f, e.ln, e.ms])).toEqual([
+      [0, 0, 100], [1, 0, 150], [1, 1, 200], [0, 1, 300],
+    ]);
+  });
+
+  it('is stable at equal timestamps: tie-break by file then line', () => {
+    // Carried-forward continuation lines share a timestamp; each file must keep its
+    // own internal order, and whole files break ties by index (file 0 before file 1).
+    const entries: MergeEntry[] = [
+      { f: 1, ln: 5, ms: 500 },
+      { f: 0, ln: 9, ms: 500 },
+      { f: 0, ln: 2, ms: 500 },
+      { f: 1, ln: 1, ms: 500 },
+    ];
+    sortMergeEntries(entries);
+    expect(entries.map(e => [e.f, e.ln])).toEqual([
+      [0, 2], [0, 9], [1, 1], [1, 5],
+    ]);
+  });
+
+  it('returns the same array reference (sorts in place)', () => {
+    const entries: MergeEntry[] = [{ f: 0, ln: 0, ms: 2 }, { f: 0, ln: 1, ms: 1 }];
+    expect(sortMergeEntries(entries)).toBe(entries);
+    expect(entries[0].ms).toBe(1);
   });
 });
