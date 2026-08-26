@@ -49,6 +49,24 @@ export function carryForwardTimestamps(msPerLine: (number | null)[]): (number | 
 }
 
 /**
+ * One collected line queued for the merged timeline: its file index `f`, its
+ * 0-based line number `ln` within that file, and its effective wall-clock `ms`.
+ */
+export interface MergeEntry { f: number; ln: number; ms: number; }
+
+/**
+ * Stable interleave of every file's lines onto one wall-clock timeline: sort by
+ * time, tie-break by file then line so each file's own order (and its
+ * carried-forward continuation lines) stays intact when equal timestamps collide.
+ * Sorts in place and returns the same array. This is the CORE of the multi-log
+ * "correlation" view — kept pure so the ordering is unit-testable headlessly.
+ */
+export function sortMergeEntries(entries: MergeEntry[]): MergeEntry[] {
+  entries.sort((a, b) => a.ms - b.ms || a.f - b.f || a.ln - b.ln);
+  return entries;
+}
+
+/**
  * Human-readable origin tag per file: the basename by default. When two files
  * share a basename (same name in different folders) the colliding ones are
  * disambiguated with their parent directory so each origin column stays unique.

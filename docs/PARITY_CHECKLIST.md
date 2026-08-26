@@ -73,6 +73,18 @@ Closed by the single-session composite parity work (2026-08-18):
 |------|-------|----|--------|
 | Create single session (composite) | 🔗 button (Time Sync panel) | `logan_single_session` (`/api/composite-create`) | ✅ shared `buildComposite` + `autoSaveSingleSession`; agent path pushes `agent-open-single-session` → shared renderer `displaySingleSession` |
 
+Closed by the multi-log wall-clock correlation work (P0, 2026-08-26):
+
+| Verb | Human | AI | Status |
+|------|-------|----|--------|
+| Merge N files onto one wall-clock timeline | ⬇ "Merge to file…" (Time Sync panel) | `logan_single_session` `order:"wallclock"` (`/api/composite-create`) | ✅ shared engine `collectMergeTimeline` + `writeMergeEntriesToFile` (`sortMergeEntries` core, unit-tested); agent path writes to `.logan/merged/` + opens via shared `openFileAsCurrent` |
+
+(Both operators interleave via the SAME `collectMergeTimeline`/`writeMergeEntriesToFile` in `index.ts`
+— the human picks the destination via a save dialog, the agent writes a stamped file under
+`.logan/merged/` next to the first source and opens it as the active file. Because the result is an
+ordinary `.log`, every downstream verb works on the correlated view with no composite-invariant
+special-casing. A *virtual* time-interleaved composite — no on-disk file — is deferred, P1.)
+
 Closed by the real-parameterized-templates work (P0a, 2026-08-25):
 
 | Verb | Human | AI | Status |
