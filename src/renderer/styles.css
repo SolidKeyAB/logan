@@ -10866,6 +10866,36 @@ kbd {
 .hub-status.blocked { color: var(--warning-color); }
 .hub-blocked-title { font-weight: 700; margin-bottom: 4px; }
 
+/* "→ yields" — the recipe's output signature (what it produces), shown up front. */
+.hub-yields {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 5px;
+  padding: 6px 16px; border-bottom: 1px solid var(--border-color);
+}
+.hub-yields-label { font-size: 11px; color: var(--text-muted); }
+.hub-yield-chip {
+  font-size: 11px; font-family: var(--font-mono);
+  padding: 1px 7px; border-radius: 10px;
+  background: color-mix(in srgb, var(--info-color) 13%, transparent); color: var(--info-color);
+}
+
+/* The Output panel — the run's RESULT (rolled-up outcomes + findings). */
+.hub-output {
+  padding: 10px 16px; border-top: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--success-color, #3fb950) 7%, transparent);
+}
+.hub-output-head { font-weight: 700; font-size: 12px; margin-bottom: 6px; }
+.hub-output-result { display: flex; flex-wrap: wrap; gap: 6px; }
+.hub-output-item {
+  font-size: 11px; font-family: var(--font-mono);
+  padding: 2px 8px; border-radius: 6px;
+  background: var(--bg-hover); color: var(--text-primary);
+}
+.hub-output-empty { font-size: 11px; color: var(--text-muted); font-style: italic; }
+.hub-output-findings {
+  margin-top: 8px; display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text-secondary);
+}
+
 /* ═══ Quick-start triage "Start here" card ═════════════════════════════════ */
 /* Floating, non-modal briefing that auto-appears on file open. */
 .triage-card {
