@@ -7532,14 +7532,14 @@ async function loadInvestigationTemplates(): Promise<void> {
     const run = document.createElement('button');
     run.className = 'investigate-pattern-run';
     run.innerHTML = `▶ ${escapeHtml(t.name)} <span class="investigate-pattern-count">${stepCount}</span>`;
-    run.addEventListener('click', () => { void runInvestigationTemplate(t.name); });
+    run.addEventListener('click', () => { void openTemplateHub(t.name); });
     chip.appendChild(run);
-    // ⋔ Steps — open the read-only workflow step-list ("see what this hunt does").
+    // ⋔ Steps — open the template hub: the whole flow + inline variable boxes + live run.
     const steps = document.createElement('button');
     steps.className = 'investigate-pattern-steps';
     steps.textContent = '⋔';
-    steps.title = 'Show the steps (read-only workflow)';
-    steps.addEventListener('click', (e) => { e.stopPropagation(); void showInvestigationWorkflow(t.name); });
+    steps.title = 'Open the template — see the flow, tweak variables, run with live progress';
+    steps.addEventListener('click', (e) => { e.stopPropagation(); void openTemplateHub(t.name); });
     chip.appendChild(steps);
     // Preflight badge — only for patterns that declare a requirements manifest. Shows
     // whether THIS open log satisfies the pattern's required template (✓ / ✗ blocked).
@@ -7936,6 +7936,282 @@ async function forkInvestigationFromForm(name: string, container: HTMLElement): 
   if (!res.success) { showToast(res.error || 'Fork failed'); return; }
   trackUsage('investigation:fork');
   showToast(`Saved new instance “${newName}” — ${Object.keys(overrides).length} tweak${Object.keys(overrides).length === 1 ? '' : 's'} baked in`);
+  void loadInvestigationTemplates();
+}
+
+// ══ Template hub (unified popup) ═══════════════════════════════════════════
+// One popup is the single place to work a saved investigation: it shows the WHOLE
+// flow (a row per step, with the step's outcome), lets you edit the VARIABLE nouns
+// inline (constants pinned, ✎ to free / 🔒 to pin), and RUN — each step lights up
+// green (red + error inline) live as it executes. Footer: Save (persist the edited
+// values as the template's new defaults), Save as… (fork a new one), Cancel. Reuses
+// the floating #workflow-overlay panel + the replay-param plumbing.
+
+let hubRunUnsub: (() => void) | null = null;
+let hubRunning = false;
+
+// Disable the mutating controls (Run/Save/Save-as/Cancel + ✎/🔒 toggles) while a
+// replay is in flight, so a second Run or a mid-run role/value edit can't race the
+// live per-step updates (and can't wipe the rows the push callback is painting).
+function setHubBusy(body: HTMLElement, busy: boolean): void {
+  body.querySelectorAll('.hub-actions-btns button, .hub-noun-toggle').forEach(b => { (b as HTMLButtonElement).disabled = busy; });
+}
+
+async function openTemplateHub(name: string): Promise<void> {
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  const overlay = document.getElementById('workflow-overlay');
+  const body = document.getElementById('workflow-body');
+  if (!overlay || !body) return;
+  overlay.removeAttribute('hidden');
+  body.innerHTML = '<p class="workflow-hint">Loading…</p>';
+  trackUsage('investigation:hub');
+  const tpl = await getInvestigationTemplate(name);
+  if (!tpl) { body.innerHTML = `<p class="workflow-hint">Could not load “${escapeHtml(name)}”.</p>`; return; }
+  renderTemplateHub(tpl, body);
+}
+
+function closeTemplateHub(): void {
+  if (hubRunUnsub) { hubRunUnsub(); hubRunUnsub = null; }
+  document.getElementById('workflow-overlay')?.setAttribute('hidden', '');
+}
+
+function syncTemplateCache(tpl: any): void {
+  if (!tpl) return;
+  const i = investigationTemplatesCache.findIndex((t: any) => t.slug === tpl.slug || t.name === tpl.name);
+  if (i >= 0) investigationTemplatesCache[i] = tpl; else investigationTemplatesCache.push(tpl);
+}
+
+// A friendly verb for a step row (the api path's last segment; label carries detail).
+function hubVerb(step: any): string {
+  return String(step.path || '').replace('/api/', '') || (step.label || 'step');
+}
+
+function renderTemplateHub(tpl: any, body: HTMLElement): void {
+  const name = tpl.name;
+  const steps = tpl.steps || [];
+  const paramsByStep: Record<number, any[]> = {};
+  for (const p of (tpl.params || [])) (paramsByStep[p.stepIndex] = paramsByStep[p.stepIndex] || []).push(p);
+
+  body.innerHTML = '';
+  const header = document.createElement('div');
+  header.className = 'workflow-header';
+  header.innerHTML = `<span class="workflow-title">⋔ ${escapeHtml(name)}</span>`
+    + `<span class="workflow-meta">${steps.length} step${steps.length === 1 ? '' : 's'}</span>`;
+  const close = document.createElement('button');
+  close.className = 'workflow-close'; close.textContent = '×'; close.title = 'Close';
+  close.style.marginLeft = 'auto';
+  close.addEventListener('click', closeTemplateHub);
+  header.appendChild(close);
+  body.appendChild(header);
+  const panel = body.closest('.workflow-panel') as HTMLElement | null;
+  if (panel) enableWorkflowDrag(header, panel, close);
+
+  if (steps.length === 0) {
+    const none = document.createElement('p'); none.className = 'workflow-hint'; none.textContent = 'No steps in this template.';
+    body.appendChild(none);
+    return;
+  }
+
+  const listEl = document.createElement('div');
+  listEl.className = 'workflow-steps hub-steps';
+  steps.forEach((step: any, i: number) => listEl.appendChild(renderHubStep(step, i, paramsByStep[i] || [], name)));
+  body.appendChild(listEl);
+
+  const footer = document.createElement('div');
+  footer.className = 'hub-actions';
+  const status = document.createElement('div'); status.className = 'hub-status'; status.id = 'hub-status'; footer.appendChild(status);
+  const btns = document.createElement('div'); btns.className = 'hub-actions-btns';
+  btns.innerHTML = `<button class="secondary-btn small" data-hub="cancel">Cancel</button>`
+    + `<button class="secondary-btn small" data-hub="save" title="Save the edited values as this template’s new defaults (keeps roles)">💾 Save</button>`
+    + `<button class="secondary-btn small" data-hub="saveas" title="Save these values as a NEW template (a fork)">⑂ Save as…</button>`
+    + `<button class="primary-btn small" data-hub="run">▶ Run</button>`;
+  footer.appendChild(btns);
+  body.appendChild(footer);
+  btns.querySelector('[data-hub="cancel"]')?.addEventListener('click', closeTemplateHub);
+  btns.querySelector('[data-hub="run"]')?.addEventListener('click', () => { void runTemplateHub(tpl, body); });
+  btns.querySelector('[data-hub="save"]')?.addEventListener('click', () => { void saveTemplateHub(tpl, body); });
+  btns.querySelector('[data-hub="saveas"]')?.addEventListener('click', () => { void forkInvestigationFromForm(name, body); });
+
+  wireHubInputSync(body);
+}
+
+function renderHubStep(step: any, i: number, params: any[], name: string): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'workflow-step hub-step';
+  row.setAttribute('data-step-index', String(i));
+
+  const head = document.createElement('div');
+  head.className = 'workflow-step-head';
+  head.innerHTML = `<span class="workflow-step-idx">${i + 1}</span>`
+    + `<span class="workflow-step-verb">${escapeHtml(hubVerb(step))}</span>`
+    + `<span class="hub-step-status" id="hub-step-${i}"></span>`;
+  row.appendChild(head);
+
+  if (step.label) {
+    const lbl = document.createElement('div'); lbl.className = 'hub-step-label';
+    lbl.textContent = step.label;
+    row.appendChild(lbl);
+  }
+  if (params.length) {
+    const nounsEl = document.createElement('div'); nounsEl.className = 'workflow-step-nouns hub-nouns';
+    for (const p of params) nounsEl.appendChild(renderHubNoun(p, i, name));
+    row.appendChild(nounsEl);
+  }
+  if (step.result) {
+    const resEl = document.createElement('div'); resEl.className = 'workflow-step-result';
+    resEl.textContent = `→ ${step.result}`;
+    row.appendChild(resEl);
+  }
+  return row;
+}
+
+function renderHubNoun(p: any, stepIndex: number, name: string): HTMLElement {
+  const wrap = document.createElement('span');
+  wrap.className = `hub-noun kind-${escapeHtml(String(p.kind || 'other'))}`;
+  const val = p.default == null ? '' : String(p.default);
+  const numeric = typeof p.default === 'number' ? '1' : '0';
+  const keyEl = document.createElement('span'); keyEl.className = 'hub-noun-key'; keyEl.textContent = p.key;
+  wrap.appendChild(keyEl);
+
+  if ((p.role || 'variable') === 'constant') {
+    wrap.classList.add('hub-noun-constant');
+    const pinned = document.createElement('span'); pinned.className = 'hub-noun-pinned'; pinned.title = 'pinned constant';
+    pinned.textContent = val || '—';
+    wrap.appendChild(pinned);
+    const tog = document.createElement('button'); tog.className = 'hub-noun-toggle'; tog.textContent = '✎';
+    tog.title = 'Make this a variable you change per run';
+    tog.addEventListener('click', () => { void setHubParamRole(name, p.key, stepIndex, 'variable'); });
+    wrap.appendChild(tog);
+  } else {
+    const input = document.createElement('input');
+    input.type = 'text'; input.className = 'modal-input replay-param-input hub-noun-input';
+    input.setAttribute('data-param-key', p.key);
+    input.setAttribute('data-param-numeric', numeric);
+    input.setAttribute('data-step-index', String(stepIndex));
+    input.value = val; input.defaultValue = val;
+    wrap.appendChild(input);
+    const tog = document.createElement('button'); tog.className = 'hub-noun-toggle'; tog.textContent = '🔒';
+    tog.title = 'Pin this value as a fixed part of the recipe';
+    tog.addEventListener('click', () => { void setHubParamRole(name, p.key, stepIndex, 'constant'); });
+    wrap.appendChild(tog);
+  }
+  return wrap;
+}
+
+// Same variable key can appear on several steps; editing one input mirrors to the
+// rest (an override applies to every step using the key — resolveSteps semantics).
+function wireHubInputSync(root: HTMLElement): void {
+  root.querySelectorAll('.hub-noun-input').forEach(el => {
+    el.addEventListener('input', () => {
+      const inp = el as HTMLInputElement;
+      const key = inp.getAttribute('data-param-key');
+      if (!key) return;
+      root.querySelectorAll(`.hub-noun-input[data-param-key="${CSS.escape(key)}"]`).forEach(other => {
+        if (other !== inp) (other as HTMLInputElement).value = inp.value;
+      });
+    });
+  });
+}
+
+function setHubStepStatus(body: HTMLElement, i: number, stateName: 'pending' | 'ok' | 'fail', summary?: string): void {
+  const row = body.querySelector(`.hub-step[data-step-index="${i}"]`) as HTMLElement | null;
+  const slot = body.querySelector(`#hub-step-${i}`) as HTMLElement | null;
+  if (row) { row.classList.remove('is-pending', 'is-ok', 'is-fail'); row.classList.add('is-' + stateName); }
+  if (slot) {
+    slot.className = 'hub-step-status ' + stateName;
+    slot.textContent = stateName === 'pending' ? '…' : stateName === 'ok' ? '✓' : '✗';
+    slot.title = summary || '';
+  }
+  if (row) {
+    let fx = row.querySelector('.hub-step-error') as HTMLElement | null;
+    if (stateName === 'fail' && summary) {
+      if (!fx) { fx = document.createElement('div'); fx.className = 'hub-step-error'; row.appendChild(fx); }
+      fx.textContent = summary;
+    } else if (fx) { fx.remove(); }
+  }
+}
+
+async function runTemplateHub(tpl: any, body: HTMLElement, force = false): Promise<void> {
+  if (hubRunning) return; // single-flight — ignore a second click while a run is live
+  const name = tpl.name;
+  const steps = tpl.steps || [];
+  const overrides = collectReplayOverrides(body);
+  const statusEl = body.querySelector('#hub-status') as HTMLElement | null;
+  steps.forEach((_: any, i: number) => setHubStepStatus(body, i, 'pending'));
+  if (statusEl) { statusEl.className = 'hub-status running'; statusEl.textContent = `Running ${steps.length} step${steps.length === 1 ? '' : 's'}…`; }
+  hubRunning = true;
+  setHubBusy(body, true);
+
+  // Live per-step pushes (scoped to this template) light each row as it completes.
+  // Capture the unsub LOCALLY so overlapping runs can't unhook each other's listener,
+  // and ignore pushes once the popup is closed.
+  const overlay = document.getElementById('workflow-overlay');
+  const unsub = window.api.onInvestigationRunStep((p: any) => {
+    if (!p || (overlay && overlay.hasAttribute('hidden'))) return;
+    const mismatch = (p.slug && tpl.slug) ? p.slug !== tpl.slug : (p.name && p.name !== name);
+    if (mismatch) return;
+    if (p.phase === 'step' && typeof p.index === 'number') setHubStepStatus(body, p.index, p.ok ? 'ok' : 'fail', p.summary);
+  });
+  hubRunUnsub = unsub;
+
+  let res: any;
+  try {
+    res = await window.api.runInvestigation(name, overrides, force);
+  } finally {
+    unsub();
+    if (hubRunUnsub === unsub) hubRunUnsub = null;
+    hubRunning = false;
+    setHubBusy(body, false);
+  }
+
+  if (!res || !res.success) { if (statusEl) { statusEl.className = 'hub-status fail'; statusEl.textContent = res?.error || 'Replay failed'; } return; }
+  if (res.blocked) {
+    if (statusEl) {
+      statusEl.className = 'hub-status blocked';
+      statusEl.innerHTML = `<div class="hub-blocked-title">“${escapeHtml(name)}” doesn’t match this log</div>${renderRequirementChecks(res.requirements)}<button class="secondary-btn small" id="hub-force">Run anyway</button>`;
+      statusEl.querySelector('#hub-force')?.addEventListener('click', () => { void runTemplateHub(tpl, body, true); });
+    }
+    return;
+  }
+  // Reconcile every row against the final results (in case a push was missed).
+  (res.steps || []).forEach((s: any, i: number) => setHubStepStatus(body, i, s.ok ? 'ok' : 'fail', s.summary));
+  const failed = (res.steps || []).filter((s: any) => !s.ok).length;
+  if (statusEl) {
+    statusEl.className = 'hub-status ' + (failed ? 'fail' : 'ok');
+    statusEl.textContent = failed ? `${failed} of ${(res.steps || []).length} step${failed === 1 ? '' : 's'} failed` : `All ${(res.steps || []).length} steps ✓`;
+  }
+}
+
+// ✎/🔒 — flip one step's noun between variable and constant, persist, re-render.
+async function setHubParamRole(name: string, key: string, stepIndex: number, role: 'variable' | 'constant'): Promise<void> {
+  if (hubRunning) return; // don't mutate the template mid-run
+  const res = await window.api.setInvestigationParams(name, [{ stepIndex, key, role }]);
+  if (!res || !res.success) { showToast(res?.error || 'Could not update parameter'); return; }
+  syncTemplateCache(res.template);
+  const overlay = document.getElementById('workflow-overlay');
+  const body = document.getElementById('workflow-body');
+  if (res.template && body && overlay && !overlay.hasAttribute('hidden')) renderTemplateHub(res.template, body);
+}
+
+// 💾 Save — persist the edited VARIABLE values as the template's new defaults (roles
+// preserved, unlike a fork). Only variables can be edited, so only they are patched.
+async function saveTemplateHub(tpl: any, body: HTMLElement): Promise<void> {
+  if (hubRunning) return;
+  const overrides = collectReplayOverrides(body);
+  const patches: any[] = [];
+  const savedKeys = new Set<string>();
+  for (const p of (tpl.params || [])) {
+    if ((p.role || 'variable') === 'constant') continue;
+    if (overrides[p.key] !== undefined) { patches.push({ stepIndex: p.stepIndex, key: p.key, default: overrides[p.key] }); savedKeys.add(p.key); }
+  }
+  if (!patches.length) { showToast('No edited values to save'); return; }
+  const res = await window.api.setInvestigationParams(tpl.name, patches);
+  if (!res || !res.success) { showToast(res?.error || 'Save failed'); return; }
+  syncTemplateCache(res.template);
+  const n = savedKeys.size;
+  showToast(`Saved — ${n} value${n === 1 ? '' : 's'} updated as the template’s defaults`);
+  const overlay = document.getElementById('workflow-overlay');
+  if (res.template && overlay && !overlay.hasAttribute('hidden')) renderTemplateHub(res.template, body);
   void loadInvestigationTemplates();
 }
 

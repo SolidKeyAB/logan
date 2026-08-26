@@ -219,6 +219,7 @@ export interface ParamPatch {
   role?: ParamRole;
   label?: string;
   description?: string;
+  default?: any;                // set the param's captured value (+ the step body) — "save tweaks as new defaults"
   remove?: boolean;             // demote: drop this param (value stays in the step body)
 }
 
@@ -245,6 +246,10 @@ export function applyParamPatches(tpl: InvestigationTemplate, patches: ParamPatc
       if (patch.role) p.role = patch.role;
       if (patch.label) p.label = patch.label;
       if (patch.description !== undefined) p.description = patch.description;
+      // Persist a tweaked value as the param's NEW default (and mirror it into the step
+      // body so a replay with no overrides now uses it) — "Save" in the template hub.
+      // Roles/labels are preserved (unlike a fork, which re-derives them).
+      if (patch.default !== undefined) { p.default = patch.default; step.body[key] = patch.default; }
       applied++;
     } else {
       // Promotion: the value must be present in the step body.
