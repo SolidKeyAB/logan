@@ -141,7 +141,8 @@ export interface ActivityEntry {
     | 'composite_created'
     | 'annotation_added'
     | 'summarize'
-    | 'fold_regions';
+    | 'fold_regions'
+    | 'diff_runs';
   details: Record<string, unknown>;
 }
 
