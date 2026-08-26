@@ -10911,6 +10911,21 @@ kbd {
   margin-top: 8px; display: flex; align-items: center; gap: 8px;
   font-size: 12px; color: var(--text-secondary);
 }
+.hub-output-conclude { margin-top: 8px; }
+
+/* The recipe's CONCLUSION — the native verdict that answers the aim. */
+.hub-conclusion { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border-color); }
+.hub-concl-head { font-weight: 700; font-size: 12px; margin-bottom: 4px; }
+.hub-concl-verdict { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.hub-concl-verdict.sev-error { color: var(--error-color, #f85149); }
+.hub-concl-verdict.sev-warning { color: var(--warning-color); }
+.hub-concl-verdict.sev-info { color: var(--info-color); }
+.hub-concl-row {
+  font-size: 12px; color: var(--text-secondary); cursor: pointer;
+  padding: 2px 0; display: flex; gap: 6px; align-items: baseline;
+}
+.hub-concl-row:hover { color: var(--accent-hover); }
+.hub-concl-line { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); }
 
 /* ═══ Quick-start triage "Start here" card ═════════════════════════════════ */
 /* Floating, non-modal briefing that auto-appears on file open. */
