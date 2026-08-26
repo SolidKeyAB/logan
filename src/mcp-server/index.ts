@@ -238,21 +238,31 @@ server.tool(
 // === Tool: logan_single_session ===
 server.tool(
   'logan_single_session',
-  'Combine 2+ already-existing log files into ONE continuous, read-only "single session" (composite) and open it. ' +
-    'Files are concatenated in the given order into a single global line space (no file is written to disk); ' +
-    'reads, search, filter, analyze, severity-jump and investigate then all operate across the whole set. ' +
-    'The session is auto-saved so it can be re-run later, and it appears in the viewer beside its source files. ' +
-    'Agent parity for the human 🔗 "Single session" button.',
+  'Combine 2+ already-existing log files into ONE session and open it. Two orderings:\n' +
+    '• order="sequential" (default): the files are CONCATENATED in the given order into one continuous, ' +
+    'read-only line space — nothing is written to disk (a virtual composite). Best when the files are ' +
+    'already in order or you want to browse them back-to-back.\n' +
+    '• order="wallclock": the files are INTERLEAVED by timestamp onto one wall-clock timeline and written ' +
+    'to a new merged .log (each line prefixed "<timestamp> | <origin> | <original line>"), which is then ' +
+    'opened. Use this to CORRELATE across sources — "what did component B log at the moment A errored?". ' +
+    'Untimestamped lines carry-forward the previous timestamp; files with no timestamps are skipped. ' +
+    '(Caps: ~3M lines scanned/merged per file; reported back as skipped/capped.)\n' +
+    'Either way, reads, search, filter, analyze, severity-jump and investigate then operate across the whole set. ' +
+    'Agent parity for the human 🔗 "Single session" (sequential) and "⬇ Merge to file" (wallclock) buttons.',
   {
     files: z
       .array(z.string())
       .min(2)
-      .describe('Ordered list of absolute file paths to concatenate (at least 2).'),
-    label: z.string().optional().describe('Optional display name for the session (defaults to a name derived from the files).'),
+      .describe('Ordered list of absolute file paths (at least 2). For order="sequential" this is the concat order; for "wallclock" only the timestamps determine order.'),
+    label: z.string().optional().describe('Optional display name for the session / merged file (defaults to a name derived from the files).'),
+    order: z
+      .enum(['sequential', 'wallclock'])
+      .optional()
+      .describe('"sequential" (default) = virtual concatenation, no file written. "wallclock" = interleave by timestamp into a materialized merged file, then open it.'),
   },
-  async ({ files, label }) => {
+  async ({ files, label, order }) => {
     try {
-      const result = await apiCall('POST', '/api/composite-create', { files, label });
+      const result = await apiCall('POST', '/api/composite-create', { files, label, order });
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err: any) {
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
