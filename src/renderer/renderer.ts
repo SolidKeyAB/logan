@@ -2912,7 +2912,6 @@ function isLineMuted(text: string): boolean {
 
 function saveMutePatterns(): void {
   localStorage.setItem('logan-mute-patterns', JSON.stringify(state.mutePatterns));
-  void window.api.setMutePatterns(state.mutePatterns); // so main-side tools (Extract) discard muted lines
 }
 
 function addMutePattern(pattern: string): void {
@@ -5235,8 +5234,8 @@ async function saveSelectedLinesToFile(): Promise<void> {
     return;
   }
 
-  const colConfig = state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible || c.muted)
-    ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible && !c.muted })) }
+  const colConfig = state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible)
+    ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible })) }
     : undefined;
   const result = await window.api.saveSelectedLines(state.selectionStart, state.selectionEnd, colConfig);
 
@@ -5336,8 +5335,8 @@ async function saveToNotesWithRange(startLine: number, endLine: number): Promise
   const modalResult = await showNotesModal(startLine, endLine);
   if (modalResult === null) return; // User cancelled
 
-  const colConfig = state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible || c.muted)
-    ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible && !c.muted })) }
+  const colConfig = state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible)
+    ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible })) }
     : undefined;
   const result = await window.api.saveToNotes(
     startLine,
@@ -7521,7 +7520,6 @@ function initInvestigatePanel(): void {
   // The agent applied a saved lens entity → run the SAME dispatcher the human ▶ Apply uses
   // (set-semantics, so a re-apply is idempotent). One impl, two operators.
   window.api.onEntityApply((p) => { if (p && p.kind) void applySavedEntity(p.kind, p.id, p.name, { set: true }); });
-  void window.api.setMutePatterns(state.mutePatterns); // seed the backend with any persisted mute patterns
   void loadInvestigationTemplates();
 }
 
@@ -19814,7 +19812,7 @@ let timeGapEndHistory: InputHistory | null = null;
 // filter both change what matches, so they're part of the key; start line and
 // direction only affect which match is selected, so they're deliberately excluded.
 function findSignature(pattern: string): string {
-  const colSig = (state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible || c.muted))
+  const colSig = (state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible))
     ? `${state.columnConfig.delimiter}:${state.columnConfig.columns.map(c => (c.visible ? '1' : '0')).join('')}`
     : '';
   return [
@@ -19926,10 +19924,10 @@ async function performSearch(): Promise<void> {
     };
 
     // Add column config if columns are filtered
-    if (state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible || c.muted)) {
+    if (state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible)) {
       searchOptions.columnConfig = {
         delimiter: state.columnConfig.delimiter,
-        columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible && !c.muted })),
+        columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible })),
       };
     }
 
@@ -20516,8 +20514,8 @@ async function extractFilterToFile(): Promise<void> {
     showToast('Apply a filter first, then Extract to file.');
     return;
   }
-  const colConfig = state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible || c.muted)
-    ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible && !c.muted })) }
+  const colConfig = state.columnConfig && !state.columnConfig.pattern && state.columnConfig.columns.some(c => !c.visible)
+    ? { delimiter: state.columnConfig.delimiter, columns: state.columnConfig.columns.map(c => ({ index: c.index, visible: c.visible })) }
     : undefined;
   // Keep the modal open with the button's busy ring spinning while it writes,
   // then close + open the new file on success.
