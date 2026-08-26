@@ -49,6 +49,8 @@ export interface InvestigationTemplate {
   slug: string;
   createdAt: number;
   sourceFile?: string;          // log the template was recorded from (for reference)
+  aim?: string;                 // what this recipe is FOR — the question it sets out to answer
+                                // ("find the root-cause component of the 401 storm")
   description?: string;
   steps: TemplateStep[];
   params: ParamDef[];           // promoted fill-ins (component/field/pattern/event/…)
@@ -128,7 +130,7 @@ function ensureDir(): void {
 }
 
 // Turn a recorded journal into a parameterised template.
-export function buildTemplate(name: string, journal: JournalEntry[], sourceFile?: string, description?: string, requirements?: RequirementsManifest): InvestigationTemplate {
+export function buildTemplate(name: string, journal: JournalEntry[], sourceFile?: string, description?: string, requirements?: RequirementsManifest, aim?: string): InvestigationTemplate {
   const steps: TemplateStep[] = journal.map(e => ({ path: e.path, body: { ...e.body }, label: e.label, result: e.result }));
   const params: ParamDef[] = [];
   steps.forEach((step, i) => {
@@ -140,7 +142,7 @@ export function buildTemplate(name: string, journal: JournalEntry[], sourceFile?
       }
     }
   });
-  return { name, slug: slugify(name), createdAt: Date.now(), sourceFile, description, steps, params, requirements };
+  return { name, slug: slugify(name), createdAt: Date.now(), sourceFile, aim, description, steps, params, requirements };
 }
 
 function stepLabel(step: TemplateStep): string {
