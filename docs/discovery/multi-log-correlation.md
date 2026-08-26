@@ -1,7 +1,7 @@
 # Multi-log correlation & logs+env — closing the AI coverage gaps
 
-**Status:** P0 (wall-clock agent verb) + P3 (ContextManifest env entity) implemented.
-P1, P2, P4 deferred.
+**Status:** P0 (wall-clock agent verb) + P3 (ContextManifest env entity) + P2 (run-vs-run
+template diff) implemented. P1, P4 deferred.
 **Origin:** 2026-08-26 tool-coverage assessment (mine + Fable). LOGAN exposes ~68 MCP
 tools. Verdict: for a **single log** the toolkit is complete/over-complete; the real
 gaps are in **multiple logs** and **logs + env**. This doc is the design for closing them.
@@ -125,12 +125,48 @@ is needed. Human authoring UI, if the Saved-panel readout proves insufficient.
 
 ---
 
+## P2 — run-vs-run template diff (implemented)
+
+The multi-log **differential**: "what does the failing run contain that the good run
+doesn't?" A raw line diff of two multi-million-line runs is noise (every timestamp / pid /
+counter differs), and `baseline_compare` only diffs at fingerprint granularity (level
+counts, crash sets, components). The meaningful diff is at the **message-template** level.
+
+### Design
+
+- **Fold, then set-diff.** Fold each run into its distinct message templates with the
+  **existing** `TemplateFolder` / `normalizeShape` engine (the summarize engine — masks
+  `<TS>`/`<NUM>`/… so near-duplicate lines collapse to one shape, and the shape hash is
+  stable across runs). Then set-diff the two shape populations:
+  `onlyInTarget` (shapes the failing run introduced — the headline), `onlyInReference`
+  (shapes the good run had, now gone), `changed` (shapes in both whose frequency shifted
+  past `changeFactor`, default 3×). Each delta carries both counts, the ratio, worst
+  severity, and example viewerLines on each side. Pure diff in `src/main/runDiff.ts`
+  (`diffRuns`), unit-tested headlessly.
+- **Verb.** `logan_diff_runs({ reference, scope?, maxTemplates?, minCount?, changeFactor?,
+  topN? })` → `/api/diff-runs` → `ApiContext.diffRuns`. Target = the active file (honours
+  its scope, like summarize); **reference = another log by path, opened ON DEMAND** (via the
+  shared `getOrOpenHandlerForPath`, without disturbing the active view) — the agent-verb
+  pattern (`buildComposite`/`mergeTimeline` open on demand too), vs the human split/diff
+  which needs both files in open tabs. Both sides fold through one shared
+  `foldHandlerTemplates` helper (off-thread worker when indexed, else main-thread scan) so
+  the two summaries are strictly comparable. Registered as investigative logic (journal +
+  `logan_get_investigation_log` + saveable as a template step). Response defaults
+  `redact:true` (shapes can carry log-derived tokens).
+- **Parity: written exemption.** The human already has the two human-form ways to compare
+  runs — the **split/diff** view (raw visual line diff, ≤100k lines) and **baseline_compare**
+  (fingerprint deltas). A template-level structural diff is the *agent-form* (the agent can't
+  eyeball a scrolling visual diff); its results reach the human the same way `evidence_pack`
+  does — the agent pins notable deltas with `logan_report_finding` (each delta has target
+  viewerLines). A dedicated human "diff two summaries" panel is a natural extension of the
+  Summarize panel, earnable with usage. Logged in `PARITY_CHECKLIST.md`.
+
+---
+
 ## Deferred
 
 - **P1 — virtual interleaved composite.** A time-ordered line-space (per-line global↔local
   permutation) so wall-clock single-session needs no on-disk file. Bigger: rework
   `CompositeLineSpace` + severity/search rebase for non-contiguous members.
-- **P2 — run-vs-run diff verb.** Line/template-level agent diff of two logs (parity for the
-  human split/diff), beyond fingerprint `baseline_compare`.
 - **P4 — CRUD consolidation / de-dup.** Collapse the ~15 annotate/highlight/bookmark verbs
   to one-per-noun-with-action; retire the `baseline_compare` / `compare_baseline` overlap.
