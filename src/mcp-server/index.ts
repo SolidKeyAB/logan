@@ -392,6 +392,33 @@ server.tool(
   }
 );
 
+// === Tool: logan_diff_runs ===
+server.tool(
+  'logan_diff_runs',
+  'Run-vs-run TEMPLATE diff: "what does this (failing) run contain that a good run does not?" Folds BOTH the open log (the target) and a reference log (given by path — opened on demand, no need to open a tab) into their distinct message templates (near-duplicate lines collapse to one shape), then set-diffs the two: `onlyInTarget` = shapes the target has that the reference lacks (the headline — new errors/messages), `onlyInReference` = shapes the reference had that vanished, `changed` = shapes in both whose frequency shifted (≥ changeFactor×). Each delta carries reference/target counts, factor, worst severity, and example viewerLines on each side. This is the semantic multi-log differential — far more useful on big logs than a raw line diff (which drowns in timestamp/counter noise) and finer-grained than baseline_compare (which only diffs level counts / crash sets). Drill into a delta with logan_get_lines, then pin it with logan_report_finding. Tip: point `reference` at the last-known-good run and investigate `onlyInTarget` first.',
+  {
+    reference: z.string().describe('Absolute path to the reference ("good"/known) run to diff against. The open log is the target ("failing") run. Opened on demand — it does not need to be an open tab.'),
+    scope: scopeSchema,
+    maxTemplates: z.number().int().min(1).optional().describe('Max distinct templates kept per side (K). Default 5000.'),
+    maxExamples: z.number().int().min(1).optional().describe('Example viewerLines kept per template per side. Default 5.'),
+    minCount: z.number().int().min(1).optional().describe('Noise floor: ignore a template whose relevant count is below this. Default 1.'),
+    changeFactor: z.number().min(1).optional().describe('A SHARED template counts as "changed" when its target/reference frequency ratio is ≥ this (or ≤ 1/this). Default 3.'),
+    topN: z.number().int().min(1).optional().describe('Max entries returned per bucket (full counts still reported in summary/caps). Default 50.'),
+    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
+  },
+  async ({ reference, scope, maxTemplates, maxExamples, minCount, changeFactor, topN, redact }) => {
+    try {
+      const result = await apiCall('POST', '/api/diff-runs', {
+        reference, scope: toApiScope(scope as any), maxTemplates, maxExamples, minCount, changeFactor, topN,
+      });
+      const output = redact ? maybeRedact(result, true) : result;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_fold_regions ===
 server.tool(
   'logan_fold_regions',

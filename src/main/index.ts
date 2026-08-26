@@ -52,6 +52,8 @@ import { runTrendJob, runSummarizeJob, cancelSummarizeJob, canSummarizeOffThread
 import { resolveScope, isWholeFile, scopeInfo, forEachScopeLine, ScopeResolverContext } from './scope';
 import { analyzeScope } from './analyzers/scopedAnalysis';
 import { TemplateFolder, type TemplateSummary } from './logTemplates';
+import { feedScope } from './summarizeScan';
+import { diffRuns, type DiffOptions } from './runDiff';
 import { detectLogFormat } from './analyzers/lineClassify';
 import { GapDetector } from './timeGaps';
 // Native-dependent modules — lazy-loaded to prevent SIGSEGV if bindings aren't built
@@ -386,6 +388,40 @@ async function buildComposite(
     analysisResultCache.delete(COMPOSITE_ID);
   }
   return { id: activeCompositeId, info: activeComposite.getFileInfo(), boundaries: activeComposite.boundaries() };
+}
+
+// Get a readable FileHandler for an arbitrary path WITHOUT making it the active file.
+// Reuses the cache if the path is already open; otherwise opens+indexes it on demand
+// (the agent-verb pattern — buildComposite/mergeTimeline do the same) and caches it so a
+// repeat call is cheap. Used by the run-vs-run diff to fold a reference log that isn't
+// the active tab. Never mutates currentFilePath / the viewer.
+async function getOrOpenHandlerForPath(filePath: string): Promise<FileHandler> {
+  let h = fileHandlerCache.get(filePath);
+  if (h && h.isStale()) { evictFromCache(filePath); h = undefined; }
+  if (!h) {
+    h = new FileHandler();
+    const opened = await openWithAdapter(h, filePath, () => {});
+    sourceRegistry.set(filePath, opened.source);
+    addToCache(filePath, h);
+  }
+  return h;
+}
+
+// Fold ANY open handler into its message templates, reusing the SAME dispatch as
+// ctx.summarize: off-thread in the trend worker when the handler carries a whole-file
+// index, else a batched main-thread scan (segmented files). Shared by the run-vs-run
+// diff so both sides fold with identical semantics and are strictly comparable.
+async function foldHandlerTemplates(
+  handler: FileHandler | CompositeFileHandler | SegmentedFileHandler,
+  scopeArg: { kind: 'range'; startLine: number; endLine: number } | { kind: 'indices'; lines: number[] },
+  folderOpts: { maxTemplates?: number; maxExamples?: number; detectSeverity?: boolean; detectTimestamp?: boolean },
+): Promise<TemplateSummary> {
+  if (canSummarizeOffThread(handler)) {
+    return await runSummarizeJob(handler, folderOpts, scopeArg);
+  }
+  const folder = new TemplateFolder(folderOpts);
+  feedScope(handler as any, scopeArg, folder);
+  return folder.finish();
 }
 
 // Open a plain file, make it the active read target, load its sidecars, and tell the
@@ -2151,6 +2187,56 @@ app.whenReady().then(() => {
           scanCapped: c.scanCapped,
           from: formatWallClock(c.minMs),
           to: formatWallClock(c.maxMs),
+        };
+      } catch (error) {
+        return { success: false, error: String(error) };
+      }
+    },
+    diffRuns: async (referencePath, opts) => {
+      // Target = the active file (the run under investigation, honouring its scope, like
+      // summarize). Reference = another log by path (the good/known run), opened on demand.
+      const targetHandler = getReadHandler();
+      if (!targetHandler || !currentFilePath) return { success: false, error: 'No file open (open the run to investigate first)' };
+      if (!referencePath || typeof referencePath !== 'string') return { success: false, error: 'reference path required' };
+      if (!fs.existsSync(referencePath)) return { success: false, error: `Reference file not found: ${referencePath}` };
+      if (path.resolve(referencePath) === path.resolve(currentFilePath)) {
+        return { success: false, error: 'Reference and target are the same file — open two different runs' };
+      }
+      const folderOpts = {
+        maxTemplates: opts?.maxTemplates,
+        maxExamples: opts?.maxExamples,
+        detectSeverity: true,
+        detectTimestamp: true,
+      };
+      try {
+        // Target scope: resolve like summarize (whole file / filter / range / indices).
+        const resolved = resolveCurrentScope(opts?.scope);
+        const targetScopeArg = resolved.kind === 'range'
+          ? { kind: 'range' as const, startLine: resolved.startLine, endLine: resolved.endLine }
+          : { kind: 'indices' as const, lines: resolved.lines };
+
+        const referenceHandler = await getOrOpenHandlerForPath(referencePath);
+        const refTotal = referenceHandler.getTotalLines();
+        const referenceScopeArg = { kind: 'range' as const, startLine: 0, endLine: Math.max(0, refTotal - 1) };
+
+        // Fold both runs with the identical dispatch → strictly comparable summaries.
+        const [referenceSummary, targetSummary] = await Promise.all([
+          foldHandlerTemplates(referenceHandler, referenceScopeArg, folderOpts),
+          foldHandlerTemplates(targetHandler, targetScopeArg, folderOpts),
+        ]);
+
+        const diffOpts: DiffOptions = { minCount: opts?.minCount, changeFactor: opts?.changeFactor, topN: opts?.topN };
+        const diff = diffRuns(referenceSummary, targetSummary, diffOpts);
+        logActivity(currentFilePath, 'diff_runs', {
+          reference: path.basename(referencePath),
+          onlyInTarget: diff.summary.onlyInTarget,
+          changed: diff.summary.changed,
+        });
+        return {
+          success: true,
+          reference: { path: referencePath, name: path.basename(referencePath) },
+          target: { path: currentFilePath, name: path.basename(currentFilePath), scope: scopeInfo(resolved) },
+          diff,
         };
       } catch (error) {
         return { success: false, error: String(error) };

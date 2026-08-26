@@ -35,7 +35,7 @@ const INVESTIGATIVE_PATHS = new Set<string>([
   '/api/trend-fields', '/api/trend-series', '/api/trend-transitions', '/api/trend-correlate',
   '/api/trend-show', '/api/investigate-crashes', '/api/investigate-component',
   '/api/investigate-timerange', '/api/triage', '/api/navigate', '/api/evidence-pack',
-  '/api/build-conclusion', '/api/summarize', '/api/fold-regions',
+  '/api/build-conclusion', '/api/summarize', '/api/fold-regions', '/api/diff-runs',
 ]);
 const JOURNAL_CAP = 200;
 let agentJournal: JournalEntry[] = [];
@@ -66,6 +66,7 @@ function journalLabel(p: string, body: Record<string, any>): string {
   if (p === '/api/build-conclusion') return 'build-conclusion';
   if (p === '/api/summarize') return `summarize${body.opts?.contains ? ` ~"${body.opts.contains}"` : ''}`;
   if (p === '/api/fold-regions') return 'fold-regions';
+  if (p === '/api/diff-runs') return `diff-runs vs ${String(body.reference ?? '').split(/[\\/]/).pop() || ''}`.trim();
   return name;
 }
 
@@ -116,6 +117,7 @@ function summarizeReplay(p: string, r: any): string {
   if (p === '/api/fold-regions') return `${r.regions?.length ?? 0} repeat regions`;
   if (p === '/api/evidence-pack') return r.pack?.severity ? `${r.pack.severity}` : 'brief';
   if (p === '/api/investigate-crashes') return `${r.crashes?.length ?? r.groups?.length ?? 0} crash groups`;
+  if (p === '/api/diff-runs') return r.diff ? `${r.diff.summary?.onlyInTarget ?? 0} new / ${r.diff.summary?.changed ?? 0} changed templates` : 'diffed';
   return 'ok';
 }
 
@@ -414,6 +416,10 @@ export interface ApiContext {
   createComposite(filePaths: string[], label?: string): Promise<{ success: boolean; id?: string; info?: any; boundaries?: any[]; error?: string }>;
   // Wall-clock interleave of N files → a materialized merged .log, opened as active.
   mergeTimeline(filePaths: string[], label?: string): Promise<{ success: boolean; filePath?: string; info?: any; lineCount?: number; fileCount?: number; skipped?: string[]; collectCapped?: boolean; scanCapped?: boolean; from?: string; to?: string; error?: string }>;
+  // Run-vs-run TEMPLATE diff: fold the active file (target) and a reference log (by path,
+  // opened on demand) into message templates and set-diff them (onlyInTarget / onlyInReference
+  // / changed). The multi-log "differential", beyond fingerprint baseline_compare.
+  diffRuns(referencePath: string, opts?: { scope?: ScopeDescriptor; maxTemplates?: number; maxExamples?: number; minCount?: number; changeFactor?: number; topN?: number }): Promise<{ success: boolean; reference?: any; target?: any; diff?: any; error?: string }>;
   getAnnotations(): Map<string, Annotation>;
   addAnnotation(annotation: Annotation): any;
   addAnnotations(annotations: Annotation[]): any;
@@ -1040,6 +1046,20 @@ export function startApiServer(ctx: ApiContext): void {
 
         if (url === '/api/summarize') {
           const result = await ctx.summarize(body.opts, body.scope);
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/diff-runs') {
+          if (!body.reference || typeof body.reference !== 'string') return sendError(res, 'reference (path to the good/reference run) required');
+          const result = await ctx.diffRuns(body.reference, {
+            scope: body.scope,
+            maxTemplates: body.maxTemplates,
+            maxExamples: body.maxExamples,
+            minCount: body.minCount,
+            changeFactor: body.changeFactor,
+            topN: body.topN,
+          });
           sendJson(res, result);
           return;
         }
