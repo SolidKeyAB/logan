@@ -102,6 +102,7 @@ const IPC = {
   GET_LINE_TIMESTAMPS: 'get-line-timestamps',
   READ_FILE_TEXT: 'read-file-text',
   EXTRACT_FILTERED_TO_FILE: 'extract-filtered-to-file',
+  SET_MUTE_PATTERNS: 'set-mute-patterns',
   // File-handler registry
   FILE_HANDLERS_RESOLVE: 'file-handlers-resolve',
   FILE_HANDLER_RUN: 'file-handler-run',
@@ -325,6 +326,8 @@ const api = {
   // Extract the active filter's matching lines into a new file
   extractFilteredToFile: (opts?: { includeLineNumbers?: boolean; columnConfig?: { delimiter: string; columns: Array<{ index: number; visible: boolean }> } }): Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }> =>
     ipcRenderer.invoke(IPC.EXTRACT_FILTERED_TO_FILE, opts),
+  setMutePatterns: (patterns: string[]): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke(IPC.SET_MUTE_PATTERNS, patterns),
 
   // Save to notes file
   findNotesFiles: (): Promise<{ success: boolean; files?: Array<{ name: string; path: string; created: string }>; logFilePath?: string; error?: string }> =>
