@@ -46,9 +46,10 @@ import { getPatternLog, clearPatternLog, logPattern, PatternLogEntry, flushPatte
 import { compilePattern, CompileInput } from './compilePattern';
 import { parseTimestampFast } from './timestampParse';
 import { carryForwardTimestamps, buildOriginTags, formatWallClock, sortMergeEntries, type MergeEntry } from './mergeTimeline';
-import { compileColumnPattern, makeColumnExtractor, refinePaintPattern, CompiledColumnPattern, ColumnPatternSpec } from './columnPattern';
+import { ColumnPatternSpec } from './columnPattern';
 import { parseVtraceToFile } from './vtraceParse';
-import { runTrendJob, runSummarizeJob, cancelSummarizeJob, canSummarizeOffThread, runFoldRegionsJob } from './trendWorkerClient';
+import { runTrendJob, runSummarizeJob, cancelSummarizeJob, canSummarizeOffThread, runFoldRegionsJob, runColumnPreviewJob, canColumnPreviewOffThread } from './trendWorkerClient';
+import { computeColumnPreview } from './columnPreview';
 import { resolveScope, isWholeFile, scopeInfo, forEachScopeLine, ScopeResolverContext } from './scope';
 import { analyzeScope } from './analyzers/scopedAnalysis';
 import { TemplateFolder, type TemplateSummary } from './logTemplates';
@@ -4491,51 +4492,34 @@ ipcMain.handle('column-pattern-preview', async (_, spec: ColumnPatternSpec, opts
     // thread (which also serves the viewer). scan=true (default) is the deliberate "Test
     // over file" / commit step where match-rate + refine-from-data actually belong.
     const doScan = opts?.scan !== false;
-    // Gather the candidate lines once (the user's sample first, then the file head).
+    const handler = doScan ? getFileHandler() : null;
+
+    // The heavy validate + refine over the file head goes OFF the main thread (the same
+    // thread that serves the viewer) into the trend worker — with a watchdog so a
+    // catastrophic-backtracking column regex can never freeze the UI. Only the cheap
+    // single-line live-painting path (and the rare segmented-file case, which holds no
+    // whole-file index to hand a worker) run inline via the shared core.
+    if (doScan && handler && canColumnPreviewOffThread(handler)) {
+      try {
+        const result = await runColumnPreviewJob(handler, spec, { sampleLines: N });
+        return { success: true, ...result };
+      } catch (e) {
+        return { success: false, error: String(e instanceof Error ? e.message : e) };
+      }
+    }
+
+    // Gather the candidate lines once (the user's sample first, then the file head) and
+    // run the SAME pure core the worker uses.
     const sampleLines: string[] = [];
     if (spec.sample && spec.sample.trim()) sampleLines.push(spec.sample);
-    const handler = doScan ? getFileHandler() : null;
     if (handler) {
       const scanTo = Math.min(handler.getTotalLines(), N * 4);
       for (const line of handler.getLines(0, scanTo)) {
         if (line.text.trim()) sampleLines.push(line.text);
       }
     }
-    const collect = (compiled: CompiledColumnPattern) => {
-      const extractor = makeColumnExtractor(compiled);
-      const rows: string[][] = [];
-      let matched = 0;
-      let scanned = 0;
-      for (const text of sampleLines) {
-        scanned++;
-        const vals = extractor(text);
-        if (vals) { matched++; if (rows.length < N) rows.push(vals); }
-      }
-      return { rows, matched, scanned };
-    };
-
-    let compiled = compileColumnPattern(spec);
-    let { rows, matched, scanned } = collect(compiled);
-
-    // ✨ Refine from data (paint mode): use the extracted column values to peel each column's
-    // constant WRAPPER (/…/, xx…xx, …blah…) and re-compile, then re-extract with the smarter
-    // pattern. No-op when no wrapper is shared across values.
-    let refined = false;
-    if (doScan && spec.mode === 'paint' && rows.length >= 2 && compiled.fields.length > 0) {
-      const fieldSamples = compiled.fields.map((_f, ci) => rows.map(r => r[ci]).filter(Boolean));
-      const refinedCompiled = refinePaintPattern(spec, fieldSamples);
-      if (refinedCompiled.regex !== compiled.regex) {
-        compiled = refinedCompiled;
-        ({ rows, matched, scanned } = collect(compiled));
-        refined = true;
-      }
-    }
-
-    return {
-      success: true,
-      regex: compiled.regex, flags: compiled.flags, fields: compiled.fields, named: compiled.named,
-      rows, matched, scanned, refined,
-    };
+    const result = computeColumnPreview(sampleLines, spec, { maxRows: N, doScan });
+    return { success: true, ...result };
   } catch (e) {
     return { success: false, error: String(e instanceof Error ? e.message : e) };
   }

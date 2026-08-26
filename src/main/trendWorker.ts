@@ -4,6 +4,7 @@ import { parseTimestampFast } from './timestampParse';
 import { WorkerFileReader, CompositeWorkerReader, ScanContext } from './trendWorkerReaders';
 import { foldScope } from './summarizeScan';
 import { detectFoldRegions } from './foldRegions';
+import { computeColumnPreview } from './columnPreview';
 import type { FileHandler } from './fileHandler';
 
 /**
@@ -68,6 +69,26 @@ try {
       // Whole-file fingerprint scan → off-thread so the UI never blocks.
       result = detectFoldRegions(reader, args.opts || {});
       break;
+    case 'columnPreview': {
+      // Column-pattern "validate + refine over the file" — the heavy path behind
+      // "✓ Test over file" / Save. Reading the file head + running a possibly-
+      // backtracking regex over it here keeps the UI thread free (a runaway regex
+      // hangs only THIS worker, which the client watchdog then terminates).
+      const spec = args.spec;
+      const N = Math.max(1, Math.min(500, args.opts?.sampleLines ?? 200));
+      const lines: string[] = [];
+      if (spec?.sample && String(spec.sample).trim()) lines.push(spec.sample);
+      const total = reader.getTotalLines();
+      const scanTo = Math.min(total, N * 4);
+      const BATCH = 2000;
+      for (let s = 0; s < scanTo; s += BATCH) {
+        for (const l of reader.getLines(s, Math.min(BATCH, scanTo - s))) {
+          if (l.text.trim()) lines.push(l.text);
+        }
+      }
+      result = computeColumnPreview(lines, spec, { maxRows: N, doScan: true });
+      break;
+    }
     default:
       throw new Error(`Unknown trend job kind: ${kind}`);
   }
