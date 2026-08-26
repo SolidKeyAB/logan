@@ -614,7 +614,6 @@ interface Api {
   // Save selected lines
   saveSelectedLines: (startLine: number, endLine: number, columnConfig?: { delimiter: string; columns: Array<{ index: number; visible: boolean }> }) => Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }>;
   extractFilteredToFile: (opts?: { includeLineNumbers?: boolean; columnConfig?: { delimiter: string; columns: Array<{ index: number; visible: boolean }> } }) => Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }>;
-  setMutePatterns: (patterns: string[]) => Promise<{ success: boolean }>;
 
   // Save snippets (selected lines to file)
   findNotesFiles: () => Promise<{ success: boolean; files?: Array<{ name: string; path: string; created: string }>; logFilePath?: string; error?: string }>;
