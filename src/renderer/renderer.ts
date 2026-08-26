@@ -2912,6 +2912,7 @@ function isLineMuted(text: string): boolean {
 
 function saveMutePatterns(): void {
   localStorage.setItem('logan-mute-patterns', JSON.stringify(state.mutePatterns));
+  void window.api.setMutePatterns(state.mutePatterns); // so main-side tools (Extract) discard muted lines
 }
 
 function addMutePattern(pattern: string): void {
@@ -7520,6 +7521,7 @@ function initInvestigatePanel(): void {
   // The agent applied a saved lens entity → run the SAME dispatcher the human ▶ Apply uses
   // (set-semantics, so a re-apply is idempotent). One impl, two operators.
   window.api.onEntityApply((p) => { if (p && p.kind) void applySavedEntity(p.kind, p.id, p.name, { set: true }); });
+  void window.api.setMutePatterns(state.mutePatterns); // seed the backend with any persisted mute patterns
   void loadInvestigationTemplates();
 }
 
