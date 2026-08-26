@@ -73,6 +73,14 @@ Closed by the single-session composite parity work (2026-08-18):
 |------|-------|----|--------|
 | Create single session (composite) | 🔗 button (Time Sync panel) | `logan_single_session` (`/api/composite-create`) | ✅ shared `buildComposite` + `autoSaveSingleSession`; agent path pushes `agent-open-single-session` → shared renderer `displaySingleSession` |
 
+Closed by the real-parameterized-templates work (P0a, 2026-08-25):
+
+| Verb | Human | AI | Status |
+|------|-------|----|--------|
+| Curate template params (variable/constant role) | Replay tweak-form: 🔒 pin / ✎ make-variable per row (constants shown read-only) | `logan_set_investigation_params` (`/api/investigation-set-params`) | ✅ shared `setTemplateParams`/`applyParamPatches`; `resolveSteps` pins constants for both operators |
+
+**Partial (agent-only for now):** *promoting an ARBITRARY step value* (a body key auto-promotion never surfaced) into a fill-in ships on the agent side (`logan_set_investigation_params` accepts a `(stepIndex,key)` not yet in `params`). The human tweak-form currently only re-roles the auto-promoted params (🔒/✎); a human "promote this raw value" affordance (needs a step-body picker) is a scoped follow-up, not a written exemption.
+
 (The AI path builds the composite in main — making it the active read target — and pushes the
 display to the renderer, which reflects it through the SAME `displaySingleSession` helper the
 human 🔗 flow uses. Usage joins human `composite_created` ↔ AI `composite-create` via

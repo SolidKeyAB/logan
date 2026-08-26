@@ -845,6 +845,31 @@ server.tool(
   }
 );
 
+// === Tool: logan_set_investigation_params ===
+server.tool(
+  'logan_set_investigation_params',
+  "Curate a saved investigation's fill-in parameters so it becomes a REAL, portable template. Label each value 'variable' (prompted + changeable when replaying on the next bug log) or 'constant' (pinned — the fixed shape of the hunt, shown read-only). You can also attach a description, PROMOTE an arbitrary step value into a fill-in, or DEMOTE one back to a pinned value. Each patch targets one (stepIndex, key); promotion requires that value to actually exist in that step's body. Use after logan_save_investigation to make a recorded hunt re-runnable on a different log.",
+  {
+    name: z.string().describe('Saved template name (or slug) from logan_list_investigations'),
+    params: z.array(z.object({
+      stepIndex: z.number().describe('0-based index of the step this value belongs to'),
+      key: z.string().describe("The step body key, e.g. 'component', 'pattern', 'startTime'"),
+      role: z.enum(['variable', 'constant']).optional().describe('variable = prompt/change on replay; constant = pinned to the recipe'),
+      label: z.string().optional().describe('Optional display-label override'),
+      description: z.string().optional().describe('Optional note, e.g. "device serial for this incident"'),
+      remove: z.boolean().optional().describe('Demote: drop this fill-in (its value stays pinned in the step body)'),
+    })).describe('Curation patches — one per (stepIndex, key)'),
+  },
+  async ({ name, params }) => {
+    try {
+      const result = await apiCall('POST', '/api/investigation-set-params', { name, patches: params });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_list_investigations ===
 server.tool(
   'logan_list_investigations',
