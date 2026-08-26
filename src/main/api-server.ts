@@ -404,6 +404,9 @@ export interface ApiContext {
   // The Entity Registry read model: a uniform catalog of every saved/reusable entity this
   // process owns (all kinds except investigations, which /api/entities appends itself).
   listSavedEntities(kind?: string): EntityDescriptor[];
+  // Apply a saved LENS entity (filter/highlightGroup/columnLayout/session) to the open view —
+  // the agent-parity write-half of listSavedEntities (reuses the human applySavedEntity).
+  applyEntityRef(ref: { kind: string; id?: string; name?: string }): { success: boolean; applied?: boolean; entity?: any; error?: string };
   investigateCrashes(options: { contextLines?: number; maxCrashes?: number; autoBookmark?: boolean; autoHighlight?: boolean }): Promise<any>;
   investigateComponent(options: { component: string; maxSamplesPerLevel?: number; includeErrorContext?: boolean; contextLines?: number }): Promise<any>;
   investigateTimerange(options: { startTime: string; endTime: string; maxSamples?: number }): Promise<any>;
@@ -991,6 +994,13 @@ export function startApiServer(ctx: ApiContext): void {
             entities.push(...toDescriptors('sequence', listSequences()));
           }
           sendJson(res, { success: true, count: entities.length, entities });
+          return;
+        }
+        if (url === '/api/apply-entity') {
+          // Apply a saved lens entity to the open view (agent parity for the human ▶ Apply).
+          const result = ctx.applyEntityRef({ kind: body.kind, id: body.id, name: body.name });
+          if (!result.success) return sendError(res, result.error || 'Could not apply');
+          sendJson(res, result);
           return;
         }
         if (url === '/api/investigation-suggest-requirements') {
