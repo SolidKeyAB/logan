@@ -10797,6 +10797,67 @@ kbd {
 }
 .investigate-pattern-steps:hover { color: var(--accent-hover); }
 
+/* ═══ Template hub — the unified "flow + tweak + live run" popup ════════════ */
+/* Renders inside the floating .workflow-panel; reuses the .workflow-step spine. */
+.hub-step-label {
+  font-size: 11px; color: var(--text-secondary); margin: 3px 0 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hub-step-status {
+  margin-left: auto; font-size: 13px; font-weight: 700; min-width: 16px; text-align: center;
+}
+.hub-step-status.pending { color: var(--text-muted); }
+.hub-step-status.ok { color: var(--success-color, #3fb950); }
+.hub-step-status.fail { color: var(--error-color, #f85149); }
+/* The node dot tracks run state: grey while pending, green/red once done. */
+.hub-step.is-pending::before { background: var(--text-muted); }
+.hub-step.is-ok::before { background: var(--success-color, #3fb950); }
+.hub-step.is-fail::before { background: var(--error-color, #f85149); }
+.hub-step-error {
+  margin: 4px 0 0; font-size: 11px; font-family: var(--font-mono);
+  color: var(--error-color, #f85149);
+  background: color-mix(in srgb, var(--error-color, #f85149) 12%, transparent);
+  padding: 3px 7px; border-radius: 5px;
+}
+
+/* A noun on a step: key + editable input (variable) or pinned value (constant). */
+.hub-noun {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-family: var(--font-mono);
+  padding: 2px 5px; border-radius: 6px;
+  background: var(--bg-hover); border: 1px solid transparent;
+}
+.hub-noun.kind-time, .hub-noun.kind-range { background: color-mix(in srgb, var(--warning-color) 13%, transparent); }
+.hub-noun.kind-component { background: color-mix(in srgb, var(--accent-color) 13%, transparent); }
+.hub-noun-key { color: var(--text-muted); }
+.hub-noun-pinned { color: var(--text-secondary); font-weight: 600; }
+.hub-noun-constant { opacity: 0.85; }
+.hub-noun-input {
+  width: 128px; max-width: 40vw; padding: 1px 6px !important;
+  font-size: 11px !important; font-family: var(--font-mono);
+  height: auto !important; margin: 0 !important;
+}
+.hub-noun-toggle {
+  border: none; background: transparent; cursor: pointer;
+  color: var(--text-muted); font-size: 11px; padding: 0 2px; line-height: 1;
+}
+.hub-noun-toggle:hover { color: var(--accent-hover); }
+
+/* Footer: status readout + Cancel / Save / Save as… / Run. */
+.hub-actions {
+  position: sticky; bottom: 0;
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px; border-top: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+.hub-actions-btns { margin-left: auto; display: flex; gap: 6px; flex-shrink: 0; }
+.hub-status { font-size: 11px; color: var(--text-muted); flex: 1; min-width: 0; }
+.hub-status.running { color: var(--warning-color); }
+.hub-status.ok { color: var(--success-color, #3fb950); }
+.hub-status.fail { color: var(--error-color, #f85149); }
+.hub-status.blocked { color: var(--warning-color); }
+.hub-blocked-title { font-weight: 700; margin-bottom: 4px; }
+
 /* ═══ Quick-start triage "Start here" card ═════════════════════════════════ */
 /* Floating, non-modal briefing that auto-appears on file open. */
 .triage-card {

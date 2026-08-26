@@ -192,4 +192,29 @@ describe('applyParamPatches — promote / retype / demote', () => {
     expect(applied).toBe(0);
     expect(errors.length).toBe(1);
   });
+
+  // "Save" in the template hub — persist a tweaked value as the new default, keeping role.
+  it('sets a new default value (+ mirrors into the step body), preserving the role', () => {
+    const t = buildTemplate('T', journal);
+    const before = t.params.find(p => p.key === 'startTime')!;
+    expect(before.role).toBe('variable');
+    const { applied, errors } = applyParamPatches(t, [{ stepIndex: 0, key: 'startTime', default: '2026-05-05T00:00:00Z' }]);
+    expect(applied).toBe(1);
+    expect(errors).toEqual([]);
+    const after = t.params.find(p => p.key === 'startTime')!;
+    expect(after.default).toBe('2026-05-05T00:00:00Z'); // new default
+    expect(after.role).toBe('variable');                 // role preserved (not re-derived like a fork)
+    expect(t.steps[0].body.startTime).toBe('2026-05-05T00:00:00Z'); // mirrored into the body
+    // A subsequent replay with NO overrides now uses the saved default.
+    expect(resolveSteps(t, {})[0].body.startTime).toBe('2026-05-05T00:00:00Z');
+  });
+
+  it('a default patch can be combined with a role change', () => {
+    const t = buildTemplate('T', journal);
+    applyParamPatches(t, [{ stepIndex: 1, key: 'component', role: 'variable', default: 'network' }]);
+    const p = t.params.find(p => p.key === 'component')!;
+    expect(p.role).toBe('variable');
+    expect(p.default).toBe('network');
+    expect(t.steps[1].body.component).toBe('network');
+  });
 });
