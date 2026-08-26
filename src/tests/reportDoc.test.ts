@@ -79,6 +79,27 @@ describe('buildReportMarkdown', () => {
     expect(md).toContain('The refresh call fired 5m early.');
   });
 
+  it('renders an Environment section from envContext, before Summary, with provenance', () => {
+    const md = buildReportMarkdown({
+      ...BASE,
+      body: 'narrative',
+      envContext: [
+        { key: 'build', value: '4.2.1', source: 'header line 3' },
+        { key: 'firmware', value: 'rev-88' },
+      ],
+    });
+    expect(md).toContain('## Environment');
+    expect(md).toContain('- **build** — 4.2.1 _(header line 3)_');
+    expect(md).toContain('- **firmware** — rev-88');
+    // Environment precedes the Summary narrative.
+    expect(md.indexOf('## Environment')).toBeLessThan(md.indexOf('## Summary'));
+  });
+
+  it('omits the Environment section when no envContext', () => {
+    const md = buildReportMarkdown(BASE);
+    expect(md).not.toContain('## Environment');
+  });
+
   it('renders findings as sub-sections with severity, location, and description', () => {
     const md = buildReportMarkdown({
       ...BASE,
