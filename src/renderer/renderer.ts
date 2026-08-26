@@ -8055,6 +8055,11 @@ function renderHubOutput(body: HTMLElement, res: any, aim?: string): void {
   const findings = Array.isArray(state.annotations) ? state.annotations.length : 0;
   let html = `<div class="hub-output-head">📤 Output</div>`;
   if (aim) html += `<div class="hub-output-aim">🎯 ${escapeHtml(aim)}</div>`;
+  // The "outfit" — lenses this recipe auto-applied to the view before its steps ran.
+  const lenses = (res.applied || []).filter((a: any) => a && a.applied);
+  if (lenses.length) {
+    html += `<div class="hub-output-lenses">🧥 Applied ${lenses.map((a: any) => `<span class="hub-lens-chip">${escapeHtml(a.name)}</span>`).join('')}</div>`;
+  }
   html += results.length
     ? `<div class="hub-output-result">${results.map((r: string) => `<span class="hub-output-item">${escapeHtml(r)}</span>`).join('')}</div>`
     : `<div class="hub-output-result hub-output-empty">Steps ran, but produced no counts to report.</div>`;
