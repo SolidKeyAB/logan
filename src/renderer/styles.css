@@ -4292,6 +4292,14 @@ kbd {
   min-width: 50px;
 }
 
+/* Per-column mute toggle in the Columns window — compact, muted styling. */
+.column-item .col-mute-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  gap: 4px;
+}
+.column-item .col-mute-label input { margin: 0; }
+
 .column-samples {
   display: flex;
   flex-wrap: wrap;

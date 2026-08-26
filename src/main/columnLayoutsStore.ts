@@ -13,7 +13,7 @@ export interface ColumnLayoutSaved {
   delimiter?: string;
   delimiterName?: string;
   pattern?: { regex: string; flags: string; fields: string[] };
-  columns: Array<{ index: number; name?: string; visible: boolean }>;
+  columns: Array<{ index: number; name?: string; visible: boolean; muted?: boolean }>;
   description?: string; // optional human/AI note: what this is for / why it was added
 }
 
