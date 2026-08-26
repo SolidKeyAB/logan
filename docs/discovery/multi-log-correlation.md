@@ -1,6 +1,7 @@
 # Multi-log correlation & logs+env — closing the AI coverage gaps
 
-**Status:** P0 (wall-clock agent verb) implemented in this doc's commit. P1–P4 deferred.
+**Status:** P0 (wall-clock agent verb) + P3 (ContextManifest env entity) implemented.
+P1, P2, P4 deferred.
 **Origin:** 2026-08-26 tool-coverage assessment (mine + Fable). LOGAN exposes ~68 MCP
 tools. Verdict: for a **single log** the toolkit is complete/over-complete; the real
 gaps are in **multiple logs** and **logs + env**. This doc is the design for closing them.
@@ -84,6 +85,46 @@ the agent as `skipped` + `capped`.
 
 ---
 
+## P3 — `ContextManifest` env entity (implemented)
+
+The **logs + env** gap. Static environment (build id, firmware, device, feature flags,
+config) had *nothing* to hold it, and nothing conditioned on it — so `baseline_compare`
+would diff a build-4.2 log against a 4.1 baseline and call the deltas anomalies.
+
+### Design
+
+- **The entity.** A per-file sidecar `.logan/<file>.context-manifest.json` — a typed
+  `Record<key, {value, source}>` (facts + provenance) + `updatedAt`/`agentName`. Pure
+  merge/diff semantics live in `src/main/contextManifest.ts` (`mergeFacts`, `factsToPlain`,
+  `diffEnv`) so they're unit-tested headlessly; the fs read/write sits in `index.ts` beside
+  the agent-memory scratchpad (`getContextManifest` / `saveContextManifestFile`). Listed in
+  the entity registry as kind `contextManifest` (scope `file`), so it shows in
+  `logan_entities` and the human Saved panel when its file is open.
+
+- **The verbs (parity).** Agent: `logan_context_attach` (merge a key→value patch, or
+  `replace`; blank value deletes; optional `provenance`/`source`) + `logan_context_read`,
+  over `/api/context-manifest` (POST/GET) → `ApiContext.attachContextManifest` /
+  `getContextManifest`. Human: no dedicated compose UI ships — **written exemption** in
+  `PARITY_CHECKLIST.md` (the manifest is agent-authored env capture; the human consumes it
+  via the Saved panel + the report's Environment section + the baseline env-diff finding).
+
+- **The injections (why it earns its place).** The same facts thread into three existing
+  surfaces automatically, so attaching once conditions the whole investigation:
+  1. **`evidence_pack`** — an `env` block near the top, so the agent sees "what was this
+     system" before drilling in.
+  2. **`save_report`** — an **Environment** section (each fact + provenance) after the
+     metadata table, ahead of the narrative; findings are read against it.
+  3. **baseline fingerprint** — `buildFingerprint` records an `env` snapshot; `compare`
+     emits an **info `env-diff`** finding ("Environment differs: build 4.1 → 4.2") whenever
+     the baseline recorded env and it changed — so drift is surfaced for weighting, not
+     mis-counted as a regression. Legacy baselines (no env) are never drift-checked.
+
+**Deferred within P3:** wiring the env manifest into the requirements-manifest gate
+("template requires flag X on") — the resolver already exists; only a new requirement kind
+is needed. Human authoring UI, if the Saved-panel readout proves insufficient.
+
+---
+
 ## Deferred
 
 - **P1 — virtual interleaved composite.** A time-ordered line-space (per-line global↔local
@@ -91,10 +132,5 @@ the agent as `skipped` + `capped`.
   `CompositeLineSpace` + severity/search rebase for non-contiguous members.
 - **P2 — run-vs-run diff verb.** Line/template-level agent diff of two logs (parity for the
   human split/diff), beyond fingerprint `baseline_compare`.
-- **P3 — `ContextManifest` env entity.** Typed key-values + provenance in the `.logan/`
-  sidecar, listed in `logan_entities`, attach/read verb pair, injected into `evidence_pack`
-  (agent sees env up front), `save_report` (findings conditioned on env), and the baseline
-  fingerprint (warn "env differs: build 4.1→4.2"). The requirements-manifest gate extends
-  naturally ("template requires flag X on").
 - **P4 — CRUD consolidation / de-dup.** Collapse the ~15 annotate/highlight/bookmark verbs
   to one-per-noun-with-action; retire the `baseline_compare` / `compare_baseline` overlap.

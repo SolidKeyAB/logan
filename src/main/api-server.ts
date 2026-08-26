@@ -6,6 +6,7 @@ import { BrowserWindow } from 'electron';
 import { SearchOptions, Bookmark, Highlight, Annotation, ScopeDescriptor, ResolvedScope } from '../shared/types';
 import { FileHandler } from './fileHandler';
 import { type BaselineStore, buildFingerprint } from './baselineStore';
+import { factsToPlain } from './contextManifest';
 import { AnalysisResult } from './analyzers/types';
 import { JournalEntry, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps, setTemplateParams } from './investigationStore';
 import { investigationToGraph } from './workflowGraph';
@@ -379,6 +380,12 @@ export interface ApiContext {
   getAgentMemory(): any;
   saveAgentMemory(content: string, agentName?: string): any;
   clearAgentMemory(): any;
+  // Static-env context manifest (per-file sidecar). read = the current manifest;
+  // attach = merge a key→value patch (or replace); clear = drop it. The facts are
+  // injected into evidence_pack / save_report / the baseline fingerprint.
+  getContextManifest(): any;
+  attachContextManifest(patch: Record<string, string>, opts?: { provenance?: Record<string, string>; source?: string; replace?: boolean; agentName?: string }): { success: boolean; manifest?: any; facts?: number };
+  clearContextManifest(): { success: boolean };
   detectTimeGaps(options: any): Promise<any>;
   // Semantic compression: fold the (scoped) log into its distinct message templates.
   summarize(opts?: { maxTemplates?: number; maxExamples?: number; detectSeverity?: boolean; detectTimestamp?: boolean; contains?: string }, scope?: ScopeDescriptor): Promise<any>;
@@ -479,6 +486,12 @@ export async function buildEvidencePack(
   if (!filePath || !handler) return { success: false, error: 'No file open' };
   const totalLines = handler.getTotalLines();
 
+  // Static environment attached to this log (build/firmware/flags/config) — so the agent
+  // sees the "what was this system" context up front, and the baseline delta below is
+  // fingerprinted against it.
+  const envFacts = factsToPlain(ctx.getContextManifest());
+  const hasEnv = Object.keys(envFacts).length > 0;
+
   const thresholdSeconds = opts.thresholdSeconds ?? 60;
   const topFieldsN = opts.topFields ?? 25;
   const topGapsN = opts.topGaps ?? 8;
@@ -555,13 +568,14 @@ export async function buildEvidencePack(
   if (opts.baselineId) {
     const ar = ctx.getAnalysisResult();
     if (ar) {
-      const fp = buildFingerprint(filePath, ar, handler);
+      const fp = buildFingerprint(filePath, ar, handler, envFacts);
       baselineDelta = ctx.getBaselineStore().compare(fp, opts.baselineId) || null;
     }
   }
 
   const pack = {
     file: { path: filePath, totalLines, timeRange: aresult?.timeRange || null },
+    ...(hasEnv ? { env: envFacts } : {}),
     scope: analysisResp?.scope,
     severity,
     summary: parts.join(', '),
@@ -737,6 +751,12 @@ export function startApiServer(ctx: ApiContext): void {
         if (url === '/api/agent-memory') {
           const mem = ctx.getAgentMemory();
           sendJson(res, { success: true, memory: mem || null });
+          return;
+        }
+
+        if (url === '/api/context-manifest') {
+          const manifest = ctx.getContextManifest();
+          sendJson(res, { success: true, manifest: manifest || null });
           return;
         }
 
@@ -1335,6 +1355,27 @@ export function startApiServer(ctx: ApiContext): void {
           return;
         }
 
+        if (url === '/api/context-manifest') {
+          if (!body.facts || typeof body.facts !== 'object' || Array.isArray(body.facts)) {
+            return sendError(res, 'facts required (object of key→value strings)');
+          }
+          if (!ctx.getCurrentFilePath()) return sendError(res, 'No file open');
+          const result = ctx.attachContextManifest(body.facts, {
+            provenance: (body.provenance && typeof body.provenance === 'object' && !Array.isArray(body.provenance)) ? body.provenance : undefined,
+            source: typeof body.source === 'string' ? body.source : undefined,
+            replace: body.replace === true,
+            agentName: activeAgent?.name,
+          });
+          if (!result.success) return sendError(res, 'Failed to attach context (could not write .logan/ sidecar)');
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/context-manifest-clear') {
+          sendJson(res, ctx.clearContextManifest());
+          return;
+        }
+
         if (url === '/api/agent-memory-clear') {
           ctx.clearAgentMemory();
           notifyMemoryChanged(ctx);
@@ -1479,6 +1520,17 @@ export function startApiServer(ctx: ApiContext): void {
             ? body.questions.filter((q: any) => typeof q === 'string' && q.trim()).map((q: string) => q.trim()).slice(0, 50)
             : [];
 
+          // Environment the log was captured under (build/firmware/flags/config) — the
+          // manifest's facts become an "Environment" section conditioning the findings.
+          const cm = ctx.getContextManifest();
+          const envContext = (cm && cm.facts)
+            ? Object.entries(cm.facts).map(([key, f]: [string, any]) => ({
+                key,
+                value: String(f?.value ?? ''),
+                ...(f?.source ? { source: String(f.source) } : {}),
+              }))
+            : [];
+
           const md = buildReportMarkdown({
             name: body.name,
             aim: body.aim || '',
@@ -1495,6 +1547,7 @@ export function startApiServer(ctx: ApiContext): void {
             eventLines,
             components,
             questions,
+            envContext,
           });
 
           const saved = await ctx.saveReport(reportFileName(body.name), md);
@@ -1541,7 +1594,7 @@ export function startApiServer(ctx: ApiContext): void {
           const analysisResult = ctx.getAnalysisResult();
           if (!filePath || !handler) return sendError(res, 'No file open');
           if (!analysisResult) return sendError(res, 'Run analysis first');
-          const fp = buildFingerprint(filePath, analysisResult, handler);
+          const fp = buildFingerprint(filePath, analysisResult, handler, factsToPlain(ctx.getContextManifest()));
           const id = ctx.getBaselineStore().save(
             body.name || 'Unnamed baseline',
             body.description || '',
@@ -1559,7 +1612,7 @@ export function startApiServer(ctx: ApiContext): void {
           if (!filePath || !handler) return sendError(res, 'No file open');
           if (!analysisResult) return sendError(res, 'Run analysis first');
           if (!body.baselineId) return sendError(res, 'baselineId required');
-          const fp = buildFingerprint(filePath, analysisResult, handler);
+          const fp = buildFingerprint(filePath, analysisResult, handler, factsToPlain(ctx.getContextManifest()));
           const report = ctx.getBaselineStore().compare(fp, body.baselineId);
           if (!report) return sendError(res, 'Baseline not found');
           sendJson(res, { success: true, report });
