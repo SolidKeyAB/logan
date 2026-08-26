@@ -7823,11 +7823,16 @@ function dedupeReplayParams(params: any[]): any[] {
   const byKey = new Map<string, any>();
   for (const p of (params || [])) {
     if (!p || !p.key) continue;
+    const role = (p.role === 'constant') ? 'constant' : 'variable';
     const existing = byKey.get(p.key);
     if (!existing) {
-      byKey.set(p.key, { key: p.key, kind: p.kind || 'other', default: p.default, count: 1, differs: false });
+      byKey.set(p.key, { key: p.key, kind: p.kind || 'other', default: p.default, count: 1, differs: false, role, stepIndexes: (typeof p.stepIndex === 'number' ? [p.stepIndex] : []) });
     } else {
       existing.count++;
+      if (typeof p.stepIndex === 'number' && !existing.stepIndexes.includes(p.stepIndex)) existing.stepIndexes.push(p.stepIndex);
+      // A key is tweakable (variable) if ANY of its occurrences is variable; only an
+      // all-constant key collapses to a pinned row.
+      if (role === 'variable') existing.role = 'variable';
       // Same key captured with DIFFERENT values across steps — editing it will set
       // all of them (resolveSteps applies an override to every step using the key).
       if (JSON.stringify(existing.default) !== JSON.stringify(p.default)) existing.differs = true;
@@ -7847,14 +7852,26 @@ function renderReplayParamForm(container: HTMLElement | null, name: string, para
     const hint = [baseHint, multiHint].filter(Boolean).join(' — ');
     const val = p.default == null ? '' : String(p.default);
     const numeric = typeof p.default === 'number' ? '1' : '0';
+    const steps = escapeHtml((p.stepIndexes || []).join(','));
+    if (p.role === 'constant') {
+      // Pinned — the fixed shape of the recipe. Shown read-only so it stays legible;
+      // ✎ frees it back to a variable the user retargets per bug.
+      return `<div class="filter-group replay-param-row replay-param-constant">`
+        + `<label>${escapeHtml(p.key)} <span class="req-hint">(constant${baseHint ? ' · ' + escapeHtml(baseHint) : ''})</span>`
+        + ` <button class="replay-role-toggle" data-role-key="${escapeHtml(p.key)}" data-role-steps="${steps}" data-role-to="variable" title="Make this a variable you change per bug">✎ make variable</button></label>`
+        + `<div class="replay-param-pinned" title="pinned value">${escapeHtml(val) || '<em>(empty)</em>'}</div>`
+        + `</div>`;
+    }
     return `<div class="filter-group replay-param-row">`
-      + `<label>${escapeHtml(p.key)}${hint ? ` <span class="req-hint">(${escapeHtml(hint)})</span>` : ''}</label>`
+      + `<label>${escapeHtml(p.key)}${hint ? ` <span class="req-hint">(${escapeHtml(hint)})</span>` : ''}`
+      + ` <button class="replay-role-toggle" data-role-key="${escapeHtml(p.key)}" data-role-steps="${steps}" data-role-to="constant" title="Pin this value as a fixed part of the recipe (not tweaked on replay)">🔒 pin</button></label>`
       + `<input type="text" class="modal-input replay-param-input" data-param-key="${escapeHtml(p.key)}" data-param-numeric="${numeric}" value="${escapeHtml(val)}">`
       + `</div>`;
   }).join('');
+  const anyVariable = params.some(p => p.role !== 'constant');
   container.innerHTML = `<div class="investigate-replay">`
     + `<div class="investigate-replay-title">Rerun “${escapeHtml(name)}” on this log — adjust the window / nouns</div>`
-    + `<div class="investigate-req-note">Leave a field as-is to reuse the captured value; edit to retarget the hunt onto this incident.</div>`
+    + `<div class="investigate-req-note">Variables prompt for a new value; 🔒 pins one as a constant, ✎ frees a constant. ${anyVariable ? 'Leave a field as-is to reuse the captured value.' : 'All values are pinned — free one to retarget, or run as recorded.'}</div>`
     + rows
     + `<div class="investigate-req-actions"><button class="secondary-btn small" id="btn-replay-reset">Reset</button><button class="secondary-btn small" id="btn-replay-fork" title="Save these tweaked values as a NEW saved investigation (a fork)">⑂ Save as new…</button><button class="primary-btn small" id="btn-replay-run">▶ Run replay</button></div>`
     + `</div>`;
@@ -7863,6 +7880,31 @@ function renderReplayParamForm(container: HTMLElement | null, name: string, para
     void runInvestigationTemplate(name, force, collectReplayOverrides(container));
   });
   container.querySelector('#btn-replay-fork')?.addEventListener('click', () => { void forkInvestigationFromForm(name, container); });
+  container.querySelectorAll('.replay-role-toggle').forEach(el => {
+    el.addEventListener('click', () => {
+      const btn = el as HTMLElement;
+      const key = btn.getAttribute('data-role-key') || '';
+      const to = (btn.getAttribute('data-role-to') === 'constant') ? 'constant' : 'variable';
+      const stepIdxs = (btn.getAttribute('data-role-steps') || '').split(',').map(s => Number(s)).filter(n => !isNaN(n));
+      void setReplayParamRole(name, key, stepIdxs, to, container, force);
+    });
+  });
+}
+
+// Flip a replay param between variable (prompted) and constant (pinned), persisting
+// the choice on the saved template (across every step that shares the key) via the
+// param-setter verb, then re-render the form from the updated template.
+async function setReplayParamRole(name: string, key: string, stepIndexes: number[], role: 'variable' | 'constant', container: HTMLElement | null, force: boolean): Promise<void> {
+  if (!container || !key) return;
+  const patches = (stepIndexes.length ? stepIndexes : [0]).map(si => ({ stepIndex: si, key, role }));
+  const res = await window.api.setInvestigationParams(name, patches);
+  if (!res || !res.success) { showToast(res?.error || 'Could not update parameter'); return; }
+  // Keep the cache in sync so list / workflow views reflect the new role.
+  if (res.template) {
+    const i = investigationTemplatesCache.findIndex((t: any) => t.name === name || t.slug === res.template.slug);
+    if (i >= 0) investigationTemplatesCache[i] = res.template;
+  }
+  renderReplayParamForm(container, name, dedupeReplayParams(res.template?.params || []), force);
 }
 
 // Collect only genuinely-EDITED, non-empty fields as overrides (an untouched field
