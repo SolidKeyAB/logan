@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { ScopeDescriptor, ScopeInfo } from '../shared/types';
 
 // IPC Channel constants (must match main process)
@@ -1138,6 +1138,11 @@ const api = {
   windowMaximize: (): Promise<void> => ipcRenderer.invoke('window-maximize'),
   windowClose: (): Promise<void> => ipcRenderer.invoke('window-close'),
   getPlatform: (): Promise<string> => ipcRenderer.invoke('get-platform'),
+
+  // Resolve the on-disk path of a File (from <input type=file> or a drop).
+  // Electron 32+ removed the non-standard File.path; webUtils.getPathForFile is
+  // the supported replacement and must be called from the preload bridge.
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
 };
 
 contextBridge.exposeInMainWorld('api', api);

@@ -13567,7 +13567,7 @@ function openVideoFile(): void {
   input.onchange = () => {
     const file = input.files?.[0];
     if (file) {
-      loadVideoFromPath(file.path);
+      loadVideoFromPath(window.api.getPathForFile(file));
     }
   };
   input.click();
@@ -13814,7 +13814,7 @@ function setupVideoDragDrop(): void {
     const videoExts = new Set(['mp4', 'webm', 'ogv', 'ogg', 'mov', 'mkv', 'avi', 'wmv', 'flv', 'mpg', 'mpeg', 'm4v', 'm2ts', 'ts', '3gp']);
     // Accept by MIME OR extension — some containers (e.g. .mkv) report an empty type.
     if (file.type.startsWith('video/') || videoExts.has(ext)) {
-      loadVideoFromPath(file.path);
+      loadVideoFromPath(window.api.getPathForFile(file));
     }
   });
 }
