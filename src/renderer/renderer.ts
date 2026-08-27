@@ -19074,7 +19074,7 @@ async function showColumnsModal(): Promise<void> {
               <input type="checkbox" data-col-index="${idx}" ${col.visible ? 'checked' : ''}>
               <span class="column-index">${label}</span>
             </label>
-            <label class="checkbox-label col-mute-label" title="Dim this column and drop it from searches / analysis / extract (kept visible for context)">
+            <label class="checkbox-label col-mute-label" title="Dim this column in place — view-only de-emphasis (kept visible for context). Right-click a column in the viewer to mute/unmute too.">
               <input type="checkbox" class="col-mute-cb" data-col-mute="${idx}" ${(col as any).muted ? 'checked' : ''}>
               <span>🔇 mute</span>
             </label>
@@ -19126,7 +19126,7 @@ function renderPatternColumnsModal(cfg: ColumnConfig): void {
           <input type="checkbox" data-col-index="${col.index}" ${col.visible ? 'checked' : ''}>
           <span class="column-index">${label}</span>
         </label>
-        <label class="checkbox-label col-mute-label" title="Dim this column and drop it from searches / analysis / extract (kept visible for context)">
+        <label class="checkbox-label col-mute-label" title="Dim this column in place — view-only de-emphasis (kept visible for context). Right-click a column in the viewer to mute/unmute too.">
           <input type="checkbox" class="col-mute-cb" data-col-mute="${col.index}" ${col.muted ? 'checked' : ''}>
           <span>🔇 mute</span>
         </label>
