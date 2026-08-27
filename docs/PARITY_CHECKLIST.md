@@ -30,7 +30,58 @@ Copy this into the PR when you add or change a verb:
 - [ ] Is there an MCP tool in `src/mcp-server/index.ts` calling that endpoint?
 - [ ] Is the verb counted in the Usage Monitor for **both** operators, and mapped in `src/shared/verbRegistry.ts` so the human/AI counts join?
 - [ ] Redaction: does the MCP tool default `redact: true` for any response that can contain log content? (Metadata-only responses — e.g. a compiled pattern the AI itself supplied — may default `redact: false`.)
+- [ ] **One effect layer?** Does the verb declare a single primary effect — View / Scope / Read / Produce / Mark (see [Effect layers](#effect-layers--the-second-axis))? If it needs two, split it.
 - [ ] **OR** written exemption: _"Human-only because …"_ (e.g. it's a pure viewport/UI concern, or a security-gated capability the AI must not have).
+
+## Effect layers — the second axis
+
+Parity asks *"can both operators do it?"*. This axis asks *"what does the verb
+**touch**?"* — and the two are orthogonal, so every verb carries **two coordinates**:
+
+- **Altitude** (the existing 3-layer pyramid — L0 primitives → L1 composites → L2
+  synthesis): *how much* a call does.
+- **Effect layer** (this axis): *what* a verb changes. Every verb declares **one**
+  primary effect:
+
+  | Layer | "Does it change what other verbs see?" | Verbs |
+  |-------|-----------------------------------------|-------|
+  | **View** | Presentation only. Reversible; changes nothing another verb reads. | line/column mute, highlight, fold, navigate, muted-size |
+  | **Scope** | Sets the working set later verbs operate on. | filter, active-scope, hide-columns, single-session concat, folder-mute |
+  | **Read** | Returns information. No mutation, no artifact. | search, get-lines, analyze, trends, time-gaps, evidence-pack, diff-runs, investigate-* |
+  | **Produce** | Writes a new derived artifact / file / entity. | extract, merge-to-file, wall-clock materialize, save-report, save-investigation |
+  | **Mark** | Attaches a durable record to the log. | bookmark, report-finding / annotate / import-findings, add-clue / save-sequence, baseline-save, context-attach |
+
+### The rule (one verb = one effect layer)
+
+> **A verb declares exactly one primary effect layer. If it needs two, split it.**
+
+This is a **design-review gate checked at PR time**, not a runtime field on every
+tool. It catches the overlapping-verb trap *before* it ships:
+
+- **Motivating case — mute (#155 → #162 → #163).** Column/line mute churned because
+  it straddled **View** (dim in place) and **Scope** (drop from search / analyze /
+  extract). The rule forces the split: mute is **View** → visual-only; *shrinking
+  the working set* belongs to **Scope** (Hide columns / Filter rows) or **Produce**
+  (Extract). Applying the rule retroactively is exactly what #163 did.
+
+### Where it earns its keep (and where it would be bureaucracy)
+
+It earns its keep in exactly two places — both of which **consume** the tag, so it
+drives behavior instead of decorating:
+
+1. **This review gate.** One-verb-one-layer is a yes/no question a reviewer can
+   actually answer, and it would have flagged mute before the churn.
+2. **AI verb-selection.** Put the layer word in the MCP description of the
+   *confusable cluster only* (mute / filter / extract / hide / highlight). Then the
+   agent reasons "to shrink what I analyze I reach for a **Scope** verb, not a
+   **View** one" — a real constraint on tool choice.
+
+What we deliberately **do not** build: an `effectLayer` field on all ~68 tools + a
+registry + badges everywhere. Nothing would read it → bureaucracy. Materialize the
+tag only where something consumes it (a description string, a palette grouping) —
+the same "earn the surface with usage" discipline as the entity registry. Beyond
+these two, the axis stays a **design axis** used when classifying a new verb; it may
+later be surfaced (badges / grouping) once a consumer earns it.
 
 ## How to wire a counterpart (reference)
 
@@ -228,16 +279,10 @@ when each is next touched):
   **Hide** (columns → gone from view + tools) and **Filter/Extract** (rows) already do, so mute
   doesn't overlap. The AI has no viewport and reads column values directly; it needs no
   "mute a column" verb.
-  NB — **effect-layer classification (2026-08-27):** LOGAN tools are being framed by their
-  EFFECT AREA — **View** (visual only: mute, highlight, bookmark, fold) · **Scope** (narrows
-  what tools operate on: filter, hide-columns, active-scope) · **Read** (compute, no mutation:
-  search, analyze, trends, time-gaps, investigate-*, summarize, diff-runs) · **Produce**
-  (writes an artifact/entity: extract, merge-to-file, save-report, save-investigation,
-  single-session) · **Mark** (pins findings: report_finding, annotate, import_findings). This
-  answers "does X affect tools?" definitionally: **mute is View → visual-only** (so an earlier
-  slice that discarded muted columns/lines from search/extract was reverted). "Discard / shrink
-  the working set" is the job of Scope (Hide/Filter) + Produce (Extract). Design axis; may be
-  surfaced (badges/grouping) + enforced on new tools.
+  NB — this is the motivating case for the **effect-layer** axis (see [Effect layers](#effect-layers--the-second-axis),
+  established 2026-08-27): **mute is View → visual-only**, so the earlier slice that discarded
+  muted columns/lines from search/extract was reverted (#163). "Discard / shrink the working
+  set" is Scope's job (Hide/Filter) + Produce's (Extract), never View's.
 
 - **Apply a saved lens entity — `logan_apply_entity`** (the write-half of `logan_entities`,
   which only lists). CLOSES a real parity debt: the agent previously had **no** way to apply a
