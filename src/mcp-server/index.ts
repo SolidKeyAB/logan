@@ -463,7 +463,7 @@ server.tool(
 // === Tool: logan_filter ===
 server.tool(
   'logan_filter',
-  'Apply a filter to show only matching lines. Supports level filtering and include/exclude patterns.',
+  '[Scope] Apply a filter to show only matching lines — this NARROWS the working set that later read/produce verbs (logan_search, logan_analyze, logan_extract) operate on. Supports level filtering and include/exclude patterns. (Effect layer = Scope; to only visually mark lines without narrowing, use logan_highlight instead.)',
   {
     levels: z.array(z.string()).optional().describe('Log levels to include (e.g. ["error", "warning"])'),
     includePatterns: z.array(z.string()).optional().describe('Regex patterns — line must match at least one'),
@@ -589,7 +589,7 @@ server.tool(
 // === Tool: logan_highlight ===
 server.tool(
   'logan_highlight',
-  'Add a highlight rule to visually mark matching text in the log viewer',
+  '[View] Add a highlight rule to visually mark matching text in the log viewer. Visual only — it does NOT change what other tools see and does NOT narrow the working set (use logan_filter to narrow, logan_extract to write a subset out).',
   {
     pattern: z.string().describe('Text or regex pattern to highlight'),
     isRegex: z.boolean().default(false).describe('Treat pattern as regex'),
@@ -2071,7 +2071,7 @@ server.tool(
 // line number so it maps back to the original.
 server.tool(
   'logan_extract',
-  'Extract the current active FILTER subset into a NEW file and return its path + line count. Requires an active filter — call logan_filter first. Each extracted line is prefixed with its 1-based ORIGINAL source line number (unless includeLineNumbers=false), so you can map back. This is the AI counterpart of the human "Extract to file" button (same underlying action).',
+  '[Produce] Extract the current active FILTER subset into a NEW file and return its path + line count — this WRITES a new artifact on disk (contrast logan_filter, which only narrows the in-view set, and logan_highlight, which only marks it visually). Requires an active filter — call logan_filter first. Each extracted line is prefixed with its 1-based ORIGINAL source line number (unless includeLineNumbers=false), so you can map back. This is the AI counterpart of the human "Extract to file" button (same underlying action).',
   {
     includeLineNumbers: z.boolean().default(true).describe('Prefix each extracted line with its 1-based original source line number (tab-separated)'),
     redact: z.boolean().default(true).describe('Whether to redact sensitive data in the returned path/metadata'),
