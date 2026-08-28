@@ -919,6 +919,7 @@ interface Api {
   windowMaximize: () => Promise<void>;
   windowClose: () => Promise<void>;
   getPlatform: () => Promise<string>;
+  getPathForFile: (file: File) => string;
 }
 
 interface Window {
