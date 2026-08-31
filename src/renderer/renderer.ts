@@ -176,6 +176,13 @@ interface LocalFolderFile {
   isDirectory?: boolean;
   children?: LocalFolderFile[];
   collapsed?: boolean;
+  // Lazy tree: shallow-scan hint that this directory has expandable content, plus
+  // transient per-node load state (populated when the user expands it or reveal walks
+  // through it). Local and remote subfolders both load their children on demand.
+  hasChildren?: boolean;
+  _loaded?: boolean;
+  _loading?: boolean;
+  _loadError?: string;
 }
 
 interface FolderState {
@@ -5547,8 +5554,34 @@ function mapFolderEntries(entries: any[]): LocalFolderFile[] {
     fileType: e.fileType,
     isDirectory: e.isDirectory || false,
     collapsed: true, // subdirs start collapsed
+    hasChildren: e.hasChildren, // shallow-scan hint: expandable? (loaded lazily on expand)
     children: e.children ? mapFolderEntries(e.children) : undefined,
   }));
+}
+
+// Fetch a LOCAL subfolder's immediate children (one shallow level) and splice them into
+// the node. Shared by the expand-on-click handler and revealActiveFileInTree's ancestor
+// walk. Sets the transient _loading/_loaded/_loadError flags so the tree can render
+// Loading… / Failed to load / No supported files. No-op if already loaded.
+async function loadLocalSubdirChildren(node: LocalFolderFile, dirPath: string): Promise<void> {
+  if (node._loaded) return;
+  node._loading = true;
+  node._loadError = undefined;
+  renderFolderTree();
+  try {
+    const result = await window.api.readFolder(dirPath);
+    if (result.success) {
+      node.children = mapFolderEntries(result.files || []);
+      node._loaded = true;
+    } else {
+      node._loadError = result.error || 'Failed to read directory';
+      console.error('readFolder failed:', result.error);
+    }
+  } catch (err) {
+    node._loadError = String(err);
+    console.error('readFolder error:', err);
+  }
+  node._loading = false;
 }
 
 // Add a folder to the folders panel by path (reused by the open dialog and the
@@ -5654,18 +5687,51 @@ function preserveCollapseState(newEntries: LocalFolderFile[], oldEntries: LocalF
   })(newEntries);
 }
 
+// Re-scan a LOCAL folder (shallow root) while re-opening every branch that was expanded
+// before — re-loading each open level from disk so newly created subfolders/files inside
+// an open branch appear on refresh (that's the whole point: the old deep scan showed them
+// only within the depth cap; now an open branch always re-lists live). Renders are left to
+// the caller. Directories that were collapsed stay collapsed and unloaded (lazy).
+async function reloadFolderPreservingExpansion(folder: FolderState): Promise<void> {
+  // Snapshot which directories were open (expanded + populated) before the re-scan.
+  const expanded: string[] = [];
+  (function walk(entries: LocalFolderFile[]) {
+    for (const e of entries) {
+      if (e.isDirectory && !e.collapsed && (e._loaded || (e.children && e.children.length > 0))) {
+        expanded.push(e.path);
+      }
+      if (e.children) walk(e.children);
+    }
+  })(folder.files);
+
+  // Re-scan the root shallowly — picks up added/removed top-level entries.
+  const rootRes = await window.api.readFolder(folder.path);
+  if (!rootRes.success || !rootRes.files) return;
+  folder.files = mapFolderEntries(rootRes.files);
+
+  // Re-open each previously-expanded branch parent-before-child (a parent path is always a
+  // strict prefix, hence shorter), re-listing as we go so the branch reflects disk now.
+  expanded.sort((a, b) => a.length - b.length);
+  for (const dirPath of expanded) {
+    const node = findSubfolder(folder.files, dirPath) || findSubfolder(folder.files, dirPath.replace(/\//g, '\\'));
+    if (!node || !node.isDirectory) continue;
+    node.collapsed = false;
+    if (!node._loaded && (!node.children || node.children.length === 0)) {
+      try {
+        const res = await window.api.readFolder(node.path);
+        if (res.success) { node.children = mapFolderEntries(res.files || []); node._loaded = true; }
+      } catch { /* leave it collapsed-empty; the user can re-expand to retry */ }
+    }
+  }
+}
+
 async function refreshFolders(): Promise<void> {
   if (state.folders.length === 0) return;
 
   try {
     for (const folder of state.folders) {
-      if (folder.isRemote) continue; // SSH folders don't recurse
-      const result = await window.api.readFolder(folder.path);
-      if (result.success && result.files) {
-        const newFiles = mapFolderEntries(result.files);
-        preserveCollapseState(newFiles, folder.files);
-        folder.files = newFiles;
-      }
+      if (folder.isRemote) continue; // SSH folders refresh via their own per-folder button
+      await reloadFolderPreservingExpansion(folder);
     }
     renderFolderTree();
   } finally {
@@ -5684,7 +5750,7 @@ async function refreshSingleFolder(folderPath: string): Promise<void> {
 
   try {
     if (folder.isRemote) {
-      // Remote folder — re-list via SFTP
+      // Remote folder — re-list the root via SFTP (deep branches reload lazily on expand)
       const result = await window.api.sshListRemoteDir(folder.path);
       if (result.success && result.files) {
         const newFiles = mapFolderEntries(result.files);
@@ -5692,12 +5758,7 @@ async function refreshSingleFolder(folderPath: string): Promise<void> {
         folder.files = newFiles;
       }
     } else {
-      const result = await window.api.readFolder(folder.path);
-      if (result.success && result.files) {
-        const newFiles = mapFolderEntries(result.files);
-        preserveCollapseState(newFiles, folder.files);
-        folder.files = newFiles;
-      }
+      await reloadFolderPreservingExpansion(folder);
     }
     renderFolderTree();
   } finally {
@@ -5781,25 +5842,35 @@ function fileTypeIcon(entry: LocalFolderFile): { glyph: string; cls: string } {
 function renderFolderEntries(entries: LocalFolderFile[], depth: number, isRemote: boolean): string {
   return entries.map(entry => {
     if (entry.isDirectory) {
-      const hasChildren = entry.children && entry.children.length > 0;
-      const isLoading = (entry as any)._loading;
-      const loadError = (entry as any)._loadError as string | undefined;
+      const loadedChildren = !!(entry.children && entry.children.length > 0);
+      // Expandable if we already hold children OR the shallow scan flagged content
+      // inside. Lazy tree: children for local + remote dirs are fetched on expand, so
+      // an expandable dir may have no children in memory until the user opens it.
+      const expandable = !!entry.hasChildren || loadedChildren;
+      const isLoading = !!entry._loading;
+      const loadError = entry._loadError;
+      const isLoaded = !!entry._loaded || loadedChildren;
       let innerHtml = '';
-      if (hasChildren) {
+      if (loadedChildren) {
         innerHtml = renderFolderEntries(entry.children!, depth + 1, isRemote);
-      } else if (!entry.collapsed && isRemote) {
+      } else if (!entry.collapsed) {
+        // Expanded but nothing in memory yet — show the load state (local + remote).
+        const pad = 8 + (depth + 1) * 14;
         if (isLoading) {
-          innerHtml = `<div class="folder-loading" style="padding-left:${8 + (depth+1) * 14}px">Loading…</div>`;
+          innerHtml = `<div class="folder-loading" style="padding-left:${pad}px">Loading…</div>`;
         } else if (loadError) {
-          innerHtml = `<div class="folder-loading" style="padding-left:${8 + (depth+1) * 14}px;color:var(--error-color,#e88080);" title="${escapeHtml(loadError)}">Failed to load</div>`;
-        } else if ((entry as any)._loaded) {
-          innerHtml = `<div class="folder-loading" style="padding-left:${8 + (depth+1) * 14}px">Empty</div>`;
+          innerHtml = `<div class="folder-loading" style="padding-left:${pad}px;color:var(--error-color,#e88080);" title="${escapeHtml(loadError)}">Failed to load</div>`;
+        } else if (isLoaded) {
+          innerHtml = `<div class="folder-loading" style="padding-left:${pad}px">No supported files</div>`;
         }
       }
+      const toggle = expandable
+        ? `<span class="folder-toggle">${isLoading ? '&#8987;' : '&#9660;'}</span>`
+        : `<span class="folder-toggle folder-toggle--leaf"></span>`;
       return `
-        <div class="folder-subdir ${entry.collapsed ? 'collapsed' : ''}" data-subdir-path="${escapeHtml(entry.path)}" ${isRemote ? 'data-remote-dir="true"' : ''}>
+        <div class="folder-subdir ${entry.collapsed ? 'collapsed' : ''}${expandable ? '' : ' leaf'}" data-subdir-path="${escapeHtml(entry.path)}" ${isRemote ? 'data-remote-dir="true"' : ''}>
           <div class="folder-subdir-header" style="padding-left: ${8 + depth * 14}px">
-            <span class="folder-toggle">${isLoading ? '&#8987;' : '&#9660;'}</span>
+            ${toggle}
             <span class="folder-subdir-name" title="${escapeHtml(entry.path)}">${escapeHtml(entry.name)}</span>
           </div>
           <div class="folder-subdir-files">${innerHtml}</div>
@@ -5873,7 +5944,9 @@ async function revealActiveFileInTree(opts?: { auto?: boolean }): Promise<void> 
     if (!host) { if (!auto) showToast('Could not locate the file’s folder'); return; }
   }
 
-  // 3. Expand the host root + every ancestor directory down to the file.
+  // 3. Expand the host root + every ancestor directory down to the file. The tree is
+  //    lazy, so each local level is loaded on the way down — otherwise the deeper nodes
+  //    (and the file's own row) wouldn't exist in memory to expand or scroll to.
   host.collapsed = false;
   const base = host.path.replace(/[\\/]+$/, '');
   const rel = target.slice(base.length).replace(/^[\\/]+/, '');
@@ -5883,7 +5956,12 @@ async function revealActiveFileInTree(opts?: { auto?: boolean }): Promise<void> 
   for (const part of parts) {
     acc = acc + '/' + part;
     const sub = findSubfolder(host.files, acc) || findSubfolder(host.files, acc.replace(/\//g, '\\'));
-    if (sub) sub.collapsed = false;
+    if (!sub) break; // path diverged from what's on disk — stop expanding
+    sub.collapsed = false;
+    // Local lazy tree: materialise this level's children so the next part resolves.
+    if (!host.isRemote && sub.isDirectory && !sub._loaded && (!sub.children || sub.children.length === 0)) {
+      await loadLocalSubdirChildren(sub, sub.path);
+    }
   }
   renderFolderTree();
 
@@ -5986,25 +6064,28 @@ function renderFolderTree(): void {
       // Toggle collapse
       node.collapsed = !node.collapsed;
 
-      // Lazy-load remote subdirectory contents if expanding and not yet loaded
-      if (!node.collapsed && isRemoteDir && !(node as any)._loaded && (!node.children || node.children.length === 0)) {
-        (node as any)._loading = true;
-        (node as any)._loadError = undefined;
+      // Lazy-load subdirectory contents on first expand — local and remote alike.
+      const needsLoad = !node.collapsed && !node._loaded && (!node.children || node.children.length === 0);
+      if (needsLoad && isRemoteDir) {
+        node._loading = true;
+        node._loadError = undefined;
         renderFolderTree();
         try {
           const result = await window.api.sshListRemoteDir(subdirPath, connectionId);
           if (result.success) {
             node.children = mapFolderEntries(result.files || []);
-            (node as any)._loaded = true;
+            node._loaded = true;
           } else {
-            (node as any)._loadError = result.error || 'Failed to list directory';
+            node._loadError = result.error || 'Failed to list directory';
             console.error('sshListRemoteDir failed:', result.error);
           }
         } catch (err) {
-          (node as any)._loadError = String(err);
+          node._loadError = String(err);
           console.error('sshListRemoteDir error:', err);
         }
-        (node as any)._loading = false;
+        node._loading = false;
+      } else if (needsLoad && node.hasChildren) {
+        await loadLocalSubdirChildren(node, subdirPath);
       }
 
       renderFolderTree();
