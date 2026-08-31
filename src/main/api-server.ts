@@ -8,7 +8,9 @@ import { FileHandler } from './fileHandler';
 import { type BaselineStore, buildFingerprint } from './baselineStore';
 import { factsToPlain } from './contextManifest';
 import { AnalysisResult } from './analyzers/types';
-import { JournalEntry, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps, setTemplateParams } from './investigationStore';
+import { JournalEntry, InvestigationTemplate, TemplateStep, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps, setTemplateParams, slugify } from './investigationStore';
+import { resolveAnswerStep, outputLabelForPath, deriveAnswerValue, AnswerValue } from '../shared/recipeOutputs';
+import { evaluateGuard, describeGuard, normalizeGuard, isCompositeStep, compositeTarget, COMPOSITE_STEP_PATH } from '../shared/recipeComposition';
 import { investigationToGraph } from './workflowGraph';
 import { listSequences, saveSequence, appendClue, deleteSequence } from './sequenceStore';
 import { evaluateRequirements, suggestRequirements, mergeRequirements, RequirementCheckContext, EntityRef } from './investigationRequirements';
@@ -38,7 +40,14 @@ const INVESTIGATIVE_PATHS = new Set<string>([
   '/api/build-conclusion', '/api/summarize', '/api/fold-regions', '/api/diff-runs',
 ]);
 const JOURNAL_CAP = 200;
+// A composite recipe recurses (its steps run sub-recipes, which may themselves be composite).
+// Cap the nesting to break a self-referential recipe before it loops forever.
+const MAX_COMPOSE_DEPTH = 8;
 let agentJournal: JournalEntry[] = [];
+// Distinct files touched during the CURRENT recording (same lifecycle as agentJournal):
+// accumulates the current file each time an investigative call is journaled, so a saved
+// recipe records every file/type it was built on. Reset when the journal is cleared.
+let journalFiles: string[] = [];
 
 // --- Usage Monitor (AI tap) ---
 // Housekeeping / connection-management POST paths that are NOT real tool verbs;
@@ -118,6 +127,11 @@ function summarizeReplay(p: string, r: any): string {
   if (p === '/api/evidence-pack') return r.pack?.severity ? `${r.pack.severity}` : 'brief';
   if (p === '/api/investigate-crashes') return `${r.crashes?.length ?? r.groups?.length ?? 0} crash groups`;
   if (p === '/api/diff-runs') return r.diff ? `${r.diff.summary?.onlyInTarget ?? 0} new / ${r.diff.summary?.changed ?? 0} changed templates` : 'diffed';
+  if (p === COMPOSITE_STEP_PATH) {
+    if (r.blocked) return `↳ ${r.ran || 'sub-recipe'} blocked (requirements)`;
+    const a = r.answer;
+    return a ? `↳ ${r.ran}: ${a.summary || a.output || 'ran'}` : `↳ ${r.ran || 'sub-recipe'} ran`;
+  }
   return 'ok';
 }
 
@@ -833,7 +847,13 @@ export function startApiServer(ctx: ApiContext): void {
         // (internal call from runTemplate), which would pollute the recording.
         if (req.headers['x-logan-replay'] !== '1') {
           const journaled = recordJournal(url, body);
-          if (journaled) resultPendingByRes.set(res, journaled); // fill .result at sendJson
+          if (journaled) {
+            resultPendingByRes.set(res, journaled); // fill .result at sendJson
+            // Track every DISTINCT file the recorded steps ran against, so a saved recipe
+            // shows which file(s)/type(s) it was built on (esp. a multi-file investigation).
+            const fp = ctx.getCurrentFilePath();
+            if (fp && !journalFiles.includes(fp)) journalFiles.push(fp);
+          }
           // Usage Monitor: count every real AI tool call (verb = path minus
           // '/api/'). Skip replay + housekeeping paths. Fire-and-forget.
           if (url?.startsWith('/api/') && !USAGE_SKIP_PATHS.has(url)) {
@@ -857,6 +877,7 @@ export function startApiServer(ctx: ApiContext): void {
         }
         if (url === '/api/investigation-clear') {
           agentJournal = [];
+          journalFiles = [];
           sendJson(res, { success: true });
           return;
         }
@@ -880,6 +901,11 @@ export function startApiServer(ctx: ApiContext): void {
         }
         if (url === '/api/investigation-save') {
           if (!body.name) return sendError(res, 'name required');
+          // Aim is REQUIRED — a recipe must say what it is FOR, or a growing list of them
+          // is unreadable (you can't tell one hunt from another). Gate every save here so
+          // both operators (human "Save current" IPC + agent MCP) are covered by one rule.
+          const aim = typeof body.aim === 'string' ? body.aim.trim() : '';
+          if (!aim) return sendError(res, 'An aim is required — say what this recipe is for (e.g. "find the root-cause component of the 401 storm"). Without an aim, the recipe list becomes unreadable as it grows.');
           if (agentJournal.length === 0) return sendError(res, 'Nothing to save — the agent has not run any investigative steps yet.');
           let requirements = body.requirements;
           if (body.autoDetect) {
@@ -887,7 +913,7 @@ export function startApiServer(ctx: ApiContext): void {
             const suggested = suggestRequirements({ filePath: fp, adapterId: fp ? pickAdapter(fp).id : null });
             requirements = mergeRequirements(requirements, suggested);
           }
-          const tpl = buildTemplate(body.name, agentJournal, ctx.getCurrentFilePath() || undefined, body.description, requirements, body.aim);
+          const tpl = buildTemplate(body.name, agentJournal, ctx.getCurrentFilePath() || undefined, body.description, requirements, aim, journalFiles.slice());
           saveTemplate(tpl);
           // Notify the renderer so the Investigate panel can refresh its list.
           const win = ctx.getMainWindow();
@@ -909,6 +935,10 @@ export function startApiServer(ctx: ApiContext): void {
         if (url === '/api/investigation-run') {
           const tpl = getTemplate(body.name || body.slug || '');
           if (!tpl) return sendError(res, `No saved investigation named "${body.name || body.slug}"`);
+          // Composite recipes recurse (a step runs a sub-recipe). Cap the nesting so a
+          // self-referential recipe can't loop forever; depth is threaded through the body.
+          const depth = Number(body._depth) || 0;
+          if (depth > MAX_COMPOSE_DEPTH) return sendError(res, `Composite recursion too deep (>${MAX_COMPOSE_DEPTH}) — a recipe likely references itself. Aborting to avoid a loop.`);
           // Preflight: does the CURRENT log satisfy this investigation's requirements
           // (e.g. must be in a given column template / format)? A file-template mismatch
           // blocks the replay unless the caller passes force:true.
@@ -946,16 +976,54 @@ export function startApiServer(ctx: ApiContext): void {
           };
           pushStep({ phase: 'start', total: steps.length });
           const results: any[] = [];
+          const raws: any[] = [];           // raw replay result per step (for the typed answer)
+          let lastAnswer: AnswerValue | null = null; // typed answer of the last RUN step — what a guard tests
           for (let i = 0; i < steps.length; i++) {
             const step = steps[i];
-            const r = await replayStep(step);
+            // CONDITIONAL: a composite step may carry a guard on the previous step's answer.
+            // If it fails, skip the step (don't run its sub-recipe) and record why.
+            if (step.when && !evaluateGuard(step.when, lastAnswer)) {
+              const summary = `skipped · ${describeGuard(step.when)}`;
+              results.push({ step: step.label, path: step.path, ok: true, skipped: true, summary, ...(isCompositeStep(step) ? { subRecipe: compositeTarget(step) } : {}) });
+              raws.push(null);
+              pushStep({ phase: 'step', index: i, ok: true, skipped: true, summary, label: step.label });
+              continue;
+            }
+            // Composite (sub-recipe) step: recurse into the run handler, threading the depth
+            // guard + force flag so nested requirement-gates and the loop cap still apply.
+            const isRef = isCompositeStep(step);
+            const runBody = isRef ? { ...step.body, _depth: depth + 1, force: body.force || step.body?.force } : step.body;
+            const r = await replayStep({ path: step.path, body: runBody });
             const ok = r?.success !== false;
             const summary = summarizeReplay(step.path, r);
-            results.push({ step: step.label, path: step.path, ok, summary });
+            raws.push(r);
+            lastAnswer = deriveAnswerValue(step.path, r);
+            results.push({ step: step.label, path: step.path, ok, summary, ...(isRef ? { subRecipe: compositeTarget(step) } : {}) });
             pushStep({ phase: 'step', index: i, ok, summary, label: step.label });
           }
           pushStep({ phase: 'done', total: steps.length });
-          sendJson(res, { success: true, ran: tpl.name, steps: results, requirements, applied: appliedLenses });
+          // The ANSWER — the recipe's valuable output (what its aim asked). Explicit marked
+          // step if set, else the heuristic (last output step) — flagged so the caller can
+          // tell the user it's a best guess. Both operators get this front-and-center.
+          let ans = resolveAnswerStep(steps, tpl.answerStepIndex);
+          // In a CONDITIONAL recipe the chosen answer step may have been skipped by a guard;
+          // fall back to the last non-skipped output-producing step (the real result reached).
+          if (ans && results[ans.index]?.skipped) {
+            let fb: { index: number; heuristic: boolean } | null = null;
+            for (let i = results.length - 1; i >= 0; i--) {
+              if (!results[i]?.skipped && outputLabelForPath(steps[i]?.path)) { fb = { index: i, heuristic: true }; break; }
+            }
+            ans = fb;
+          }
+          const answer = ans ? {
+            index: ans.index,
+            heuristic: ans.heuristic,
+            step: results[ans.index]?.step,
+            output: outputLabelForPath(steps[ans.index]?.path),
+            summary: results[ans.index]?.summary,
+            value: deriveAnswerValue(steps[ans.index]?.path, raws[ans.index]), // typed value a conditional branches on
+          } : null;
+          sendJson(res, { success: true, ran: tpl.name, aim: tpl.aim, composite: !!tpl.composite, answer, steps: results, requirements, applied: appliedLenses });
           return;
         }
         // Fork (Workflow Canvas Phase 3) — "save as a new instance": derive a NEW saved
@@ -968,9 +1036,56 @@ export function startApiServer(ctx: ApiContext): void {
           if (!src) return sendError(res, `No saved investigation named "${body.name || body.slug}"`);
           const newName = (body.newName || '').trim();
           if (!newName) return sendError(res, 'newName required');
+          // Fork must also carry an aim: use the override if given, else inherit the source's.
+          const forkAim = (typeof body.aim === 'string' ? body.aim.trim() : '') || (src.aim || '').trim();
+          if (!forkAim) return sendError(res, 'An aim is required — say what this forked recipe is for. Pass `aim` (the source has none to inherit).');
           const resolved = resolveSteps(src, body.params || {});
           const journal = resolved.map(s => ({ path: s.path, body: s.body, ts: 0, label: s.label }));
-          const tpl = buildTemplate(newName, journal, src.sourceFile, body.description || src.description, src.requirements, body.aim || src.aim);
+          const tpl = buildTemplate(newName, journal, src.sourceFile, body.description || src.description, src.requirements, forkAim, src.sourceFiles);
+          tpl.answerStepIndex = src.answerStepIndex; // carry over the marked answer step (same step count)
+          saveTemplate(tpl);
+          const win = ctx.getMainWindow();
+          if (win && !win.isDestroyed()) win.webContents.send('investigation-templates-changed');
+          sendJson(res, { success: true, template: tpl });
+          return;
+        }
+        // COMPOSE — build a "complicated" recipe out of simpler saved recipes. Each input
+        // step names a saved sub-recipe, optional params to pass it, and an optional `when`
+        // guard (run the sub-recipe only if the PREVIOUS step's typed answer satisfies it —
+        // "if recipe-a returns true → run recipe-b with a,b"). The composite is itself a normal
+        // InvestigationTemplate whose steps recurse into the run engine, so it lists / runs /
+        // forks / pins like any other recipe. Reachable by both operators (agent MCP now; a
+        // human compose panel is the follow-up — see PARITY note).
+        if (url === '/api/investigation-compose') {
+          const name = (body.name || '').trim();
+          if (!name) return sendError(res, 'name required');
+          // Same aim gate as save/fork — a composite is still a recipe and must say what it's for.
+          const aim = typeof body.aim === 'string' ? body.aim.trim() : '';
+          if (!aim) return sendError(res, 'An aim is required — say what this composite recipe is for (e.g. "if the crash-check finds crashes, confirm whether it is OOM").');
+          const inSteps = Array.isArray(body.steps) ? body.steps : [];
+          if (inSteps.length === 0) return sendError(res, 'steps required — list the sub-recipes to chain, each { investigation, params?, when? }.');
+          const steps: TemplateStep[] = [];
+          const missing: string[] = [];
+          for (const s of inSteps) {
+            const subName = String(s?.investigation || s?.name || s?.slug || '').trim();
+            if (!subName) { missing.push('(unnamed)'); continue; }
+            const sub = getTemplate(subName);
+            if (!sub) { missing.push(subName); continue; }
+            const when = normalizeGuard(s?.when);
+            const guardTxt = when ? ` (${describeGuard(when)})` : '';
+            steps.push({
+              path: COMPOSITE_STEP_PATH,
+              body: { name: sub.slug, params: (s?.params && typeof s.params === 'object') ? s.params : {} },
+              label: `▶ ${sub.name}${guardTxt}`,
+              ...(when ? { when } : {}),
+            });
+          }
+          if (missing.length) return sendError(res, `Unknown sub-recipe(s): ${missing.join(', ')}. Use the saved investigations list to see valid names.`);
+          const tpl: InvestigationTemplate = {
+            name, slug: slugify(name), createdAt: Date.now(),
+            aim, description: typeof body.description === 'string' ? body.description : undefined,
+            steps, params: [], composite: true,
+          };
           saveTemplate(tpl);
           const win = ctx.getMainWindow();
           if (win && !win.isDestroyed()) win.webContents.send('investigation-templates-changed');
@@ -982,7 +1097,30 @@ export function startApiServer(ctx: ApiContext): void {
         if (url === '/api/investigation-set-aim') {
           const tpl = getTemplate(body.name || body.slug || '');
           if (!tpl) return sendError(res, `No saved investigation named "${body.name || body.slug}"`);
-          tpl.aim = typeof body.aim === 'string' ? body.aim.trim() : undefined;
+          // Aim can't be cleared to blank — a recipe must always say what it is for.
+          const aim = typeof body.aim === 'string' ? body.aim.trim() : '';
+          if (!aim) return sendError(res, 'An aim cannot be blank — a recipe must say what it is for. Enter an aim.');
+          tpl.aim = aim;
+          saveTemplate(tpl);
+          const win = ctx.getMainWindow();
+          if (win && !win.isDestroyed()) win.webContents.send('investigation-templates-changed');
+          sendJson(res, { success: true, template: tpl });
+          return;
+        }
+        // Mark WHICH step is the recipe's ANSWER (the valuable output). stepIndex = -1
+        // (or null) clears it → the run falls back to the heuristic (last output step).
+        if (url === '/api/investigation-set-answer') {
+          const tpl = getTemplate(body.name || body.slug || '');
+          if (!tpl) return sendError(res, `No saved investigation named "${body.name || body.slug}"`);
+          const idx = body.stepIndex;
+          const nSteps = (tpl.steps || []).length;
+          if (idx === null || idx === undefined || idx === -1) {
+            tpl.answerStepIndex = undefined; // clear → heuristic
+          } else if (typeof idx === 'number' && idx >= 0 && idx < nSteps) {
+            tpl.answerStepIndex = idx;
+          } else {
+            return sendError(res, `stepIndex out of range (0..${nSteps - 1}), or -1 to clear (use the heuristic)`);
+          }
           saveTemplate(tpl);
           const win = ctx.getMainWindow();
           if (win && !win.isDestroyed()) win.webContents.send('investigation-templates-changed');

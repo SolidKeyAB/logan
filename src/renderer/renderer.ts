@@ -7359,7 +7359,7 @@ const OPTIONAL_FEATURES: OptionalFeatureDef[] = [
   { id: 'time-align', label: 'Time Align',   description: 'Align search-config results on draggable timeline lanes.',              defaultEnabled: false, bottomTab: 'time-align' },
   { id: 'history',    label: 'History',      description: 'Action history (searches, filters, runs) with replay.',                defaultEnabled: false, panel: 'history' },
   { id: 'auto-segment', label: 'Auto-composite big files', description: 'For very large files, index only the segments near the viewport (bounded RAM) instead of the whole-file line index. Experimental.', defaultEnabled: false },
-  { id: 'triage-on-open', label: 'Triage on open', description: 'When a log opens, auto-run the briefing and pop a floating “Start here” card — top crashes / errors / components / time gaps, click to jump. Skipped on very large files.', defaultEnabled: true },
+  { id: 'triage-on-open', label: 'Triage on open', description: 'When a log opens, pop a floating “Start here” card from the fast severity index — fatal / error / warning counts + one-click jump to the first problem. Cheap (no full analysis), instant, works on huge files. The full ranked briefing stays on the 📋 Full brief button.', defaultEnabled: true },
 ];
 
 const FEATURES_LS_KEY = 'logan-features';
@@ -7536,6 +7536,22 @@ async function getInvestigationTemplate(name: string): Promise<any | null> {
   return investigationTemplatesCache.find((t: any) => t.name === name || t.slug === name) || null;
 }
 
+// Summarize the file(s) a recipe was recorded on — basenames + distinct type (extension) —
+// so the user sees what to apply it to next time. Handles both the legacy single sourceFile
+// and the multi-file sourceFiles list (a recipe built across several logs).
+function recipeSourceFilesInfo(tpl: any): { names: string[]; types: string[] } | null {
+  const raw: string[] = (Array.isArray(tpl?.sourceFiles) && tpl.sourceFiles.length)
+    ? tpl.sourceFiles
+    : (tpl?.sourceFile ? [tpl.sourceFile] : []);
+  const names = raw.filter(Boolean).map((f: string) => f.split(/[\\/]/).pop() || f);
+  if (!names.length) return null;
+  const types = Array.from(new Set(names.map((n: string) => {
+    const dot = n.lastIndexOf('.');
+    return dot > 0 ? n.slice(dot).toLowerCase() : '(no ext)';
+  })));
+  return { names, types };
+}
+
 async function loadInvestigationTemplates(): Promise<void> {
   const list = document.getElementById('investigate-patterns-list');
   if (!list) return;
@@ -7552,7 +7568,9 @@ async function loadInvestigationTemplates(): Promise<void> {
     chip.className = 'investigate-pattern-chip';
     const stepCount = (t.steps || []).length;
     const stepsPreview = (t.steps || []).map((s: any) => s.label).join(' → ');
-    chip.title = `${t.aim ? `🎯 ${t.aim}\n\n` : ''}${stepCount} steps: ${stepsPreview}\nRight-click to edit requirements`;
+    const srcInfo = recipeSourceFilesInfo(t);
+    const srcLine = srcInfo ? `\n📄 Recorded on ${srcInfo.names.length} file${srcInfo.names.length === 1 ? '' : 's'} (${srcInfo.types.join(', ')}): ${srcInfo.names.join(', ')}` : '';
+    chip.title = `${t.aim ? `🎯 ${t.aim}\n\n` : ''}${stepCount} steps: ${stepsPreview}${srcLine}\nRight-click to edit requirements`;
     const run = document.createElement('button');
     run.className = 'investigate-pattern-run';
     // 🎯 marker when the recipe states its aim (its purpose is known at a glance).
@@ -7793,9 +7811,11 @@ function makeWorkflowEntityChip(ent: any): HTMLElement {
 async function saveCurrentInvestigation(): Promise<void> {
   const name = ((await showInputPrompt('Name this recipe (the steps taken so far):')) || '').trim();
   if (!name) return;
-  // The aim is the point of the recipe — what it sets out to find. Capture it up front.
-  const aim = ((await showInputPrompt('🎯 What is this recipe aimed at? (e.g. find the root-cause component of the 401 storm)')) || '').trim();
-  const res = await window.api.saveInvestigation(name, undefined, undefined, undefined, aim || undefined);
+  // The aim is the point of the recipe — what it sets out to find. REQUIRED: a recipe
+  // without an aim makes the list unreadable once it grows, so we won't save without one.
+  const aim = ((await showInputPrompt('🎯 What is this recipe aimed at? (required — e.g. find the root-cause component of the 401 storm)')) || '').trim();
+  if (!aim) { showToast('An aim is required — a recipe must say what it’s for. Nothing saved.'); return; }
+  const res = await window.api.saveInvestigation(name, undefined, undefined, undefined, aim);
   if (!res.success) { showToast(res.error || 'Nothing to save yet — run an investigation first'); return; }
   showToast(`Saved recipe “${name}” (${res.template?.steps?.length || 0} steps)`);
   void loadInvestigationTemplates();
@@ -8010,6 +8030,7 @@ function syncTemplateCache(tpl: any): void {
 
 // A friendly verb for a step row (the api path's last segment; label carries detail).
 function hubVerb(step: any): string {
+  if (step.path === '/api/investigation-run') return '▶ recipe'; // composite step: runs a sub-recipe
   return String(step.path || '').replace('/api/', '') || (step.label || 'step');
 }
 
@@ -8021,6 +8042,7 @@ const HUB_OUTPUT_LABEL: Record<string, string> = {
   '/api/investigate-component': 'component health', '/api/investigate-timerange': 'timerange findings',
   '/api/triage': 'triage', '/api/build-conclusion': 'verdict', '/api/summarize': 'templates',
   '/api/evidence-pack': 'evidence pack', '/api/diff-runs': 'run diff',
+  '/api/investigation-run': 'recipe answer', // a composite step runs a saved sub-recipe
 };
 function hubOutputLabel(path: string | undefined): string | null {
   if (!path) return null;
@@ -8124,12 +8146,24 @@ async function addRecipeLensPicker(tpl: any, body: HTMLElement, ev: MouseEvent):
 
 // ✎ Set/edit a recipe's aim (what it's for) — persisted, re-rendered.
 async function editRecipeAim(tpl: any, body: HTMLElement): Promise<void> {
-  const aim = ((await showInputPrompt('🎯 What is this recipe aimed at? (e.g. find the root-cause component)', tpl.aim || '')) || '').trim();
+  const aim = ((await showInputPrompt('🎯 What is this recipe aimed at? (required — e.g. find the root-cause component)', tpl.aim || '')) || '').trim();
+  if (!aim) { showToast('An aim can’t be blank — a recipe must say what it’s for.'); return; }
   const res = await window.api.setInvestigationAim(tpl.name, aim);
   if (!res || !res.success) { showToast(res?.error || 'Could not set the aim'); return; }
   syncTemplateCache(res.template);
   const overlay = document.getElementById('workflow-overlay');
   if (res.template && body && overlay && !overlay.hasAttribute('hidden')) renderTemplateHub(res.template, body);
+  void loadInvestigationTemplates();
+}
+
+// ⭐ Mark (stepIndex ≥ 0) or clear (-1) which step is the recipe's answer, then re-render.
+async function setHubAnswerStep(name: string, stepIndex: number, body: HTMLElement): Promise<void> {
+  const res = await window.api.setInvestigationAnswer(name, stepIndex);
+  if (!res || !res.success) { showToast(res?.error || 'Could not set the answer step'); return; }
+  syncTemplateCache(res.template);
+  const overlay = document.getElementById('workflow-overlay');
+  if (res.template && body && overlay && !overlay.hasAttribute('hidden')) renderTemplateHub(res.template, body);
+  showToast(stepIndex === -1 ? 'Answer cleared — the run will show a heuristic best guess' : 'Marked as the recipe’s answer ⭐');
   void loadInvestigationTemplates();
 }
 
@@ -8141,6 +8175,33 @@ function renderHubOutput(body: HTMLElement, res: any, aim?: string): void {
   const findings = Array.isArray(state.annotations) ? state.annotations.length : 0;
   let html = `<div class="hub-output-head">📤 Output</div>`;
   if (aim) html += `<div class="hub-output-aim">🎯 ${escapeHtml(aim)}</div>`;
+  // THE ANSWER — the recipe's valuable output, up front (what the aim/question asked).
+  // If it came from the heuristic (no answer step marked), say so plainly: it's a best
+  // guess (the last result), and the user can mark the real answer step (⭐) for precision.
+  if (res.answer) {
+    const a = res.answer;
+    const val = (a.summary && a.summary !== 'ok') ? a.summary : (a.output || '—');
+    const badge = a.heuristic
+      ? `<span class="hub-answer-badge heuristic" title="No answer step was marked, so this is a best guess: the recipe's last result. Mark the real answer step (⭐) in the steps below for a precise answer.">⚠ heuristic · best guess</span>`
+      : `<span class="hub-answer-badge marked" title="This step was explicitly marked as the recipe's answer.">⭐ answer</span>`;
+    // Typed value chip — the comparable result a CONDITIONAL recipe branches on (true/false,
+    // a count, or a text label). Shown so the author can see what a `when` guard would test.
+    let typed = '';
+    const av = a.value;
+    if (av && av.kind && av.kind !== 'none') {
+      const disp = av.kind === 'count' ? String(av.count)
+        : av.kind === 'text' ? String(av.text)
+        : (av.bool ? 'true' : 'false');
+      const suffix = av.kind === 'boolean' ? '' : ` · ${av.bool ? 'true' : 'false'}`;
+      typed = `<span class="hub-answer-typed" title="Typed answer (${escapeHtml(String(av.kind))}) — the value a conditional recipe tests with a when-guard">${escapeHtml(disp)}${suffix}</span>`;
+    }
+    html += `<div class="hub-answer${a.heuristic ? ' is-heuristic' : ''}">`
+      + `<span class="hub-answer-arrow">➡</span>`
+      + `<span class="hub-answer-val">${escapeHtml(String(val))}</span>`
+      + typed
+      + badge
+      + `</div>`;
+  }
   // The "outfit" — lenses this recipe auto-applied to the view before its steps ran.
   const lenses = (res.applied || []).filter((a: any) => a && a.applied);
   if (lenses.length) {
@@ -8248,6 +8309,21 @@ function renderTemplateHub(tpl: any, body: HTMLElement): void {
     body.appendChild(yEl);
   }
 
+  // 📄 Works on — the file(s)/type(s) this recipe was recorded on, so you know what to
+  // apply it to next time (a multi-file investigation lists each distinct type; hover for
+  // the full filenames). Reuses the → yields row styling.
+  const srcInfo = recipeSourceFilesInfo(tpl);
+  if (srcInfo) {
+    const sEl = document.createElement('div');
+    sEl.className = 'hub-yields';
+    sEl.title = `Recorded on: ${srcInfo.names.join(', ')}\nApply this recipe to a similar file next time.`;
+    const detail = srcInfo.names.length > 1 ? `${srcInfo.names.length} files` : srcInfo.names[0];
+    sEl.innerHTML = `<span class="hub-yields-label">📄 works on</span>`
+      + srcInfo.types.map(t => `<span class="hub-yield-chip">${escapeHtml(t)}</span>`).join('')
+      + `<span class="hub-yield-chip">${escapeHtml(detail)}</span>`;
+    body.appendChild(sEl);
+  }
+
   // 🧥 Lenses (the "outfit") — saved lenses this recipe auto-applies to the view on run.
   renderHubLenses(tpl, body);
 
@@ -8259,7 +8335,7 @@ function renderTemplateHub(tpl: any, body: HTMLElement): void {
 
   const listEl = document.createElement('div');
   listEl.className = 'workflow-steps hub-steps';
-  steps.forEach((step: any, i: number) => listEl.appendChild(renderHubStep(step, i, paramsByStep[i] || [], name)));
+  steps.forEach((step: any, i: number) => listEl.appendChild(renderHubStep(step, i, paramsByStep[i] || [], name, tpl, body)));
   body.appendChild(listEl);
 
   // Output panel — filled with the run's result (populated by renderHubOutput on Run).
@@ -8285,7 +8361,7 @@ function renderTemplateHub(tpl: any, body: HTMLElement): void {
   wireHubInputSync(body);
 }
 
-function renderHubStep(step: any, i: number, params: any[], name: string): HTMLElement {
+function renderHubStep(step: any, i: number, params: any[], name: string, tpl?: any, body?: HTMLElement): HTMLElement {
   const row = document.createElement('div');
   row.className = 'workflow-step hub-step';
   row.setAttribute('data-step-index', String(i));
@@ -8295,6 +8371,20 @@ function renderHubStep(step: any, i: number, params: any[], name: string): HTMLE
   head.innerHTML = `<span class="workflow-step-idx">${i + 1}</span>`
     + `<span class="workflow-step-verb">${escapeHtml(hubVerb(step))}</span>`
     + `<span class="hub-step-status" id="hub-step-${i}"></span>`;
+  // ⭐ Mark this step's output as the recipe's ANSWER — only steps that PRODUCE an output
+  // qualify (a navigate/filter-only step isn't an answer). The marked step wins over the
+  // heuristic; unmark to fall back to it.
+  if (hubOutputLabel(step.path) && body) {
+    const isAns = typeof tpl?.answerStepIndex === 'number' && tpl.answerStepIndex === i;
+    const star = document.createElement('button');
+    star.className = 'hub-step-answer' + (isAns ? ' on' : '');
+    star.textContent = isAns ? '⭐' : '☆';
+    star.title = isAns
+      ? 'This is the recipe’s answer — click to unmark (fall back to the heuristic)'
+      : 'Mark this step’s output as the recipe’s answer (shown first when the recipe runs)';
+    star.addEventListener('click', (e) => { e.stopPropagation(); void setHubAnswerStep(name, isAns ? -1 : i, body); });
+    head.appendChild(star);
+  }
   row.appendChild(head);
 
   if (step.label) {
@@ -8363,13 +8453,13 @@ function wireHubInputSync(root: HTMLElement): void {
   });
 }
 
-function setHubStepStatus(body: HTMLElement, i: number, stateName: 'pending' | 'ok' | 'fail', summary?: string): void {
+function setHubStepStatus(body: HTMLElement, i: number, stateName: 'pending' | 'ok' | 'fail' | 'skip', summary?: string): void {
   const row = body.querySelector(`.hub-step[data-step-index="${i}"]`) as HTMLElement | null;
   const slot = body.querySelector(`#hub-step-${i}`) as HTMLElement | null;
-  if (row) { row.classList.remove('is-pending', 'is-ok', 'is-fail'); row.classList.add('is-' + stateName); }
+  if (row) { row.classList.remove('is-pending', 'is-ok', 'is-fail', 'is-skip'); row.classList.add('is-' + stateName); }
   if (slot) {
     slot.className = 'hub-step-status ' + stateName;
-    slot.textContent = stateName === 'pending' ? '…' : stateName === 'ok' ? '✓' : '✗';
+    slot.textContent = stateName === 'pending' ? '…' : stateName === 'ok' ? '✓' : stateName === 'skip' ? '⊘' : '✗';
     slot.title = summary || '';
   }
   if (row) {
@@ -8402,7 +8492,7 @@ async function runTemplateHub(tpl: any, body: HTMLElement, force = false): Promi
     if (!p || (overlay && overlay.hasAttribute('hidden'))) return;
     const mismatch = (p.slug && tpl.slug) ? p.slug !== tpl.slug : (p.name && p.name !== name);
     if (mismatch) return;
-    if (p.phase === 'step' && typeof p.index === 'number') setHubStepStatus(body, p.index, p.ok ? 'ok' : 'fail', p.summary);
+    if (p.phase === 'step' && typeof p.index === 'number') setHubStepStatus(body, p.index, p.skipped ? 'skip' : (p.ok ? 'ok' : 'fail'), p.summary);
   });
   hubRunUnsub = unsub;
 
@@ -8426,7 +8516,7 @@ async function runTemplateHub(tpl: any, body: HTMLElement, force = false): Promi
     return;
   }
   // Reconcile every row against the final results (in case a push was missed).
-  (res.steps || []).forEach((s: any, i: number) => setHubStepStatus(body, i, s.ok ? 'ok' : 'fail', s.summary));
+  (res.steps || []).forEach((s: any, i: number) => setHubStepStatus(body, i, s.skipped ? 'skip' : (s.ok ? 'ok' : 'fail'), s.summary));
   const failed = (res.steps || []).filter((s: any) => !s.ok).length;
   if (statusEl) {
     statusEl.className = 'hub-status ' + (failed ? 'fail' : 'ok');
@@ -18601,11 +18691,9 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       });
       renderMinimapCanvas();
 
-      // Kick off the background severity index (jump-to-problem via F8).
+      // Kick off the background severity index (jump-to-problem via F8). This same
+      // cheap rg pass also builds the "Start here" quick-start card (see below).
       void prefetchSeverityIndex();
-
-      // Quick-start triage — auto-run the briefing and pop a "Start here" card.
-      void prefetchTriage();
 
       // Auto-analyze if enabled in settings
       if (userSettings.autoAnalyze && !isMarkdownFile) {
@@ -20265,56 +20353,50 @@ function severityBucketCount(): number {
 
 // ─── Quick-start triage ("Start here" card) ──────────────────────────────────
 // The analyst's first move = "where do I look first?", zero input, the instant the
-// file opens. On open we auto-run the SAME evidence-pack the 📋 Brief uses (already
-// grouped + ranked) and pop a compact, dismissable floating card with the top few
-// "look here first" jump targets (crashes → worst components → biggest gap). Gated
-// by the "Triage on open" feature; skipped on very large files (a full auto-analyze
-// would be heavy — the analyst can still run the Brief by hand there).
-const TRIAGE_AUTO_MAX_LINES = 5_000_000;
+// file opens. We build the card from the SAME cheap ripgrep severity index that
+// already runs on open (see prefetchSeverityIndex): the fatal/error/warning counts,
+// plus the first fatal + first error line via an O(log n) binary-search lookup on
+// the index we just built. So it is:
+//   • cheap        — no full analyze(), no time-gap scan, no field discovery on open;
+//   • deterministic — appears the moment the index resolves, not at some later,
+//                     unpredictable time when a heavy background pack happens to finish;
+//   • useful        — the actual fast path to the first real problem (click to jump).
+// It even works on 50M-line files, where the old full-analyze card was skipped. The
+// heavy ranked breakdown (crashes / worst components / time gaps) stays where heavy
+// work belongs: behind the on-demand "📋 Full brief" button.
 
 function hideTriageCard(): void {
   document.getElementById('triage-card')?.setAttribute('hidden', '');
 }
 
-async function prefetchTriage(): Promise<void> {
-  hideTriageCard(); // clear any prior file's card first
-  if (!isFeatureEnabled('triage-on-open') || !state.filePath) return;
-  if (getTotalLines() > TRIAGE_AUTO_MAX_LINES) return; // too big to auto-analyze
-  const forFile = state.filePath;
-  try {
-    const res = await window.api.getEvidencePack();
-    if (!res?.success || !res.pack) return;
-    if (state.filePath !== forFile) return; // file changed while building
-    showTriageCard(res.pack);
-  } catch { /* triage is best-effort; never blocks open */ }
-}
-
-function showTriageCard(pack: EvidencePack): void {
+// Render the "Start here" card from cheap severity data. firstFatal/firstError are
+// 0-based line numbers (or null) from the severity index; capped => index hit its cap.
+function showStartHereCard(
+  counts: { fatal: number; error: number; warning: number },
+  firstFatal: number | null,
+  firstError: number | null,
+  capped: boolean,
+): void {
   const el = document.getElementById('triage-card');
   if (!el) return;
-  const crashes = (pack.crashes || []).filter(c => c.viewerLine);
-  const comps = (pack.topComponents || []).filter(c => (c.errorCount || 0) > 0 && c.sampleLine);
-  const gaps = (pack.timeGaps || []).filter(g => g.viewerLine);
-  const errorCount = Number(pack.levels?.error || 0);
-  const warnCount = Number(pack.levels?.warning || 0);
-  const sev = pack.severity || 'healthy';
-  // Only surface when there's actually something to look at.
-  if (sev === 'healthy' && crashes.length === 0 && comps.length === 0 && errorCount === 0) return;
-
-  // Up to 5 ranked "look here first" rows: crashes → worst components → biggest gap.
-  const rows: Array<{ icon: string; text: string; line: number; cls: string }> = [];
-  for (const c of crashes.slice(0, 3)) rows.push({ icon: '💥', cls: 'crash', line: c.viewerLine!, text: `${c.count ? `×${c.count} ` : ''}${c.keyword || 'crash'}` });
-  for (const c of comps.slice(0, 3)) rows.push({ icon: '⛔', cls: 'comp', line: c.sampleLine!, text: `${c.name} — ${c.errorCount} err${c.warningCount ? ` / ${c.warningCount} warn` : ''}` });
-  if (gaps.length) rows.push({ icon: '⏱', cls: 'gap', line: gaps[0].viewerLine!, text: `${Math.round(gaps[0].gapSeconds || 0)}s time gap` });
-  const capped = rows.slice(0, 5);
+  const { fatal, error, warning } = counts;
+  if (fatal + error + warning === 0) return; // nothing to look at — stay hidden
+  const sev = (fatal > 0 || error > 0) ? 'critical' : 'warning';
+  const plus = capped ? '+' : '';
+  const verdict = [
+    fatal ? `💥 ${fatal.toLocaleString()}${plus}` : '',
+    error ? `⛔ ${error.toLocaleString()}${plus}` : '',
+    warning ? `⚠ ${warning.toLocaleString()}${plus}` : '',
+  ].filter(Boolean).join('  ');
 
   el.innerHTML = '';
   const header = document.createElement('div');
   header.className = 'triage-head';
-  header.innerHTML = `<span class="triage-dot sev-${escapeHtml(sev)}"></span><span class="triage-title">Start here</span>`
-    + `<span class="triage-verdict">${errorCount ? `⛔ ${errorCount.toLocaleString()}` : ''}${warnCount ? ` ⚠ ${warnCount.toLocaleString()}` : ''}${crashes.length ? ` 💥 ${crashes.length}` : ''}</span>`;
+  header.innerHTML = `<span class="triage-dot sev-${sev}"></span><span class="triage-title">Start here</span>`
+    + `<span class="triage-verdict">${verdict}</span>`;
   const brief = document.createElement('button');
-  brief.className = 'triage-brief'; brief.textContent = '📋 Full brief'; brief.title = 'Open the full briefing in the Analysis panel';
+  brief.className = 'triage-brief'; brief.textContent = '📋 Full brief';
+  brief.title = 'Run the full briefing (crashes / components / time gaps) in the Analysis panel';
   brief.addEventListener('click', () => { openBottomTab('analysis'); void showBrief(); });
   const close = document.createElement('button');
   close.className = 'triage-close'; close.textContent = '×'; close.title = 'Dismiss';
@@ -20323,16 +20405,18 @@ function showTriageCard(pack: EvidencePack): void {
   el.appendChild(header);
   enableFloatingDrag(header, el); // drag the card around by its header
 
-  if (pack.summary) { const s = document.createElement('div'); s.className = 'triage-summary'; s.textContent = pack.summary; el.appendChild(s); }
-
-  if (capped.length) {
+  // Actionable jump rows — the fast path to the first real problem.
+  const rows: Array<{ icon: string; cls: string; text: string; line: number }> = [];
+  if (fatal > 0 && firstFatal != null) rows.push({ icon: '💥', cls: 'crash', text: 'Jump to first fatal', line: firstFatal });
+  if (error > 0 && firstError != null) rows.push({ icon: '⛔', cls: 'comp', text: 'Jump to first error', line: firstError });
+  if (rows.length) {
     const list = document.createElement('div'); list.className = 'triage-rows';
-    for (const r of capped) {
+    for (const r of rows) {
       const row = document.createElement('button');
       row.className = `triage-row ${r.cls}`;
-      row.title = `Jump to line ${r.line}`;
-      row.innerHTML = `<span class="triage-row-icon">${r.icon}</span><span class="triage-row-text">${escapeHtml(r.text)}</span><span class="triage-row-line">L${r.line}</span>`;
-      row.addEventListener('click', () => { void navigateTo(r.line - 1); });
+      row.title = `Jump to line ${(r.line + 1).toLocaleString()}`;
+      row.innerHTML = `<span class="triage-row-icon">${r.icon}</span><span class="triage-row-text">${escapeHtml(r.text)}</span><span class="triage-row-line">L${(r.line + 1).toLocaleString()}</span>`;
+      row.addEventListener('click', () => { goToLine(r.line); });
       list.appendChild(row);
     }
     el.appendChild(list);
@@ -20345,6 +20429,7 @@ function showTriageCard(pack: EvidencePack): void {
 // surface the counts so the jump feature is discoverable. Fire-and-forget.
 async function prefetchSeverityIndex(): Promise<void> {
   severityCounts = null;
+  hideTriageCard(); // clear any prior file's "Start here" card
   const forFile = state.filePath;
   if (!forFile) return;
   try {
@@ -20355,11 +20440,22 @@ async function prefetchSeverityIndex(): Promise<void> {
     const problems = c ? c.fatal + c.error + c.warning : 0;
     if (problems > 0 && severitySeenForFile !== forFile) {
       severitySeenForFile = forFile;
-      const bits: string[] = [];
-      if (c!.fatal) bits.push(`${c!.fatal.toLocaleString()} fatal`);
-      if (c!.error) bits.push(`${c!.error.toLocaleString()} error`);
-      if (c!.warning) bits.push(`${c!.warning.toLocaleString()} warning`);
-      showToast(`${bits.join(' · ')}${r.capped ? '+' : ''} — press F8 to jump to next problem`);
+      if (isFeatureEnabled('triage-on-open')) {
+        // Cheap "Start here" card: 1-2 binary-search lookups on the index we just built.
+        let firstFatal: number | null = null;
+        let firstError: number | null = null;
+        if (c!.fatal > 0) { const f = await window.api.nextSeverityLine(-1, 1, ['fatal']); if (f?.success) firstFatal = f.line ?? null; }
+        if (c!.error > 0) { const e = await window.api.nextSeverityLine(-1, 1, ['error']); if (e?.success) firstError = e.line ?? null; }
+        if (state.filePath !== forFile) return; // file changed while looking up
+        showStartHereCard(c!, firstFatal, firstError, !!r.capped);
+      } else {
+        // Feature off: keep the lightweight toast hint for F8 discovery.
+        const bits: string[] = [];
+        if (c!.fatal) bits.push(`${c!.fatal.toLocaleString()} fatal`);
+        if (c!.error) bits.push(`${c!.error.toLocaleString()} error`);
+        if (c!.warning) bits.push(`${c!.warning.toLocaleString()} warning`);
+        showToast(`${bits.join(' · ')}${r.capped ? '+' : ''} — press F8 to jump to next problem`);
+      }
     }
   } catch { /* ignore — on-demand jump still works */ }
 }
