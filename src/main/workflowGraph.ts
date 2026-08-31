@@ -15,6 +15,7 @@
 
 import { ParamKind, paramKind, PARAM_KEYS } from './investigationStore';
 import { RequirementsManifest, EntityRef } from './investigationRequirements';
+import { StepGuard, describeGuard, COMPOSITE_STEP_PATH } from '../shared/recipeComposition';
 
 export type WorkflowNodeKind = 'step' | 'entity';
 // sequence = temporal order; dataflow = a step consumes a prior step's output
@@ -41,6 +42,10 @@ export interface WorkflowNode {
   nouns?: WorkflowNoun[];     // tweakable fill-ins present on this step
   config?: Record<string, any>; // remaining non-noun body (detail; noise-free)
   result?: string;            // outcome summary — reserved (journal carries none yet)
+  // ── composite (recipe-of-recipes) step nodes ──
+  subRecipe?: string;         // the saved sub-recipe this step runs (a composite step)
+  guard?: string;             // human-readable conditional ("prev found something") — when
+                              // this step runs only if the PREVIOUS step's answer satisfies it
   // ── entity nodes ──
   entityRef?: EntityRef;      // the saved entity this node stands for (from requirements)
 }
@@ -69,6 +74,7 @@ export interface WorkflowStepInput {
   label?: string;
   ts?: number;
   result?: string;   // compact outcome captured at record time (Build 2)
+  when?: StepGuard;  // composite step: conditional on the previous step's typed answer
 }
 
 // Non-investigative calls that are just navigation / fetching / chat plumbing. They
@@ -160,9 +166,13 @@ export function investigationToGraph(
   (journal || []).forEach((entry, sourceIndex) => {
     if (!entry || !isMeaningfulStep(entry.path)) { dropped++; return; }
     const body = entry.body || {};
-    const verb = verbFromPath(entry.path);
-    const nouns = extractNouns(body);
-    const config = extractConfig(body);
+    // A composite step runs a saved sub-recipe (not a raw tool call), optionally guarded on
+    // the previous step's answer. Project it as a legible node — the sub-recipe it runs +
+    // the guard — rather than the generic 'investigation-run' verb with an opaque body.
+    const isComposite = entry.path === COMPOSITE_STEP_PATH;
+    const verb = isComposite ? 'run recipe' : verbFromPath(entry.path);
+    const nouns = isComposite ? [] : extractNouns(body);
+    const config = isComposite ? {} : extractConfig(body);
     const stepIndex = stepNodes.length;
     const node: WorkflowNode = {
       id: `step-${stepIndex}`,
@@ -174,6 +184,8 @@ export function investigationToGraph(
       nouns: nouns.length ? nouns : undefined,
       config: Object.keys(config).length ? config : undefined,
       result: entry.result || undefined,
+      subRecipe: isComposite ? (typeof body.name === 'string' ? body.name : undefined) : undefined,
+      guard: entry.when ? describeGuard(entry.when) : undefined,
     };
     // dataflow edge: this step reads the prior step's active scope.
     if (stepIndex > 0 && usesActiveScope(body)) {
