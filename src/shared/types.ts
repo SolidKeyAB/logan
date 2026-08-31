@@ -436,6 +436,7 @@ export const IPC = {
   INVESTIGATION_SET_AIM: 'investigation-set-aim',                     // set/edit the recipe's aim (what it's for)
   INVESTIGATION_SET_ANSWER: 'investigation-set-answer',               // mark which step is the recipe's answer (-1 clears → heuristic)
   INVESTIGATION_SUGGEST_REQS: 'investigation-suggest-requirements',   // suggest a starter manifest from open file
+  INVESTIGATION_COMPOSE: 'investigation-compose',                     // author a composite recipe (recipe-of-recipes) — human parity for logan_compose_investigation
   WORKFLOW_SHOW: 'workflow-show',                                     // project a hunt (journal or saved investigation) → WorkflowGraph
   // Entity Registry — one browse catalog over every saved entity
   ENTITIES_LIST: 'entities-list',
