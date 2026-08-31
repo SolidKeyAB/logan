@@ -9405,6 +9405,12 @@ kbd {
   border-radius: 7px;
   padding: 0 5px;
 }
+/* The recipe's aim (its purpose), shown inline on the card — not just on hover. */
+.investigate-pattern-aim {
+  font-size: 10px; color: var(--text-muted); font-style: italic;
+  max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.investigate-pattern-composite { color: var(--accent-color); font-style: normal; }
 .investigate-pattern-del {
   background: none;
   border: none;
@@ -10773,6 +10779,11 @@ kbd {
   background: var(--bg-hover); color: var(--text-muted); white-space: nowrap;
 }
 .workflow-step-tag.dataflow { color: var(--info-color); background: color-mix(in srgb, var(--info-color) 14%, transparent); }
+.workflow-step-tag.guard { color: var(--warning-color, #d29922); background: color-mix(in srgb, var(--warning-color, #d29922) 14%, transparent); font-style: italic; }
+.workflow-step-subrecipe {
+  font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 8px; white-space: nowrap;
+  color: var(--accent-color, #2f81f7); background: color-mix(in srgb, var(--accent-color, #2f81f7) 14%, transparent);
+}
 .workflow-step-nouns { display: flex; flex-wrap: wrap; gap: 5px; margin: 5px 0 0; }
 .workflow-step-result {
   margin: 4px 0 0; font-size: 11px; font-family: var(--font-mono);

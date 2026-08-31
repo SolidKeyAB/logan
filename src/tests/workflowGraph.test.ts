@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { investigationToGraph, verbFromPath, isMeaningfulStep, WorkflowStepInput } from '../main/workflowGraph';
 import { RequirementsManifest } from '../main/investigationRequirements';
+import { describeGuard } from '../shared/recipeComposition';
 
 // Phase 0 (Investigation Workflow Canvas): the pure journal → WorkflowGraph projection.
 // No UI, no store — just the typed model both operators will share.
@@ -86,6 +87,21 @@ describe('investigationToGraph', () => {
   it('handles empty / null journals', () => {
     expect(investigationToGraph([]).nodes).toEqual([]);
     expect(investigationToGraph(null).meta).toEqual({ steps: 0, entities: 0, dropped: 0 });
+  });
+
+  it('projects a composite step with its sub-recipe name and conditional guard', () => {
+    const g = investigationToGraph([
+      { path: '/api/investigation-run', body: { name: 'crash-check', params: {} }, label: '▶ Crash check' },
+      { path: '/api/investigation-run', body: { name: 'oom-confirm', params: { component: 'mem' } }, label: '▶ OOM confirm', when: { op: 'true' } },
+    ]);
+    const steps = g.nodes.filter(n => n.kind === 'step');
+    expect(steps.map(s => s.verb)).toEqual(['run recipe', 'run recipe']);
+    expect(steps.map(s => s.subRecipe)).toEqual(['crash-check', 'oom-confirm']);
+    expect(steps[0].guard).toBeUndefined();               // first step: no guard
+    expect(steps[1].guard).toBe(describeGuard({ op: 'true' }));
+    // composite bodies aren't scanned for raw nouns/config — the sub-recipe IS the content.
+    expect(steps[0].nouns).toBeUndefined();
+    expect(steps[0].config).toBeUndefined();
   });
 
   it('carries a captured result onto the step node (Build 2)', () => {
