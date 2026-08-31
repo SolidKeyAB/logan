@@ -1436,6 +1436,10 @@ body.platform-darwin .titlebar {
   width: 12px;
 }
 
+/* Leaf subfolder (shallow scan found nothing inside): reserve the arrow's width so names
+   stay aligned, but show no disclosure glyph. */
+.folder-toggle--leaf { visibility: hidden; }
+
 .folder-group.collapsed .folder-toggle {
   transform: rotate(-90deg);
 }
