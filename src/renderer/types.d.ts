@@ -760,6 +760,7 @@ interface Api {
   listInvestigations: () => Promise<{ success: boolean; templates?: any[]; error?: string }>;
   saveInvestigation: (name: string, description?: string, requirements?: any, autoDetect?: boolean, aim?: string) => Promise<{ success: boolean; template?: any; error?: string }>;
   setInvestigationAim: (name: string, aim: string) => Promise<{ success: boolean; template?: any; error?: string }>;
+  setInvestigationAnswer: (name: string, stepIndex: number) => Promise<{ success: boolean; template?: any; error?: string }>;
   runInvestigation: (name: string, params?: Record<string, any>, force?: boolean) => Promise<{ success: boolean; ran?: string; steps?: any[]; applied?: any[]; blocked?: boolean; requirements?: any; message?: string; error?: string }>;
   deleteInvestigation: (name: string) => Promise<{ success: boolean }>;
   checkInvestigation: (name: string) => Promise<{ success: boolean; name?: string; manifest?: any; requirements?: any; error?: string }>;
