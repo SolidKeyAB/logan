@@ -10817,6 +10817,8 @@ kbd {
 .hub-step-status.pending { color: var(--text-muted); }
 .hub-step-status.ok { color: var(--success-color, #3fb950); }
 .hub-step-status.fail { color: var(--error-color, #f85149); }
+.hub-step-status.skip { color: var(--text-muted); }
+.hub-step.is-skip { opacity: 0.55; } /* a conditional step whose guard didn't fire */
 /* The node dot tracks run state: grey while pending, green/red once done. */
 .hub-step.is-pending::before { background: var(--text-muted); }
 .hub-step.is-ok::before { background: var(--success-color, #3fb950); }
@@ -10881,6 +10883,23 @@ kbd {
 }
 .hub-aim-edit:hover { color: var(--accent-hover); }
 .hub-output-aim { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+/* ➡ The ANSWER — the recipe's valuable output, surfaced first. Heuristic = best guess. */
+.hub-answer {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 10px; margin-bottom: 8px; border-radius: 6px;
+  background: var(--bg-hover); border-left: 3px solid var(--accent-color);
+}
+.hub-answer.is-heuristic { border-left-color: var(--warning-color); }
+.hub-answer-arrow { flex: 0 0 auto; }
+.hub-answer-val { flex: 1; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+/* Typed answer chip — the machine-comparable value a conditional recipe's when-guard tests. */
+.hub-answer-typed { flex: 0 0 auto; font-family: var(--mono-font, monospace); font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 6px; background: var(--bg-tertiary, rgba(127,127,127,0.15)); color: var(--text-primary); white-space: nowrap; }
+.hub-answer-badge { flex: 0 0 auto; font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 10px; white-space: nowrap; }
+.hub-answer-badge.marked { color: var(--accent-color); border: 1px solid var(--accent-color); }
+.hub-answer-badge.heuristic { color: var(--warning-color); border: 1px solid var(--warning-color); }
+/* ⭐ Per-step "mark as answer" toggle in the hub step head. */
+.hub-step-answer { margin-left: auto; background: none; border: none; cursor: pointer; font-size: 13px; opacity: 0.55; padding: 0 2px; }
+.hub-step-answer:hover, .hub-step-answer.on { opacity: 1; }
 /* 🧥 The "outfit" — lenses the recipe auto-applied to the view before its steps. */
 .hub-output-lenses { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
 .hub-lens-chip {

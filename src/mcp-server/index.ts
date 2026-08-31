@@ -810,7 +810,7 @@ server.tool(
   'Save the investigative steps recorded so far as a NAMED, re-runnable template (an "investigate pattern"). Values like component/field/pattern/event become fill-in parameters so the template can be replayed on a different log. Optionally attach `requirements` — the preconditions the log must meet for this investigation to apply (e.g. the file must match a saved column template / format), plus the saved entities (searches, filters, highlights, column layouts…) it expects. On replay, LOGAN preflights these and blocks a mismatched log. Call this after investigating a ticket when the user wants to reuse the approach.',
   {
     name: z.string().describe('Template name, e.g. "Auth token-expiry investigation"'),
-    aim: z.string().optional().describe('What this recipe is FOR — the question it sets out to answer, e.g. "find the root-cause component of the 401 storm" or "confirm whether the crash is OOM". Shown up front so anyone (human or AI) knows the recipe\'s purpose at a glance. Always set this.'),
+    aim: z.string().min(1).describe('REQUIRED. What this recipe is FOR — the question it sets out to answer, e.g. "find the root-cause component of the 401 storm" or "confirm whether the crash is OOM". Shown up front so anyone (human or AI) knows the recipe\'s purpose at a glance. A recipe cannot be saved without an aim: without it, a growing list of recipes is unreadable.'),
     description: z.string().optional().describe('Optional note on what this pattern is for / when to use it'),
     requirements: z.object({
       fileTemplate: z.object({
@@ -883,6 +883,24 @@ server.tool(
   }
 );
 
+// === Tool: logan_set_investigation_answer ===
+server.tool(
+  'logan_set_investigation_answer',
+  'Mark WHICH step of a saved recipe produces its ANSWER — the valuable output that answers the recipe\'s aim (e.g. the analyze step that determines "did the unit sleep?"). When set, running the recipe surfaces that step\'s result up front as "the answer", not just a step log. Pass the 0-based `stepIndex` of an output-producing step, or -1 to clear it. Cleared => the run falls back to the HEURISTIC (the last output-producing step) and tells the user it is a best guess — so mark the real answer when you know it.',
+  {
+    name: z.string().describe('Saved template name (or slug)'),
+    stepIndex: z.number().int().describe('0-based index of the answer step, or -1 to clear (use the heuristic)'),
+  },
+  async ({ name, stepIndex }) => {
+    try {
+      const result = await apiCall('POST', '/api/investigation-set-answer', { name, stepIndex });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_set_investigation_params ===
 server.tool(
   'logan_set_investigation_params',
@@ -926,7 +944,7 @@ server.tool(
 // === Tool: logan_run_investigation ===
 server.tool(
   'logan_run_investigation',
-  'Replay a saved investigation template by name on the CURRENT log, re-running its recorded steps in order. First runs a REQUIREMENTS PREFLIGHT: if the investigation declares a file-template (column layout / format the log must match) and the open log does not match, the replay is BLOCKED and a `requirements` report is returned instead of running — pass `force:true` to override. Pass `params` to override the captured fill-ins. Returns a per-step result summary plus the requirements report.',
+  'Replay a saved investigation template by name on the CURRENT log, re-running its recorded steps in order. First runs a REQUIREMENTS PREFLIGHT: if the investigation declares a file-template (column layout / format the log must match) and the open log does not match, the replay is BLOCKED and a `requirements` report is returned instead of running — pass `force:true` to override. Pass `params` to override the captured fill-ins. Returns a per-step result summary, the requirements report, and the recipe\'s ANSWER — including a TYPED `answer.value` ({kind:"count"|"boolean"|"text"|"none", bool, count?, text?}) which is the machine-comparable result a conditional/composite recipe branches on (see logan_compose_investigation). Composite recipes recurse through their sub-recipes and skip guarded steps whose condition fails.',
   {
     name: z.string().describe('Saved template name (or slug) from logan_list_investigations'),
     params: z.record(z.string(), z.any()).optional().describe('Override fill-in params, e.g. { "component": "auth", "field": "isTokenExpired" }'),
@@ -955,6 +973,33 @@ server.tool(
   async ({ name, newName, params, description }) => {
     try {
       const result = await apiCall('POST', '/api/investigation-fork', { name, newName, params: params || {}, description });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_compose_investigation ===
+server.tool(
+  'logan_compose_investigation',
+  'Compose a COMPLICATED recipe out of simpler saved recipes — chain sub-recipes, optionally with CONDITIONALS. Each step names a saved sub-recipe (from logan_list_investigations), optional `params` to pass into it (its fill-ins), and an optional `when` guard that runs the step ONLY IF the PREVIOUS step\'s typed answer satisfies it — e.g. "if the crash-check finds crashes, run the OOM-confirm recipe": step 2 gets when {op:"true"} (or {op:"gt", value:0}). Every recipe run returns a TYPED answer (answer.value = {kind, bool, count?, text?} — see logan_run_investigation); that is exactly what a guard tests: op true/false → the bool; gt/lt/eq → the count (eq also matches text); contains → substring of the text. The composite is saved as a normal recipe (composite:true): replay it with logan_run_investigation and it recurses through each sub-recipe in order, skipping guarded steps whose condition fails, and surfaces the last real result as its answer. Build the simple sub-recipes first (logan_save_investigation), then compose.',
+  {
+    name: z.string().describe('Name for the new composite recipe, e.g. "Crash → OOM confirm"'),
+    aim: z.string().min(1).describe('REQUIRED. What this composite is FOR (its question), e.g. "if the crash-check finds crashes, confirm whether it is OOM".'),
+    steps: z.array(z.object({
+      investigation: z.string().describe('Name (or slug) of a saved sub-recipe to run as this step'),
+      params: z.record(z.string(), z.any()).optional().describe('Params to pass the sub-recipe (its fill-ins), e.g. { "component": "auth", "startTime": "…" }'),
+      when: z.object({
+        op: z.enum(['true', 'false', 'gt', 'lt', 'eq', 'contains']).describe("Test on the PREVIOUS step's answer.value: true/false = its bool; gt/lt/eq = its count (eq also matches its text); contains = substring of its text"),
+        value: z.union([z.number(), z.string()]).optional().describe('Operand for gt/lt/eq/contains (omit for true/false)'),
+      }).optional().describe('Conditional: run this step only if the previous step\'s answer satisfies it. Omit on the first step / to always run.'),
+    })).min(1).describe('The ordered sub-recipes to chain'),
+    description: z.string().optional().describe('Optional note on what this composite is for'),
+  },
+  async ({ name, aim, steps, description }) => {
+    try {
+      const result = await apiCall('POST', '/api/investigation-compose', { name, aim, steps, description });
       return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     } catch (err: any) {
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
