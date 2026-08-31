@@ -7655,16 +7655,20 @@ async function loadInvestigationTemplates(): Promise<void> {
     chip.title = `${t.aim ? `🎯 ${t.aim}\n\n` : ''}${stepCount} steps: ${stepsPreview}${srcLine}\nRight-click to edit requirements`;
     const run = document.createElement('button');
     run.className = 'investigate-pattern-run';
-    // 🎯 marker when the recipe states its aim (its purpose is known at a glance).
-    run.innerHTML = `▶ ${t.aim ? '🎯 ' : ''}${escapeHtml(t.name)} <span class="investigate-pattern-count">${stepCount}</span>`;
+    // The card reads as "what it is" at a glance: ⋔ marks a composite (recipe-of-recipes),
+    // the name identifies it, and the aim (its purpose) shows inline — not just on hover.
+    run.innerHTML = `▶ ${t.composite ? '<span class="investigate-pattern-composite" title="Composite — a recipe of recipes">⋔</span> ' : ''}${escapeHtml(t.name)}`
+      + (t.aim ? ` <span class="investigate-pattern-aim">🎯 ${escapeHtml(t.aim)}</span>` : '')
+      + ` <span class="investigate-pattern-count">${stepCount}</span>`;
     run.addEventListener('click', () => { void openTemplateHub(t.name); });
     chip.appendChild(run);
-    // ⋔ Steps — open the template hub: the whole flow + inline variable boxes + live run.
+    // ⋔ Flow — open the read-only VISUAL flow (verb + nouns + dataflow + conditionals),
+    // so you can see what the recipe does; ▶ (the name) opens the run/tweak hub.
     const steps = document.createElement('button');
     steps.className = 'investigate-pattern-steps';
     steps.textContent = '⋔';
-    steps.title = 'Open the template — see the flow, tweak variables, run with live progress';
-    steps.addEventListener('click', (e) => { e.stopPropagation(); void openTemplateHub(t.name); });
+    steps.title = 'See this recipe as a visual flow';
+    steps.addEventListener('click', (e) => { e.stopPropagation(); void showInvestigationWorkflow(t.name); });
     chip.appendChild(steps);
     // Preflight badge — only for patterns that declare a requirements manifest. Shows
     // whether THIS open log satisfies the pattern's required template (✓ / ✗ blocked).
@@ -7835,6 +7839,20 @@ function renderWorkflowGraph(graph: any, name: string, body: HTMLElement): void 
     const head = document.createElement('div');
     head.className = 'workflow-step-head';
     head.innerHTML = `<span class="workflow-step-idx">${i + 1}</span><span class="workflow-step-verb">${escapeHtml(n.verb)}</span>`;
+    // Composite step: the saved sub-recipe it runs, as a chip after the verb.
+    if (n.subRecipe) {
+      const sr = document.createElement('span'); sr.className = 'workflow-step-subrecipe';
+      sr.textContent = `▶ ${wfTrunc(String(n.subRecipe), 40)}`;
+      sr.title = 'Runs this saved sub-recipe';
+      head.appendChild(sr);
+    }
+    // Conditional guard: this step runs only if the previous step's answer satisfies it.
+    if (n.guard) {
+      const g = document.createElement('span'); g.className = 'workflow-step-tag guard';
+      g.textContent = `only if ${wfTrunc(String(n.guard), 40)}`;
+      g.title = 'Runs only when the previous step’s answer satisfies this condition';
+      head.appendChild(g);
+    }
     if (dataflowInto.has(n.id)) {
       const df = document.createElement('span'); df.className = 'workflow-step-tag dataflow';
       df.textContent = '↳ prev result'; df.title = 'Consumes the previous step’s active scope';
