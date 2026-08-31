@@ -2865,9 +2865,9 @@ interface FolderEntry {
 // How many levels below the opened folder the tree recurses. Bounded so a deep tree
 // can't make a folder-open scan unbounded; the skip-list below removes the usual
 // explosion sources (node_modules/.git/build/…) and empty branches get pruned, so a
-// generous cap is cheap in practice. Raised 3 → 10 so realistically-nested capture
+// generous cap is cheap in practice. Raised 3 → 15 so realistically-nested capture
 // folders (e.g. run/device/session/sub/…) are still shown.
-const FOLDER_SCAN_MAX_DEPTH = 10;
+const FOLDER_SCAN_MAX_DEPTH = 15;
 const FOLDER_SCAN_SKIP = new Set(['node_modules', '__pycache__', '.git', 'build', 'dist', '.next', 'target']);
 const FOLDER_SCAN_PARALLEL = 16; // concurrent file sniff operations
 
