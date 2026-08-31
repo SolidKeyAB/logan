@@ -8349,6 +8349,7 @@ ipcMain.handle(IPC.INVESTIGATION_CHECK, async (_e, name: string) => callApiServe
 ipcMain.handle(IPC.INVESTIGATION_SET_REQS, async (_e, name: string, requirements: any) => callApiServer('/api/investigation-set-requirements', { name, requirements }));
 ipcMain.handle(IPC.INVESTIGATION_SET_PARAMS, async (_e, name: string, patches: any[]) => callApiServer('/api/investigation-set-params', { name, patches: patches || [] }));
 ipcMain.handle(IPC.INVESTIGATION_SUGGEST_REQS, async () => callApiServer('/api/investigation-suggest-requirements', {}));
+ipcMain.handle(IPC.INVESTIGATION_COMPOSE, async (_e, input: any) => callApiServer('/api/investigation-compose', input || {}));
 ipcMain.handle(IPC.WORKFLOW_SHOW, async (_e, investigation?: string) => callApiServer('/api/workflow-show', { investigation }));
 ipcMain.handle(IPC.ENTITIES_LIST, async (_e, kind?: string) => callApiServer('/api/entities', { kind }));
 // Clue sequences (ordered evidence trails) — human side proxies to the same /api/sequence-*
