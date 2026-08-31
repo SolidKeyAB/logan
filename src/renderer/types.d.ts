@@ -767,6 +767,7 @@ interface Api {
   deleteInvestigation: (name: string) => Promise<{ success: boolean }>;
   checkInvestigation: (name: string) => Promise<{ success: boolean; name?: string; manifest?: any; requirements?: any; error?: string }>;
   forkInvestigation: (name: string, newName: string, params?: Record<string, any>, description?: string) => Promise<{ success: boolean; template?: any; error?: string }>;
+  composeInvestigation: (input: { name: string; aim: string; steps: Array<{ investigation: string; params?: Record<string, any>; when?: { op: string; value?: number | string } }>; description?: string }) => Promise<{ success: boolean; template?: any; error?: string }>;
   showWorkflow: (investigation?: string) => Promise<{ success: boolean; graph?: any; source?: any; error?: string }>;
   setInvestigationRequirements: (name: string, requirements: any) => Promise<{ success: boolean; template?: any; error?: string }>;
   setInvestigationParams: (name: string, patches: any[]) => Promise<{ success: boolean; template?: any; applied?: number; errors?: string[]; error?: string }>;

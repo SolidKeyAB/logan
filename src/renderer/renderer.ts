@@ -7597,6 +7597,7 @@ function initInvestigatePanel(): void {
 
   // Saved investigation patterns (templates of the agent's recorded steps).
   document.getElementById('btn-save-investigation')?.addEventListener('click', () => { void saveCurrentInvestigation(); });
+  document.getElementById('btn-compose-investigation')?.addEventListener('click', () => { void openComposePanel(); });
   window.api.onInvestigationTemplatesChanged(() => { void loadInvestigationTemplates(); });
   // The agent applied a saved lens entity → run the SAME dispatcher the human ▶ Apply uses
   // (set-semantics, so a re-apply is idempotent). One impl, two operators.
@@ -8101,6 +8102,232 @@ async function openTemplateHub(name: string): Promise<void> {
 function closeTemplateHub(): void {
   if (hubRunUnsub) { hubRunUnsub(); hubRunUnsub = null; }
   document.getElementById('workflow-overlay')?.setAttribute('hidden', '');
+}
+
+// ── ＋ Compose panel — human authoring of a COMPOSITE recipe (recipe-of-recipes) ──
+// Parity for the agent's logan_compose_investigation: pick saved sub-recipes, chain them,
+// optionally guard each on the PREVIOUS step's typed answer, and save via the SAME
+// /api/investigation-compose endpoint (through INVESTIGATION_COMPOSE). Reuses the shared
+// #workflow-overlay so it inherits the drag + styling of the template hub.
+interface ComposeStepDraft { investigation: string; params: Record<string, string>; whenOp: string; whenValue: string; }
+let composeRecipes: any[] = [];
+let composeDraft: { name: string; aim: string; description: string; steps: ComposeStepDraft[] } | null = null;
+
+// Guard ops on the PREVIOUS step's typed answer.value (see recipeComposition.ts / the agent tool).
+const COMPOSE_GUARD_OPS: Array<{ v: string; label: string; needsValue: boolean }> = [
+  { v: '', label: 'always run', needsValue: false },
+  { v: 'true', label: 'prev found something (true)', needsValue: false },
+  { v: 'false', label: 'prev found nothing (false)', needsValue: false },
+  { v: 'gt', label: 'prev count >', needsValue: true },
+  { v: 'lt', label: 'prev count <', needsValue: true },
+  { v: 'eq', label: 'prev count/text =', needsValue: true },
+  { v: 'contains', label: 'prev text contains', needsValue: true },
+];
+
+// A recipe's fill-in params (role variable / unset) — the ones a composite step can pass.
+function composeRecipeVarParams(recipe: any): any[] {
+  return (recipe?.params || []).filter((p: any) => p && p.role !== 'constant');
+}
+function composeFindRecipe(name: string): any {
+  return composeRecipes.find(r => r.name === name || r.slug === name) || null;
+}
+// Prefill a step's param map from the selected recipe's variable defaults.
+function seedComposeStepParams(step: ComposeStepDraft): void {
+  step.params = {};
+  for (const p of composeRecipeVarParams(composeFindRecipe(step.investigation))) {
+    step.params[p.key] = p.default != null ? String(p.default) : '';
+  }
+}
+
+async function openComposePanel(): Promise<void> {
+  const res = await window.api.listInvestigations();
+  composeRecipes = (res.success && res.templates) ? res.templates : [];
+  if (composeRecipes.length === 0) {
+    showToast('Save at least one recipe first — Compose chains saved recipes together.');
+    return;
+  }
+  const first: ComposeStepDraft = { investigation: composeRecipes[0].name, params: {}, whenOp: '', whenValue: '' };
+  seedComposeStepParams(first);
+  composeDraft = { name: '', aim: '', description: '', steps: [first] };
+  const overlay = document.getElementById('workflow-overlay');
+  const body = document.getElementById('workflow-body');
+  if (!overlay || !body) return;
+  overlay.removeAttribute('hidden');
+  trackUsage('investigation:compose-open');
+  renderComposePanel();
+}
+
+function renderComposePanel(): void {
+  const body = document.getElementById('workflow-body');
+  if (!body || !composeDraft) return;
+  body.innerHTML = '';
+
+  const header = document.createElement('div');
+  header.className = 'workflow-header';
+  header.innerHTML = `<span class="workflow-title">＋ Compose recipe</span>`
+    + `<span class="workflow-meta">${composeDraft.steps.length} step${composeDraft.steps.length === 1 ? '' : 's'}</span>`;
+  const close = document.createElement('button');
+  close.className = 'workflow-close'; close.textContent = '×'; close.title = 'Close';
+  close.style.marginLeft = 'auto';
+  close.addEventListener('click', closeWorkflowOverlay);
+  header.appendChild(close);
+  body.appendChild(header);
+  const panel = body.closest('.workflow-panel') as HTMLElement | null;
+  if (panel) enableWorkflowDrag(header, panel, close);
+
+  const hint = document.createElement('p');
+  hint.className = 'workflow-hint';
+  hint.textContent = 'Chain saved recipes into one. Each step runs a recipe; from step 2 on you can gate a step on the previous step’s answer. Runs / lists / forks like any recipe.';
+  body.appendChild(hint);
+
+  // Name + aim (required) + optional note.
+  const meta = document.createElement('div');
+  meta.className = 'compose-meta';
+  meta.innerHTML =
+    `<label class="compose-field"><span>Name</span><input type="text" class="compose-name" placeholder="e.g. Crash → OOM confirm" value="${escapeHtml(composeDraft.name)}"></label>`
+    + `<label class="compose-field"><span>🎯 Aim <em>(required)</em></span><input type="text" class="compose-aim" placeholder="what is this composite FOR? e.g. if the crash-check finds crashes, confirm whether it is OOM" value="${escapeHtml(composeDraft.aim)}"></label>`
+    + `<label class="compose-field"><span>Note <em>(optional)</em></span><input type="text" class="compose-desc" placeholder="optional description" value="${escapeHtml(composeDraft.description)}"></label>`;
+  body.appendChild(meta);
+  meta.querySelector('.compose-name')?.addEventListener('input', (e) => { composeDraft!.name = (e.target as HTMLInputElement).value; });
+  meta.querySelector('.compose-aim')?.addEventListener('input', (e) => { composeDraft!.aim = (e.target as HTMLInputElement).value; });
+  meta.querySelector('.compose-desc')?.addEventListener('input', (e) => { composeDraft!.description = (e.target as HTMLInputElement).value; });
+
+  const list = document.createElement('div');
+  list.className = 'compose-steps';
+  composeDraft.steps.forEach((step, i) => list.appendChild(renderComposeStep(step, i)));
+  body.appendChild(list);
+
+  const addBtn = document.createElement('button');
+  addBtn.className = 'secondary-btn small compose-add';
+  addBtn.textContent = '+ Add step';
+  addBtn.addEventListener('click', () => {
+    const s: ComposeStepDraft = { investigation: composeRecipes[0].name, params: {}, whenOp: '', whenValue: '' };
+    seedComposeStepParams(s);
+    composeDraft!.steps.push(s);
+    renderComposePanel();
+  });
+  body.appendChild(addBtn);
+
+  const footer = document.createElement('div');
+  footer.className = 'hub-actions';
+  const status = document.createElement('div'); status.className = 'hub-status'; status.id = 'compose-status'; footer.appendChild(status);
+  const btns = document.createElement('div'); btns.className = 'hub-actions-btns';
+  btns.innerHTML = `<button class="secondary-btn small" data-compose="cancel">Cancel</button>`
+    + `<button class="primary-btn small" data-compose="save">💾 Save composite</button>`;
+  footer.appendChild(btns);
+  body.appendChild(footer);
+  btns.querySelector('[data-compose="cancel"]')?.addEventListener('click', closeWorkflowOverlay);
+  btns.querySelector('[data-compose="save"]')?.addEventListener('click', () => { void saveComposePanel(); });
+}
+
+function renderComposeStep(step: ComposeStepDraft, i: number): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'compose-step';
+
+  const head = document.createElement('div');
+  head.className = 'compose-step-head';
+  const opts = composeRecipes.map(r => `<option value="${escapeHtml(r.name)}"${r.name === step.investigation ? ' selected' : ''}>${escapeHtml(r.name)}${r.composite ? ' ⋔' : ''}</option>`).join('');
+  head.innerHTML = `<span class="compose-step-num">${i + 1}</span>`
+    + `<select class="compose-step-recipe">${opts}</select>`
+    + `<span class="compose-step-tools">`
+    + (i > 0 ? `<button class="compose-step-tool" data-move="up" title="Move up">↑</button>` : '')
+    + (i < composeDraft!.steps.length - 1 ? `<button class="compose-step-tool" data-move="down" title="Move down">↓</button>` : '')
+    + (composeDraft!.steps.length > 1 ? `<button class="compose-step-tool compose-step-del" data-del="1" title="Remove step">×</button>` : '')
+    + `</span>`;
+  row.appendChild(head);
+  head.querySelector('.compose-step-recipe')?.addEventListener('change', (e) => {
+    step.investigation = (e.target as HTMLSelectElement).value;
+    seedComposeStepParams(step);
+    renderComposePanel();
+  });
+  head.querySelector('[data-move="up"]')?.addEventListener('click', () => swapComposeSteps(i, i - 1));
+  head.querySelector('[data-move="down"]')?.addEventListener('click', () => swapComposeSteps(i, i + 1));
+  head.querySelector('[data-del]')?.addEventListener('click', () => { composeDraft!.steps.splice(i, 1); renderComposePanel(); });
+
+  // Guard — only from step 2 on (step 1 has no previous answer to test).
+  if (i > 0) {
+    const guard = document.createElement('div');
+    guard.className = 'compose-step-guard';
+    const opSel = COMPOSE_GUARD_OPS.map(o => `<option value="${o.v}"${o.v === step.whenOp ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('');
+    const needsValue = COMPOSE_GUARD_OPS.find(o => o.v === step.whenOp)?.needsValue;
+    guard.innerHTML = `<span class="compose-guard-label">only if</span>`
+      + `<select class="compose-guard-op">${opSel}</select>`
+      + `<input type="text" class="compose-guard-val" placeholder="value" value="${escapeHtml(step.whenValue)}"${needsValue ? '' : ' hidden'}>`;
+    row.appendChild(guard);
+    guard.querySelector('.compose-guard-op')?.addEventListener('change', (e) => { step.whenOp = (e.target as HTMLSelectElement).value; renderComposePanel(); });
+    guard.querySelector('.compose-guard-val')?.addEventListener('input', (e) => { step.whenValue = (e.target as HTMLInputElement).value; });
+  }
+
+  // Params — the selected recipe's fill-ins (prefilled with its recorded defaults).
+  const varParams = composeRecipeVarParams(composeFindRecipe(step.investigation));
+  if (varParams.length) {
+    const pm = document.createElement('div');
+    pm.className = 'compose-step-params';
+    for (const p of varParams) {
+      const lbl = document.createElement('label');
+      lbl.className = 'compose-param';
+      lbl.innerHTML = `<span title="${escapeHtml(p.label || p.key)}">${escapeHtml(p.key)}</span>`
+        + `<input type="text" data-pkey="${escapeHtml(p.key)}" value="${escapeHtml(step.params[p.key] ?? '')}" placeholder="${escapeHtml(p.default != null ? String(p.default) : '')}">`;
+      pm.appendChild(lbl);
+    }
+    row.appendChild(pm);
+    pm.querySelectorAll('input[data-pkey]').forEach(inp => inp.addEventListener('input', (e) => {
+      const el = e.target as HTMLInputElement;
+      step.params[el.dataset.pkey || ''] = el.value;
+    }));
+  }
+  return row;
+}
+
+function swapComposeSteps(a: number, b: number): void {
+  if (!composeDraft || b < 0 || b >= composeDraft.steps.length) return;
+  const t = composeDraft.steps[a]; composeDraft.steps[a] = composeDraft.steps[b]; composeDraft.steps[b] = t;
+  renderComposePanel();
+}
+
+// Coerce a guard value: numeric where sensible; text for eq/contains that aren't numeric.
+function composeGuardValue(op: string, raw: string): number | string | undefined {
+  const s = raw.trim();
+  if (op === 'gt' || op === 'lt') { const n = Number(s); return s !== '' && !isNaN(n) ? n : undefined; }
+  if (op === 'eq') { const n = Number(s); return s !== '' && !isNaN(n) ? n : s; }
+  if (op === 'contains') return s;
+  return undefined;
+}
+
+async function saveComposePanel(): Promise<void> {
+  if (!composeDraft) return;
+  const status = document.getElementById('compose-status');
+  const setStatus = (msg: string) => { if (status) status.textContent = msg; };
+  const name = composeDraft.name.trim();
+  const aim = composeDraft.aim.trim();
+  if (!name) { setStatus('⚠ Name the composite.'); return; }
+  if (!aim) { setStatus('⚠ Aim is required — say what this composite is for.'); return; }
+  if (!composeDraft.steps.length) { setStatus('⚠ Add at least one step.'); return; }
+
+  const steps = composeDraft.steps.map(s => {
+    const params: Record<string, any> = {};
+    for (const [k, v] of Object.entries(s.params)) { const t = (v ?? '').trim(); if (t !== '') params[k] = t; }
+    const out: any = { investigation: s.investigation };
+    if (Object.keys(params).length) out.params = params;
+    if (s.whenOp) {
+      const guard: any = { op: s.whenOp };
+      const gv = composeGuardValue(s.whenOp, s.whenValue);
+      if (gv !== undefined) guard.value = gv;
+      out.when = guard;
+    }
+    return out;
+  });
+
+  setStatus('Saving…');
+  const res = await window.api.composeInvestigation({ name, aim, steps, description: composeDraft.description.trim() || undefined });
+  if (res && res.success) {
+    showToast(`✓ Composite “${name}” saved`);
+    composeDraft = null;
+    closeWorkflowOverlay();
+    void loadInvestigationTemplates();
+  } else {
+    setStatus(`⚠ ${(res as any)?.error || 'Could not save composite'}`);
+  }
 }
 
 function syncTemplateCache(tpl: any): void {
