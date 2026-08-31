@@ -26,6 +26,7 @@ import { computeSegmentPlan, readSystemMemory } from './segmentPlan';
 import { getRipgrepPath } from './ripgrepPath';
 import { openWithAdapter, NormalizedSource, isTextPassthrough } from './sourceAdapter';
 import { resolveFileHandlers, runFileHandler, FileHandlerQuery } from './fileHandlers';
+import { scanFolderShallow } from './folderScan';
 import { extractBodyLine, extractHeaderLine } from '../shared/extractFormat';
 import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, SingleSessionEntry, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation, PatternProperty, SavedPattern, ScopeDescriptor, ResolvedScope, FileInfo } from '../shared/types';
 import * as Diff from 'diff';
@@ -2814,125 +2815,15 @@ const TEXT_EXTENSIONS = new Set([
   '.properties', '.env', '.gitignore', '.dockerignore',
 ]);
 
-// Detect file type purely by reading file header (magic bytes).
-// No extension checks — works for extensionless files, misnamed files, etc.
-async function sniffFileType(filePath: string): Promise<'text' | 'image' | 'video' | 'binary'> {
-  try {
-    const fh = await fs.promises.open(filePath, 'r');
-    try {
-      const buf = Buffer.alloc(16);
-      const { bytesRead } = await fh.read(buf, 0, 16, 0);
-      if (bytesRead === 0) return 'text'; // empty file is openable as text
-
-      // --- Image signatures ---
-      if (bytesRead >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'image'; // PNG
-      if (bytesRead >= 3 && buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'image'; // JPEG
-      if (bytesRead >= 3 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return 'image'; // GIF
-      if (bytesRead >= 2 && buf[0] === 0x42 && buf[1] === 0x4D) return 'image'; // BMP
-      // RIFF container: check subtype for WebP vs AVI
-      if (bytesRead >= 12 && buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46) {
-        if (buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) return 'image'; // WebP
-        if (buf[8] === 0x41 && buf[9] === 0x56 && buf[10] === 0x49 && buf[11] === 0x20) return 'video'; // AVI
-      }
-
-      // --- Video signatures ---
-      if (bytesRead >= 8 && buf[4] === 0x66 && buf[5] === 0x74 && buf[6] === 0x79 && buf[7] === 0x70) return 'video'; // MP4/MOV/M4V (ftyp box)
-      if (bytesRead >= 4 && buf[0] === 0x1A && buf[1] === 0x45 && buf[2] === 0xDF && buf[3] === 0xA3) return 'video'; // MKV/WebM (EBML)
-      if (bytesRead >= 4 && buf[0] === 0x4F && buf[1] === 0x67 && buf[2] === 0x67 && buf[3] === 0x53) return 'video'; // OGG/OGV
-
-      // --- Binary detection: any NUL byte in the sample means binary ---
-      for (let i = 0; i < bytesRead; i++) {
-        if (buf[i] === 0x00) return 'binary';
-      }
-      return 'text';
-    } finally {
-      await fh.close();
-    }
-  } catch {
-    return 'binary';
-  }
-}
-
-interface FolderEntry {
-  name: string;
-  path: string;
-  isDirectory: boolean;
-  size?: number;
-  fileType?: 'text' | 'image' | 'video' | 'binary';
-  children?: FolderEntry[];
-}
-
-// How many levels below the opened folder the tree recurses. Bounded so a deep tree
-// can't make a folder-open scan unbounded; the skip-list below removes the usual
-// explosion sources (node_modules/.git/build/…) and empty branches get pruned, so a
-// generous cap is cheap in practice. Raised 3 → 15 so realistically-nested capture
-// folders (e.g. run/device/session/sub/…) are still shown.
-const FOLDER_SCAN_MAX_DEPTH = 15;
-const FOLDER_SCAN_SKIP = new Set(['node_modules', '__pycache__', '.git', 'build', 'dist', '.next', 'target']);
-const FOLDER_SCAN_PARALLEL = 16; // concurrent file sniff operations
-
-// Binary formats the app has a SourceAdapter for (see sourceAdapter.ts). Arbitrary
-// binaries are hidden from the folder tree, but these are first-class OPENABLE
-// files (they decode to text on open), so the tree must show them by extension —
-// sniffFileType() only sees NUL bytes and would otherwise class them 'binary'.
-// Keep this in sync with the binary adapters' detect() extensions
-// (VtraceAdapter → .esotrace, Mf4Adapter → .mf4/.mdf).
-const BINARY_OPENABLE_EXTENSIONS = new Set(['.esotrace', '.mf4', '.mdf']);
-
-async function scanFolder(folderPath: string, depth: number): Promise<FolderEntry[]> {
-  const dirEntries = await fs.promises.readdir(folderPath, { withFileTypes: true });
-  const results: FolderEntry[] = [];
-
-  // Process subdirectories first (sequential to avoid fd exhaustion)
-  if (depth < FOLDER_SCAN_MAX_DEPTH) {
-    for (const entry of dirEntries) {
-      if (entry.name.startsWith('.') || FOLDER_SCAN_SKIP.has(entry.name)) continue;
-      if (!entry.isDirectory()) continue;
-      const fullPath = path.join(folderPath, entry.name);
-      try {
-        const children = await scanFolder(fullPath, depth + 1);
-        if (children.length > 0) {
-          results.push({ name: entry.name, path: fullPath, isDirectory: true, children });
-        }
-      } catch { /* skip unreadable dirs */ }
-    }
-  }
-
-  // Process files in parallel batches for speed
-  const fileEntries = dirEntries.filter(e => !e.name.startsWith('.') && e.isFile());
-  for (let i = 0; i < fileEntries.length; i += FOLDER_SCAN_PARALLEL) {
-    const batch = fileEntries.slice(i, i + FOLDER_SCAN_PARALLEL);
-    const batchResults = await Promise.all(batch.map(async (entry) => {
-      const fullPath = path.join(folderPath, entry.name);
-      try {
-        const [stat, fileType] = await Promise.all([
-          fs.promises.stat(fullPath),
-          sniffFileType(fullPath),
-        ]);
-        // Hide arbitrary binaries, but keep formats we can decode (.esotrace/.mf4).
-        // Dropping these also pruned any subfolder that held only such files, via
-        // scanFolder's `children.length > 0` gate — so a folder of .esotrace
-        // captures disappeared from the tree entirely.
-        if (fileType === 'binary' && !BINARY_OPENABLE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) return null;
-        return { name: entry.name, path: fullPath, isDirectory: false, size: stat.size, fileType } as FolderEntry;
-      } catch { return null; }
-    }));
-    for (const r of batchResults) {
-      if (r) results.push(r);
-    }
-  }
-
-  // Directories first, then alphabetical
-  results.sort((a, b) => {
-    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
-    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
-  });
-  return results;
-}
+// Folder-tree scanning (sniffFileType / scanFolderShallow / hasChildren peek) lives in
+// ./folderScan so it can be unit-tested without importing electron. The tree is LAZY:
+// READ_FOLDER returns ONE level; deeper levels load on expand via the same handler
+// (the renderer calls readFolder(subdirPath) for a subfolder). No depth cap, no
+// whole-tree scan on open — see folderScan.ts.
 
 ipcMain.handle(IPC.READ_FOLDER, async (_, folderPath: string) => {
   try {
-    const files = await scanFolder(folderPath, 0);
+    const files = await scanFolderShallow(folderPath);
     return { success: true, files, folderPath };
   } catch (error) {
     return { success: false, error: String(error) };

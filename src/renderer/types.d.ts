@@ -178,6 +178,8 @@ interface FolderFile {
   path: string;
   isDirectory: boolean;
   size?: number;
+  fileType?: 'text' | 'image' | 'video' | 'binary';
+  hasChildren?: boolean;
 }
 
 interface FolderSearchMatch {
