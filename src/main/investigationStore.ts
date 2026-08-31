@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { RequirementsManifest } from './investigationRequirements';
+import { StepGuard } from '../shared/recipeComposition';
 
 // One recorded investigative tool call.
 export interface JournalEntry {
@@ -42,6 +43,8 @@ export interface TemplateStep {
   body: Record<string, any>;
   label: string;
   result?: string;              // outcome captured when the step was recorded (Build 2)
+  when?: StepGuard;             // conditional guard (composite recipes): run this step only if
+                                // the PREVIOUS step's typed answer satisfies it. Absent = always.
 }
 
 export interface InvestigationTemplate {
@@ -49,12 +52,20 @@ export interface InvestigationTemplate {
   slug: string;
   createdAt: number;
   sourceFile?: string;          // log the template was recorded from (for reference)
+  sourceFiles?: string[];       // ALL distinct logs the recorded steps ran against — so the
+                                // user can see which file(s)/type(s) it was built on and knows
+                                // what to apply it to next time (esp. a multi-file investigation)
   aim?: string;                 // what this recipe is FOR — the question it sets out to answer
                                 // ("find the root-cause component of the 401 storm")
   description?: string;
+  answerStepIndex?: number;     // which step produces the ANSWER (the valuable output that
+                                // answers the aim). Unset => the run shows a HEURISTIC answer
+                                // (the last output-producing step), flagged as a best guess.
   steps: TemplateStep[];
   params: ParamDef[];           // promoted fill-ins (component/field/pattern/event/…)
   requirements?: RequirementsManifest; // preconditions: file-template + expected saved entities
+  composite?: boolean;          // true = a "recipe of recipes": every step runs a saved
+                                // sub-recipe (path '/api/investigation-run'), optionally guarded.
 }
 
 // Body keys worth exposing as fill-in parameters when replaying on a new log.
@@ -130,7 +141,7 @@ function ensureDir(): void {
 }
 
 // Turn a recorded journal into a parameterised template.
-export function buildTemplate(name: string, journal: JournalEntry[], sourceFile?: string, description?: string, requirements?: RequirementsManifest, aim?: string): InvestigationTemplate {
+export function buildTemplate(name: string, journal: JournalEntry[], sourceFile?: string, description?: string, requirements?: RequirementsManifest, aim?: string, sourceFiles?: string[]): InvestigationTemplate {
   const steps: TemplateStep[] = journal.map(e => ({ path: e.path, body: { ...e.body }, label: e.label, result: e.result }));
   const params: ParamDef[] = [];
   steps.forEach((step, i) => {
@@ -142,7 +153,9 @@ export function buildTemplate(name: string, journal: JournalEntry[], sourceFile?
       }
     }
   });
-  return { name, slug: slugify(name), createdAt: Date.now(), sourceFile, aim, description, steps, params, requirements };
+  // Keep sourceFiles distinct + non-empty; fall back to the single sourceFile.
+  const files = Array.from(new Set((sourceFiles && sourceFiles.length ? sourceFiles : (sourceFile ? [sourceFile] : [])).filter(Boolean)));
+  return { name, slug: slugify(name), createdAt: Date.now(), sourceFile, sourceFiles: files.length ? files : undefined, aim, description, steps, params, requirements };
 }
 
 function stepLabel(step: TemplateStep): string {

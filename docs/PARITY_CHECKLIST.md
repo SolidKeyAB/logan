@@ -318,3 +318,21 @@ when each is next touched):
   removes it, persisted through `setInvestigationRequirements`. So both operators author the
   outfit (agent via the `autoApply` flag at save, human via the hub composer), and both
   consume it (the lenses apply to the view + the "Applied" readout).
+
+- **Recipe composition + conditionals — `logan_compose_investigation` (recipe-of-recipes).**
+  A "complicated" recipe is now a normal `InvestigationTemplate` with `composite:true` whose
+  steps each run a saved SUB-recipe (`path:'/api/investigation-run'`, body `{name, params}`)
+  with an optional `when` guard (`StepGuard` — run the step only if the PREVIOUS step's typed
+  answer satisfies it: `true|false|gt|lt|eq|contains`). The run engine recurses (depth-capped
+  at 8, `force` threaded), skips guarded steps whose condition fails, and every run now returns
+  a TYPED `answer.value` (`AnswerValue = {kind, bool, count?, text?}`, pure `deriveAnswerValue`)
+  — the machine-comparable result a guard tests. Guard eval + shape live in the pure, unit-
+  tested `shared/recipeComposition.ts` (mirrors the derive-at-read pattern; zero migration).
+  **RUN is at full parity:** a composite lists in the Saved panel and runs via the human recipe
+  hub / ▶ Apply AND via agent `logan_run_investigation` (same shared run handler); the hub shows
+  the typed-value chip, `▶ recipe` step verbs, and ⊘ skipped-step state.
+  **AUTHORING — logged parity DEBT (agent-only for now):** the agent authors composites via
+  `logan_compose_investigation`; there is **no human compose panel yet** (you build one by
+  talking to the agent, then run/tweak/fork it in the hub like any recipe). Follow-up P1 =
+  a human "＋ Compose" surface (pick sub-recipes, set params, set each `when`) + top-level
+  composite inputs that forward into sub-recipes, and output→input value binding.
