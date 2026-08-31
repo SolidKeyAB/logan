@@ -68,6 +68,7 @@ const IPC = {
   INVESTIGATION_SET_AIM: 'investigation-set-aim',
   INVESTIGATION_SET_ANSWER: 'investigation-set-answer',
   INVESTIGATION_SUGGEST_REQS: 'investigation-suggest-requirements',
+  INVESTIGATION_COMPOSE: 'investigation-compose',
   WORKFLOW_SHOW: 'workflow-show',
   ENTITIES_LIST: 'entities-list',
   SERIAL_LIST_PORTS: 'serial-list-ports',
@@ -820,6 +821,9 @@ const api = {
   // baked in as the new defaults.
   forkInvestigation: (name: string, newName: string, params?: Record<string, any>, description?: string): Promise<{ success: boolean; template?: any; error?: string }> =>
     ipcRenderer.invoke(IPC.INVESTIGATION_FORK, name, newName, params, description),
+  // Author a composite recipe (recipe-of-recipes) — human parity for logan_compose_investigation.
+  composeInvestigation: (input: { name: string; aim: string; steps: Array<{ investigation: string; params?: Record<string, any>; when?: { op: string; value?: number | string } }>; description?: string }): Promise<{ success: boolean; template?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.INVESTIGATION_COMPOSE, input),
   checkInvestigation: (name: string): Promise<{ success: boolean; name?: string; manifest?: any; requirements?: any; error?: string }> =>
     ipcRenderer.invoke(IPC.INVESTIGATION_CHECK, name),
   setInvestigationRequirements: (name: string, requirements: any): Promise<{ success: boolean; template?: any; error?: string }> =>
