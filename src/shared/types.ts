@@ -105,6 +105,8 @@ export interface FolderEntry {
   path: string;
   isDirectory: boolean;
   size?: number;
+  mtimeMs?: number;
+  birthtimeMs?: number;
 }
 
 // Folder search result
