@@ -11580,10 +11580,19 @@ function cancelQueuedMessage(id: number): void {
   renderChatQueue();
 }
 
-function sendQueuedMessage(id: number): void {
+// Dispatch a queued message. `force` = the user judges the "agent is busy" state to be
+// wrong — the processing/typing animation is stuck or deceptive and the agent is really
+// idle. In that case we clear the awaiting gate (and the typing indicator) and deliver
+// now, instead of waiting on a reply signal that may never come. deliverChatMessage
+// then re-arms awaitingAgentReply for the genuine turn.
+function sendQueuedMessage(id: number, force = false): void {
   const i = chatQueue.findIndex(q => q.id === id);
   if (i < 0) return;
   const [item] = chatQueue.splice(i, 1);
+  if (force) {
+    awaitingAgentReply = false;
+    hideTypingIndicator();
+  }
   renderChatQueue();
   deliverChatMessage(item.text); // re-enters the busy state; the rest stay queued
 }
@@ -11606,7 +11615,7 @@ function renderChatQueue(): void {
   box.classList.toggle('waiting', awaitingAgentReply);
   if (elements.chatQueueTitle) {
     elements.chatQueueTitle.textContent = awaitingAgentReply
-      ? `Queued (${chatQueue.length}) — waiting for the agent to reply…`
+      ? `Queued (${chatQueue.length}) — waiting for the agent… (⚡ Force send if it looks stuck)`
       : `Queued (${chatQueue.length}) — agent replied; send or cancel`;
   }
 
@@ -11621,15 +11630,24 @@ function renderChatQueue(): void {
     txt.title = item.text;
     row.appendChild(txt);
 
-    // Send is offered only once the agent is free — sending while still busy
-    // would just re-create the swallowing problem.
     if (!awaitingAgentReply) {
+      // Agent is free — a normal Send.
       const send = document.createElement('button');
       send.className = 'chat-queue-send';
       send.textContent = 'Send';
       send.title = 'Send this message now';
       send.addEventListener('click', () => sendQueuedMessage(item.id));
       row.appendChild(send);
+    } else {
+      // Agent looks busy — but the progress state can be wrong/stuck (the agent
+      // finished a turn without a chat reply, or a reply event was missed). Offer a
+      // FORCE send so the user is never trapped behind a deceptive "processing" state.
+      const force = document.createElement('button');
+      force.className = 'chat-queue-force';
+      force.textContent = '⚡ Force send';
+      force.title = 'The agent looks busy — send this now anyway. Use when the “processing” state is stuck or wrong.';
+      force.addEventListener('click', () => sendQueuedMessage(item.id, true));
+      row.appendChild(force);
     }
 
     const cancel = document.createElement('button');
