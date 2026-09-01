@@ -3,7 +3,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { VtraceAdapter, pickAdapter, adapterRegistry } from '../main/sourceAdapter';
-import { decodeVtrace, parseVtraceToFile, findEpochAnchorMs, repairTs, newTsRepair, VtraceRecord } from '../main/vtraceParse';
+import {
+  decodeVtrace, parseVtraceToFile, findEpochAnchorMs, repairTs, newTsRepair, VtraceRecord,
+  parseLoggerTimeSidecar, loggerTimeToAnchor, findSidecarAnchor, resolveWallClockAnchor,
+} from '../main/vtraceParse';
 import { parseTimestampFast } from '../main/timestampParse';
 
 // ── Minimal vtrace fixture builder ───────────────────────────────────────────
@@ -47,6 +50,18 @@ function tmpVtrace(buf: Buffer): string {
   fs.writeFileSync(p, buf);
   return p;
 }
+
+// A capture "bundle": an isolated temp dir holding a .esotrace file and, optionally, a
+// loggertime sidecar next to it — the layout findSidecarAnchor discovers.
+function tmpBundle(buf: Buffer, sidecarJson?: string): { dir: string; esotrace: string } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'logan-vtrace-bundle-'));
+  const esotrace = path.join(dir, 'log_0000.esotrace');
+  fs.writeFileSync(esotrace, buf);
+  if (sidecarJson !== undefined) fs.writeFileSync(path.join(dir, 'loggertime_abc123.json'), sidecarJson);
+  return { dir, esotrace };
+}
+
+function rmDir(dir: string): void { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } }
 
 const SAMPLE = buildFixture([
   record(296_000_000_000, 2, '[4532:4532:1310123] [valhalla]: Using simple cache'),
@@ -276,6 +291,110 @@ describe('vtrace absolute wall-clock anchor', () => {
       fs.unlinkSync(p);
       if (fs.existsSync(outPath)) fs.unlinkSync(outPath);
     }
+  });
+});
+
+// ── Sidecar wall-clock anchor (loggertime two-point map) ──────────────────────
+describe('vtrace loggertime sidecar anchor', () => {
+  // Two calibration points on the record ns timebase → epoch ms: slope exactly 1e-6,
+  // boot epoch 1_700_000_000_000 (2023-11-14 22:13:20 UTC).
+  const MAP = { x1: 296_000_000_000, y1: 1_700_000_296_000, x2: 596_000_000_000, y2: 1_700_000_596_000 };
+  const MAP_JSON = JSON.stringify(MAP);
+  // A fixture carrying an in-message anchor pinning the SAME boot epoch (for cross-check).
+  const ANCHORED_LOCAL = buildFixture([
+    record(296_000_000_000, 2, '[1:2:3] session start timestamp=1700000296000 monotonicTimestamp=296000000000'),
+    record(296_005_000_000, 3, '[9:9:9] later event, no fields here'),
+  ]);
+
+  it('parseLoggerTimeSidecar reads a flat {x1,y1,x2,y2} map', () => {
+    expect(parseLoggerTimeSidecar(MAP_JSON)).toEqual(MAP);
+  });
+
+  it('parseLoggerTimeSidecar tolerates string numbers and a one-level wrapper', () => {
+    const wrapped = JSON.stringify({ loggertime: { x1: '296000000000', y1: '1700000296000', x2: '596000000000', y2: '1700000596000' } });
+    expect(parseLoggerTimeSidecar(wrapped)).toEqual(MAP);
+  });
+
+  it('parseLoggerTimeSidecar returns null for malformed / degenerate maps', () => {
+    expect(parseLoggerTimeSidecar('not json')).toBeNull();
+    expect(parseLoggerTimeSidecar('{"x1":1,"y1":2}')).toBeNull();               // missing x2/y2
+    expect(parseLoggerTimeSidecar('{"x1":5,"y1":2,"x2":5,"y2":9}')).toBeNull(); // x1==x2 → no slope
+  });
+
+  it('loggerTimeToAnchor recovers epoch0 + a ~1e-6 slope from two points', () => {
+    const a = loggerTimeToAnchor(MAP)!;
+    expect(a.epoch0Ms).toBe(1_700_000_000_000);
+    expect(a.slopeMsPerNs).toBeCloseTo(1e-6, 12);
+  });
+
+  it('loggerTimeToAnchor rejects a wrong-unit x-axis (slope orders of magnitude off)', () => {
+    // Same epochs but x in MICROSECONDS → slope ~1e-3 (1000× nominal) → rejected → fallback.
+    expect(loggerTimeToAnchor({ x1: 296_000_000, y1: 1_700_000_296_000, x2: 596_000_000, y2: 1_700_000_596_000 })).toBeNull();
+  });
+
+  it('findSidecarAnchor discovers loggertime*.json in the SAME folder as the .esotrace', () => {
+    const { dir, esotrace } = tmpBundle(SAMPLE, MAP_JSON);
+    try {
+      expect(findSidecarAnchor(esotrace)!.epoch0Ms).toBe(1_700_000_000_000);
+    } finally { rmDir(dir); }
+  });
+
+  it('findSidecarAnchor returns null when no sidecar is present', () => {
+    const { dir, esotrace } = tmpBundle(SAMPLE);
+    try {
+      expect(findSidecarAnchor(esotrace)).toBeNull();
+    } finally { rmDir(dir); }
+  });
+
+  it('findSidecarAnchor falls back to a loggertime/ subfolder', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'logan-vtrace-sub-'));
+    try {
+      const esotrace = path.join(dir, 'log_0000.esotrace');
+      fs.writeFileSync(esotrace, SAMPLE);
+      fs.mkdirSync(path.join(dir, 'loggertime'));
+      fs.writeFileSync(path.join(dir, 'loggertime', 'loggertime_x.json'), MAP_JSON);
+      expect(findSidecarAnchor(esotrace)!.epoch0Ms).toBe(1_700_000_000_000);
+    } finally { rmDir(dir); }
+  });
+
+  it('parseVtraceToFile stamps absolute dates from a sidecar (file has no in-message anchor)', async () => {
+    const { dir, esotrace } = tmpBundle(SAMPLE, MAP_JSON);
+    const outPath = path.join(dir, 'out.norm');
+    try {
+      await parseVtraceToFile(esotrace, outPath);
+      const lines = fs.readFileSync(outPath, 'utf-8').split('\n');
+      // SAMPLE record 0 is uptime 296.000000s → epoch0 + 296000ms.
+      expect(lines[0]).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.000 WARNING /);
+      expect(parseTimestampFast(lines[0])!.date.getTime()).toBe(1_700_000_296_000);
+    } finally { rmDir(dir); }
+  });
+
+  it('resolveWallClockAnchor uses a sidecar that AGREES with the in-message anchor', () => {
+    const { dir, esotrace } = tmpBundle(ANCHORED_LOCAL, MAP_JSON);
+    try {
+      expect(resolveWallClockAnchor(fs.readFileSync(esotrace), esotrace)!.epoch0Ms).toBe(1_700_000_000_000);
+    } finally { rmDir(dir); }
+  });
+
+  it('resolveWallClockAnchor rejects a sidecar that DISAGREES with the in-message anchor', () => {
+    // Sidecar pinned an hour off the in-message boot epoch → a different clock; the
+    // provably-correct in-message anchor wins (not the offset sidecar value).
+    const off = 3_600_000; // 1 h in ms
+    const badMap = JSON.stringify({ x1: 296_000_000_000, y1: 1_700_000_296_000 + off, x2: 596_000_000_000, y2: 1_700_000_596_000 + off });
+    const { dir, esotrace } = tmpBundle(ANCHORED_LOCAL, badMap);
+    try {
+      const a = resolveWallClockAnchor(fs.readFileSync(esotrace), esotrace)!;
+      expect(a.epoch0Ms).toBe(1_700_000_000_000);
+      expect(a.slopeMsPerNs).toBe(1e-6);
+    } finally { rmDir(dir); }
+  });
+
+  it('an explicit opts.epochMsAnchor still overrides a present sidecar', () => {
+    const { dir, esotrace } = tmpBundle(SAMPLE, MAP_JSON);
+    try {
+      const a = resolveWallClockAnchor(fs.readFileSync(esotrace), esotrace, { epochMsAnchor: 1_600_000_000_000 })!;
+      expect(a.epoch0Ms).toBe(1_600_000_000_000);
+    } finally { rmDir(dir); }
   });
 });
 
