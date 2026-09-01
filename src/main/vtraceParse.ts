@@ -31,8 +31,11 @@ import * as path from 'path';
  *    self-correcting (we byte-scan forward to the next valid record).
  *  - The timestamp is a full uint64 ns uptime, so a genuine value can be arbitrarily
  *    large (it passes 2^40 — the old "40-bit" assumption — after only ~18.3 minutes).
- *    We trust the read and only carry the last good value forward for a negative or
- *    beyond-representable (> ~104 days of ns) read, keeping the stream monotonic.
+ *    Which reads to trust is decided by the SEQUENCE, not by any absolute magnitude cap:
+ *    a read that matches the recent cadence flows through; a lone outlier (a spike, or a
+ *    backward read) is held at the last trusted value; and a SUSTAINED shift is confirmed
+ *    over a few reads before it's adopted. So no single bad read can become a permanent
+ *    floor — the failure mode a plain max()-clamp had (see repairTs).
  *
  * Output: one normalized line per record, with any embedded CR/LF folded to spaces
  * so FileHandler keeps a 1:1 record-to-line map and its level detection keys on the
@@ -44,12 +47,32 @@ import * as path from 'path';
 
 const HDR = 39; // fixed tail length for the common record shape
 const MAX_STRLEN = 1 << 16;
-// The timestamp is a full uint64 ns CLOCK_MONOTONIC uptime. The only physical/representable
-// ceiling is JS's exact-integer limit (2^53 - 1 ≈ 104 days of ns) — past that a read isn't
-// even represented exactly, so it can only be a desync/garbage read. This is NOT 2^40:
-// 2^40 ns is a mere ~18.3 minutes, and treating everything above it as "overflow" froze the
-// timestamp for the entire remainder of any capture running longer than 18 minutes.
-const TS_MAX = Number.MAX_SAFE_INTEGER; // 2^53 - 1 ns ≈ 104 days: the largest exactly-representable uptime
+// Representability guard (NOT a magnitude cap). The timestamp is a full uint64 ns
+// CLOCK_MONOTONIC uptime. A read above JS's exact-integer limit (2^53 - 1 ≈ 104 days
+// of ns) isn't even represented exactly, so it can only be a desync/garbage read.
+// This is the ONLY absolute bound we keep on the value itself — everything else about
+// which reads to trust is decided by the sequence, not by a threshold on magnitude.
+// (Historical note: a 2^40 ≈ 18.3-min "ceiling" once lived here and wrongly rejected
+// every genuine uptime past 18 min as overflow — see repairTs for why any absolute cap
+// is the wrong tool.)
+const TS_MAX = Number.MAX_SAFE_INTEGER; // 2^53 - 1 ns ≈ 104 days: largest exactly-representable uptime
+
+// ── Sequence-based timestamp repair knobs ────────────────────────────────────
+// MAX_STEP: the largest forward gap between two ADJACENT records we treat as normal
+// cadence. It is a bound on the delta between neighbours, not on the absolute value —
+// so raising it never re-introduces the 18-min freeze. Adjacent trace records in a
+// continuous capture sit far under an hour apart; a corrupt "spike" read lands days
+// away (a value that slips just under TS_MAX is ~58 days of ns). One hour therefore
+// sits safely between real cadence and corruption. The exact figure is deliberately
+// non-critical: RESYNC_RUN below is what actually guarantees we never latch, so this
+// only decides how eagerly a genuine large gap is accepted immediately vs. confirmed.
+const MAX_STEP = 3_600_000_000_000; // 1 hour in ns
+// RESYNC_RUN: how many CONSECUTIVE, mutually-consistent reads it takes to adopt a new
+// baseline that contradicts the current floor. This is the escape hatch that makes the
+// floor self-healing instead of a permanent ratchet: a lone spike (or a genuine low
+// read) is held, but a sustained shift — a real gap, or recovery from a floor that a
+// bad read poisoned — is confirmed and adopted. 3 = a single outlier can never move it.
+const RESYNC_RUN = 3;
 
 /** Magic identity string present in a valid file's header (a marker of the input). */
 const IDENTITY = Buffer.from('traceserverIVI', 'latin1');
@@ -132,21 +155,98 @@ function oneLine(s: string): string {
     : s.replace(/\r\n|\r|\n/g, ' ');
 }
 
-/** Resolve a raw timestamp read against the last good one (monotonic repair).
- * `lastTs` is the previously emitted ns value, or -1 before any record. */
-export function repairTs(rawTs: number, lastTs: number): number {
-  // The timestamp is a full uint64 ns uptime — trust it. Only a read beyond TS_MAX
-  // (~104 days, JS's exact-integer ceiling) or a negative one is genuinely corrupt;
-  // carry the last good value forward for it. (The old test `rawTs <= 2^40` was wrong:
-  // 2^40 ns is only ~18.3 min, so every real timestamp past 18 min was rejected as
-  // "overflow" and the stream froze on the last sub-18-min value — the latch-up bug.)
-  let ts = rawTs >= 0 && rawTs <= TS_MAX ? rawTs : lastTs;
-  // First record (lastTs = -1) and its only read was corrupt: nothing trustworthy to
-  // carry, so start at uptime 0. It must NOT fall back to the ceiling (TS_MAX): that
-  // seeds lastTs at the maximum and the monotonic clamp below then LATCHES every
-  // following record to it — the "timestamp repeats without changing" bug.
-  if (ts < 0) ts = 0;
-  return ts < lastTs ? lastTs : ts;          // enforce monotonicity
+/**
+ * Rolling state for sequence-based timestamp repair. One instance per decode pass;
+ * created with `newTsRepair()` and advanced one record at a time by `repairTs`.
+ *
+ *  - `last`     the last trusted, emitted ns value (the current floor); -1 before any
+ *               record has been accepted.
+ *  - `candBase` / `candRun`  a candidate new baseline that contradicts `last` (a spike,
+ *               or a run of low reads), and how many CONSECUTIVE reads have agreed with
+ *               it. Once `candRun` reaches RESYNC_RUN the candidate is adopted as the new
+ *               floor. This is what lets the floor recover from a bad read instead of
+ *               ratcheting on it forever.
+ */
+export interface TsRepairState {
+  last: number;
+  candBase: number;
+  candRun: number;
+}
+
+/** Fresh repair state for a decode pass. */
+export function newTsRepair(): TsRepairState {
+  return { last: -1, candBase: -1, candRun: 0 };
+}
+
+/**
+ * Advance the repair state by one raw timestamp read and return the ns value to emit.
+ *
+ * Sequence-based validation, replacing the old "absolute-magnitude cap + monotonic
+ * max()-clamp". The clamp's fatal flaw was that it trusted every read as an upper
+ * bound, so ONE over-high read that slipped under the cap became `last` and then
+ * `max()` floored every following record to it — a permanent freeze. Here nothing is
+ * trusted from a single read alone:
+ *
+ *   • A read that matches recent cadence (a forward step within MAX_STEP) is accepted
+ *     as the new floor.
+ *   • A lone outlier — a spike far above the floor, or a backward read below it — is
+ *     NOT adopted; we emit the last trusted value and wait. A single bad read therefore
+ *     costs exactly one carried line and can never poison the floor.
+ *   • A SUSTAINED shift — RESYNC_RUN consecutive reads clustering in a new region —
+ *     is confirmed and adopted, whether that region is higher (a genuine long gap) or
+ *     lower (recovery from a floor a previous bad read had pushed too high). This is the
+ *     self-healing property that a max()-clamp fundamentally cannot have.
+ *
+ * The only absolute bound is the representability guard (finite, non-negative, ≤ TS_MAX):
+ * a read outside it isn't a real ns uptime at all, so it can never be a candidate.
+ */
+export function repairTs(state: TsRepairState, rawTs: number): number {
+  const valid = Number.isFinite(rawTs) && rawTs >= 0 && rawTs <= TS_MAX && Number.isInteger(rawTs);
+
+  // First record. Seed the floor from a valid read; a corrupt leading read has nothing
+  // to carry, so emit uptime origin 0 and stay UNSEEDED (last = -1) — the next valid read
+  // then seeds cleanly. It must NOT seed at TS_MAX (that was the old latch: a max seed
+  // clamped the whole file to the ceiling).
+  if (state.last < 0) {
+    if (valid) { state.last = rawTs; return rawTs; }
+    return 0;
+  }
+
+  // A structurally-impossible read (beyond representable) is pure garbage, never a real
+  // region — carry the floor forward and cancel any pending resync.
+  if (!valid) {
+    state.candBase = -1;
+    state.candRun = 0;
+    return state.last;
+  }
+
+  // On-cadence forward step → accept directly and clear any pending candidate.
+  const delta = rawTs - state.last;
+  if (delta >= 0 && delta <= MAX_STEP) {
+    state.last = rawTs;
+    state.candBase = -1;
+    state.candRun = 0;
+    return state.last;
+  }
+
+  // Outlier (backward, or a jump larger than one step). Extend the candidate run if this
+  // read is consistent with the pending candidate region; otherwise start a fresh run.
+  if (state.candRun > 0 && Math.abs(rawTs - state.candBase) <= MAX_STEP) {
+    state.candRun++;
+  } else {
+    state.candRun = 1;
+  }
+  state.candBase = rawTs;
+
+  if (state.candRun >= RESYNC_RUN) {
+    // Confirmed sustained shift — adopt the new baseline (self-heal / accept a real gap).
+    state.last = rawTs;
+    state.candBase = -1;
+    state.candRun = 0;
+    return state.last;
+  }
+  // Unconfirmed outlier — hold the timeline at the last trusted value.
+  return state.last;
 }
 
 /**
@@ -192,15 +292,14 @@ export function findEpochAnchorMs(buf: Buffer): number | null {
  */
 export function decodeVtrace(buf: Buffer, emit: (rec: VtraceRecord) => void): number {
   const n = buf.length;
-  let lastTs = -1;
+  const tsRepair = newTsRepair();
   let count = 0;
   let t = HDR;
   while (t < n - 4) {
     const rec = recordAt(buf, t, n);
     if (rec === null) { t += 1; continue; } // resync to next valid record
     const [rawTs, level, sl] = rec;
-    const ts = repairTs(rawTs, lastTs);
-    lastTs = ts;
+    const ts = repairTs(tsRepair, rawTs);
     emit({ tsNs: ts, level, text: oneLine(buf.toString('utf8', t, t + sl)) });
     count++;
     t += sl + HDR;
@@ -254,14 +353,13 @@ export async function parseVtraceToFile(
   try {
     const n = buf.length;
     let lastPct = -1;
-    let lastTs = -1;
+    const tsRepair = newTsRepair();
     let t = HDR;
     while (t < n - 4) {
       const rec = recordAt(buf, t, n);
       if (rec === null) { t += 1; continue; }
       const [rawTs, level, sl] = rec;
-      const ts = repairTs(rawTs, lastTs);
-      lastTs = ts;
+      const ts = repairTs(tsRepair, rawTs);
       const stamp = epochMsAnchor !== null
         ? formatAbsoluteMs(epochMsAnchor + ts / 1e6)   // absolute wall-clock
         : (ts / 1e9).toFixed(6);                        // relative uptime seconds
