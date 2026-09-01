@@ -5427,6 +5427,22 @@ kbd {
 }
 .chat-queue-send:hover { opacity: 0.9; }
 
+/* Force-send: override the (possibly stuck) "agent busy" state. Amber, to read as a
+   deliberate override rather than a normal send. */
+.chat-queue-force {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: #1e1e1e;
+  background: #d0a860;
+  border: none;
+  border-radius: 4px;
+  padding: 2px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chat-queue-force:hover { background: #e0bb70; }
+
 .chat-queue-cancel {
   flex: 0 0 auto;
   font-size: 12px;
