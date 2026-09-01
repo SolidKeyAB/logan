@@ -901,6 +901,24 @@ server.tool(
   }
 );
 
+// === Tool: logan_set_investigation_tier ===
+server.tool(
+  'logan_set_investigation_tier',
+  "Classify a saved recipe as 'fundamental' (a reusable single-aim building block, e.g. \"check S2R flow failure/stall\") or 'complex' (a multi-step / composite workflow that chains fundamentals). This drives the grouped Fundamental/Complex view in the Recipes panel. Recipes have a smart default already (a composite is 'complex', an atomic recipe is 'fundamental'), so only call this to OVERRIDE — e.g. promote a rich atomic recipe to complex, or demote a simple composite to fundamental. Pass tier='auto' to clear the override and return to the smart default.",
+  {
+    name: z.string().describe('Saved template name (or slug) from logan_list_investigations'),
+    tier: z.enum(['fundamental', 'complex', 'auto']).describe("'fundamental' | 'complex', or 'auto' to clear the override and use the smart default"),
+  },
+  async ({ name, tier }) => {
+    try {
+      const result = await apiCall('POST', '/api/investigation-set-tier', { name, tier });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_set_investigation_params ===
 server.tool(
   'logan_set_investigation_params',
