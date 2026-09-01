@@ -375,6 +375,7 @@ export interface ApiContext {
   getBookmarks(): Map<string, Bookmark>;
   getHighlights(): Map<string, Highlight>;
   openFile(filePath: string): Promise<any>;
+  openFolder(folderPath: string): Promise<any>;
   getLines(startLine: number, count: number): any;
   search(options: SearchOptions & { scope?: ScopeDescriptor }): Promise<any>;
   analyze(analyzerName?: string, scope?: ScopeDescriptor): Promise<any>;
@@ -1218,6 +1219,14 @@ export function startApiServer(ctx: ApiContext): void {
           if (!body.filePath) return sendError(res, 'filePath required');
           if (!fs.existsSync(body.filePath)) return sendError(res, 'File not found');
           const result = await ctx.openFile(body.filePath);
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/open-folder') {
+          if (!body.folderPath) return sendError(res, 'folderPath required');
+          const result = await ctx.openFolder(body.folderPath);
+          if (!result?.success) return sendError(res, result?.error || 'Failed to open folder');
           sendJson(res, result);
           return;
         }
