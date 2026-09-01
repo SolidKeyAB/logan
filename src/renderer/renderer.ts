@@ -176,6 +176,11 @@ interface LocalFolderFile {
   isDirectory?: boolean;
   children?: LocalFolderFile[];
   collapsed?: boolean;
+  // Last-modified / creation time (epoch-ms) from the folder scan. Drives the tree's
+  // "updated" label, the recent-file highlight and the recency sort. Absent for remote
+  // (SSH) entries and any entry whose stat failed.
+  mtimeMs?: number;
+  birthtimeMs?: number;
   // Lazy tree: shallow-scan hint that this directory has expandable content, plus
   // transient per-node load state (populated when the user expands it or reveal walks
   // through it). Local and remote subfolders both load their children on demand.
@@ -5556,6 +5561,8 @@ function mapFolderEntries(entries: any[]): LocalFolderFile[] {
     collapsed: true, // subdirs start collapsed
     hasChildren: e.hasChildren, // shallow-scan hint: expandable? (loaded lazily on expand)
     children: e.children ? mapFolderEntries(e.children) : undefined,
+    mtimeMs: e.mtimeMs,
+    birthtimeMs: e.birthtimeMs,
   }));
 }
 
@@ -5772,6 +5779,67 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// Files modified within this window are visually flagged as "recent" in the tree.
+const FOLDER_RECENT_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
+
+// How the folder tree orders each level: alphabetical (dirs first) or newest-first by
+// mtime. Cycled by the ⇅ button in each folder header; applies to every open folder.
+let folderSortMode: 'name' | 'recent' = 'name';
+
+// Compact "time since" label for a folder-tree row, e.g. "just now", "5m", "3h", "2d",
+// "4w", "5mo", "2y". Empty string when the timestamp is missing (e.g. remote entries).
+function formatRelativeTime(ms?: number): string {
+  if (!ms || !isFinite(ms)) return '';
+  const diff = Date.now() - ms;
+  if (diff < 0) return 'just now'; // clock skew / future mtime
+  const s = Math.floor(diff / 1000);
+  if (s < 45) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d}d`;
+  const w = Math.floor(d / 7);
+  if (d < 30) return `${w}w`;
+  const mo = Math.floor(d / 30);
+  if (d < 365) return `${mo}mo`;
+  return `${Math.floor(d / 365)}y`;
+}
+
+// Full timestamp for the row tooltip: "Modified 2026-09-01 14:03 · Created 2026-08-30 09:12".
+function formatFileTimeTooltip(entry: LocalFolderFile): string {
+  const fmt = (ms?: number): string => {
+    if (!ms || !isFinite(ms)) return '';
+    const dt = new Date(ms);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+  };
+  const parts: string[] = [];
+  if (entry.mtimeMs) parts.push(`Modified ${fmt(entry.mtimeMs)}`);
+  if (entry.birthtimeMs && entry.birthtimeMs !== entry.mtimeMs) parts.push(`Created ${fmt(entry.birthtimeMs)}`);
+  return parts.join(' · ');
+}
+
+// Order one level of the tree per folderSortMode. Directories always stay above files;
+// within each group we sort by name (default) or newest-mtime-first (recent). Entries
+// without an mtime sink to the bottom of a recency sort so remote/unstatted rows don't
+// masquerade as brand new.
+function sortFolderEntries(entries: LocalFolderFile[]): LocalFolderFile[] {
+  const sorted = entries.slice();
+  sorted.sort((a, b) => {
+    const aDir = !!a.isDirectory, bDir = !!b.isDirectory;
+    if (aDir !== bDir) return aDir ? -1 : 1;
+    if (folderSortMode === 'recent') {
+      const at = a.mtimeMs ?? -Infinity;
+      const bt = b.mtimeMs ?? -Infinity;
+      if (at !== bt) return bt - at; // newest first
+    }
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
+  return sorted;
+}
+
 // Inline (Lucide-style) SVG icons for file types. Stroke uses currentColor so each
 // type is tinted purely via its .folder-file-icon--<cls> CSS class — themeable, crisp
 // at any DPI, and consistent in weight (unlike the per-OS emoji they replaced).
@@ -5840,7 +5908,14 @@ function fileTypeIcon(entry: LocalFolderFile): { glyph: string; cls: string } {
 }
 
 function renderFolderEntries(entries: LocalFolderFile[], depth: number, isRemote: boolean): string {
-  return entries.map(entry => {
+  const now = Date.now();
+  return sortFolderEntries(entries).map(entry => {
+    const rel = formatRelativeTime(entry.mtimeMs);
+    const isRecent = !!entry.mtimeMs && now - entry.mtimeMs < FOLDER_RECENT_WINDOW_MS;
+    const timeTitle = formatFileTimeTooltip(entry);
+    const timeHtml = rel
+      ? `<span class="folder-file-time${isRecent ? ' folder-file-time--recent' : ''}"${timeTitle ? ` title="${escapeHtml(timeTitle)}"` : ''}>${rel}</span>`
+      : '';
     if (entry.isDirectory) {
       const loadedChildren = !!(entry.children && entry.children.length > 0);
       // Expandable if we already hold children OR the shallow scan flagged content
@@ -5869,16 +5944,17 @@ function renderFolderEntries(entries: LocalFolderFile[], depth: number, isRemote
         : `<span class="folder-toggle folder-toggle--leaf"></span>`;
       return `
         <div class="folder-subdir ${entry.collapsed ? 'collapsed' : ''}${expandable ? '' : ' leaf'}" data-subdir-path="${escapeHtml(entry.path)}" ${isRemote ? 'data-remote-dir="true"' : ''}>
-          <div class="folder-subdir-header" style="padding-left: ${8 + depth * 14}px">
+          <div class="folder-subdir-header${isRecent ? ' folder-subdir-header--recent' : ''}" style="padding-left: ${8 + depth * 14}px">
             ${toggle}
             <span class="folder-subdir-name" title="${escapeHtml(entry.path)}">${escapeHtml(entry.name)}</span>
+            ${timeHtml}
           </div>
           <div class="folder-subdir-files">${innerHtml}</div>
         </div>`;
     }
     const { glyph: icon, cls: iconCls } = fileTypeIcon(entry);
     return `
-      <div class="folder-file ${entry.path === state.filePath ? 'active' : ''}"
+      <div class="folder-file ${entry.path === state.filePath ? 'active' : ''}${isRecent ? ' folder-file--recent' : ''}"
            data-path="${escapeHtml(entry.path)}"
            data-filetype="${entry.fileType || 'text'}"
            ${isRemote ? 'data-remote="true"' : ''}
@@ -5886,6 +5962,7 @@ function renderFolderEntries(entries: LocalFolderFile[], depth: number, isRemote
         ${icon ? `<span class="folder-file-icon folder-file-icon--${iconCls}">${icon}</span>` : '<span class="folder-file-icon"></span>'}
         <span class="folder-file-name" title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</span>
         ${entry.size ? `<span class="folder-file-size">${formatFileSize(entry.size)}</span>` : ''}
+        ${timeHtml}
       </div>`;
   }).join('');
 }
@@ -5995,6 +6072,7 @@ function renderFolderTree(): void {
         <div class="folder-header">
           <span class="folder-toggle">&#9660;</span>
           <span class="folder-name" title="${escapeHtml(folder.path)}">${folder.isRemote ? '<span class="ssh-badge">SSH</span> ' : ''}${escapeHtml(folder.name)}</span>
+          <button class="folder-sort${folderSortMode === 'recent' ? ' active' : ''}" title="Sort order — click to switch to ${folderSortMode === 'recent' ? 'name (A→Z)' : 'most recently modified'}">&#8645; ${folderSortMode === 'recent' ? 'Recent' : 'Name'}</button>
           <button class="folder-refresh" title="Refresh folder">&#8635;</button>
           <button class="folder-close" title="Remove folder">&times;</button>
         </div>
@@ -6028,6 +6106,11 @@ function renderFolderTree(): void {
     header.querySelector('.folder-name')?.addEventListener('click', (e) => {
       e.stopPropagation();
       toggleFolder(folderPath);
+    });
+    header.querySelector('.folder-sort')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      folderSortMode = folderSortMode === 'recent' ? 'name' : 'recent';
+      renderFolderTree();
     });
     header.querySelector('.folder-refresh')?.addEventListener('click', (e) => {
       e.stopPropagation();
