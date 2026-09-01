@@ -45,7 +45,7 @@ reimplemented. `vtrace` follows the exact shape of the existing **MF4** adapter:
 | `VtraceAdapter` | `src/main/sourceAdapter.ts` | `detect()` by extension + identity magic; `normalize()` spawns the worker, returns the temp `.norm` path + `cleanup()` |
 | Worker entry | `src/main/vtraceWorker.ts` | runs the decode off the Electron main/UI thread; relays `progress`/`done`/`error` |
 | Decoder core | `src/main/vtraceParse.ts` | `decodeVtrace(buf, emit)` and `parseVtraceToFile(in, out, onProgress)` |
-| Tests | `src/tests/vtraceAdapter.test.ts` | fixture builder + 9 cases (detect, decode, monotonic repair, newline folding, normalize output) |
+| Tests | `src/tests/vtraceAdapter.test.ts` | fixture builder + cases for detect, decode, sequence-based timestamp repair (spike-under-ceiling + self-heal), newline folding, normalize output |
 
 Registration (most-specific first, text fallback last):
 
@@ -92,15 +92,30 @@ invariants hold *and* the text is ≥90 % printable (TAB/CR/LF allowed). That ma
 false positives effectively impossible, so the scanner can **resync** by stepping
 forward one byte after any miss — interleaved non-message records never desync it.
 
-**Timestamp is a full uint64 ns uptime.** An early revision assumed a 40-bit field
-(`high bytes 0`) and treated `rawTs > 0xFF_FFFF_FFFF` as a corrupt/shifted read to
-carry forward. But 2^40 ns is only **~18.3 minutes**, so on any capture running
-longer than that every genuine timestamp exceeded the ceiling, was rejected, and the
-stream **froze on the last sub-18-min value** (the latch-up bug). The high bytes are
-not reserved — they carry real uptime bits past ~18 min. We therefore trust the full
-64-bit read and carry the last good value forward only for a negative or
-beyond-representable read (`> Number.MAX_SAFE_INTEGER` ≈ 104 days of ns), which keeps
-the stream monotonic without freezing — see the `repairTs` / `monotonic repair` tests.
+**Timestamp is a full uint64 ns uptime, repaired against the SEQUENCE — not a cap.**
+Two earlier revisions failed by validating each read against an absolute magnitude and
+then forcing monotonicity with a `max()`-clamp:
+
+1. A 40-bit ceiling (`rawTs > 0xFF_FFFF_FFFF` = "overflow") — but 2^40 ns is only
+   **~18.3 minutes**, so on any longer capture every genuine timestamp was rejected and
+   the stream **froze on the last sub-18-min value**. Raising the ceiling fixed this
+   case but not the mechanism.
+2. The `max()`-clamp itself (`ts < lastTs ? lastTs : ts`). It trusts *every* read as an
+   upper bound, so a single garbage-high read that slips **under** the ceiling becomes
+   `lastTs` and floors every following record to it — a **permanent freeze** no ceiling
+   can prevent.
+
+The fix is **sequence-based repair** (`repairTs` over a `TsRepairState`). The only
+absolute bound left is a representability guard (finite, ≥ 0, ≤ `Number.MAX_SAFE_INTEGER`
+≈ 104 days of ns); which reads to *trust* is decided by the recent sequence:
+
+- a read within one step (`MAX_STEP`, 1 h) of the floor is accepted;
+- a lone outlier — a spike above, or a backward read below — is held at the last trusted
+  value (one carried line) and never becomes the floor;
+- a **sustained** shift (`RESYNC_RUN` = 3 consecutive consistent reads) is confirmed and
+  adopted, whether higher (a real long gap) or lower (recovery from a floor a bad read
+  poisoned). So the floor **self-heals** — no single read can latch it. See the
+  `repairTs (sequence-based)` tests, incl. the spike-under-ceiling and self-heal cases.
 
 ---
 
