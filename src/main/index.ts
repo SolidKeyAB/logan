@@ -1116,6 +1116,11 @@ function createWindow() {
   });
 }
 
+// The folder LOGAN was launched pointing at (`logan ./logs/` / `--` arg / /api/open-folder).
+// Becomes the AI agent's working directory + is injected into its bootstrap prompt so the
+// agent starts working on that folder. Null when launched without a folder.
+let contextFolder: string | null = null;
+
 // --- Single-instance lock (skipped on Linux — can SIGSEGV on some setups) ---
 if (process.platform !== 'linux') {
   const gotTheLock = app.requestSingleInstanceLock();
@@ -1129,6 +1134,7 @@ if (process.platform !== 'linux') {
     }
     const target = extractPathFromArgv(argv);
     if (target && mainWindow) {
+      if (target.isDirectory) contextFolder = target.path;
       mainWindow.webContents.send(target.isDirectory ? 'open-folder-from-cli' : 'open-file-from-cli', target.path);
     }
   });
@@ -1187,6 +1193,7 @@ app.whenReady().then(() => {
   // (e.g. `logan myfile.log` or `logan ./logs/`).
   const cliTarget = extractPathFromArgv(process.argv);
   if (cliTarget && mainWindow) {
+    if (cliTarget.isDirectory) contextFolder = cliTarget.path;
     mainWindow.once('ready-to-show', () => {
       // Small delay to let renderer finish init
       setTimeout(() => {
@@ -1194,6 +1201,13 @@ app.whenReady().then(() => {
           cliTarget.isDirectory ? 'open-folder-from-cli' : 'open-file-from-cli',
           cliTarget.path,
         );
+        // Launched pointing at a folder → also start the AI agent working on it, but
+        // only if the user has actually configured an agent (agent-config.json exists).
+        // No config → no surprise process spawn. Given a short beat so the renderer has
+        // opened the folder and the API server is ready before the agent connects.
+        if (cliTarget.isDirectory && !agentProcess && hasConfiguredAgent()) {
+          setTimeout(() => { void launchAgentProcess(false); }, 800);
+        }
       }, 300);
     });
   }
@@ -1214,6 +1228,16 @@ app.whenReady().then(() => {
       // Reuse the same logic as the IPC.OPEN_FILE handler (shared openFileAsCurrent).
       const info = await openFileAsCurrent(filePath);
       return { success: true, info };
+    },
+    openFolder: async (folderPath: string) => {
+      let st: fs.Stats | null = null;
+      try { st = fs.statSync(folderPath); } catch { /* not a path */ }
+      if (!st || !st.isDirectory()) return { success: false, error: 'Folder not found' };
+      // Same context folder a `logan ./logs/` launch records — the next agent launch
+      // uses it as cwd/prompt. The renderer roots the Folders panel on it.
+      contextFolder = folderPath;
+      mainWindow?.webContents.send('open-folder-from-cli', folderPath);
+      return { success: true, folderPath };
     },
     getLines: (startLine: number, count: number) => {
       const handler = getReadHandler();
@@ -8135,6 +8159,13 @@ function getAgentConfig(): AgentConfig {
   return { type: 'builtin' };
 }
 
+// True only when the user has explicitly set up an agent (via the setup wizard).
+// Gate for auto-launching the agent on a `logan ./folder/` start — no config file
+// means the user hasn't opted into an agent, so we don't spawn one behind their back.
+function hasConfiguredAgent(): boolean {
+  return fs.existsSync(path.join(os.homedir(), '.logan', 'agent-config.json'));
+}
+
 function getBuiltinScriptPath(): string {
   const devPath = path.join(app.getAppPath(), 'examples', 'agent-node.mjs');
   if (fs.existsSync(devPath)) return devPath;
@@ -8179,6 +8210,16 @@ function archiveAgentMemory(filePath: string | null): void {
 }
 
 function buildAgentPrompt(): string {
+  // When LOGAN was launched pointing at a folder, tell the agent to start working on it
+  // (its cwd is set to that folder too — see launchAgentProcess) instead of just idling.
+  const folderSection = contextFolder
+    ? `\n\nLOGAN was launched pointing at this folder, which is also your working directory:
+  ${contextFolder}
+Start by surveying the log files in that folder (your own file tools — ls/glob — and
+logan_status for anything already open). Then greet the user with logan_send_message,
+briefly noting the folder and the notable logs you see, and either open the most relevant
+one with logan_open_file and run logan_triage / logan_analyze, or ask which file to open.`
+    : '';
   return `You are connected to LOGAN, a log analysis tool, via MCP.
 Use logan_status to check the current state, then greet the user with logan_send_message.
 Then enter a chat loop: call logan_wait_for_message to receive user messages, process them
@@ -8186,7 +8227,7 @@ using LOGAN's MCP tools (logan_search, logan_analyze, logan_filter, logan_get_li
 and reply with logan_send_message. Continue until the user says goodbye or stop.
 
 After completing each significant task, call logan_memory_write with a brief note of
-what you found and what the user asked — this lets you resume naturally if you reconnect.`;
+what you found and what the user asked — this lets you resume naturally if you reconnect.${folderSection}`;
 }
 
 async function launchAgentProcess(isReconnect = false): Promise<{ success: boolean; agentName?: string; error?: string; resumed?: boolean }> {
@@ -8241,7 +8282,13 @@ async function launchAgentProcess(isReconnect = false): Promise<{ success: boole
         ? 'You have just reconnected to LOGAN after an idle disconnect — your previous conversation has been restored. Call logan_memory_read to refresh context if needed, briefly tell the user you are back and what you were working on, then resume the chat loop with logan_wait_for_message.'
         : prompt;
       args.push(launchPrompt);
-      agentProcess = spawn(claudePath, args, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env } });
+      // If LOGAN was launched on a folder, run the agent IN that folder so its own
+      // file tools (ls/glob/read) operate on the user's logs, not LOGAN's app dir.
+      agentProcess = spawn(claudePath, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env },
+        cwd: contextFolder || undefined,
+      });
     } else if (config.type === 'local-llm') {
       const llmScriptPath = path.join(app.getAppPath(), 'examples', 'agent-local-llm.mjs');
       if (!fs.existsSync(llmScriptPath)) return { success: false, error: `Local LLM agent script not found: ${llmScriptPath}` };
