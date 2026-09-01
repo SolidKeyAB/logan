@@ -8,7 +8,7 @@ import { FileHandler } from './fileHandler';
 import { type BaselineStore, buildFingerprint } from './baselineStore';
 import { factsToPlain } from './contextManifest';
 import { AnalysisResult } from './analyzers/types';
-import { JournalEntry, InvestigationTemplate, TemplateStep, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps, setTemplateParams, slugify } from './investigationStore';
+import { JournalEntry, InvestigationTemplate, TemplateStep, buildTemplate, saveTemplate, listTemplates, getTemplate, deleteTemplate, resolveSteps, setTemplateParams, resolveTier, slugify } from './investigationStore';
 import { resolveAnswerStep, outputLabelForPath, deriveAnswerValue, AnswerValue } from '../shared/recipeOutputs';
 import { evaluateGuard, describeGuard, normalizeGuard, isCompositeStep, compositeTarget, COMPOSITE_STEP_PATH } from '../shared/recipeComposition';
 import { investigationToGraph } from './workflowGraph';
@@ -922,7 +922,11 @@ export function startApiServer(ctx: ApiContext): void {
           return;
         }
         if (url === '/api/investigations') {
-          sendJson(res, { success: true, templates: listTemplates() });
+          // Attach the EFFECTIVE tier (explicit or smart default) so both operators —
+          // the renderer's grouped view and the agent via logan_list_investigations —
+          // see fundamental-vs-complex without re-deriving it.
+          const templates = listTemplates().map((t) => ({ ...t, tierEffective: resolveTier(t) }));
+          sendJson(res, { success: true, templates });
           return;
         }
         if (url === '/api/investigation-delete') {
@@ -1105,6 +1109,27 @@ export function startApiServer(ctx: ApiContext): void {
           const win = ctx.getMainWindow();
           if (win && !win.isDestroyed()) win.webContents.send('investigation-templates-changed');
           sendJson(res, { success: true, template: tpl });
+          return;
+        }
+        // Pin a recipe's TIER — fundamental (a reusable building block) vs complex (a
+        // multi-step / composite workflow). tier = 'auto' (or null) clears the pin and
+        // falls back to the smart default (resolveTier). Both operators reach it: human
+        // via the recipe context menu, agent via logan_set_investigation_tier.
+        if (url === '/api/investigation-set-tier') {
+          const tpl = getTemplate(body.name || body.slug || '');
+          if (!tpl) return sendError(res, `No saved investigation named "${body.name || body.slug}"`);
+          const t = body.tier;
+          if (t === null || t === undefined || t === 'auto' || t === '') {
+            tpl.tier = undefined; // reset to the smart default
+          } else if (t === 'fundamental' || t === 'complex') {
+            tpl.tier = t;
+          } else {
+            return sendError(res, "tier must be 'fundamental', 'complex', or 'auto'/null to reset to the smart default");
+          }
+          saveTemplate(tpl);
+          const win = ctx.getMainWindow();
+          if (win && !win.isDestroyed()) win.webContents.send('investigation-templates-changed');
+          sendJson(res, { success: true, template: tpl, tier: resolveTier(tpl) });
           return;
         }
         // Mark WHICH step is the recipe's ANSWER (the valuable output). stepIndex = -1
