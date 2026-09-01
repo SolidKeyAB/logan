@@ -76,7 +76,7 @@ ends with a fixed 39-byte tail, measured back from the start of its UTF-8 text `
 (all multi-byte fields big-endian):
 
 ```
-T-39 .. T-31 : uint64 timestamp      40-bit ns monotonic uptime (high bytes 0)
+T-39 .. T-31 : uint64 timestamp      ns monotonic uptime (full 64-bit, big-endian)
 T-31 .. T-27 : uint32 payload_length == strlen + 35            ← invariant #2
 T-27         : uint8  type           0x04 = trace message      ← invariant #1
 T-26 .. T-18 : uint64 message id / sequence number
@@ -92,11 +92,15 @@ invariants hold *and* the text is ≥90 % printable (TAB/CR/LF allowed). That ma
 false positives effectively impossible, so the scanner can **resync** by stepping
 forward one byte after any miss — interleaved non-message records never desync it.
 
-**Variable header.** Some records insert an extra 4-byte field between the
-timestamp and the length field. That shifts the fixed-offset timestamp read so it
-overflows 40 bits; we detect `rawTs > 0xFF_FFFF_FFFF` and **carry the last good
-timestamp forward** (within a few ms). The emitted stream is therefore strictly
-monotonic — see the `monotonic repair` test.
+**Timestamp is a full uint64 ns uptime.** An early revision assumed a 40-bit field
+(`high bytes 0`) and treated `rawTs > 0xFF_FFFF_FFFF` as a corrupt/shifted read to
+carry forward. But 2^40 ns is only **~18.3 minutes**, so on any capture running
+longer than that every genuine timestamp exceeded the ceiling, was rejected, and the
+stream **froze on the last sub-18-min value** (the latch-up bug). The high bytes are
+not reserved — they carry real uptime bits past ~18 min. We therefore trust the full
+64-bit read and carry the last good value forward only for a negative or
+beyond-representable read (`> Number.MAX_SAFE_INTEGER` ≈ 104 days of ns), which keeps
+the stream monotonic without freezing — see the `repairTs` / `monotonic repair` tests.
 
 ---
 

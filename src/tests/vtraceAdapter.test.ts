@@ -10,16 +10,16 @@ import { parseTimestampFast } from '../main/timestampParse';
 // Builds a buffer shaped like a real trace stream: a header carrying the
 // "traceserverIVI" identity string, followed by contiguous fixed-tail message
 // records. Each record's 39-byte tail precedes its UTF-8 text (see vtraceParse.ts
-// for the field map). `tsHiByte` injects a high byte into the timestamp to emulate
-// the variable-header records whose timestamp must be carried forward.
+// for the field map). `tsHiByte` pokes a high byte into the timestamp to emulate a
+// corrupt / out-of-range read whose timestamp must be carried forward.
 const HDR = 39;
 
 function record(tsNs: number, level: number, text: string, tsHiByte = 0): Buffer {
   const body = Buffer.from(text, 'utf8'); // messages are UTF-8 on the wire
   const sl = body.length;
   const tail = Buffer.alloc(HDR);
-  // [0..8) uint64 BE timestamp (40-bit value; tsHiByte pokes bit 40+ to fake a
-  // variable-header record that overflows the 40-bit read).
+  // [0..8) uint64 BE timestamp. `tsHiByte` pokes a high byte to fake a garbage read
+  // beyond the representable ceiling (a genuine large uptime uses tsHiByte = 0).
   tail.writeUInt32BE(Math.floor(tsNs / 0x100000000) | (tsHiByte << 16), 0);
   tail.writeUInt32BE(tsNs >>> 0, 4);
   tail.writeUInt32BE(sl + 35, 8);   // [8..12)  length invariant == strlen + 35
@@ -91,26 +91,42 @@ describe('VtraceAdapter', () => {
     expect(recs[2].text).toContain('Unrecognized alarm listener');
   });
 
-  it('keeps the timestamp stream monotonic by carrying forward variable-header reads', () => {
+  it('keeps the timestamp stream monotonic by carrying forward a corrupt (out-of-range) read', () => {
     const buf = buildFixture([
       record(296_000_000_000, 2, 'first'),
-      record(999_000_000_000, 2, 'variable-header record', /* tsHiByte */ 0xff), // bad read
+      record(999_000_000_000, 2, 'corrupt read', /* tsHiByte */ 0xff), // garbage, beyond ceiling
       record(296_010_000_000, 2, 'third'),
     ]);
     const recs = decodeAll(buf);
-    expect(recs.map(r => r.text)).toEqual(['first', 'variable-header record', 'third']);
-    // The middle record's overflowed timestamp is replaced by the prior good one.
+    expect(recs.map(r => r.text)).toEqual(['first', 'corrupt read', 'third']);
+    // The middle record's out-of-range timestamp is replaced by the prior good one.
     expect(recs[1].tsNs).toBe(296_000_000_000);
     expect(recs[0].tsNs).toBeLessThanOrEqual(recs[1].tsNs);
     expect(recs[1].tsNs).toBeLessThanOrEqual(recs[2].tsNs);
   });
 
-  it('does NOT latch the timestamp when the FIRST record is a variable-header (bad) read', () => {
-    // Regression: a leading overflowed read has nothing good to carry. It must resolve
-    // to uptime 0 — NOT the 40-bit ceiling — or every following record gets clamped to
-    // that ceiling and the whole file shows one unchanging timestamp (the latch-up).
+  it('does NOT freeze on genuine timestamps past ~18 min (the 40-bit-ceiling latch-up)', () => {
+    // The real bug: real reads (tsHiByte = 0) whose ns uptime naturally exceeds 2^40
+    // (~18.3 min). The old ceiling misread each as "overflow" and carried the last good
+    // value forward, so the whole tail of any >18-min capture showed one frozen timestamp.
     const buf = buildFixture([
-      record(999_000_000_000, 2, 'bad first', /* tsHiByte */ 0xff), // overflowed, nothing to carry
+      record(1_200_000_000_000, 2, 'twenty minutes in'),    // 20 min
+      record(1_500_000_000_000, 2, 'twenty-five minutes'),  // 25 min
+      record(1_800_000_000_000, 2, 'thirty minutes'),       // 30 min
+    ]);
+    const recs = decodeAll(buf);
+    expect(recs.map(r => r.tsNs)).toEqual([
+      1_200_000_000_000, 1_500_000_000_000, 1_800_000_000_000,
+    ]);
+    expect(new Set(recs.map(r => r.tsNs)).size).toBe(3); // strictly advancing, not frozen
+  });
+
+  it('does NOT latch the timestamp when the FIRST record is a corrupt (out-of-range) read', () => {
+    // Regression: a leading corrupt read has nothing good to carry. It must resolve to
+    // uptime 0 — NOT the ceiling — or every following record gets clamped to that ceiling
+    // and the whole file shows one unchanging timestamp (the latch-up).
+    const buf = buildFixture([
+      record(999_000_000_000, 2, 'bad first', /* tsHiByte */ 0xff), // garbage, nothing to carry
       record(296_000_000_000, 2, 'second'),
       record(296_010_000_000, 2, 'third'),
     ]);
@@ -241,14 +257,24 @@ describe('vtrace absolute wall-clock anchor', () => {
 });
 
 // ── repairTs: monotonic timestamp repair (unit) ──────────────────────────────
-const TS_MAX = 0xffffffffff; // 2^40 - 1, mirrors vtraceParse
+const TS_MAX = Number.MAX_SAFE_INTEGER; // 2^53 - 1 ns ≈ 104 days, mirrors vtraceParse
+const TWO_POW_40 = 0x100_00000000;      // 2^40 ns ≈ 18.3 min — the OLD (wrong) ceiling
 describe('repairTs', () => {
   it('passes a normal in-range value straight through', () => {
     expect(repairTs(296_000_000_000, -1)).toBe(296_000_000_000);
     expect(repairTs(296_010_000_000, 296_000_000_000)).toBe(296_010_000_000);
   });
 
-  it('carries the last good value forward for an overflowed (>TS_MAX) read', () => {
+  it('accepts genuine timestamps past the old 2^40 (18.3 min) ceiling — no freeze', () => {
+    // 2^40 ns is only ~18.3 min. A real capture running longer than that must keep
+    // advancing, not latch on the last sub-18-min value (the timestamp-freeze bug).
+    expect(repairTs(TWO_POW_40, 296_000_000_000)).toBe(TWO_POW_40);
+    const twentyMin = 1_200_000_000_000; // 1200 s, comfortably past 2^40
+    expect(repairTs(twentyMin, TWO_POW_40)).toBe(twentyMin);
+    expect(repairTs(twentyMin + 5_000_000_000, twentyMin)).toBe(twentyMin + 5_000_000_000);
+  });
+
+  it('carries the last good value forward only for a truly corrupt (beyond-representable) read', () => {
     expect(repairTs(TS_MAX + 1, 296_000_000_000)).toBe(296_000_000_000);
   });
 
@@ -256,7 +282,7 @@ describe('repairTs', () => {
     expect(repairTs(100, 296_000_000_000)).toBe(296_000_000_000);
   });
 
-  it('a leading overflowed read resolves to 0, never the TS_MAX ceiling (no latch)', () => {
+  it('a leading corrupt read resolves to 0, never the ceiling (no latch)', () => {
     // First record, nothing good to carry (lastTs = -1).
     expect(repairTs(TS_MAX + 5, -1)).toBe(0);
     // …and the next real value is then free to flow, not clamped to a huge seed.

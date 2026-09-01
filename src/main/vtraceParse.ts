@@ -15,7 +15,7 @@ import * as path from 'path';
  * trace-message record ends with a fixed tail measured back from the start of its
  * UTF-8 message text `T`:
  *
- *   T-39 .. T-31 : uint64 timestamp      40-bit ns monotonic uptime (high bytes 0)
+ *   T-39 .. T-31 : uint64 timestamp      ns monotonic uptime (full 64-bit, big-endian)
  *   T-31 .. T-27 : uint32 payload_length == strlen + 35            ← invariant #2
  *   T-27         : uint8  type           0x04 = trace message      ← invariant #1
  *   T-26 .. T-18 : uint64 message id / sequence number
@@ -29,10 +29,10 @@ import * as path from 'path';
  *  - A record is accepted only when all four invariants hold AND the text is ≥90%
  *    printable, so false positives are effectively impossible and desync is
  *    self-correcting (we byte-scan forward to the next valid record).
- *  - Some records carry an extra 4-byte field between the timestamp and the length
- *    field (variable header). That makes the fixed-offset timestamp read overflow
- *    its 40 bits; we detect it and carry the last good timestamp forward (accurate
- *    to a few ms) so the emitted stream stays strictly monotonic.
+ *  - The timestamp is a full uint64 ns uptime, so a genuine value can be arbitrarily
+ *    large (it passes 2^40 — the old "40-bit" assumption — after only ~18.3 minutes).
+ *    We trust the read and only carry the last good value forward for a negative or
+ *    beyond-representable (> ~104 days of ns) read, keeping the stream monotonic.
  *
  * Output: one normalized line per record, with any embedded CR/LF folded to spaces
  * so FileHandler keeps a 1:1 record-to-line map and its level detection keys on the
@@ -44,7 +44,12 @@ import * as path from 'path';
 
 const HDR = 39; // fixed tail length for the common record shape
 const MAX_STRLEN = 1 << 16;
-const TS_MAX = 0xffffffffff; // 2^40 - 1: a real ns uptime fits in 40 bits
+// The timestamp is a full uint64 ns CLOCK_MONOTONIC uptime. The only physical/representable
+// ceiling is JS's exact-integer limit (2^53 - 1 ≈ 104 days of ns) — past that a read isn't
+// even represented exactly, so it can only be a desync/garbage read. This is NOT 2^40:
+// 2^40 ns is a mere ~18.3 minutes, and treating everything above it as "overflow" froze the
+// timestamp for the entire remainder of any capture running longer than 18 minutes.
+const TS_MAX = Number.MAX_SAFE_INTEGER; // 2^53 - 1 ns ≈ 104 days: the largest exactly-representable uptime
 
 /** Magic identity string present in a valid file's header (a marker of the input). */
 const IDENTITY = Buffer.from('traceserverIVI', 'latin1');
@@ -112,7 +117,8 @@ function recordAt(buf: Buffer, t: number, n: number): [number, number, number] |
     if (b >= 32 || b === 9 || b === 10 || b === 13) printable++;
   }
   if (printable / sl < 0.9) return null;
-  // 40-bit ns timestamp lives in the low 5 bytes of the uint64 at T-39.
+  // Full uint64 ns timestamp at T-39 (big-endian). The high bytes are 0 only for short
+  // uptimes; past ~18.3 min they carry real bits, so read the whole 8 bytes, not 5.
   const hi = buf.readUInt32BE(t - HDR);          // bytes T-39..T-35
   const lo = buf.readUInt32BE(t - HDR + 4);      // bytes T-35..T-31
   const rawTs = hi * 0x100000000 + lo;
@@ -129,12 +135,15 @@ function oneLine(s: string): string {
 /** Resolve a raw timestamp read against the last good one (monotonic repair).
  * `lastTs` is the previously emitted ns value, or -1 before any record. */
 export function repairTs(rawTs: number, lastTs: number): number {
-  // A real 40-bit ns value is <= TS_MAX; a larger read means a variable-header
-  // field shifted it, so carry the last good timestamp forward.
-  let ts = rawTs <= TS_MAX ? rawTs : lastTs;
-  // First record (lastTs = -1) and its only read overflowed: nothing trustworthy to
-  // carry, so start at uptime 0. It must NOT fall back to the 40-bit ceiling (TS_MAX):
-  // that seeds lastTs at the maximum and the monotonic clamp below then LATCHES every
+  // The timestamp is a full uint64 ns uptime — trust it. Only a read beyond TS_MAX
+  // (~104 days, JS's exact-integer ceiling) or a negative one is genuinely corrupt;
+  // carry the last good value forward for it. (The old test `rawTs <= 2^40` was wrong:
+  // 2^40 ns is only ~18.3 min, so every real timestamp past 18 min was rejected as
+  // "overflow" and the stream froze on the last sub-18-min value — the latch-up bug.)
+  let ts = rawTs >= 0 && rawTs <= TS_MAX ? rawTs : lastTs;
+  // First record (lastTs = -1) and its only read was corrupt: nothing trustworthy to
+  // carry, so start at uptime 0. It must NOT fall back to the ceiling (TS_MAX): that
+  // seeds lastTs at the maximum and the monotonic clamp below then LATCHES every
   // following record to it — the "timestamp repeats without changing" bug.
   if (ts < 0) ts = 0;
   return ts < lastTs ? lastTs : ts;          // enforce monotonicity
