@@ -126,12 +126,17 @@ function oneLine(s: string): string {
     : s.replace(/\r\n|\r|\n/g, ' ');
 }
 
-/** Resolve a raw timestamp read against the last good one (monotonic repair). */
-function repairTs(rawTs: number, lastTs: number): number {
+/** Resolve a raw timestamp read against the last good one (monotonic repair).
+ * `lastTs` is the previously emitted ns value, or -1 before any record. */
+export function repairTs(rawTs: number, lastTs: number): number {
   // A real 40-bit ns value is <= TS_MAX; a larger read means a variable-header
   // field shifted it, so carry the last good timestamp forward.
   let ts = rawTs <= TS_MAX ? rawTs : lastTs;
-  if (ts < 0) ts = Math.min(rawTs, TS_MAX);  // first record, nothing to carry
+  // First record (lastTs = -1) and its only read overflowed: nothing trustworthy to
+  // carry, so start at uptime 0. It must NOT fall back to the 40-bit ceiling (TS_MAX):
+  // that seeds lastTs at the maximum and the monotonic clamp below then LATCHES every
+  // following record to it — the "timestamp repeats without changing" bug.
+  if (ts < 0) ts = 0;
   return ts < lastTs ? lastTs : ts;          // enforce monotonicity
 }
 

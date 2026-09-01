@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { VtraceAdapter, pickAdapter, adapterRegistry } from '../main/sourceAdapter';
-import { decodeVtrace, parseVtraceToFile, findEpochAnchorMs, VtraceRecord } from '../main/vtraceParse';
+import { decodeVtrace, parseVtraceToFile, findEpochAnchorMs, repairTs, VtraceRecord } from '../main/vtraceParse';
 import { parseTimestampFast } from '../main/timestampParse';
 
 // ── Minimal vtrace fixture builder ───────────────────────────────────────────
@@ -103,6 +103,23 @@ describe('VtraceAdapter', () => {
     expect(recs[1].tsNs).toBe(296_000_000_000);
     expect(recs[0].tsNs).toBeLessThanOrEqual(recs[1].tsNs);
     expect(recs[1].tsNs).toBeLessThanOrEqual(recs[2].tsNs);
+  });
+
+  it('does NOT latch the timestamp when the FIRST record is a variable-header (bad) read', () => {
+    // Regression: a leading overflowed read has nothing good to carry. It must resolve
+    // to uptime 0 — NOT the 40-bit ceiling — or every following record gets clamped to
+    // that ceiling and the whole file shows one unchanging timestamp (the latch-up).
+    const buf = buildFixture([
+      record(999_000_000_000, 2, 'bad first', /* tsHiByte */ 0xff), // overflowed, nothing to carry
+      record(296_000_000_000, 2, 'second'),
+      record(296_010_000_000, 2, 'third'),
+    ]);
+    const recs = decodeAll(buf);
+    expect(recs.map(r => r.text)).toEqual(['bad first', 'second', 'third']);
+    expect(recs[0].tsNs).toBe(0);                 // uptime origin, not TS_MAX
+    expect(recs[1].tsNs).toBe(296_000_000_000);   // real values flow through — not clamped
+    expect(recs[2].tsNs).toBe(296_010_000_000);
+    expect(new Set(recs.map(r => r.tsNs)).size).toBeGreaterThan(1); // not stuck on one value
   });
 
   it('decodes UTF-8 multibyte message text (e.g. CJK) without mangling it', () => {
@@ -220,5 +237,29 @@ describe('vtrace absolute wall-clock anchor', () => {
       fs.unlinkSync(p);
       if (fs.existsSync(outPath)) fs.unlinkSync(outPath);
     }
+  });
+});
+
+// ── repairTs: monotonic timestamp repair (unit) ──────────────────────────────
+const TS_MAX = 0xffffffffff; // 2^40 - 1, mirrors vtraceParse
+describe('repairTs', () => {
+  it('passes a normal in-range value straight through', () => {
+    expect(repairTs(296_000_000_000, -1)).toBe(296_000_000_000);
+    expect(repairTs(296_010_000_000, 296_000_000_000)).toBe(296_010_000_000);
+  });
+
+  it('carries the last good value forward for an overflowed (>TS_MAX) read', () => {
+    expect(repairTs(TS_MAX + 1, 296_000_000_000)).toBe(296_000_000_000);
+  });
+
+  it('enforces monotonicity — an out-of-order lower read repeats the last value', () => {
+    expect(repairTs(100, 296_000_000_000)).toBe(296_000_000_000);
+  });
+
+  it('a leading overflowed read resolves to 0, never the TS_MAX ceiling (no latch)', () => {
+    // First record, nothing good to carry (lastTs = -1).
+    expect(repairTs(TS_MAX + 5, -1)).toBe(0);
+    // …and the next real value is then free to flow, not clamped to a huge seed.
+    expect(repairTs(296_000_000_000, 0)).toBe(296_000_000_000);
   });
 });
