@@ -78,6 +78,24 @@ describe('scanFolderShallow', () => {
     expect(byName['capture.esotrace'].fileType).toBe('binary');
   });
 
+  it('populates mtimeMs / birthtimeMs for both files and directories', async () => {
+    write('log.txt', 'plain text');
+    write('sub/inner.txt', 'x');
+
+    const entries = await scanFolderShallow(root);
+    const byName = Object.fromEntries(entries.map((e) => [e.name, e]));
+
+    const file = byName['log.txt'];
+    expect(typeof file.mtimeMs).toBe('number');
+    expect(file.mtimeMs!).toBeGreaterThan(0);
+    expect(typeof file.birthtimeMs).toBe('number');
+
+    const dir = byName['sub'];
+    expect(dir.isDirectory).toBe(true);
+    expect(typeof dir.mtimeMs).toBe('number');
+    expect(dir.mtimeMs!).toBeGreaterThan(0);
+  });
+
   it('sorts directories first, then alphabetically (case-insensitive)', async () => {
     write('Bravo.txt', 'x');
     write('alpha.txt', 'x');
