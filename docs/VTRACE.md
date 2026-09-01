@@ -45,7 +45,7 @@ reimplemented. `vtrace` follows the exact shape of the existing **MF4** adapter:
 | `VtraceAdapter` | `src/main/sourceAdapter.ts` | `detect()` by extension + identity magic; `normalize()` spawns the worker, returns the temp `.norm` path + `cleanup()` |
 | Worker entry | `src/main/vtraceWorker.ts` | runs the decode off the Electron main/UI thread; relays `progress`/`done`/`error` |
 | Decoder core | `src/main/vtraceParse.ts` | `decodeVtrace(buf, emit)` and `parseVtraceToFile(in, out, onProgress)` |
-| Tests | `src/tests/vtraceAdapter.test.ts` | fixture builder + cases for detect, decode, sequence-based timestamp repair (spike-under-ceiling + self-heal), newline folding, normalize output |
+| Tests | `src/tests/vtraceAdapter.test.ts` | fixture builder + cases for detect, decode, sequence-based timestamp repair (spike-under-ceiling + self-heal), newline folding, normalize output, in-message + loggertime-sidecar wall-clock anchors |
 
 Registration (most-specific first, text fallback last):
 
@@ -142,17 +142,39 @@ time-gaps and the ⏱ timeline all operate on wall-clock time. When it doesn't
 (no anchor message in that file), the decoder falls back to the relative
 device-uptime seconds it has always emitted — nothing breaks.
 
-**Sidecar anchor (future).** The capture *bundle* also carries sidecars:
+**Sidecar anchor (implemented).** The capture *bundle* also carries a `loggertime`
+sidecar — a small JSON holding a **two-point linear map** `{x1,y1,x2,y2}` from the
+record timebase to epoch-ms, which is what the **official exporter** uses to date its
+output. It lives in the **same folder as the `.esotrace` files** (the exporter's
+layout; a `loggertime/` subfolder is accepted as a fallback). Because it has *two*
+calibration points it recovers both the origin and the slope, so it also corrects
+clock **drift** (a slope that isn't exactly the nominal `1 ns = 1e-6 ms`):
 
-- `loggertime/loggertime_<sid>.json` — a linear map `{x1,y1,x2,y2}` from a logger
-  clock to epoch-ms. (Note: it maps the *logger* clock, not `CLOCK_MONOTONIC`; the
-  two differ by a boot offset.)
-- `session.json` / `segments.json` describe session boundaries and 1-second
-  segments; `de.esolutions.fw.tools.trace.versioninfo/` lists per-app versions.
+```
+slopeMsPerNs = (y2 − y1) / (x2 − x1)          // epoch-ms per record nanosecond
+epoch0_ms    = y1 − x1 · slopeMsPerNs         // wall-clock at record uptime 0
+line_time    = epoch0_ms + record_ns · slopeMsPerNs
+```
 
-`parseVtraceToFile` already accepts `{ epochMsAnchor }`, so a sidecar-derived
-anchor would just be read in the adapter's `normalize()` and passed straight
-through — no decoder change needed.
+`findSidecarAnchor(filePath)` (`vtraceParse.ts`) discovers + parses it; `parseVtraceToFile`
+calls it automatically, so **all three decode paths** (open-file adapter, the single-file
+decode button, and the folder batch-decode) get sidecar dates with no per-caller wiring.
+Resolution precedence (`resolveWallClockAnchor`): an explicit `opts.epochMsAnchor`
+override → the **sidecar** (cross-checked against any in-message pair — if they disagree
+by more than a few seconds the sidecar's x-axis is a different clock, so the provably-
+correct in-message anchor wins) → the in-message `timestamp`/`monotonicTimestamp` pair →
+relative seconds. Two guards make a mis-shaped or wrong-unit sidecar a safe no-op (it
+falls back, never a wrong date): the derived `epoch0` must land in the plausible epoch-ms
+window, and the slope must sit within a few percent of the nominal `1e-6`.
+
+> **Assumption to confirm against a real bundle:** the sidecar's `x` axis is treated as
+> the record `CLOCK_MONOTONIC` ns timebase. If a real `loggertime_*.json` uses a different
+> unit or a distinct logger clock, the slope/agreement guards make it fall back safely,
+> and the exact schema/units can be locked from the sample.
+
+The bundle also carries `session.json` / `segments.json` (session boundaries + 1-second
+segments) and `de.esolutions.fw.tools.trace.versioninfo/` (per-app versions) — not yet
+consumed.
 
 ### Level mapping caveat
 `level` (uint16) is a 0–4 enum; the names `CRITICAL/ERROR/WARNING/INFO/DEBUG` are a
@@ -182,6 +204,6 @@ adapter line-for-line.
 ## 6. Try it
 
 ```bash
-npm run build && npm test -- vtraceAdapter      # 9 tests
+npm run build && npm test -- vtraceAdapter      # 38 tests
 # then in the app: File ▸ Open ▸ log_0000.esotrace  (auto-detected)
 ```
