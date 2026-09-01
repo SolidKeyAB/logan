@@ -93,6 +93,41 @@ const MONO_NS_RE = /monotonicTimestamp=(\d+)/;
 const EPOCH_MS_MIN = 1_000_000_000_000;
 const EPOCH_MS_MAX = 4_000_000_000_000;
 
+// ── Sidecar wall-clock anchor (loggertime map) ───────────────────────────────
+// The capture BUNDLE shipped alongside the .esotrace files carries a `loggertime`
+// sidecar — a tiny JSON holding a two-point LINEAR MAP that the official exporter
+// uses to put wall-clock dates on the monotonic trace records. Per the exporter's
+// layout the sidecar sits in the SAME folder as the .esotrace files (older
+// reverse-engineering notes guessed a `loggertime/` subfolder — we accept that too,
+// as a fallback).
+//
+// The map is two calibration points (x1→y1, x2→y2): x is the record timebase
+// (CLOCK_MONOTONIC nanoseconds — the same clock the record timestamp carries) and y
+// is absolute epoch-ms. From the two points we recover BOTH the origin and the
+// slope, so unlike the single-point in-message anchor it also corrects any clock
+// DRIFT (a slope that isn't exactly the nominal 1 ns = 1e-6 ms):
+//
+//   slopeMsPerNs = (y2 − y1) / (x2 − x1)          // epoch-ms per record nanosecond
+//   epoch0Ms     = y1 − x1 · slopeMsPerNs         // wall-clock at record uptime 0
+//   line_time_ms = epoch0Ms + record_ns · slopeMsPerNs
+//
+// Guards keep a mis-shaped or wrong-unit sidecar from ever emitting a wrong date (it
+// falls back to the in-message anchor, then to relative seconds, exactly as before):
+// the epoch0 must land in the plausible epoch-ms window, and the slope must sit within
+// a few percent of the nominal 1e-6 — a sidecar whose x-axis were µs/ms/s lands orders
+// of magnitude off and is rejected. See docs/VTRACE.md §4.
+const NOMINAL_SLOPE_MS_PER_NS = 1e-6; // 1 ns = 1e-6 ms
+const SLOPE_MIN = NOMINAL_SLOPE_MS_PER_NS * 0.9;
+const SLOPE_MAX = NOMINAL_SLOPE_MS_PER_NS * 1.1;
+// How close a sidecar-derived boot epoch must sit to an in-message-derived one to
+// treat the sidecar as VALIDATED. The in-message pair is provably on the record's own
+// clock; if the sidecar disagrees by more than this, its x-axis is a different clock
+// (a boot offset), so we trust the in-message anchor and treat the sidecar as suspect.
+// Generous: a few seconds covers clock precision + drift across the calibration span.
+const ANCHOR_AGREE_TOL_MS = 5000;
+// Sidecar filename: `loggertime.json`, `loggertime_<sid>.json`, etc. — case-insensitive.
+const LOGGERTIME_RE = /^loggertime.*\.json$/i;
+
 /** Format an absolute epoch-ms as "YYYY-MM-DD HH:MM:SS.mmm" in LOCAL time — the
  * same calendar convention parseTimestampFast reads back, so the emitted line
  * round-trips to the same instant regardless of the viewer's timezone. */
@@ -287,6 +322,120 @@ export function findEpochAnchorMs(buf: Buffer): number | null {
 }
 
 /**
+ * A resolved wall-clock anchor: enough to turn any record's ns uptime into an
+ * absolute epoch-ms. `slopeMsPerNs` is nominally 1e-6 (1 ns = 1e-6 ms); a loggertime
+ * sidecar may supply a drift-corrected slope from its two calibration points.
+ */
+export interface WallClockAnchor {
+  /** Epoch-ms at record uptime 0 (the boot instant). */
+  epoch0Ms: number;
+  /** Epoch-ms advanced per record nanosecond. */
+  slopeMsPerNs: number;
+}
+
+/** The loggertime sidecar's two-point linear map (record ns → epoch-ms). */
+export interface LoggerTimeMap { x1: number; y1: number; x2: number; y2: number; }
+
+/**
+ * Parse a loggertime sidecar's JSON text into its {x1,y1,x2,y2} two-point map.
+ * Tolerant of string-encoded numbers and a one-level wrapper object; returns null for
+ * any shape that doesn't yield four finite numbers with x1 !== x2 (a degenerate map
+ * has no slope). Never throws.
+ */
+export function parseLoggerTimeSidecar(jsonText: string): LoggerTimeMap | null {
+  let root: unknown;
+  try { root = JSON.parse(jsonText); } catch { return null; }
+  const pick = (o: unknown): LoggerTimeMap | null => {
+    if (!o || typeof o !== 'object') return null;
+    const rec = o as Record<string, unknown>;
+    const num = (v: unknown): number => (typeof v === 'string' ? Number(v) : (v as number));
+    const x1 = num(rec.x1), y1 = num(rec.y1), x2 = num(rec.x2), y2 = num(rec.y2);
+    if ([x1, y1, x2, y2].every((n) => typeof n === 'number' && Number.isFinite(n)) && x1 !== x2) {
+      return { x1, y1, x2, y2 };
+    }
+    return null;
+  };
+  const direct = pick(root);
+  if (direct) return direct;
+  // Tolerate one level of nesting, e.g. { loggertime: {...} } or { map: {...} }.
+  if (root && typeof root === 'object') {
+    for (const v of Object.values(root as Record<string, unknown>)) {
+      const nested = pick(v);
+      if (nested) return nested;
+    }
+  }
+  return null;
+}
+
+/**
+ * Convert a loggertime two-point map into a guarded wall-clock anchor, or null when
+ * the map is implausible (slope not within a few percent of the nominal 1e-6, or a
+ * boot epoch outside the plausible window) — the caller then falls back.
+ */
+export function loggerTimeToAnchor(map: LoggerTimeMap): WallClockAnchor | null {
+  const slopeMsPerNs = (map.y2 - map.y1) / (map.x2 - map.x1);
+  if (!Number.isFinite(slopeMsPerNs) || slopeMsPerNs < SLOPE_MIN || slopeMsPerNs > SLOPE_MAX) return null;
+  const epoch0Ms = map.y1 - map.x1 * slopeMsPerNs;
+  if (!Number.isFinite(epoch0Ms) || epoch0Ms < EPOCH_MS_MIN || epoch0Ms > EPOCH_MS_MAX) return null;
+  return { epoch0Ms, slopeMsPerNs };
+}
+
+/**
+ * Locate + parse the loggertime sidecar next to an .esotrace file and return its
+ * wall-clock anchor, or null when there is no usable sidecar. Looks in the SAME folder
+ * as the file first (the exporter's layout), then a `loggertime/` subfolder as a
+ * fallback. Never throws — any fs/parse error resolves to null (so a read-only or
+ * absent sidecar just leaves the decode on its existing fallback).
+ */
+export function findSidecarAnchor(esotraceFilePath: string): WallClockAnchor | null {
+  const tryDir = (dir: string): WallClockAnchor | null => {
+    let names: string[];
+    try { names = fs.readdirSync(dir); } catch { return null; }
+    for (const name of names.filter((n) => LOGGERTIME_RE.test(n)).sort()) {
+      let text: string;
+      try { text = fs.readFileSync(path.join(dir, name), 'utf8'); } catch { continue; }
+      const map = parseLoggerTimeSidecar(text);
+      if (!map) continue;
+      const anchor = loggerTimeToAnchor(map);
+      if (anchor) return anchor;
+    }
+    return null;
+  };
+  const dir = path.dirname(esotraceFilePath);
+  return tryDir(dir) ?? tryDir(path.join(dir, 'loggertime'));
+}
+
+/**
+ * Resolve the wall-clock anchor for a decode. Precedence:
+ *   1. an explicit `opts.epochMsAnchor` (a caller/test override) — nominal slope;
+ *   2. a loggertime sidecar (the exporter's own source of truth), VALIDATED against an
+ *      in-message anchor when the file carries one — if they disagree materially the
+ *      sidecar's x-axis is a different clock, so the in-message anchor wins;
+ *   3. the in-message `timestamp`/`monotonicTimestamp` pair (findEpochAnchorMs);
+ *   4. null — the decoder keeps the relative device-uptime seconds it emits today.
+ */
+export function resolveWallClockAnchor(
+  buf: Buffer,
+  filePath: string,
+  opts?: { epochMsAnchor?: number | null },
+): WallClockAnchor | null {
+  if (opts?.epochMsAnchor != null) {
+    return { epoch0Ms: opts.epochMsAnchor, slopeMsPerNs: NOMINAL_SLOPE_MS_PER_NS };
+  }
+  const sidecar = findSidecarAnchor(filePath);
+  const inMsgMs = findEpochAnchorMs(buf);
+  if (sidecar && inMsgMs !== null) {
+    // The in-message pair is provably on the record's own clock. If the sidecar agrees,
+    // it's validated (and we keep its drift-corrected slope); if not, trust in-message.
+    if (Math.abs(sidecar.epoch0Ms - inMsgMs) <= ANCHOR_AGREE_TOL_MS) return sidecar;
+    return { epoch0Ms: inMsgMs, slopeMsPerNs: NOMINAL_SLOPE_MS_PER_NS };
+  }
+  if (sidecar) return sidecar;
+  if (inMsgMs !== null) return { epoch0Ms: inMsgMs, slopeMsPerNs: NOMINAL_SLOPE_MS_PER_NS };
+  return null;
+}
+
+/**
  * Decode every trace message in `buf`, invoking `emit` for each in file order.
  * Returns the number of records emitted. Timestamps are repaired to be monotonic.
  */
@@ -318,12 +467,13 @@ export function isVtrace(filePath: string, head: Buffer): boolean {
  * FileHandler indexer can consume unchanged. Mirrors mf4Parse's buffered writer
  * (flush ~every 1 MB) and progress contract.
  *
- * When an absolute wall-clock anchor can be resolved (from `opts.epochMsAnchor`, or
- * auto-detected in-message via findEpochAnchorMs), each line is prefixed with a real
- * "YYYY-MM-DD HH:MM:SS.mmm" date so LOGAN's timestamp parser, time-gaps and the
- * timeline all work on wall-clock time. Otherwise it falls back to the relative
- * device-uptime seconds it has always emitted. (`opts.epochMsAnchor` is the hook a
- * future sidecar-based anchor would use.)
+ * When an absolute wall-clock anchor can be resolved, each line is prefixed with a real
+ * "YYYY-MM-DD HH:MM:SS.mmm" date so LOGAN's timestamp parser, time-gaps and the timeline
+ * all work on wall-clock time. The anchor is resolved by `resolveWallClockAnchor` in
+ * precedence order: an explicit `opts.epochMsAnchor`, then a loggertime SIDECAR next to
+ * the file (the exporter's own source of truth, cross-checked against any in-message
+ * pair), then the in-message `timestamp`/`monotonicTimestamp` pair. With none it falls
+ * back to the relative device-uptime seconds it has always emitted.
  */
 export async function parseVtraceToFile(
   filePath: string,
@@ -336,9 +486,9 @@ export async function parseVtraceToFile(
     throw new Error(`Not a vtrace file: ${path.basename(filePath)}`);
   }
 
-  // Resolve the wall-clock anchor once up front (uptime-0 → epoch ms). A supplied
-  // anchor wins; otherwise auto-detect from an in-message timestamp/monotonic pair.
-  const epochMsAnchor = opts?.epochMsAnchor ?? findEpochAnchorMs(buf);
+  // Resolve the wall-clock anchor once up front (uptime-0 → epoch ms, plus a slope that
+  // a two-point sidecar may drift-correct). See resolveWallClockAnchor for precedence.
+  const anchor = resolveWallClockAnchor(buf, filePath, opts);
 
   const fd = fs.openSync(outPath, 'w');
   let started = false;
@@ -360,9 +510,9 @@ export async function parseVtraceToFile(
       if (rec === null) { t += 1; continue; }
       const [rawTs, level, sl] = rec;
       const ts = repairTs(tsRepair, rawTs);
-      const stamp = epochMsAnchor !== null
-        ? formatAbsoluteMs(epochMsAnchor + ts / 1e6)   // absolute wall-clock
-        : (ts / 1e9).toFixed(6);                        // relative uptime seconds
+      const stamp = anchor !== null
+        ? formatAbsoluteMs(anchor.epoch0Ms + ts * anchor.slopeMsPerNs) // absolute wall-clock
+        : (ts / 1e9).toFixed(6);                                        // relative uptime seconds
       const lvl = VTRACE_LEVELS[level] ?? `L${level}`;
       writeLine(`${stamp} ${lvl} ${oneLine(buf.toString('utf8', t, t + sl))}`);
       t += sl + HDR;
