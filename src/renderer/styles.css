@@ -1527,6 +1527,7 @@ body.platform-darwin .titlebar {
   color: var(--text-primary);
 }
 .folder-subdir-name {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1596,6 +1597,49 @@ body.platform-darwin .titlebar {
   font-size: 10px;
   color: var(--text-muted);
 }
+
+/* Last-modified label ("3h", "2d") on folder-tree rows. Recent files (< 24h) get the
+   accent colour so the eye lands on freshly-changed logs. */
+.folder-file-time {
+  font-size: 10px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.folder-file-time--recent {
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+/* Recently-modified rows carry a thin accent bar on the left. Skip it on the active
+   file (its full accent fill already stands out). */
+.folder-file--recent:not(.active) {
+  box-shadow: inset 2px 0 0 var(--accent-color);
+}
+.folder-file--recent:not(.active) .folder-file-name {
+  color: var(--text-primary);
+}
+.folder-subdir-header--recent {
+  box-shadow: inset 2px 0 0 var(--accent-color);
+}
+
+/* Sort-order toggle in each folder header (Name ⇄ Recent). Always visible but muted;
+   accented when recency sort is active. */
+.folder-sort {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 0 3px;
+  border-radius: 3px;
+  white-space: nowrap;
+  opacity: 0.6;
+  transition: opacity 0.1s, color 0.1s;
+}
+.folder-header:hover .folder-sort { opacity: 1; }
+.folder-sort:hover { color: var(--accent-color); }
+.folder-sort.active { color: var(--accent-color); opacity: 1; }
 
 /* Folder Search */
 .folder-search-container {

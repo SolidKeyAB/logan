@@ -34,6 +34,12 @@ export interface FolderEntry {
   // Set on directories by the shallow scan: true if a one-level peek found any
   // non-hidden, non-skip-listed entry inside — i.e. the folder is worth expanding.
   hasChildren?: boolean;
+  // Modification / creation time in epoch-ms (from fs.stat), for both files and dirs.
+  // Drives the folder tree's "last updated" label, recent-file highlight and recency
+  // sort. Undefined when the stat failed or the entry came from a source without times
+  // (e.g. a remote/SSH listing).
+  mtimeMs?: number;
+  birthtimeMs?: number;
 }
 
 // Classify a file by reading its first 16 bytes: image/video by magic signature,
@@ -117,7 +123,18 @@ export async function scanFolderShallow(folderPath: string): Promise<FolderEntry
         } catch {
           /* unreadable dir → treat as a leaf */
         }
-        return { name: entry.name, path: fullPath, isDirectory: true, hasChildren } as FolderEntry;
+        // Cheap extra stat so a directory can carry its own mtime (e.g. a folder that
+        // just received a new file sorts/highlights as recent alongside the file).
+        let mtimeMs: number | undefined;
+        let birthtimeMs: number | undefined;
+        try {
+          const st = await fs.promises.stat(fullPath);
+          mtimeMs = st.mtimeMs;
+          birthtimeMs = st.birthtimeMs;
+        } catch {
+          /* stat failed → leave times undefined */
+        }
+        return { name: entry.name, path: fullPath, isDirectory: true, hasChildren, mtimeMs, birthtimeMs } as FolderEntry;
       }),
     );
     results.push(...batchResults);
@@ -134,7 +151,15 @@ export async function scanFolderShallow(folderPath: string): Promise<FolderEntry
         try {
           const [stat, fileType] = await Promise.all([fs.promises.stat(fullPath), sniffFileType(fullPath)]);
           if (fileType === 'binary' && !BINARY_OPENABLE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) return null;
-          return { name: entry.name, path: fullPath, isDirectory: false, size: stat.size, fileType } as FolderEntry;
+          return {
+            name: entry.name,
+            path: fullPath,
+            isDirectory: false,
+            size: stat.size,
+            fileType,
+            mtimeMs: stat.mtimeMs,
+            birthtimeMs: stat.birthtimeMs,
+          } as FolderEntry;
         } catch {
           return null;
         }
