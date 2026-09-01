@@ -500,6 +500,7 @@ const getHighlightsPath = () => path.join(getConfigDir(), 'highlights.json');
 const getHighlightGroupsPath = () => path.join(getConfigDir(), 'highlight-groups.json');
 const getBookmarksPath = () => path.join(getConfigDir(), 'bookmarks.json');
 const getBookmarkSetsPath = () => path.join(getConfigDir(), 'bookmark-sets.json');
+const getAnnotationsStorePath = () => path.join(getConfigDir(), 'annotations.json');
 
 // Ensure config directory exists
 function ensureConfigDir(): void {
@@ -1003,33 +1004,74 @@ function saveBookmarksForCurrentFile(): void {
 
 // --- Agent Annotations ---
 
+// Global fallback store for annotations, mirroring the bookmarks store: a per-file map
+// in ~/.logan used when the log's OWN directory isn't writable — e.g. a virtual
+// single-session/composite ("merged session"), whose synthetic path (COMPOSITE_ID) has
+// no on-disk sidecar. Without this, composite annotations couldn't persist OR reload
+// (loadAnnotationsForFile gated the whole load on canWriteLocal), so they vanished the
+// moment you switched to another file and never came back.
+interface AnnotationsStore { [filePath: string]: Annotation[]; }
+function loadAnnotationsStore(): AnnotationsStore {
+  try {
+    ensureConfigDir();
+    const p = getAnnotationsStorePath();
+    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf-8'));
+  } catch (error) {
+    console.error('Failed to load annotations store:', error);
+  }
+  return {};
+}
+function saveAnnotationsStore(store: AnnotationsStore): void {
+  try {
+    ensureConfigDir();
+    fs.writeFileSync(getAnnotationsStorePath(), JSON.stringify(store, null, 2), 'utf-8');
+  } catch (error) {
+    console.error('Failed to save annotations store:', error);
+  }
+}
+
 function loadAnnotationsForFile(filePath: string): void {
   annotations.clear();
   if (canWriteLocal(filePath)) {
     const localData = loadLocalFileData(filePath);
-    for (const a of localData.annotations || []) {
-      annotations.set(a.id, a);
+    const localAnns = localData.annotations || [];
+    if (localAnns.length > 0) {
+      for (const a of localAnns) annotations.set(a.id, a);
+    } else {
+      // Migrate any annotations parked in the global store (e.g. saved while this file
+      // lived on a read-only mount) into the local sidecar — mirrors bookmarks.
+      const store = loadAnnotationsStore();
+      const globalAnns = store[filePath] || [];
+      if (globalAnns.length > 0) {
+        for (const a of globalAnns) annotations.set(a.id, a);
+        localData.annotations = globalAnns;
+        saveLocalFileData(filePath, localData);
+        delete store[filePath];
+        saveAnnotationsStore(store);
+      }
     }
+  } else {
+    // Read-only / virtual path (e.g. a single-session composite) → global keyed store,
+    // so annotations persist and reload across tab switches instead of disappearing.
+    const store = loadAnnotationsStore();
+    for (const a of (store[filePath] || [])) annotations.set(a.id, a);
   }
 }
 
 function saveAnnotationsForCurrentFile(): void {
   if (!currentFilePath) return;
-  // Try local storage first, fall back to global ~/.logan storage
-  if (!currentFileUsesLocalStorage) {
-    // Still attempt to save using the fallback path so clears persist
-    try {
-      const localData = loadLocalFileData(currentFilePath);
-      localData.annotations = Array.from(annotations.values())
-        .sort((a, b) => a.lineNumber - b.lineNumber);
-      saveLocalFileData(currentFilePath, localData);
-    } catch { /* read-only fs — annotations not persisted */ }
-    return;
+  const list = Array.from(annotations.values()).sort((a, b) => a.lineNumber - b.lineNumber);
+  if (currentFileUsesLocalStorage) {
+    const localData = loadLocalFileData(currentFilePath);
+    localData.annotations = list;
+    saveLocalFileData(currentFilePath, localData);
+  } else {
+    // Read-only / virtual path → global keyed store (the same fallback bookmarks use).
+    const store = loadAnnotationsStore();
+    if (list.length > 0) store[currentFilePath] = list;
+    else delete store[currentFilePath];
+    saveAnnotationsStore(store);
   }
-  const localData = loadLocalFileData(currentFilePath);
-  localData.annotations = Array.from(annotations.values())
-    .sort((a, b) => a.lineNumber - b.lineNumber);
-  saveLocalFileData(currentFilePath, localData);
 }
 
 function pushAnnotationsToRenderer(): void {
