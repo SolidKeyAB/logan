@@ -7549,6 +7549,17 @@ function setFeatureEnabled(id: string, enabled: boolean): void {
   localStorage.setItem(FEATURES_LS_KEY, JSON.stringify(saved));
 }
 
+// Make sure an optional feature is ON (and its tab/icon visible) because the user just
+// did something that REQUIRES it — e.g. opened an image while the Image Viewer was
+// toggled off. Without this the panel content shows with NO tab, then vanishes on the
+// next tab switch with no way back. Opening the file is the feature earning its place;
+// the choice persists so the tab stays put. No-op when already enabled.
+function ensureFeatureEnabled(id: string): void {
+  if (isFeatureEnabled(id)) return;
+  setFeatureEnabled(id, true);
+  applyFeatureVisibility();
+}
+
 // Show/hide each optional feature's tab button + activity-bar icon based on state.
 function applyFeatureVisibility(): void {
   for (const def of OPTIONAL_FEATURES) {
@@ -24708,6 +24719,10 @@ function openImageInPanel(filePath: string): void {
   };
   imageViewerImg.src = `file://${filePath}`;
 
+  // The Image Viewer is an optional (default-off) feature. Opening an image must make
+  // its tab visible + persistent first — otherwise the panel shows with no tab and
+  // disappears on the next tab switch.
+  ensureFeatureEnabled('image');
   // Always open (never toggle-closed) — opening a file should show the panel,
   // even if the image tab is already the active one.
   openBottomTab('image');
@@ -28170,7 +28185,7 @@ async function dispatchFileHandlerResult(res: FileHandlerResult): Promise<void> 
       if (res.path) await loadFile(res.path);
       break;
     case 'open-panel':
-      if (res.panel === 'video' && res.path) { loadVideoFromPath(res.path); openBottomTab('video'); }
+      if (res.panel === 'video' && res.path) { ensureFeatureEnabled('video'); loadVideoFromPath(res.path); openBottomTab('video'); }
       else if (res.panel === 'image' && res.path) { openImageInPanel(res.path); }
       else showToast(`No viewer available for ${res.panel || 'this file'}`);
       break;
