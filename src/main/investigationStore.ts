@@ -66,6 +66,19 @@ export interface InvestigationTemplate {
   requirements?: RequirementsManifest; // preconditions: file-template + expected saved entities
   composite?: boolean;          // true = a "recipe of recipes": every step runs a saved
                                 // sub-recipe (path '/api/investigation-run'), optionally guarded.
+  tier?: 'fundamental' | 'complex'; // curated difficulty tier. Absent = use the smart default
+                                // (see resolveTier): a composite defaults to 'complex', an atomic
+                                // recipe to 'fundamental'. Either operator (human via the recipe
+                                // context menu, agent via logan_set_investigation_tier) can pin it.
+}
+
+// The EFFECTIVE tier of a recipe: an explicit `tier` wins; otherwise fall back to the
+// smart default — a recipe-of-recipes (composite) is 'complex', a single-aim atomic
+// recipe is 'fundamental'. Pure + zero-migration (computed at read time, never persisted
+// unless a caller explicitly pins it), mirroring resolveAnswerStep / deriveRole.
+export function resolveTier(tpl: Pick<InvestigationTemplate, 'tier' | 'composite'>): 'fundamental' | 'complex' {
+  if (tpl.tier === 'fundamental' || tpl.tier === 'complex') return tpl.tier;
+  return tpl.composite ? 'complex' : 'fundamental';
 }
 
 // Body keys worth exposing as fill-in parameters when replaying on a new log.

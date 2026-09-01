@@ -8341,6 +8341,7 @@ function callApiServer(apiPath: string, body: any): Promise<any> {
 ipcMain.handle(IPC.INVESTIGATION_LIST, async () => callApiServer('/api/investigations', {}));
 ipcMain.handle(IPC.INVESTIGATION_SAVE, async (_e, name: string, description?: string, requirements?: any, autoDetect?: boolean, aim?: string) => callApiServer('/api/investigation-save', { name, description, requirements, autoDetect, aim }));
 ipcMain.handle(IPC.INVESTIGATION_SET_AIM, async (_e, name: string, aim: string) => callApiServer('/api/investigation-set-aim', { name, aim }));
+ipcMain.handle(IPC.INVESTIGATION_SET_TIER, async (_e, name: string, tier: string) => callApiServer('/api/investigation-set-tier', { name, tier }));
 ipcMain.handle(IPC.INVESTIGATION_SET_ANSWER, async (_e, name: string, stepIndex: number) => callApiServer('/api/investigation-set-answer', { name, stepIndex }));
 ipcMain.handle(IPC.INVESTIGATION_RUN, async (_e, name: string, params?: Record<string, any>, force?: boolean) => callApiServer('/api/investigation-run', { name, params: params || {}, force: force || false }));
 ipcMain.handle(IPC.INVESTIGATION_DELETE, async (_e, name: string) => callApiServer('/api/investigation-delete', { name }));
