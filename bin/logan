@@ -6,32 +6,42 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 
-const filePath = process.argv[2];
+const inputPath = process.argv[2];
 
-if (!filePath) {
-  // No file arg — try to launch LOGAN or show usage
+if (!inputPath) {
+  // No path arg — try to reach a running LOGAN, else launch it.
   tryApi(null, () => {
     launchElectron(null);
   });
 } else {
-  const abs = path.resolve(filePath);
-  if (!fs.existsSync(abs)) {
-    console.error(`logan: file not found: ${abs}`);
+  // Accept a file OR a folder: `logan app.log` or `logan ./logs/` (or `logan .`).
+  const abs = path.resolve(inputPath);
+  let stat;
+  try {
+    stat = fs.statSync(abs);
+  } catch {
+    console.error(`logan: path not found: ${abs}`);
     process.exit(1);
   }
-  tryApi(abs, () => {
+  const target = { path: abs, isDir: stat.isDirectory() };
+  tryApi(target, () => {
     launchElectron(abs);
   });
 }
 
-function tryApi(absPath, onFail) {
-  const postData = absPath ? JSON.stringify({ filePath: absPath }) : null;
+// `target` is { path, isDir } or null (status ping). A folder posts to
+// /api/open-folder, a file to /api/open-file; both fall back to a cold launch.
+function tryApi(target, onFail) {
+  const isFolder = !!(target && target.isDir);
+  const postData = target
+    ? JSON.stringify(isFolder ? { folderPath: target.path } : { filePath: target.path })
+    : null;
   const options = {
     hostname: '127.0.0.1',
     port: 19532,
-    path: absPath ? '/api/open-file' : '/api/status',
-    method: absPath ? 'POST' : 'GET',
-    headers: absPath
+    path: target ? (isFolder ? '/api/open-folder' : '/api/open-file') : '/api/status',
+    method: target ? 'POST' : 'GET',
+    headers: target
       ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(postData) }
       : {},
     timeout: 2000,
@@ -41,8 +51,8 @@ function tryApi(absPath, onFail) {
     let body = '';
     res.on('data', (chunk) => (body += chunk));
     res.on('end', () => {
-      if (absPath) {
-        console.log(`Opened ${path.basename(absPath)} in LOGAN`);
+      if (target) {
+        console.log(`Opened ${path.basename(target.path)} in LOGAN`);
       } else {
         console.log('LOGAN is already running');
       }
