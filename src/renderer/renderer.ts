@@ -7717,6 +7717,79 @@ function recipeSourceFilesInfo(tpl: any): { names: string[]; types: string[] } |
   return { names, types };
 }
 
+// The EFFECTIVE tier of a recipe (mirrors resolveTier in investigationStore): an
+// explicit pin wins; else the server-computed tierEffective; else the smart default
+// (composite → complex, atomic → fundamental).
+function resolveRecipeTier(t: any): 'fundamental' | 'complex' {
+  if (t?.tier === 'fundamental' || t?.tier === 'complex') return t.tier;
+  if (t?.tierEffective === 'fundamental' || t?.tierEffective === 'complex') return t.tierEffective;
+  return t?.composite ? 'complex' : 'fundamental';
+}
+
+// Collapse state for the two recipe tiers in the Recipes panel (session-only).
+const recipeTierCollapsed: { fundamental: boolean; complex: boolean } = { fundamental: false, complex: false };
+
+// Build one recipe card (chip). Extracted so the grouped Fundamental/Complex view can
+// place cards under their tier section.
+function buildRecipeChip(t: any): HTMLElement {
+  const chip = document.createElement('span');
+  chip.className = 'investigate-pattern-chip';
+  const stepCount = (t.steps || []).length;
+  const stepsPreview = (t.steps || []).map((s: any) => s.label).join(' → ');
+  const srcInfo = recipeSourceFilesInfo(t);
+  const srcLine = srcInfo ? `\n📄 Recorded on ${srcInfo.names.length} file${srcInfo.names.length === 1 ? '' : 's'} (${srcInfo.types.join(', ')}): ${srcInfo.names.join(', ')}` : '';
+  const pinned = (t.tier === 'fundamental' || t.tier === 'complex');
+  chip.title = `${t.aim ? `🎯 ${t.aim}\n\n` : ''}${stepCount} steps: ${stepsPreview}${srcLine}\nTier: ${resolveRecipeTier(t)}${pinned ? ' (pinned)' : ' (auto)'}\nRight-click for tier / requirements`;
+  const run = document.createElement('button');
+  run.className = 'investigate-pattern-run';
+  // The card reads as "what it is" at a glance: ⋔ marks a composite (recipe-of-recipes),
+  // the name identifies it, and the aim (its purpose) shows inline — not just on hover.
+  run.innerHTML = `▶ ${t.composite ? '<span class="investigate-pattern-composite" title="Composite — a recipe of recipes">⋔</span> ' : ''}${escapeHtml(t.name)}`
+    + (t.aim ? ` <span class="investigate-pattern-aim">🎯 ${escapeHtml(t.aim)}</span>` : '')
+    + ` <span class="investigate-pattern-count">${stepCount}</span>`;
+  run.addEventListener('click', () => { void openTemplateHub(t.name); });
+  chip.appendChild(run);
+  // Show a small tier marker only when the tier is PINNED (curated away from the default),
+  // so the grouped sections carry the common case and pinned recipes are visibly curated.
+  if (pinned) {
+    const tierBadge = document.createElement('span');
+    tierBadge.className = 'investigate-pattern-tier';
+    tierBadge.textContent = t.tier === 'complex' ? '⋔' : '🧱';
+    tierBadge.title = `Tier pinned: ${t.tier}`;
+    chip.appendChild(tierBadge);
+  }
+  // ⋔ Flow — open the read-only VISUAL flow (verb + nouns + dataflow + conditionals),
+  // so you can see what the recipe does; ▶ (the name) opens the run/tweak hub.
+  const steps = document.createElement('button');
+  steps.className = 'investigate-pattern-steps';
+  steps.textContent = '⋔';
+  steps.title = 'See this recipe as a visual flow';
+  steps.addEventListener('click', (e) => { e.stopPropagation(); void showInvestigationWorkflow(t.name); });
+  chip.appendChild(steps);
+  // Preflight badge — only for patterns that declare a requirements manifest. Shows
+  // whether THIS open log satisfies the pattern's required template (✓ / ✗ blocked).
+  if (t.requirements && (t.requirements.fileTemplate || (t.requirements.entities || []).length)) {
+    const badge = document.createElement('span');
+    badge.className = 'investigation-req-badge checking';
+    badge.textContent = '…';
+    badge.title = 'Checking requirements against the open log…';
+    chip.appendChild(badge);
+    void refreshInvestigationBadge(t.name, badge);
+  }
+  const del = document.createElement('button');
+  del.className = 'investigate-pattern-del';
+  del.textContent = '×';
+  del.title = 'Delete this pattern';
+  del.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await window.api.deleteInvestigation(t.name);
+    void loadInvestigationTemplates();
+  });
+  chip.appendChild(del);
+  chip.addEventListener('contextmenu', (e) => { e.preventDefault(); showInvestigationContextMenu(e, t); });
+  return chip;
+}
+
 async function loadInvestigationTemplates(): Promise<void> {
   const list = document.getElementById('investigate-patterns-list');
   if (!list) return;
@@ -7728,53 +7801,31 @@ async function loadInvestigationTemplates(): Promise<void> {
     list.innerHTML = '<span class="investigate-patterns-empty">no recipes yet — ask the agent to investigate, then “Save current”</span>';
     return;
   }
-  for (const t of templates) {
-    const chip = document.createElement('span');
-    chip.className = 'investigate-pattern-chip';
-    const stepCount = (t.steps || []).length;
-    const stepsPreview = (t.steps || []).map((s: any) => s.label).join(' → ');
-    const srcInfo = recipeSourceFilesInfo(t);
-    const srcLine = srcInfo ? `\n📄 Recorded on ${srcInfo.names.length} file${srcInfo.names.length === 1 ? '' : 's'} (${srcInfo.types.join(', ')}): ${srcInfo.names.join(', ')}` : '';
-    chip.title = `${t.aim ? `🎯 ${t.aim}\n\n` : ''}${stepCount} steps: ${stepsPreview}${srcLine}\nRight-click to edit requirements`;
-    const run = document.createElement('button');
-    run.className = 'investigate-pattern-run';
-    // The card reads as "what it is" at a glance: ⋔ marks a composite (recipe-of-recipes),
-    // the name identifies it, and the aim (its purpose) shows inline — not just on hover.
-    run.innerHTML = `▶ ${t.composite ? '<span class="investigate-pattern-composite" title="Composite — a recipe of recipes">⋔</span> ' : ''}${escapeHtml(t.name)}`
-      + (t.aim ? ` <span class="investigate-pattern-aim">🎯 ${escapeHtml(t.aim)}</span>` : '')
-      + ` <span class="investigate-pattern-count">${stepCount}</span>`;
-    run.addEventListener('click', () => { void openTemplateHub(t.name); });
-    chip.appendChild(run);
-    // ⋔ Flow — open the read-only VISUAL flow (verb + nouns + dataflow + conditionals),
-    // so you can see what the recipe does; ▶ (the name) opens the run/tweak hub.
-    const steps = document.createElement('button');
-    steps.className = 'investigate-pattern-steps';
-    steps.textContent = '⋔';
-    steps.title = 'See this recipe as a visual flow';
-    steps.addEventListener('click', (e) => { e.stopPropagation(); void showInvestigationWorkflow(t.name); });
-    chip.appendChild(steps);
-    // Preflight badge — only for patterns that declare a requirements manifest. Shows
-    // whether THIS open log satisfies the pattern's required template (✓ / ✗ blocked).
-    if (t.requirements && (t.requirements.fileTemplate || (t.requirements.entities || []).length)) {
-      const badge = document.createElement('span');
-      badge.className = 'investigation-req-badge checking';
-      badge.textContent = '…';
-      badge.title = 'Checking requirements against the open log…';
-      chip.appendChild(badge);
-      void refreshInvestigationBadge(t.name, badge);
-    }
-    const del = document.createElement('button');
-    del.className = 'investigate-pattern-del';
-    del.textContent = '×';
-    del.title = 'Delete this pattern';
-    del.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      await window.api.deleteInvestigation(t.name);
-      void loadInvestigationTemplates();
+  // Split into two tiers: 🧱 Fundamental (reusable building blocks) and ⋔ Complex
+  // (multi-step / composite workflows). A section is shown only when it has recipes.
+  const TIERS: Array<{ tier: 'fundamental' | 'complex'; label: string; icon: string; hint: string }> = [
+    { tier: 'fundamental', label: 'Fundamental', icon: '🧱', hint: 'Fundamental — reusable single-aim building blocks' },
+    { tier: 'complex', label: 'Complex', icon: '⋔', hint: 'Complex — multi-step / composite workflows built from fundamentals' },
+  ];
+  for (const def of TIERS) {
+    const items = templates.filter((t: any) => resolveRecipeTier(t) === def.tier);
+    if (items.length === 0) continue;
+    const section = document.createElement('div');
+    section.className = 'recipe-tier-section' + (recipeTierCollapsed[def.tier] ? ' collapsed' : '');
+    const header = document.createElement('button');
+    header.className = 'recipe-tier-header';
+    header.title = def.hint;
+    header.innerHTML = `<span class="recipe-tier-caret">▾</span><span class="recipe-tier-icon">${def.icon}</span><span class="recipe-tier-label">${def.label}</span><span class="recipe-tier-count">${items.length}</span>`;
+    const body = document.createElement('div');
+    body.className = 'recipe-tier-body';
+    for (const t of items) body.appendChild(buildRecipeChip(t));
+    header.addEventListener('click', () => {
+      recipeTierCollapsed[def.tier] = !recipeTierCollapsed[def.tier];
+      section.classList.toggle('collapsed', recipeTierCollapsed[def.tier]);
     });
-    chip.appendChild(del);
-    chip.addEventListener('contextmenu', (e) => { e.preventDefault(); showInvestigationContextMenu(e, t); });
-    list.appendChild(chip);
+    section.appendChild(header);
+    section.appendChild(body);
+    list.appendChild(section);
   }
 }
 
@@ -8994,6 +9045,11 @@ function showInvestigationContextMenu(e: MouseEvent, t: any): void {
     b.addEventListener('click', () => { menu.remove(); fn(); });
     menu.appendChild(b);
   };
+  // Tier — classify the recipe as fundamental (building block) or complex (workflow).
+  const effTier = resolveRecipeTier(t);
+  if (effTier !== 'fundamental') item('🧱 Mark as fundamental', () => { void setRecipeTier(t.name, 'fundamental'); });
+  if (effTier !== 'complex') item('⋔ Mark as complex', () => { void setRecipeTier(t.name, 'complex'); });
+  if (t.tier === 'fundamental' || t.tier === 'complex') item('↺ Reset tier to auto', () => { void setRecipeTier(t.name, 'auto'); });
   item(hasReqs ? 'Edit requirements…' : 'Add requirements…', () => { void editInvestigationRequirements(t); });
   item('Requirements from current file…', () => { void editInvestigationRequirements(t, true); });
   item('Check against this log', () => { void checkInvestigationAgainstLog(t.name); });
@@ -9007,6 +9063,14 @@ function showInvestigationContextMenu(e: MouseEvent, t: any): void {
     if (!menu.contains(ev.target as Node)) { menu.remove(); document.removeEventListener('click', closeMenu); }
   };
   setTimeout(() => document.addEventListener('click', closeMenu), 0);
+}
+
+// Pin (or clear) a recipe's tier, then refresh the grouped Recipes view.
+async function setRecipeTier(name: string, tier: 'fundamental' | 'complex' | 'auto'): Promise<void> {
+  const res = await window.api.setInvestigationTier(name, tier);
+  if (!res.success) { showToast((res as any).error || 'Failed to set tier'); return; }
+  showToast(tier === 'auto' ? 'Tier reset to auto' : `Marked as ${tier}`);
+  void loadInvestigationTemplates();
 }
 
 // Preflight one pattern against the open log and show the report in the results pane.
