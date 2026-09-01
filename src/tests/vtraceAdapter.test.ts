@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { VtraceAdapter, pickAdapter, adapterRegistry } from '../main/sourceAdapter';
-import { decodeVtrace, parseVtraceToFile, findEpochAnchorMs, repairTs, VtraceRecord } from '../main/vtraceParse';
+import { decodeVtrace, parseVtraceToFile, findEpochAnchorMs, repairTs, newTsRepair, VtraceRecord } from '../main/vtraceParse';
 import { parseTimestampFast } from '../main/timestampParse';
 
 // ── Minimal vtrace fixture builder ───────────────────────────────────────────
@@ -138,6 +138,29 @@ describe('VtraceAdapter', () => {
     expect(new Set(recs.map(r => r.tsNs)).size).toBeGreaterThan(1); // not stuck on one value
   });
 
+  it('does NOT freeze when a spike slips UNDER the ceiling (the sticky-max latch)', () => {
+    // The bug raising the ceiling could never fix: a garbage-high read that is still
+    // BELOW TS_MAX (here ~58 days of ns — huge, but representable). A plain max()-clamp
+    // would adopt it as `last` and floor every following record to it forever. The real,
+    // much smaller timestamps that resume after it must still flow through unfrozen.
+    const buf = buildFixture([
+      record(296_000_000_000, 2, 'first'),          // 296 s
+      record(296_005_000_000, 2, 'second'),         // +5 ms
+      record(5_000_000_000_000_000, 2, 'spike'),    // ~58 days ns — garbage, but under the ~104-day ceiling
+      record(296_010_000_000, 2, 'fourth'),         // real time resumes
+      record(296_015_000_000, 2, 'fifth'),
+    ]);
+    const recs = decodeAll(buf);
+    expect(recs.map(r => r.text)).toEqual(['first', 'second', 'spike', 'fourth', 'fifth']);
+    // The spike is held at the last trusted value — it never becomes the floor.
+    expect(recs[2].tsNs).toBe(296_005_000_000);
+    // The tail keeps its own real, SMALL timestamps — the old max()-clamp would have
+    // frozen both of these at the 5e15 spike.
+    expect(recs[3].tsNs).toBe(296_010_000_000);
+    expect(recs[4].tsNs).toBe(296_015_000_000);
+    expect(recs.every(r => r.tsNs <= 296_015_000_000)).toBe(true); // nothing latched to the spike
+  });
+
   it('decodes UTF-8 multibyte message text (e.g. CJK) without mangling it', () => {
     // A real trace carries non-ASCII device names; latin1 would shred each 3-byte
     // UTF-8 char into high/C1-control bytes (the "[binary/corrupted data]" symptom).
@@ -256,36 +279,80 @@ describe('vtrace absolute wall-clock anchor', () => {
   });
 });
 
-// ── repairTs: monotonic timestamp repair (unit) ──────────────────────────────
+// ── repairTs: sequence-based timestamp repair (unit) ─────────────────────────
 const TS_MAX = Number.MAX_SAFE_INTEGER; // 2^53 - 1 ns ≈ 104 days, mirrors vtraceParse
 const TWO_POW_40 = 0x100_00000000;      // 2^40 ns ≈ 18.3 min — the OLD (wrong) ceiling
-describe('repairTs', () => {
-  it('passes a normal in-range value straight through', () => {
-    expect(repairTs(296_000_000_000, -1)).toBe(296_000_000_000);
-    expect(repairTs(296_010_000_000, 296_000_000_000)).toBe(296_010_000_000);
+const MAX_STEP = 3_600_000_000_000;     // 1 hour ns — mirrors vtraceParse's cadence bound
+
+// Feed a whole raw-timestamp SEQUENCE through one repair state and collect the emitted
+// values. Repair is now sequence-based, so the unit under test is a sequence, not a pair.
+function runRepair(raw: number[]): number[] {
+  const s = newTsRepair();
+  return raw.map(r => repairTs(s, r));
+}
+
+describe('repairTs (sequence-based)', () => {
+  it('passes normal in-cadence values straight through', () => {
+    expect(runRepair([296_000_000_000, 296_010_000_000]))
+      .toEqual([296_000_000_000, 296_010_000_000]);
   });
 
   it('accepts genuine timestamps past the old 2^40 (18.3 min) ceiling — no freeze', () => {
-    // 2^40 ns is only ~18.3 min. A real capture running longer than that must keep
-    // advancing, not latch on the last sub-18-min value (the timestamp-freeze bug).
-    expect(repairTs(TWO_POW_40, 296_000_000_000)).toBe(TWO_POW_40);
-    const twentyMin = 1_200_000_000_000; // 1200 s, comfortably past 2^40
-    expect(repairTs(twentyMin, TWO_POW_40)).toBe(twentyMin);
-    expect(repairTs(twentyMin + 5_000_000_000, twentyMin)).toBe(twentyMin + 5_000_000_000);
+    // 2^40 ns is only ~18.3 min; each step here is well under the 1-hour cadence bound,
+    // so a long capture keeps advancing instead of latching on the last sub-18-min value.
+    expect(runRepair([296_000_000_000, TWO_POW_40, 1_200_000_000_000, 1_205_000_000_000]))
+      .toEqual([296_000_000_000, TWO_POW_40, 1_200_000_000_000, 1_205_000_000_000]);
   });
 
-  it('carries the last good value forward only for a truly corrupt (beyond-representable) read', () => {
-    expect(repairTs(TS_MAX + 1, 296_000_000_000)).toBe(296_000_000_000);
+  it('carries the last good value forward for a beyond-representable (garbage) read', () => {
+    expect(runRepair([296_000_000_000, TS_MAX + 1, 296_010_000_000]))
+      .toEqual([296_000_000_000, 296_000_000_000, 296_010_000_000]);
   });
 
-  it('enforces monotonicity — an out-of-order lower read repeats the last value', () => {
-    expect(repairTs(100, 296_000_000_000)).toBe(296_000_000_000);
+  it('holds a LONE backward read at the last value (single-outlier monotonicity)', () => {
+    expect(runRepair([296_000_000_000, 100, 296_010_000_000]))
+      .toEqual([296_000_000_000, 296_000_000_000, 296_010_000_000]);
   });
 
   it('a leading corrupt read resolves to 0, never the ceiling (no latch)', () => {
-    // First record, nothing good to carry (lastTs = -1).
-    expect(repairTs(TS_MAX + 5, -1)).toBe(0);
-    // …and the next real value is then free to flow, not clamped to a huge seed.
-    expect(repairTs(296_000_000_000, 0)).toBe(296_000_000_000);
+    // First read is garbage → 0, and stays unseeded so the next real value flows freely.
+    expect(runRepair([TS_MAX + 5, 296_000_000_000, 296_010_000_000]))
+      .toEqual([0, 296_000_000_000, 296_010_000_000]);
+  });
+
+  it('does NOT let a lone spike under the ceiling become a permanent floor (the reported bug)', () => {
+    // A garbage-high read that is still BELOW TS_MAX (~58 days ns). A max()-clamp would
+    // adopt it and floor the rest of the file to it; here it is held for one line and the
+    // smaller real values that resume flow straight through.
+    const spike = 5_000_000_000_000_000;
+    expect(runRepair([296_000_000_000, 296_005_000_000, spike, 296_010_000_000, 296_015_000_000]))
+      .toEqual([296_000_000_000, 296_005_000_000, 296_005_000_000, 296_010_000_000, 296_015_000_000]);
+  });
+
+  it('self-heals: recovers even if a SUSTAINED bad-high run poisons the floor', () => {
+    // The adversarial case for any monotonic scheme: three consecutive high reads confirm
+    // a (wrong) new baseline, then the real, much lower stream returns. The floor must drop
+    // back to reality after RESYNC_RUN low reads instead of freezing at the spike forever.
+    const spike = 5_000_000_000_000_000;
+    const out = runRepair([
+      300_000_000_000, spike, spike + 1_000_000_000, spike + 2_000_000_000, // floor gets poisoned…
+      301_000_000_000, 302_000_000_000, 303_000_000_000,                    // …then real time returns
+    ]);
+    expect(out).toContain(spike + 2_000_000_000);       // the bad region WAS briefly adopted (took 3 to confirm)
+    expect(out[out.length - 1]).toBe(303_000_000_000);  // …but it healed back to reality — not frozen
+    expect(out[out.length - 1]).toBeLessThan(spike);
+  });
+
+  it('adopts a genuine sustained large gap after confirmation (no freeze on real jumps)', () => {
+    // A real gap bigger than one cadence step (~2.8 h > MAX_STEP) — e.g. the device resumed
+    // after a long idle. Held only until RESYNC_RUN reads confirm the new region, then
+    // adopted; it must reach the new region, not stay stuck at the pre-gap value.
+    const far = 10_000_000_000_000; // ~2.8 h
+    const out = runRepair([
+      1_000_000_000, 2_000_000_000, // ~1–2 s
+      far, far + 1_000_000_000, far + 2_000_000_000, far + 3_000_000_000,
+    ]);
+    expect(out[out.length - 1]).toBe(far + 3_000_000_000);
+    expect(out[out.length - 1]).toBeGreaterThan(MAX_STEP);
   });
 });
