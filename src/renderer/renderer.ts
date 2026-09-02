@@ -12615,6 +12615,10 @@ function getAnnColor(sev: string | undefined) {
   return ANN_COLORS[sev || 'info'] || ANN_COLORS.info;
 }
 
+// Remembered scroll offset of the annotation column, so a re-render (active-
+// annotation change, resize, new handoff…) doesn't snap it back to the top.
+let annBarScrollTop = 0;
+
 function renderAnnotationBar(): void {
   if (!annotationBarElement) return;
 
@@ -12640,41 +12644,67 @@ function renderAnnotationBar(): void {
     .filter((a) => barLine(a) >= 0)
     .sort((a, b) => barLine(a) - barLine(b));
 
-  // Compact tick height: 14px fixed. MIN_GAP ensures no two ticks overlap.
-  // We work in px against the bar's clientHeight; fall back to 600 if not yet laid out.
+  // Two coordinate spaces share this column:
+  //  • MAP space (fixed, height = barH): each annotation's TRUE proportional y —
+  //    the same fraction-of-file→fraction-of-height mapping the minimap uses, so
+  //    an anchor at anchorY[i] sits right beside the minimap colour for that line.
+  //  • CHIP space (scrollable, height = contentH ≥ barH): greedy-stacked chip
+  //    tops, ordered by line and never overlapping. When findings pile up the
+  //    stack grows past barH and the column SCROLLS; a curved leader line links
+  //    each chip back to its anchorY so the connection to the map is never lost.
   const barH = annotationBarElement.clientHeight || 600;
   const TICK_H = 14;
   const MIN_GAP = TICK_H + 2; // px between tick tops
+  const CHIP_X = 20;          // chip left edge (keep in sync with .ann-bar-tick left)
+  const ANCHOR_X = 5;         // anchor-dot centre x (near the minimap seam)
 
+  const anchorY: number[] = [];
   const posPx: number[] = [];
   let prevBottom = -MIN_GAP;
   for (const ann of sorted) {
     const ideal = (barLine(ann) / totalLines) * barH;
+    anchorY.push(ideal);
     const top = Math.max(ideal, prevBottom + MIN_GAP);
     posPx.push(top);
     prevBottom = top + TICK_H;
   }
+  const contentH = Math.max(barH, prevBottom + 4);
 
-  const frag = document.createDocumentFragment();
+  // ── Fixed MAP layer: range stripes + per-annotation anchor dots at true y ──
+  const mapLayer = document.createElement('div');
+  mapLayer.className = 'ann-bar-map';
+
+  // ── Scrolling CHIP layer ──
+  const scroll = document.createElement('div');
+  scroll.className = 'ann-bar-scroll';
+  const inner = document.createElement('div');
+  inner.className = 'ann-bar-scroll-inner';
+  inner.style.height = `${contentH.toFixed(1)}px`;
+  scroll.appendChild(inner);
 
   sorted.forEach((ann, i) => {
     const sev = ann.severity || 'info';
     const colors = getAnnColor(sev);
     const isActive = ann.id === activeAnnotationId;
 
-    // Range stripe (thin color band showing the span)
+    // Range stripe (true span) — lives in the fixed map layer so it stays put.
     if (ann.endLine !== undefined && ann.endLine > ann.lineNumber) {
       const endBarLine = state.isFiltered ? getFilteredDisplayIndex(ann.endLine) : ann.endLine;
-      const stripeTop = (barLine(ann) / totalLines) * barH;
+      const stripeTop = anchorY[i];
       const stripeBot = ((endBarLine >= 0 ? endBarLine : barLine(ann)) / totalLines) * barH;
       const stripe = document.createElement('div');
       stripe.className = 'ann-bar-stripe';
       stripe.style.cssText = `top:${stripeTop.toFixed(1)}px;height:${Math.max(3, stripeBot - stripeTop).toFixed(1)}px;background:${isActive ? colors.active : colors.stripe};border-left:2px solid ${colors.tick};`;
-      stripe.style.pointerEvents = 'none';
-      frag.appendChild(stripe);
+      mapLayer.appendChild(stripe);
     }
 
-    // Tick label — compact single-line chip
+    // Anchor dot — the "correct point on the line map", at the minimap seam.
+    const dot = document.createElement('div');
+    dot.className = `ann-bar-anchor severity-${sev}${isActive ? ' active' : ''}`;
+    dot.style.top = `${(anchorY[i] - 3).toFixed(1)}px`;
+    mapLayer.appendChild(dot);
+
+    // Chip — compact single-line label, positioned in scrollable chip space.
     const tick = document.createElement('div');
     tick.className = `ann-bar-tick severity-${sev}${isActive ? ' active' : ''}`;
     tick.dataset.annId = ann.id;
@@ -12689,11 +12719,61 @@ function renderAnnotationBar(): void {
     tick.innerHTML = `<span class="ann-tick-dot"></span><span class="ann-tick-text">${escapeHtml(truncated)}</span>`;
 
     tick.addEventListener('click', (e) => { e.stopPropagation(); navigateToAnnotation(ann); });
-    frag.appendChild(tick);
+    inner.appendChild(tick);
   });
 
+  // ── Fixed SVG connector layer: flexible leader from each visible chip → anchor ──
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('class', 'ann-bar-connectors');
+
+  const drawConnectors = (): void => {
+    const s = scroll.scrollTop;
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    sorted.forEach((ann, i) => {
+      const chipY = posPx[i] - s + TICK_H / 2;              // chip centre, on-screen
+      if (chipY < -TICK_H || chipY > barH + TICK_H) return; // chip scrolled out of view
+      const ay = anchorY[i];
+      const sev = ann.severity || 'info';
+      const isActive = ann.id === activeAnnotationId;
+      // Curved leader: eases horizontally out of the anchor and into the chip,
+      // so a large vertical offset still reads as one smooth "flexible" line.
+      const midX = (ANCHOR_X + CHIP_X) / 2;
+      const d = `M ${ANCHOR_X} ${ay.toFixed(1)} C ${midX} ${ay.toFixed(1)}, ${midX} ${chipY.toFixed(1)}, ${CHIP_X} ${chipY.toFixed(1)}`;
+      const path = document.createElementNS(svgNS, 'path');
+      path.setAttribute('d', d);
+      path.setAttribute('class', `ann-conn severity-${sev}${isActive ? ' active' : ''}`);
+      svg.appendChild(path);
+    });
+  };
+
+  // Assemble — stacking order: map (bottom) < connectors < chips (top).
   annotationBarElement.innerHTML = '';
-  annotationBarElement.appendChild(frag);
+  annotationBarElement.appendChild(mapLayer);
+  annotationBarElement.appendChild(svg);
+  annotationBarElement.appendChild(scroll);
+
+  // Restore the prior scroll offset, then keep leaders in sync as the user scrolls.
+  const maxScroll = Math.max(0, contentH - barH);
+  scroll.scrollTop = Math.min(annBarScrollTop, maxScroll);
+  scroll.addEventListener('scroll', () => {
+    annBarScrollTop = scroll.scrollTop;
+    drawConnectors();
+  }, { passive: true });
+
+  // Bring the active annotation's chip into view if it's off-screen.
+  if (activeAnnotationId) {
+    const ai = sorted.findIndex((a) => a.id === activeAnnotationId);
+    if (ai >= 0) {
+      const chipTop = posPx[ai];
+      if (chipTop < scroll.scrollTop + 4 || chipTop + TICK_H > scroll.scrollTop + barH - 4) {
+        scroll.scrollTop = Math.max(0, Math.min(maxScroll, chipTop - barH / 2));
+        annBarScrollTop = scroll.scrollTop;
+      }
+    }
+  }
+
+  drawConnectors();
 }
 
 function renderAnnotationsPanel(): void {

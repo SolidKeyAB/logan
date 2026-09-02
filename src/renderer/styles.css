@@ -3885,10 +3885,11 @@ body.col-resizing * {
   transition: background 0.15s;
 }
 
-/* Compact tick chip — single row, fixed 14px height, never overlaps */
+/* Compact tick chip — single row, fixed 14px height, never overlaps.
+   left:20px leaves a gutter for the leader lines back to the minimap seam. */
 .ann-bar-tick {
   position: absolute;
-  left: 6px;
+  left: 20px;
   right: 4px;
   height: 14px;
   display: flex;
@@ -3930,6 +3931,69 @@ body.col-resizing * {
   flex: 1;
   line-height: 14px;
 }
+
+/* ── Scrollable annotation column: fixed map + leaders, scrolling chips ──── */
+/* Fixed layer holding range stripes + anchor dots at each finding's TRUE y,
+   so they stay aligned with the minimap even while the chips scroll. */
+.ann-bar-map {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+/* Anchor dot — the point on the line-map a chip's leader line points back to. */
+.ann-bar-anchor {
+  position: absolute;
+  left: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(130,160,255,0.9);
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.4);
+}
+.ann-bar-anchor.severity-error   { background: rgba(255,80,80,0.95);  }
+.ann-bar-anchor.severity-warning { background: rgba(255,180,40,0.95); }
+.ann-bar-anchor.severity-info    { background: rgba(130,160,255,0.95); }
+.ann-bar-anchor.active { box-shadow: 0 0 0 1.5px rgba(255,255,255,0.7); }
+
+/* Leader lines (SVG) — connect each visible chip to its anchor dot. */
+.ann-bar-connectors {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 2;
+}
+.ann-conn {
+  fill: none;
+  stroke: rgba(130,160,255,0.45);
+  stroke-width: 1;
+}
+.ann-conn.severity-error   { stroke: rgba(255,80,80,0.5);   }
+.ann-conn.severity-warning { stroke: rgba(255,180,40,0.5);  }
+.ann-conn.severity-info    { stroke: rgba(130,160,255,0.5); }
+.ann-conn.active { stroke-width: 1.6; stroke-opacity: 0.95; }
+
+/* Scrolling chip layer — transparent so the map + leaders show through the gutter. */
+.ann-bar-scroll {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  z-index: 3;
+}
+.ann-bar-scroll-inner {
+  position: relative;
+  width: 100%;
+}
+.ann-bar-scroll::-webkit-scrollbar { width: 8px; }
+.ann-bar-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.14);
+  border-radius: 4px;
+}
+.ann-bar-scroll::-webkit-scrollbar-track { background: transparent; }
 
 /* ── Annotations activity panel ───────────────────────────────────────── */
 .annotations-list-content {
