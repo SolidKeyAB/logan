@@ -33,7 +33,7 @@ import * as Diff from 'diff';
 import { analyzerRegistry, AnalyzerOptions, AnalysisResult, AnalyzeProgress, LogAnalyzer } from './analyzers';
 import { mergeAnalysisResults } from './compositeAnalysis';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
-import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession, broadcastInterrupt, API_PORT, buildEvidencePack } from './api-server';
+import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession, broadcastInterrupt, disconnectActiveAgent, API_PORT, buildEvidencePack } from './api-server';
 import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
 import { BaselineStore, buildFingerprint } from './baselineStore';
 import { bumpUsage, getUsage, clearUsage, flushUsage, isAiContext } from './usageStore';
@@ -8365,12 +8365,23 @@ ipcMain.handle('agent-stop', async () => {
   // Explicit stop ends the session — drop the id so the next launch is fresh,
   // not a --resume of the conversation the user just stopped.
   agentSessionId = null;
+
+  // Ask whatever agent is listening to leave its loop. Delivered over the MCP
+  // server's SSE stream, so this reaches even an agent LOGAN never spawned (one
+  // started externally, or orphaned across a restart and re-attached) — letting
+  // it exit gracefully, which is the only way to end an orphan we hold no handle to.
+  if (getAgentName()) addChatMessage('user', 'stop');
+
   if (!agentProcess) {
+    // No child process to kill (external / orphaned agent). Give the "stop" a beat
+    // to flush over SSE, then free the connection slot so the bulb clears and the
+    // button settles to "Launch Agent" instead of falsely showing a live agent.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    disconnectActiveAgent();
     return { success: true };
   }
-  // Send "stop" as a user message so the agent exits its loop gracefully
-  addChatMessage('user', 'stop');
-  // Give it a moment to exit, then force kill
+
+  // LOGAN-spawned agent: give it a moment to exit on the "stop", then force kill.
   await new Promise<void>((resolve) => {
     const timer = setTimeout(() => {
       if (agentProcess) {
@@ -8390,6 +8401,9 @@ ipcMain.handle('agent-stop', async () => {
       resolve();
     }
   });
+  // Clear any lingering connection slot (its heartbeat can otherwise keep the bulb
+  // green for up to 5 min after the process is gone).
+  disconnectActiveAgent();
   return { success: true };
 });
 
