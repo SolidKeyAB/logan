@@ -11701,6 +11701,11 @@ function updateAgentConnectionStatus(connected: boolean, _count: number, name?: 
   // Stop is only meaningful while an agent is connected.
   if (elements.chatInterruptBtn) elements.chatInterruptBtn.disabled = !connected;
 
+  // Keep the Launch/Stop button in step with the bulb: an agent connected to the
+  // API but not spawned by LOGAN (external, or orphaned across a restart) must
+  // still flip the button to "Stop Agent" so it can be evicted.
+  updateLaunchButton();
+
   // If the agent drops mid-turn, stop "awaiting" so any queued messages unlock
   // (the user can then send — which surfaces the disconnected/Resend state — or cancel).
   if (!connected && awaitingAgentReply) {
@@ -11755,7 +11760,11 @@ let agentConnected = false;
 
 function updateLaunchButton(): void {
   const btn = elements.chatLaunchAgent;
-  if (agentRunning) {
+  // Single toggle over "is any agent present" — whether LOGAN spawned it
+  // (agentRunning) OR one is merely connected to the API (agentConnected). This
+  // keeps the button honest with the status bulb rather than tracking only
+  // LOGAN-spawned processes, which is what let the two disagree.
+  if (agentRunning || agentConnected) {
     btn.textContent = 'Stop Agent';
     btn.classList.add('running');
   } else {
@@ -11768,9 +11777,13 @@ async function toggleAgent(): Promise<void> {
   const btn = elements.chatLaunchAgent;
   btn.disabled = true;
   try {
-    if (agentRunning) {
-      await window.api.stopAgent();
+    if (agentRunning || agentConnected) {
+      // Optimistically flip so the "agent dropped" reconnect banner doesn't flash
+      // while we tear it down; the server then clears the bulb via a
+      // connection-changed event and the button settles to "Launch Agent".
       agentRunning = false;
+      updateLaunchButton();
+      await window.api.stopAgent();
     } else {
       // Always show wizard so user knows what they're launching
       btn.disabled = false;
