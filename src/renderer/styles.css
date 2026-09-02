@@ -3932,9 +3932,10 @@ body.col-resizing * {
   line-height: 14px;
 }
 
-/* ── Scrollable annotation column: fixed map + leaders, scrolling chips ──── */
-/* Fixed layer holding range stripes + anchor dots at each finding's TRUE y,
-   so they stay aligned with the minimap even while the chips scroll. */
+/* ── Aligned annotation column: fixed map + leaders, chips on true minimap y ── */
+/* Fixed layer holding range stripes + anchor dots at each finding's TRUE y, so
+   every dot stays beside its minimap colour; crowded findings collapse into an
+   expandable "+N" cluster chip rather than stacking/scrolling. */
 .ann-bar-map {
   position: absolute;
   inset: 0;
@@ -3975,25 +3976,91 @@ body.col-resizing * {
 .ann-conn.severity-warning { stroke: rgba(255,180,40,0.5);  }
 .ann-conn.severity-info    { stroke: rgba(130,160,255,0.5); }
 .ann-conn.active { stroke-width: 1.6; stroke-opacity: 0.95; }
+/* Faint bracket leaders fanning a cluster chip out to its extreme dots. */
+.ann-conn.faint { stroke-opacity: 0.28; stroke-dasharray: 2 2; }
 
-/* Scrolling chip layer — transparent so the map + leaders show through the gutter. */
-.ann-bar-scroll {
+/* Chip layer — transparent so the map + leaders show through the gutter. Chips
+   sit on their true minimap y (clustering guarantees they fit, so no scroll). */
+.ann-bar-chips {
   position: absolute;
   inset: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
+  pointer-events: none;
   z-index: 3;
 }
-.ann-bar-scroll-inner {
-  position: relative;
-  width: 100%;
+.ann-bar-chips > .ann-bar-tick { pointer-events: auto; }
+
+/* Collapsed "+N" cluster chip: a distinct, denser look than a single finding. */
+.ann-bar-cluster { background: var(--bg-hover, rgba(255,255,255,0.08)); font-weight: 600; }
+.ann-bar-cluster.open { outline: 1px solid currentColor; }
+.ann-cluster-caret {
+  font-size: 8px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  margin-left: 2px;
 }
-.ann-bar-scroll::-webkit-scrollbar { width: 8px; }
-.ann-bar-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.14);
+
+/* Expanded-cluster popover — floats over the chips, lists the members. */
+.ann-cluster-pop {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
   border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+  overflow: hidden;
 }
-.ann-bar-scroll::-webkit-scrollbar-track { background: transparent; }
+.ann-cluster-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ann-cluster-pop-close { opacity: 0.7; }
+.ann-cluster-pop-head:hover .ann-cluster-pop-close { opacity: 1; }
+.ann-cluster-pop > .ann-cluster-row + .ann-cluster-row { border-top: 1px solid rgba(255,255,255,0.05); }
+.ann-cluster-pop { overflow-y: auto; }
+.ann-cluster-pop::-webkit-scrollbar { width: 8px; }
+.ann-cluster-pop::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 4px; }
+.ann-cluster-pop::-webkit-scrollbar-track { background: transparent; }
+
+.ann-cluster-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 6px;
+  cursor: pointer;
+  border-left: 3px solid rgba(130,160,255,0.8);
+}
+.ann-cluster-row:hover { background: var(--bg-hover, rgba(255,255,255,0.07)); }
+.ann-cluster-row.active { background: rgba(180,120,255,0.12); }
+.ann-cluster-row.severity-error   { border-left-color: rgba(255,80,80,0.9);   }
+.ann-cluster-row.severity-warning { border-left-color: rgba(255,180,40,0.9);  }
+.ann-cluster-row.severity-info    { border-left-color: rgba(130,160,255,0.9); }
+.ann-cluster-row-ln {
+  font-size: 9px;
+  color: var(--text-tertiary, var(--text-secondary));
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.ann-cluster-row-tx {
+  font-size: 10px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
 
 /* ── Annotations activity panel ───────────────────────────────────────── */
 .annotations-list-content {
