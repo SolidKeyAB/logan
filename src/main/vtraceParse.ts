@@ -8,8 +8,8 @@ import * as path from 'path';
  * server on some automotive IVI head units. On disk the files use the `.esotrace`
  * extension and open with a length-prefixed `traceserverIVI` identity record (both
  * are intrinsic markers of the input, matched only by the detector below). This
- * module recovers the human-readable trace messages with their nanosecond
- * timestamp and severity level — no vendor tooling required.
+ * module recovers the human-readable trace messages with their raw record fields —
+ * no vendor tooling required.
  *
  * Record layout (reverse-engineered; all multi-byte fields big-endian). Every
  * trace-message record ends with a fixed tail measured back from the start of its
@@ -19,7 +19,7 @@ import * as path from 'path';
  *   T-31 .. T-27 : uint32 payload_length == strlen + 35            ← invariant #2
  *   T-27         : uint8  type           0x04 = trace message      ← invariant #1
  *   T-26 .. T-18 : uint64 message id / sequence number
- *   T-18 .. T-16 : uint16 level          0=CRITICAL … 4=DEBUG (best-guess mapping)
+ *   T-18 .. T-16 : uint16 level          (raw numeric level, emitted as "L<n>")
  *   T-16         : uint8  marker         0x20                      ← invariant #3
  *   T-16 .. T-4  : packed pid/tid/uid (also present inline at the head of the text)
  *   T-4  .. T    : uint32 strlen
@@ -29,124 +29,34 @@ import * as path from 'path';
  *  - A record is accepted only when all four invariants hold AND the text is ≥90%
  *    printable, so false positives are effectively impossible and desync is
  *    self-correcting (we byte-scan forward to the next valid record).
- *  - The timestamp is a full uint64 ns uptime, so a genuine value can be arbitrarily
- *    large (it passes 2^40 — the old "40-bit" assumption — after only ~18.3 minutes).
- *    Which reads to trust is decided by the SEQUENCE, not by any absolute magnitude cap:
- *    a read that matches the recent cadence flows through; a lone outlier (a spike, or a
- *    backward read) is held at the last trusted value; and a SUSTAINED shift is confirmed
- *    over a few reads before it's adopted. So no single bad read can become a permanent
- *    floor — the failure mode a plain max()-clamp had (see repairTs).
  *
- * Output: one normalized line per record, with any embedded CR/LF folded to spaces
- * so FileHandler keeps a 1:1 record-to-line map and its level detection keys on the
- * LEVEL token. The timestamp prefix is an absolute `"YYYY-MM-DD HH:MM:SS.mmm"` date
- * when a wall-clock anchor is resolved (from an in-message timestamp/monotonicTimestamp
- * pair — see findEpochAnchorMs and docs/VTRACE.md §4), else the relative monotonic
- * device-uptime `"<seconds>"` it has always emitted.
+ * Honesty note — NO derived "ground truth":
+ *  This decoder emits ONLY values it reads directly from the record bytes. It does
+ *  NOT invent a wall-clock date and does NOT assign severity NAMES:
+ *    • The timestamp column is the raw monotonic device-uptime in seconds
+ *      ("<seconds>", e.g. "296.004473") — read straight from the uint64 ns field,
+ *      with no repair, no clamping, no anchoring and no calendar guess.
+ *    • The level column is the raw numeric level as "L<n>" — no CRITICAL/ERROR/…
+ *      name is assigned, because that mapping was never verified.
+ *  The real wall-clock time (LOGGER_TIME) and the full column set live in the
+ *  .idx/.esotrace packet layout, which is not yet reverse-engineered here; once that
+ *  layout is known those real fields can be read and exported directly, rather than
+ *  reconstructed from a guessed anchor. (History: earlier revisions carried a
+ *  loggertime-sidecar linear map, an in-message timestamp/monotonicTimestamp anchor,
+ *  plausibility guards, a best-guess level-name table and a sequence timestamp-repair
+ *  pass; all were unverified reconstructions of ground truth and have been removed.)
  */
 
 const HDR = 39; // fixed tail length for the common record shape
 const MAX_STRLEN = 1 << 16;
-// Representability guard (NOT a magnitude cap). The timestamp is a full uint64 ns
-// CLOCK_MONOTONIC uptime. A read above JS's exact-integer limit (2^53 - 1 ≈ 104 days
-// of ns) isn't even represented exactly, so it can only be a desync/garbage read.
-// This is the ONLY absolute bound we keep on the value itself — everything else about
-// which reads to trust is decided by the sequence, not by a threshold on magnitude.
-// (Historical note: a 2^40 ≈ 18.3-min "ceiling" once lived here and wrongly rejected
-// every genuine uptime past 18 min as overflow — see repairTs for why any absolute cap
-// is the wrong tool.)
-const TS_MAX = Number.MAX_SAFE_INTEGER; // 2^53 - 1 ns ≈ 104 days: largest exactly-representable uptime
-
-// ── Sequence-based timestamp repair knobs ────────────────────────────────────
-// MAX_STEP: the largest forward gap between two ADJACENT records we treat as normal
-// cadence. It is a bound on the delta between neighbours, not on the absolute value —
-// so raising it never re-introduces the 18-min freeze. Adjacent trace records in a
-// continuous capture sit far under an hour apart; a corrupt "spike" read lands days
-// away (a value that slips just under TS_MAX is ~58 days of ns). One hour therefore
-// sits safely between real cadence and corruption. The exact figure is deliberately
-// non-critical: RESYNC_RUN below is what actually guarantees we never latch, so this
-// only decides how eagerly a genuine large gap is accepted immediately vs. confirmed.
-const MAX_STEP = 3_600_000_000_000; // 1 hour in ns
-// RESYNC_RUN: how many CONSECUTIVE, mutually-consistent reads it takes to adopt a new
-// baseline that contradicts the current floor. This is the escape hatch that makes the
-// floor self-healing instead of a permanent ratchet: a lone spike (or a genuine low
-// read) is held, but a sustained shift — a real gap, or recovery from a floor that a
-// bad read poisoned — is confirmed and adopted. 3 = a single outlier can never move it.
-const RESYNC_RUN = 3;
 
 /** Magic identity string present in a valid file's header (a marker of the input). */
 const IDENTITY = Buffer.from('traceserverIVI', 'latin1');
 
-// ── Absolute wall-clock anchor (in-message) ──────────────────────────────────
-// The record timestamp is device CLOCK_MONOTONIC uptime, not a calendar date. But
-// some messages carry BOTH an absolute `timestamp=<epoch-ms>` and the matching
-// `monotonicTimestamp=<ns>` (the same monotonic clock as the record uptime). One
-// such pair pins uptime-0 to epoch: epoch0_ms = timestamp_ms − monotonic_ns/1e6.
-// Adding a record's uptime back then gives its absolute time. See docs/VTRACE.md §4.
-// `timestamp=` is matched case-sensitively and must not be preceded by a letter, so
-// it never captures the tail of `monotonicTimestamp=`.
-const EPOCH_MS_RE = /(?:^|[^A-Za-z])timestamp=(\d{10,})/;
-const MONO_NS_RE = /monotonicTimestamp=(\d+)/;
-// Plausible epoch-ms window (2001-09 … 2096) — rejects unit mismatches (e.g. an
-// epoch-seconds field) so a bad pair falls back to relative seconds, never a
-// wildly-wrong date.
-const EPOCH_MS_MIN = 1_000_000_000_000;
-const EPOCH_MS_MAX = 4_000_000_000_000;
-
-// ── Sidecar wall-clock anchor (loggertime map) ───────────────────────────────
-// The capture BUNDLE shipped alongside the .esotrace files carries a `loggertime`
-// sidecar — a tiny JSON holding a two-point LINEAR MAP that the official exporter
-// uses to put wall-clock dates on the monotonic trace records. Per the exporter's
-// layout the sidecar sits in the SAME folder as the .esotrace files (older
-// reverse-engineering notes guessed a `loggertime/` subfolder — we accept that too,
-// as a fallback).
-//
-// The map is two calibration points (x1→y1, x2→y2): x is the record timebase
-// (CLOCK_MONOTONIC nanoseconds — the same clock the record timestamp carries) and y
-// is absolute epoch-ms. From the two points we recover BOTH the origin and the
-// slope, so unlike the single-point in-message anchor it also corrects any clock
-// DRIFT (a slope that isn't exactly the nominal 1 ns = 1e-6 ms):
-//
-//   slopeMsPerNs = (y2 − y1) / (x2 − x1)          // epoch-ms per record nanosecond
-//   epoch0Ms     = y1 − x1 · slopeMsPerNs         // wall-clock at record uptime 0
-//   line_time_ms = epoch0Ms + record_ns · slopeMsPerNs
-//
-// Guards keep a mis-shaped or wrong-unit sidecar from ever emitting a wrong date (it
-// falls back to the in-message anchor, then to relative seconds, exactly as before):
-// the epoch0 must land in the plausible epoch-ms window, and the slope must sit within
-// a few percent of the nominal 1e-6 — a sidecar whose x-axis were µs/ms/s lands orders
-// of magnitude off and is rejected. See docs/VTRACE.md §4.
-const NOMINAL_SLOPE_MS_PER_NS = 1e-6; // 1 ns = 1e-6 ms
-const SLOPE_MIN = NOMINAL_SLOPE_MS_PER_NS * 0.9;
-const SLOPE_MAX = NOMINAL_SLOPE_MS_PER_NS * 1.1;
-// How close a sidecar-derived boot epoch must sit to an in-message-derived one to
-// treat the sidecar as VALIDATED. The in-message pair is provably on the record's own
-// clock; if the sidecar disagrees by more than this, its x-axis is a different clock
-// (a boot offset), so we trust the in-message anchor and treat the sidecar as suspect.
-// Generous: a few seconds covers clock precision + drift across the calibration span.
-const ANCHOR_AGREE_TOL_MS = 5000;
-// Sidecar filename: `loggertime.json`, `loggertime_<sid>.json`, etc. — case-insensitive.
-const LOGGERTIME_RE = /^loggertime.*\.json$/i;
-
-/** Format an absolute epoch-ms as "YYYY-MM-DD HH:MM:SS.mmm" in LOCAL time — the
- * same calendar convention parseTimestampFast reads back, so the emitted line
- * round-trips to the same instant regardless of the viewer's timezone. */
-function formatAbsoluteMs(ms: number): string {
-  const d = new Date(ms);
-  const p2 = (x: number): string => String(x).padStart(2, '0');
-  const p3 = (x: number): string => String(x).padStart(3, '0');
-  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ` +
-    `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}.${p3(d.getMilliseconds())}`;
-}
-
-export const VTRACE_LEVELS: Record<number, string> = {
-  0: 'CRITICAL', 1: 'ERROR', 2: 'WARNING', 3: 'INFO', 4: 'DEBUG', 5: 'VERBOSE',
-};
-
 export interface VtraceRecord {
-  /** Monotonic device-uptime timestamp, nanoseconds. */
+  /** Monotonic device-uptime timestamp, nanoseconds — read verbatim from the record. */
   tsNs: number;
-  /** Raw numeric level (map via VTRACE_LEVELS). */
+  /** Raw numeric level (emitted as "L<n>"; no severity-name mapping is assumed). */
   level: number;
   /** Decoded message text, single line (embedded CR/LF folded to spaces). */
   text: string;
@@ -191,265 +101,20 @@ function oneLine(s: string): string {
 }
 
 /**
- * Rolling state for sequence-based timestamp repair. One instance per decode pass;
- * created with `newTsRepair()` and advanced one record at a time by `repairTs`.
- *
- *  - `last`     the last trusted, emitted ns value (the current floor); -1 before any
- *               record has been accepted.
- *  - `candBase` / `candRun`  a candidate new baseline that contradicts `last` (a spike,
- *               or a run of low reads), and how many CONSECUTIVE reads have agreed with
- *               it. Once `candRun` reaches RESYNC_RUN the candidate is adopted as the new
- *               floor. This is what lets the floor recover from a bad read instead of
- *               ratcheting on it forever.
- */
-export interface TsRepairState {
-  last: number;
-  candBase: number;
-  candRun: number;
-}
-
-/** Fresh repair state for a decode pass. */
-export function newTsRepair(): TsRepairState {
-  return { last: -1, candBase: -1, candRun: 0 };
-}
-
-/**
- * Advance the repair state by one raw timestamp read and return the ns value to emit.
- *
- * Sequence-based validation, replacing the old "absolute-magnitude cap + monotonic
- * max()-clamp". The clamp's fatal flaw was that it trusted every read as an upper
- * bound, so ONE over-high read that slipped under the cap became `last` and then
- * `max()` floored every following record to it — a permanent freeze. Here nothing is
- * trusted from a single read alone:
- *
- *   • A read that matches recent cadence (a forward step within MAX_STEP) is accepted
- *     as the new floor.
- *   • A lone outlier — a spike far above the floor, or a backward read below it — is
- *     NOT adopted; we emit the last trusted value and wait. A single bad read therefore
- *     costs exactly one carried line and can never poison the floor.
- *   • A SUSTAINED shift — RESYNC_RUN consecutive reads clustering in a new region —
- *     is confirmed and adopted, whether that region is higher (a genuine long gap) or
- *     lower (recovery from a floor a previous bad read had pushed too high). This is the
- *     self-healing property that a max()-clamp fundamentally cannot have.
- *
- * The only absolute bound is the representability guard (finite, non-negative, ≤ TS_MAX):
- * a read outside it isn't a real ns uptime at all, so it can never be a candidate.
- */
-export function repairTs(state: TsRepairState, rawTs: number): number {
-  const valid = Number.isFinite(rawTs) && rawTs >= 0 && rawTs <= TS_MAX && Number.isInteger(rawTs);
-
-  // First record. Seed the floor from a valid read; a corrupt leading read has nothing
-  // to carry, so emit uptime origin 0 and stay UNSEEDED (last = -1) — the next valid read
-  // then seeds cleanly. It must NOT seed at TS_MAX (that was the old latch: a max seed
-  // clamped the whole file to the ceiling).
-  if (state.last < 0) {
-    if (valid) { state.last = rawTs; return rawTs; }
-    return 0;
-  }
-
-  // A structurally-impossible read (beyond representable) is pure garbage, never a real
-  // region — carry the floor forward and cancel any pending resync.
-  if (!valid) {
-    state.candBase = -1;
-    state.candRun = 0;
-    return state.last;
-  }
-
-  // On-cadence forward step → accept directly and clear any pending candidate.
-  const delta = rawTs - state.last;
-  if (delta >= 0 && delta <= MAX_STEP) {
-    state.last = rawTs;
-    state.candBase = -1;
-    state.candRun = 0;
-    return state.last;
-  }
-
-  // Outlier (backward, or a jump larger than one step). Extend the candidate run if this
-  // read is consistent with the pending candidate region; otherwise start a fresh run.
-  if (state.candRun > 0 && Math.abs(rawTs - state.candBase) <= MAX_STEP) {
-    state.candRun++;
-  } else {
-    state.candRun = 1;
-  }
-  state.candBase = rawTs;
-
-  if (state.candRun >= RESYNC_RUN) {
-    // Confirmed sustained shift — adopt the new baseline (self-heal / accept a real gap).
-    state.last = rawTs;
-    state.candBase = -1;
-    state.candRun = 0;
-    return state.last;
-  }
-  // Unconfirmed outlier — hold the timeline at the last trusted value.
-  return state.last;
-}
-
-/**
- * Scan records for the first message carrying BOTH an absolute `timestamp=<epoch-ms>`
- * and a `monotonicTimestamp=<ns>`, and return the epoch-ms that corresponds to
- * device-uptime 0 (fractional): `epoch0_ms = timestamp_ms − monotonic_ns/1e6`.
- * Adding any record's uptime-ms back yields its absolute wall-clock time.
- *
- * Returns null when no plausible anchor exists in the file — the caller then keeps
- * the relative device-uptime seconds it emits today. Early-exits at the first good
- * pair (typically a boot/session banner near the file head), so it's usually cheap;
- * only pays a full extra scan when the file has no anchor at all.
- */
-export function findEpochAnchorMs(buf: Buffer): number | null {
-  const n = buf.length;
-  let t = HDR;
-  while (t < n - 4) {
-    const rec = recordAt(buf, t, n);
-    if (rec === null) { t += 1; continue; }
-    const sl = rec[2];
-    const text = buf.toString('utf8', t, t + sl);
-    // Cheap pre-filter: only the rare anchor message mentions the monotonic field.
-    if (text.indexOf('monotonicTimestamp=') !== -1) {
-      const mono = MONO_NS_RE.exec(text);
-      const epoch = EPOCH_MS_RE.exec(text);
-      if (mono && epoch) {
-        const epochMs = Number(epoch[1]);
-        const monoNs = Number(mono[1]);
-        if (Number.isFinite(epochMs) && Number.isFinite(monoNs)) {
-          const anchor = epochMs - monoNs / 1e6;
-          if (anchor >= EPOCH_MS_MIN && anchor <= EPOCH_MS_MAX) return anchor;
-        }
-      }
-    }
-    t += sl + HDR;
-  }
-  return null;
-}
-
-/**
- * A resolved wall-clock anchor: enough to turn any record's ns uptime into an
- * absolute epoch-ms. `slopeMsPerNs` is nominally 1e-6 (1 ns = 1e-6 ms); a loggertime
- * sidecar may supply a drift-corrected slope from its two calibration points.
- */
-export interface WallClockAnchor {
-  /** Epoch-ms at record uptime 0 (the boot instant). */
-  epoch0Ms: number;
-  /** Epoch-ms advanced per record nanosecond. */
-  slopeMsPerNs: number;
-}
-
-/** The loggertime sidecar's two-point linear map (record ns → epoch-ms). */
-export interface LoggerTimeMap { x1: number; y1: number; x2: number; y2: number; }
-
-/**
- * Parse a loggertime sidecar's JSON text into its {x1,y1,x2,y2} two-point map.
- * Tolerant of string-encoded numbers and a one-level wrapper object; returns null for
- * any shape that doesn't yield four finite numbers with x1 !== x2 (a degenerate map
- * has no slope). Never throws.
- */
-export function parseLoggerTimeSidecar(jsonText: string): LoggerTimeMap | null {
-  let root: unknown;
-  try { root = JSON.parse(jsonText); } catch { return null; }
-  const pick = (o: unknown): LoggerTimeMap | null => {
-    if (!o || typeof o !== 'object') return null;
-    const rec = o as Record<string, unknown>;
-    const num = (v: unknown): number => (typeof v === 'string' ? Number(v) : (v as number));
-    const x1 = num(rec.x1), y1 = num(rec.y1), x2 = num(rec.x2), y2 = num(rec.y2);
-    if ([x1, y1, x2, y2].every((n) => typeof n === 'number' && Number.isFinite(n)) && x1 !== x2) {
-      return { x1, y1, x2, y2 };
-    }
-    return null;
-  };
-  const direct = pick(root);
-  if (direct) return direct;
-  // Tolerate one level of nesting, e.g. { loggertime: {...} } or { map: {...} }.
-  if (root && typeof root === 'object') {
-    for (const v of Object.values(root as Record<string, unknown>)) {
-      const nested = pick(v);
-      if (nested) return nested;
-    }
-  }
-  return null;
-}
-
-/**
- * Convert a loggertime two-point map into a guarded wall-clock anchor, or null when
- * the map is implausible (slope not within a few percent of the nominal 1e-6, or a
- * boot epoch outside the plausible window) — the caller then falls back.
- */
-export function loggerTimeToAnchor(map: LoggerTimeMap): WallClockAnchor | null {
-  const slopeMsPerNs = (map.y2 - map.y1) / (map.x2 - map.x1);
-  if (!Number.isFinite(slopeMsPerNs) || slopeMsPerNs < SLOPE_MIN || slopeMsPerNs > SLOPE_MAX) return null;
-  const epoch0Ms = map.y1 - map.x1 * slopeMsPerNs;
-  if (!Number.isFinite(epoch0Ms) || epoch0Ms < EPOCH_MS_MIN || epoch0Ms > EPOCH_MS_MAX) return null;
-  return { epoch0Ms, slopeMsPerNs };
-}
-
-/**
- * Locate + parse the loggertime sidecar next to an .esotrace file and return its
- * wall-clock anchor, or null when there is no usable sidecar. Looks in the SAME folder
- * as the file first (the exporter's layout), then a `loggertime/` subfolder as a
- * fallback. Never throws — any fs/parse error resolves to null (so a read-only or
- * absent sidecar just leaves the decode on its existing fallback).
- */
-export function findSidecarAnchor(esotraceFilePath: string): WallClockAnchor | null {
-  const tryDir = (dir: string): WallClockAnchor | null => {
-    let names: string[];
-    try { names = fs.readdirSync(dir); } catch { return null; }
-    for (const name of names.filter((n) => LOGGERTIME_RE.test(n)).sort()) {
-      let text: string;
-      try { text = fs.readFileSync(path.join(dir, name), 'utf8'); } catch { continue; }
-      const map = parseLoggerTimeSidecar(text);
-      if (!map) continue;
-      const anchor = loggerTimeToAnchor(map);
-      if (anchor) return anchor;
-    }
-    return null;
-  };
-  const dir = path.dirname(esotraceFilePath);
-  return tryDir(dir) ?? tryDir(path.join(dir, 'loggertime'));
-}
-
-/**
- * Resolve the wall-clock anchor for a decode. Precedence:
- *   1. an explicit `opts.epochMsAnchor` (a caller/test override) — nominal slope;
- *   2. a loggertime sidecar (the exporter's own source of truth), VALIDATED against an
- *      in-message anchor when the file carries one — if they disagree materially the
- *      sidecar's x-axis is a different clock, so the in-message anchor wins;
- *   3. the in-message `timestamp`/`monotonicTimestamp` pair (findEpochAnchorMs);
- *   4. null — the decoder keeps the relative device-uptime seconds it emits today.
- */
-export function resolveWallClockAnchor(
-  buf: Buffer,
-  filePath: string,
-  opts?: { epochMsAnchor?: number | null },
-): WallClockAnchor | null {
-  if (opts?.epochMsAnchor != null) {
-    return { epoch0Ms: opts.epochMsAnchor, slopeMsPerNs: NOMINAL_SLOPE_MS_PER_NS };
-  }
-  const sidecar = findSidecarAnchor(filePath);
-  const inMsgMs = findEpochAnchorMs(buf);
-  if (sidecar && inMsgMs !== null) {
-    // The in-message pair is provably on the record's own clock. If the sidecar agrees,
-    // it's validated (and we keep its drift-corrected slope); if not, trust in-message.
-    if (Math.abs(sidecar.epoch0Ms - inMsgMs) <= ANCHOR_AGREE_TOL_MS) return sidecar;
-    return { epoch0Ms: inMsgMs, slopeMsPerNs: NOMINAL_SLOPE_MS_PER_NS };
-  }
-  if (sidecar) return sidecar;
-  if (inMsgMs !== null) return { epoch0Ms: inMsgMs, slopeMsPerNs: NOMINAL_SLOPE_MS_PER_NS };
-  return null;
-}
-
-/**
  * Decode every trace message in `buf`, invoking `emit` for each in file order.
- * Returns the number of records emitted. Timestamps are repaired to be monotonic.
+ * Returns the number of records emitted. Every field is emitted verbatim — in
+ * particular `tsNs` is the raw uint64 ns uptime read from the record, with no
+ * repair, clamping or monotonicity fix-up.
  */
 export function decodeVtrace(buf: Buffer, emit: (rec: VtraceRecord) => void): number {
   const n = buf.length;
-  const tsRepair = newTsRepair();
   let count = 0;
   let t = HDR;
   while (t < n - 4) {
     const rec = recordAt(buf, t, n);
     if (rec === null) { t += 1; continue; } // resync to next valid record
     const [rawTs, level, sl] = rec;
-    const ts = repairTs(tsRepair, rawTs);
-    emit({ tsNs: ts, level, text: oneLine(buf.toString('utf8', t, t + sl)) });
+    emit({ tsNs: rawTs, level, text: oneLine(buf.toString('utf8', t, t + sl)) });
     count++;
     t += sl + HDR;
   }
@@ -467,28 +132,22 @@ export function isVtrace(filePath: string, head: Buffer): boolean {
  * FileHandler indexer can consume unchanged. Mirrors mf4Parse's buffered writer
  * (flush ~every 1 MB) and progress contract.
  *
- * When an absolute wall-clock anchor can be resolved, each line is prefixed with a real
- * "YYYY-MM-DD HH:MM:SS.mmm" date so LOGAN's timestamp parser, time-gaps and the timeline
- * all work on wall-clock time. The anchor is resolved by `resolveWallClockAnchor` in
- * precedence order: an explicit `opts.epochMsAnchor`, then a loggertime SIDECAR next to
- * the file (the exporter's own source of truth, cross-checked against any in-message
- * pair), then the in-message `timestamp`/`monotonicTimestamp` pair. With none it falls
- * back to the relative device-uptime seconds it has always emitted.
+ * Each record becomes one `"<uptime-seconds> L<level> <message>"` line:
+ *  - `<uptime-seconds>` is the raw monotonic device-uptime (ns field ÷ 1e9, 6 dp) —
+ *    NOT a wall-clock date. This decoder deliberately does no wall-clock anchoring:
+ *    the real calendar time (LOGGER_TIME) lives in the .idx/.esotrace packet layout,
+ *    which is not yet decoded here (see the honesty note at the top of this file).
+ *  - `L<level>` is the raw numeric level; no severity NAME is assumed.
  */
 export async function parseVtraceToFile(
   filePath: string,
   outPath: string,
   onProgress?: (percent: number) => void,
-  opts?: { epochMsAnchor?: number | null },
 ): Promise<void> {
   const buf = fs.readFileSync(filePath);
   if (!buf.includes(IDENTITY)) {
     throw new Error(`Not a vtrace file: ${path.basename(filePath)}`);
   }
-
-  // Resolve the wall-clock anchor once up front (uptime-0 → epoch ms, plus a slope that
-  // a two-point sidecar may drift-correct). See resolveWallClockAnchor for precedence.
-  const anchor = resolveWallClockAnchor(buf, filePath, opts);
 
   const fd = fs.openSync(outPath, 'w');
   let started = false;
@@ -503,18 +162,13 @@ export async function parseVtraceToFile(
   try {
     const n = buf.length;
     let lastPct = -1;
-    const tsRepair = newTsRepair();
     let t = HDR;
     while (t < n - 4) {
       const rec = recordAt(buf, t, n);
       if (rec === null) { t += 1; continue; }
       const [rawTs, level, sl] = rec;
-      const ts = repairTs(tsRepair, rawTs);
-      const stamp = anchor !== null
-        ? formatAbsoluteMs(anchor.epoch0Ms + ts * anchor.slopeMsPerNs) // absolute wall-clock
-        : (ts / 1e9).toFixed(6);                                        // relative uptime seconds
-      const lvl = VTRACE_LEVELS[level] ?? `L${level}`;
-      writeLine(`${stamp} ${lvl} ${oneLine(buf.toString('utf8', t, t + sl))}`);
+      const stamp = (rawTs / 1e9).toFixed(6);   // raw monotonic device-uptime, seconds
+      writeLine(`${stamp} L${level} ${oneLine(buf.toString('utf8', t, t + sl))}`);
       t += sl + HDR;
       if (onProgress) {
         const pct = Math.min(99, Math.floor((t / n) * 100));
