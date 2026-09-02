@@ -232,6 +232,10 @@ export function buildReconnectContext(maxMessages = 20, maxChars = 3000): string
 // Single-agent connection: one SSE client at a time (must supply a name)
 let activeAgent: { res: http.ServerResponse; name: string } | null = null;
 
+// The ApiContext captured by startApiServer, so module-level helpers (e.g.
+// disconnectActiveAgent) can notify the renderer without threading ctx through.
+let serverCtx: ApiContext | null = null;
+
 // Passive listeners (e.g. the MCP server) that receive chat events but do NOT
 // count as a connected agent and do NOT affect the green-bulb status.
 const chatListeners: Set<http.ServerResponse> = new Set();
@@ -307,6 +311,27 @@ function broadcastSSE(msg: ChatMessage, ctx?: ApiContext): void {
   for (const res of chatListeners) {
     try { res.write(data); } catch { chatListeners.delete(res); }
   }
+}
+
+// Force-drop whatever agent currently holds the connection — the named SSE slot
+// AND the polling heartbeat that drives the bulb. Used by "Stop Agent" to evict
+// an agent LOGAN can't kill directly (one launched externally, or orphaned across
+// a LOGAN restart and re-attached to the new process). Frees the single-agent
+// slot immediately and turns the bulb off, so a fresh launch isn't shadowed.
+// Note: the MCP server's passive chat listener is intentionally left intact so a
+// preceding "stop" chat message can still reach the agent and end its loop.
+export function disconnectActiveAgent(): boolean {
+  let had = false;
+  if (activeAgent) {
+    had = true;
+    try { activeAgent.res.write('event: disconnect\ndata: {}\n\n'); } catch { /* ignore */ }
+    try { activeAgent.res.end(); } catch { /* ignore */ }
+    activeAgent = null;
+  }
+  if (pollingAgent) { had = true; pollingAgent = null; }
+  if (pollingAgentTimer) { clearInterval(pollingAgentTimer); pollingAgentTimer = null; }
+  if (had && serverCtx) notifyAgentConnectionChanged(serverCtx);
+  return had;
 }
 
 // Push an "interrupt" signal to the connected agent (via the MCP server's SSE
@@ -687,6 +712,7 @@ export async function buildConclusion(
 }
 
 export function startApiServer(ctx: ApiContext): void {
+  serverCtx = ctx;
   server = http.createServer(async (req, res) => {
     // Localhost-only: reject non-loopback connections
     const remoteAddr = req.socket.remoteAddress;
@@ -805,10 +831,22 @@ export function startApiServer(ctx: ApiContext): void {
           });
 
           if (agentName) {
-            // Real agent connection — shows green bulb, one at a time
-            if (activeAgent) {
-              sendJson(res, { success: false, error: 'Another agent is already connected', connectedAgent: activeAgent.name }, 409);
-              return;
+            // Real agent connection — shows green bulb, one at a time. If another
+            // named agent already holds the slot, probe it: a dead socket (e.g. one
+            // orphaned by a crash whose 'close' never fired) throws on write → we
+            // take over. A live one keeps the slot; the newcomer is told to back off
+            // via an SSE error event (the 200 event-stream headers were already
+            // written above, so we canNOT sendJson a 409 here — that would throw).
+            if (activeAgent && activeAgent.res !== res) {
+              let existingAlive = true;
+              try { activeAgent.res.write(': probe\n\n'); } catch { existingAlive = false; }
+              if (existingAlive) {
+                res.write(`event: error\ndata: ${JSON.stringify({ error: 'Another agent is already connected', connectedAgent: activeAgent.name })}\n\n`);
+                res.end();
+                return;
+              }
+              try { activeAgent.res.end(); } catch { /* already gone */ }
+              activeAgent = null;
             }
             // Include any existing agent memory so the agent can resume context
             const memory = ctx.getAgentMemory();
