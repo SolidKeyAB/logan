@@ -48,6 +48,12 @@ export function splitLineIntoColumns(line: string, delimiter: string): string[] 
     const trimmed = line.trim();
     return trimmed.length ? trimmed.split(/\s+/) : [];
   }
+  // Multi-space / whitespace-ALIGNED columns: split on runs of >=2 whitespace so a single
+  // space stays INSIDE a cell (e.g. "11.12.2025 10:38:21.686" or a free-text Message field).
+  if (delimiter === '  ') {
+    const trimmed = line.trim();
+    return trimmed.length ? trimmed.split(/\s{2,}/) : [];
+  }
   if (delimiter === '\t') {
     return line.split('\t');
   }
@@ -90,6 +96,11 @@ export function filterLineToVisibleColumns(
 
   if (delimiter === ' ' || delimiter === '\t') {
     return visibleParts.join(delimiter);
+  }
+  // Aligned columns rejoin with two spaces (exact padding isn't reproduced, but the cell
+  // content is preserved and stays splittable).
+  if (delimiter === '  ') {
+    return visibleParts.join('  ');
   }
   // CSV-style: re-quote any surviving field that itself contains the delimiter
   // or a quote, so the rejoined line stays structurally valid.
