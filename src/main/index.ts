@@ -21,6 +21,7 @@ if (process.platform !== 'linux') {
 }
 import { FileHandler, filterLineToVisibleColumns, splitLineIntoColumns, ColumnConfig } from './fileHandler';
 import { detectDelimiter, findHeaderRow, isCommentOrBanner } from '../shared/columnDetect';
+import { launchPathCandidates } from './launchArgs';
 import { CompositeFileHandler, CompositeMemberHandler, CompositeBoundary } from './compositeFileHandler';
 import { SegmentedFileHandler } from './segmentedFileHandler';
 import { computeSegmentPlan, readSystemMemory } from './segmentPlan';
@@ -1153,20 +1154,12 @@ function extractPathFromArgv(argv: string[]): { path: string; isDirectory: boole
     return null;
   };
 
-  // argv layout: [electron, app-path, ...flags, --, path]
-  // or: [electron, app-path, path] (no --)
-  const dashDashIdx = argv.indexOf('--');
-  if (dashDashIdx !== -1 && dashDashIdx + 1 < argv.length) {
-    const c = classify(argv[dashDashIdx + 1]);
-    if (c) return c;
-  }
-  // Fallback: last arg that resolves to a real file or directory.
-  for (let i = argv.length - 1; i >= 1; i--) {
-    const arg = argv[i];
-    if (arg.startsWith('-')) continue;
-    // Skip the electron binary and app directory
-    if (arg.includes('electron') || arg.includes('node_modules')) continue;
-    const c = classify(arg);
+  // launchPathCandidates() excludes Electron's own app-path argument (the "." in a dev
+  // `electron .` launch) so `npm start` from inside the repo doesn't open the repo as a folder.
+  let appPath: string | null = null;
+  try { appPath = app.getAppPath(); } catch { /* app not ready — fine */ }
+  for (const cand of launchPathCandidates(argv, appPath, !!process.defaultApp)) {
+    const c = classify(cand);
     if (c) return c;
   }
   return null;
