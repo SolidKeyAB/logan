@@ -11231,3 +11231,6 @@ kbd {
 .triage-row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
 .triage-row-line { flex: 0 0 auto; font-family: var(--font-mono); font-size: 11px; color: var(--accent-color); }
 .triage-row.crash .triage-row-line { color: var(--error-color); }
+/* On-open column-layout suggestion row, folded under the severity rows with a hairline divider. */
+.triage-rows.triage-layout { padding-top: 4px; margin-top: 2px; border-top: 1px solid var(--border-color); }
+.triage-row.layout .triage-row-line { color: var(--info-color); }
