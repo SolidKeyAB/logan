@@ -5,6 +5,7 @@ import * as readline from 'readline';
 import { Worker } from 'worker_threads';
 import * as protobuf from 'protobufjs';
 import { FileInfo } from '../shared/types';
+import { isVtrace } from './vtraceParse';
 
 /**
  * Format-adapter layer (Phase 1).
@@ -452,12 +453,13 @@ export class Mf4Adapter implements SourceAdapter {
  * `vtrace` is a neutral codename for the binary trace stream produced by the trace
  * server on some automotive IVI head units (files use the `.esotrace` extension and
  * open with a `traceserverIVI` identity record — both intrinsic markers of the
- * input, matched only by detect()). Self-describing (no schema needed); each record
- * carries a ns timestamp, a severity level and a textual message. The decoder lives
- * in vtraceParse.ts and runs in a WORKER THREAD (vtraceWorker.ts) so the byte-scan
- * decode never blocks the main/UI loop — same shape as Mf4Adapter. normalize() emits
- * one `"<seconds> <LEVEL> <message>"` line per record so the existing viewer + level
- * detection + Trends work with zero new UI.
+ * input, matched only by detect()). Self-framing (no schema needed): a flat stream of
+ * length-prefixed records, each carrying a ns timestamp, level, channel/source and a
+ * message. The decoder lives in vtraceParse.ts and runs in a WORKER THREAD
+ * (vtraceWorker.ts) so the decode never blocks the main/UI loop — same shape as
+ * Mf4Adapter. normalize() reproduces the vendor's official 11-column export
+ * (PacketID · SessionID · Label · LoggerTime · TraceTime · Channel · Source · Level ·
+ * PrivFlag · Size · Message) so LOGAN's decode matches the official `.log` output.
  */
 export class VtraceAdapter implements SourceAdapter {
   readonly id = 'vtrace';
@@ -471,9 +473,11 @@ export class VtraceAdapter implements SourceAdapter {
   };
 
   detect(filePath: string, headBytes: Buffer): boolean {
-    if (!/\.esotrace$/i.test(filePath)) return false;
-    // Header opens with a length-prefixed identity record (a marker of the input).
-    return headBytes.includes(Buffer.from('traceserverIVI', 'latin1'));
+    // `.esotrace` extension + either the `traceserverIVI` identity string or a valid
+    // self-framed first record. The identity string can sit hundreds of KB into the
+    // stream (it's message content, not a file header), so structural framing is the
+    // reliable signal for auto-detection.
+    return isVtrace(filePath, headBytes);
   }
 
   async normalize(
