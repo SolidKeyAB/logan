@@ -74,3 +74,32 @@ describe('computeColumnSegments — space', () => {
     expect(text.slice(segs[segs.length - 1].start)).toBe('b   ');
   });
 });
+
+describe('computeColumnSegments — multi-space (whitespace-aligned "  ")', () => {
+  it('splits on runs of >=2 spaces; single spaces stay inside a cell', () => {
+    // esotrace-style: "date time" pairs and free-text keep their single spaces.
+    const text = '0.18628   0   --     11.12.2025 10:38:21.686  info      [16388:1:0] MPMTIMER 1069997[us';
+    expect(splitLineIntoColumns(text, '  ')).toEqual([
+      '0.18628', '0', '--', '11.12.2025 10:38:21.686', 'info', '[16388:1:0] MPMTIMER 1069997[us',
+    ]);
+    assertTilesAndCounts(text, '  ');
+  });
+  it('the header row splits into the same number of columns as data rows', () => {
+    const header = 'PacketID  SessionID  Label  LoggerTime               TraceTime                Channel  Source  Level  PrivFlag  Size  Message';
+    const data   = '0.18628   0   --     11.12.2025 10:38:21.686  01.01.1970 00:00:00.027  Slog2Reader  traceserver  info  --  82  [16388:1:0] MPMTIMER';
+    expect(splitLineIntoColumns(header, '  ').length).toBe(11);
+    expect(splitLineIntoColumns(data, '  ').length).toBe(11);
+    assertTilesAndCounts(header, '  ');
+    assertTilesAndCounts(data, '  ');
+  });
+  it('a single-spaced prose line is ONE column (not aligned)', () => {
+    const text = 'the quick brown fox jumps';
+    expect(splitLineIntoColumns(text, '  ')).toEqual(['the quick brown fox jumps']);
+    assertTilesAndCounts(text, '  ');
+  });
+  it('leading/trailing padding folds into the first/last column; all-whitespace → none', () => {
+    assertTilesAndCounts('   a  b   c   ', '  ');
+    expect(computeColumnSegments('     ', '  ')).toEqual([]);
+    expect(splitLineIntoColumns('     ', '  ')).toEqual([]);
+  });
+});
