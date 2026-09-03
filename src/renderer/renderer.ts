@@ -3205,7 +3205,7 @@ function applyHighlights(text: string): string {
     result += escapeHtml(text.slice(lastEnd, match.start));
 
     const style = `background-color: ${match.config.backgroundColor}; ${
-      match.config.textColor ? `color: ${match.config.textColor}` : ''
+      match.config.textColor ? `color: ${match.config.textColor}` : `color: ${readableTextColor(match.config.backgroundColor)}`
     }`;
     // Convert spaces to &nbsp; in highlighted text so background color is visible
     const highlightedText = escapeHtml(text.slice(match.start, match.end)).replace(/ /g, '&nbsp;');
@@ -3315,7 +3315,7 @@ function applyHighlightsWithSearch(text: string, searchRanges: SearchRange[]): s
 
       // Build inline style for this highlight
       const style = `background-color: ${config.backgroundColor}; ${
-        config.textColor ? `color: ${config.textColor}` : ''
+        config.textColor ? `color: ${config.textColor}` : `color: ${readableTextColor(config.backgroundColor)}`
       }`;
 
       if (config.highlightAll) {
@@ -3363,7 +3363,7 @@ function applyHighlightsWithSearch(text: string, searchRanges: SearchRange[]): s
       const regex = tryRegExp(pattern, flags);
       if (!regex) continue;
       let match;
-      const style = `background-color: ${config.color}; ${config.textColor ? `color: ${config.textColor}` : 'color: #000'}`;
+      const style = `background-color: ${config.color}; ${config.textColor ? `color: ${config.textColor}` : `color: ${readableTextColor(config.color)}`}`;
       while ((match = regex.exec(text)) !== null) {
         ranges.push({
           start: match.index,
@@ -3483,7 +3483,7 @@ function applyHighlightsWithSearchJson(text: string, searchRanges: SearchRange[]
       let match;
 
       const style = `background-color: ${config.backgroundColor}; ${
-        config.textColor ? `color: ${config.textColor}` : ''
+        config.textColor ? `color: ${config.textColor}` : `color: ${readableTextColor(config.backgroundColor)}`
       }`;
 
       if (config.highlightAll) {
@@ -3529,7 +3529,7 @@ function applyHighlightsWithSearchJson(text: string, searchRanges: SearchRange[]
       const regex = tryRegExp(pattern, flags);
       if (!regex) continue;
       let match;
-      const style = `background-color: ${scConfig.color}; ${scConfig.textColor ? `color: ${scConfig.textColor}` : 'color: #000'}`;
+      const style = `background-color: ${scConfig.color}; ${scConfig.textColor ? `color: ${scConfig.textColor}` : `color: ${readableTextColor(scConfig.color)}`}`;
       while ((match = regex.exec(text)) !== null) {
         ranges.push({
           start: match.index,
@@ -10743,6 +10743,35 @@ function isLightPanelColor(color: string): boolean {
   return L > 0.179;
 }
 
+// MIRROR of readableTextColor()/parseRgb() in src/shared/textContrast.ts (tested there) — keep
+// in sync. Picks near-black or near-white text so text on a user-chosen highlight/match/mark
+// BACKGROUND colour stays readable no matter the colour (WCAG black-vs-white contrast pick).
+function parseRgbColor(color: string): [number, number, number] | null {
+  if (!color) return null;
+  const s = color.trim();
+  const hex = s.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    let h = hex[1];
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+  }
+  const m = s.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+  if (m) return [+m[1], +m[2], +m[3]];
+  return null;
+}
+function readableTextColor(bg: string, dark = '#111111', light = '#f2f2f2'): string {
+  const rgb = parseRgbColor(bg);
+  if (!rgb) return dark;
+  const lin = (v: number): number => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const L = 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
+  const contrastWhite = 1.05 / (L + 0.05);
+  const contrastBlack = (L + 0.05) / 0.05;
+  return contrastBlack >= contrastWhite ? dark : light;
+}
+
 // Smart, CONTINUOUS contrast: from the chosen panel bg, compute a full set of
 // foreground tokens (text shades, borders, control surfaces) that are guaranteed
 // readable — for ANY colour, including medium/saturated ones a binary light/dark
@@ -16258,7 +16287,7 @@ async function renderSearchConfigsResults(): Promise<void> {
       if (m.column < pos) continue; // overlapping a prior highlight — skip
       const end = Math.min(m.column + m.length, lineText.length);
       html += escapeHtml(lineText.substring(pos, m.column));
-      html += `<mark style="background:${m.color};color:#000">${escapeHtml(lineText.substring(m.column, end))}</mark>`;
+      html += `<mark style="background:${m.color};color:${readableTextColor(m.color)}">${escapeHtml(lineText.substring(m.column, end))}</mark>`;
       pos = end;
     }
     html += escapeHtml(lineText.substring(pos));
