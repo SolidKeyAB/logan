@@ -194,6 +194,7 @@ interface ColumnInfo {
   index: number;
   sample: string[];
   visible: boolean;
+  name?: string; // detected header name (when a header row was found)
 }
 
 interface ColumnAnalysis {
@@ -201,6 +202,9 @@ interface ColumnAnalysis {
   delimiterName: string;
   columns: ColumnInfo[];
   sampleLines: string[];
+  hasHeaderRow?: boolean;
+  // True when the header row is confidently named — drives the auto-proposed layout card.
+  headerConfident?: boolean;
 }
 
 interface DiffHunk {
