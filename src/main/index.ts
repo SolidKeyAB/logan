@@ -3032,7 +3032,22 @@ interface ColumnAnalysis {
   columns: ColumnInfo[];
   sampleLines: string[];
   hasHeaderRow?: boolean;
+  // True when the header row is CONFIDENTLY named (recognizable column keywords), so the
+  // Columns window can proactively PROPOSE it as a ready-to-accept layout. Distinct from the
+  // looser `hasHeaderRow` (positional guess) which only drives sample-row skipping.
+  headerConfident?: boolean;
 }
+
+// Recognizable column-header words (normalized: lowercase, alnum only). A first row carrying
+// ≥2 of these is almost certainly a header — this is what lets us auto-propose a named layout
+// (incl. esotrace-style "PacketID SessionID Label LoggerTime … Channel Source Level" exports).
+const HEADER_WORDS = new Set([
+  'packetid', 'sessionid', 'session', 'timestamp', 'time', 'date', 'datetime', 'loggertime',
+  'tracetime', 'uptime', 'level', 'severity', 'loglevel', 'priority', 'message', 'msg', 'text',
+  'content', 'description', 'source', 'process', 'thread', 'origin', 'class', 'channel',
+  'component', 'module', 'category', 'logger', 'id', 'name', 'label', 'tag', 'pid', 'tid',
+  'function', 'func', 'file', 'line', 'event', 'status', 'code', 'type', 'seq', 'index', 'ts',
+]);
 
 // Split a line respecting quoted fields (basic CSV support)
 // Detect delimiter by analyzing character frequencies
@@ -3090,21 +3105,31 @@ function detectDelimiter(lines: string[]): { delimiter: string; name: string } {
   return { delimiter: bestDelimiter.char, name: bestDelimiter.name };
 }
 
-// Check if the first row looks like a header row
-function inferHeaderRow(firstRow: string[]): { hasHeader: boolean; names: string[] } {
-  if (firstRow.length === 0) return { hasHeader: false, names: [] };
+// Check if the first row looks like a header row. Returns `hasHeader` (loose positional guess,
+// drives sample-row skipping) and `confident` (recognizable header KEYWORDS → safe to proactively
+// propose a named layout to the user). Keeping them separate means the proposal only fires when
+// we're fairly sure, while the existing sample-skip behaviour is unchanged.
+function inferHeaderRow(firstRow: string[]): { hasHeader: boolean; names: string[]; confident: boolean } {
+  if (firstRow.length === 0) return { hasHeader: false, names: [], confident: false };
 
-  // Check if all values are non-empty, non-numeric, and unique
   const trimmed = firstRow.map(v => v.trim());
   const allNonEmpty = trimmed.every(v => v.length > 0);
   const allNonNumeric = trimmed.every(v => isNaN(Number(v)));
   const allUnique = new Set(trimmed.map(v => v.toLowerCase())).size === trimmed.length;
 
-  if (allNonEmpty && allNonNumeric && allUnique && trimmed.length >= 2) {
-    return { hasHeader: true, names: trimmed };
-  }
+  // Loose positional heuristic (unchanged): all cells non-empty, non-numeric, unique.
+  const hasHeader = allNonEmpty && allNonNumeric && allUnique && trimmed.length >= 2;
 
-  return { hasHeader: false, names: [] };
+  // Confidence signal: how many cells are recognizable header keywords (e.g. "Level",
+  // "LoggerTime"). Normalize to alnum so "Logger-Time" / "log_level" still match.
+  const keywordHits = trimmed.filter(v => HEADER_WORDS.has(v.toLowerCase().replace(/[^a-z0-9]/g, ''))).length;
+
+  // Propose only when confident: ≥2 keyword cells (catches headers even with a numeric/dup cell),
+  // OR the positional heuristic backed by ≥1 keyword (which rules out a prose log line that just
+  // happens to split into all-unique words but contains no real column name).
+  const confident = trimmed.length >= 2 && allNonEmpty && (keywordHits >= 2 || (hasHeader && keywordHits >= 1));
+
+  return { hasHeader: hasHeader || confident, names: trimmed, confident };
 }
 
 ipcMain.handle('analyze-columns', async () => {
@@ -3131,7 +3156,7 @@ ipcMain.handle('analyze-columns', async () => {
     const maxColumns = Math.max(...splitLines.map(cols => cols.length));
 
     // Check if first row is a header
-    const { hasHeader, names: headerNames } = inferHeaderRow(splitLines[0] || []);
+    const { hasHeader, names: headerNames, confident: headerConfident } = inferHeaderRow(splitLines[0] || []);
 
     // Build column info with samples (skip header row for samples if detected)
     const sampleStartIdx = hasHeader ? 1 : 0;
@@ -3157,6 +3182,7 @@ ipcMain.handle('analyze-columns', async () => {
       columns,
       sampleLines: nonEmptyLines.slice(0, 5), // First 5 lines as preview
       hasHeaderRow: hasHeader,
+      headerConfident,
     };
 
     return { success: true, analysis: result };
