@@ -4319,6 +4319,37 @@ kbd {
   gap: 8px;
 }
 
+/* Auto-proposed column layout (header-row detected) — a real sample line laid out into the
+   detected named columns, sitting at the top of the Columns window for one-click Accept. */
+.column-proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--accent-color);
+  border-radius: 6px;
+}
+.col-proposal-head { display: flex; justify-content: space-between; align-items: center; }
+.col-proposal-title { font-size: 12px; font-weight: 600; color: var(--accent-color); }
+.col-proposal-x { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px; }
+.col-proposal-x:hover { color: #ff6b6b; }
+.col-proposal-sample {
+  display: flex; flex-wrap: wrap; align-items: stretch; gap: 2px;
+  font-family: var(--font-mono); font-size: 11px;
+  background: var(--bg-primary); border: 1px solid var(--border-color);
+  border-radius: 4px; padding: 6px 8px; overflow-x: auto;
+}
+.col-proposal-cell { display: inline-flex; flex-direction: column; gap: 1px; padding: 0 6px; }
+.col-proposal-name { color: var(--accent-color); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+.col-proposal-val { color: var(--text-primary); white-space: nowrap; }
+.col-proposal-empty { color: var(--text-muted); }
+.col-proposal-sep { color: var(--border-color); align-self: stretch; padding: 0 1px; }
+.col-proposal-actions { display: flex; gap: 6px; }
+.col-proposal-actions .primary-btn,
+.col-proposal-actions .secondary-btn { padding: 4px 10px; font-size: 12px; }
+
 .column-item {
   display: flex;
   flex-direction: column;
