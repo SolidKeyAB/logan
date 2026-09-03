@@ -20120,6 +20120,12 @@ function splitLineIntoColumns(text: string, delimiter: string): string[] {
     const trimmed = text.trim();
     return trimmed.length ? trimmed.split(/\s+/) : [];
   }
+  // Multi-space / whitespace-ALIGNED columns: split on runs of >=2 whitespace (single spaces
+  // stay inside a cell). MUST match splitLineIntoColumns() in src/main/fileHandler.ts.
+  if (delimiter === '  ') {
+    const trimmed = text.trim();
+    return trimmed.length ? trimmed.split(/\s{2,}/) : [];
+  }
   if (delimiter === '\t') {
     return text.split('\t');
   }
@@ -20164,6 +20170,9 @@ function applyColumnFilter(text: string): string {
   if (delimiter === ' ' || delimiter === '\t') {
     return visibleParts.join(delimiter);
   }
+  if (delimiter === '  ') {
+    return visibleParts.join('  ');
+  }
   // CSV-style: re-quote any surviving field that contains the delimiter or a
   // quote so the rejoined line stays structurally valid.
   return visibleParts
@@ -20182,9 +20191,42 @@ function applyColumnFilter(text: string): string {
 // MIRROR of the tested spec computeColumnSegments() in src/shared/columnRender.ts —
 // keep in sync (renderer.ts is a script and can't import it; see the header note).
 interface ColumnSegment { col: number; start: number; end: number; }
+// MIRROR of multiSpaceTokenStarts() in src/shared/columnRender.ts — keep in sync.
+function multiSpaceTokenStarts(text: string): number[] {
+  const starts: number[] = [];
+  const n = text.length;
+  let i = 0;
+  while (i < n && /\s/.test(text[i])) i++;
+  while (i < n) {
+    starts.push(i);
+    while (i < n) {
+      if (/\s/.test(text[i])) {
+        let j = i;
+        while (j < n && /\s/.test(text[j])) j++;
+        if (j - i >= 2 || j === n) break;
+        i = j;
+      } else {
+        i++;
+      }
+    }
+    while (i < n && /\s/.test(text[i])) i++;
+  }
+  return starts;
+}
 function computeColumnSegments(text: string, delimiter: string): ColumnSegment[] {
   if (text.length === 0) {
-    return delimiter === ' ' ? [] : [{ col: 0, start: 0, end: 0 }];
+    return (delimiter === ' ' || delimiter === '  ') ? [] : [{ col: 0, start: 0, end: 0 }];
+  }
+  if (delimiter === '  ') {
+    const starts = multiSpaceTokenStarts(text);
+    if (starts.length === 0) return [];
+    const segs: ColumnSegment[] = [];
+    for (let c = 0; c < starts.length; c++) {
+      const start = c === 0 ? 0 : starts[c];
+      const end = c === starts.length - 1 ? text.length : starts[c + 1];
+      segs.push({ col: c, start, end });
+    }
+    return segs;
   }
   if (delimiter === ' ') {
     const tokenStarts: number[] = [];

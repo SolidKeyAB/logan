@@ -16,10 +16,50 @@ export interface ColumnSegment {
   end: number;   // exclusive char offset; segments tile [0, text.length)
 }
 
+// Multi-space (whitespace-ALIGNED) columns: a column boundary is a run of >=2 whitespace;
+// single spaces stay WITHIN a cell. Returns each column's start offset in `text` (leading
+// whitespace folds into the first column). Mirrors splitLineIntoColumns(line, '  '): the
+// count of starts equals line.trim().split(/\s{2,}/).length.
+export function multiSpaceTokenStarts(text: string): number[] {
+  const starts: number[] = [];
+  const n = text.length;
+  let i = 0;
+  while (i < n && /\s/.test(text[i])) i++; // skip leading padding
+  while (i < n) {
+    starts.push(i);
+    // advance to the end of this token: stop at a run of >=2 whitespace, or at trailing
+    // whitespace that runs to end-of-line; a lone interior space stays inside the token.
+    while (i < n) {
+      if (/\s/.test(text[i])) {
+        let j = i;
+        while (j < n && /\s/.test(text[j])) j++;
+        if (j - i >= 2 || j === n) break;
+        i = j; // single interior space → keep the token going
+      } else {
+        i++;
+      }
+    }
+    while (i < n && /\s/.test(text[i])) i++; // skip the separator run
+  }
+  return starts;
+}
+
 export function computeColumnSegments(text: string, delimiter: string): ColumnSegment[] {
   if (text.length === 0) {
-    // splitLineIntoColumns: space → [] ; tab/CSV → [''] (one empty column).
-    return delimiter === ' ' ? [] : [{ col: 0, start: 0, end: 0 }];
+    // splitLineIntoColumns: space / multi-space → [] ; tab/CSV → [''] (one empty column).
+    return (delimiter === ' ' || delimiter === '  ') ? [] : [{ col: 0, start: 0, end: 0 }];
+  }
+
+  if (delimiter === '  ') {
+    const starts = multiSpaceTokenStarts(text);
+    if (starts.length === 0) return [];
+    const segs: ColumnSegment[] = [];
+    for (let c = 0; c < starts.length; c++) {
+      const start = c === 0 ? 0 : starts[c];
+      const end = c === starts.length - 1 ? text.length : starts[c + 1];
+      segs.push({ col: c, start, end });
+    }
+    return segs;
   }
 
   if (delimiter === ' ') {
