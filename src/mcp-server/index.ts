@@ -516,7 +516,7 @@ server.tool(
   'Manage saved Column Layouts (named column definitions — delimiter OR regex/paint pattern + per-column name/visibility) — the same store the human Column Layouts builder / Columns window uses. list · save · delete. (To APPLY a saved layout to the view, use logan_apply_entity kind:"columnLayout".)',
   {
     action: z.enum(['list', 'save', 'delete']).describe('list all · save one · delete one'),
-    layout: z.any().optional().describe('layout object for save: {id, name, method:"delimiter"|"pattern", delimiter?/pattern?, columns:[{index,name?,visible}], description?}. Include an optional `description` note on what the layout is for.'),
+    layout: z.any().optional().describe('layout object for save: {id, name, method:"delimiter"|"pattern", delimiter?/pattern?, columns:[{index,name?,visible,width?}], headerMode?, description?}. Optional `headerMode:true` + per-column `width` (in ch) reproduce the human "frozen header + fixed-width columns" grid. Include an optional `description` note on what the layout is for.'),
     id: z.string().optional().describe('layout id (required for delete)'),
   },
   async ({ action, layout, id }) => {
