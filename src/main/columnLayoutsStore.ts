@@ -13,7 +13,11 @@ export interface ColumnLayoutSaved {
   delimiter?: string;
   delimiterName?: string;
   pattern?: { regex: string; flags: string; fields: string[] };
-  columns: Array<{ index: number; name?: string; visible: boolean; muted?: boolean }>;
+  columns: Array<{ index: number; name?: string; visible: boolean; muted?: boolean; width?: number }>;
+  // Header mode: render columns at a fixed width (ch) with a frozen column-name header strip, and
+  // remember the per-column `width` set by dragging. Both are optional — a layout saved without
+  // header mode restores exactly as before.
+  headerMode?: boolean;
   description?: string; // optional human/AI note: what this is for / why it was added
 }
 
