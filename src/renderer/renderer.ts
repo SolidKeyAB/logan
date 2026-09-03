@@ -19641,6 +19641,8 @@ async function showColumnsModal(): Promise<void> {
   elements.columnsModal.classList.remove('hidden');
   elements.columnsLoading.style.display = 'block';
   elements.columnsContent.style.display = 'none';
+  const proposalEl0 = document.getElementById('column-proposal');
+  if (proposalEl0) { proposalEl0.style.display = 'none'; proposalEl0.innerHTML = ''; }
 
   // Pattern-mode: columns come from an applied pattern layout, not the delimiter split.
   if (state.columnConfig?.pattern) { renderPatternColumnsModal(state.columnConfig); return; }
@@ -19704,6 +19706,11 @@ async function showColumnsModal(): Promise<void> {
 
       // Template-driven: show saved layouts to apply, and enable "Save as layout".
       void loadColumnLayouts();
+
+      // Proactively propose a named layout when a header row is confidently detected and the
+      // user hasn't already set a column config — a real sample line laid out into the named
+      // columns, one-click Accept. Skipped once a layout is active (they've already chosen).
+      if (!state.columnConfig) renderColumnProposal(result.analysis);
     } else {
       elements.columnsLoading.textContent = result.error || 'Failed to analyze columns';
     }
@@ -19719,6 +19726,8 @@ function hideColumnsModal(): void {
 // Render the Columns window for a PATTERN-mode config: list the pattern's named columns with
 // visibility checkboxes (no delimiter analysis / row-filter — those are delimiter-only).
 function renderPatternColumnsModal(cfg: ColumnConfig): void {
+  const proposalEl = document.getElementById('column-proposal');
+  if (proposalEl) { proposalEl.style.display = 'none'; proposalEl.innerHTML = ''; }
   const delimEl = document.getElementById('columns-delimiter');
   if (delimEl) delimEl.textContent = `pattern — ${cfg.pattern!.fields.length} columns`;
   elements.columnsList.innerHTML = cfg.columns.map((col, idx) => {
@@ -19913,9 +19922,9 @@ function applyColumnLayoutToModal(layout: any): void {
   showToast(`Loaded layout “${layout.name}”${mismatch ? ' (different delimiter — mapped by position)' : ''} — click Apply`);
 }
 
-async function saveCurrentColumnLayout(): Promise<void> {
+async function saveCurrentColumnLayout(defaultName = ''): Promise<boolean> {
   const tempConfig = (elements.columnsModal as any)._tempConfig;
-  if (!tempConfig) { showToast('Open a delimited file first'); return; }
+  if (!tempConfig) { showToast('Open a delimited file first'); return false; }
   const visById = new Map<number, boolean>();
   elements.columnsList.querySelectorAll<HTMLInputElement>('input[type="checkbox"][data-col-index]').forEach((cb) => {
     visById.set(parseInt(cb.dataset.colIndex || '0', 10), cb.checked);
@@ -19929,8 +19938,8 @@ async function saveCurrentColumnLayout(): Promise<void> {
   elements.columnsList.querySelectorAll<HTMLInputElement>('.col-mute-cb').forEach((cb) => {
     muteById.set(parseInt(cb.dataset.colMute || '0', 10), cb.checked);
   });
-  const name = await showInputPrompt('Name this column layout (e.g. "access-log", "sensor"):');
-  if (!name) return;
+  const name = await showInputPrompt('Name this column layout (e.g. "access-log", "sensor"):', defaultName);
+  if (!name) return false;
   const layout = {
     id: 'cl_' + Date.now().toString(36) + '_' + Math.floor(Math.random() * 1e6).toString(36),
     name,
@@ -19945,10 +19954,68 @@ async function saveCurrentColumnLayout(): Promise<void> {
     })),
   };
   const res = await (window.api as any).columnLayoutSave(layout);
-  if (!res || !res.success) { showToast(res?.error || 'Save failed'); return; }
+  if (!res || !res.success) { showToast(res?.error || 'Save failed'); return false; }
   columnLayouts = res.layouts || columnLayouts;
   renderColumnLayoutChips();
   showToast(`Saved layout “${name}”`);
+  return true;
+}
+
+// Render the auto-proposed layout card at the top of the Columns window: when a header row is
+// CONFIDENTLY detected (analysis.headerConfident), show a real sample DATA line laid out into
+// the detected named columns so the user can SEE the proposed layout, then Accept it as a saved
+// layout, Edit it in the column list below, or Dismiss it.
+function renderColumnProposal(analysis: ColumnAnalysis): void {
+  const el = document.getElementById('column-proposal');
+  if (!el) return;
+  const confident = (analysis as any).headerConfident;
+  const cols = analysis.columns || [];
+  const named = cols.filter(c => (c as any).name);
+  if (!confident || named.length < 2) { el.style.display = 'none'; el.innerHTML = ''; return; }
+
+  // Pick a real data line (skip the header row) and split it the same way the viewer will.
+  const lines = analysis.sampleLines || [];
+  const sampleLine = lines.length > 1 ? lines[1] : (lines[0] || '');
+  const values = splitLineIntoColumns(sampleLine, analysis.delimiter);
+
+  const cells = cols.map((c, i) => {
+    const nm = (c as any).name || `Col ${i + 1}`;
+    let v = (values[i] ?? '').trim();
+    if (v.length > 28) v = v.slice(0, 27) + '…';
+    const valHtml = v ? escapeHtml(v) : '<span class="col-proposal-empty">—</span>';
+    return `<span class="col-proposal-cell"><span class="col-proposal-name">${escapeHtml(nm)}</span><span class="col-proposal-val">${valHtml}</span></span>`;
+  }).join('<span class="col-proposal-sep">│</span>');
+
+  el.innerHTML = `
+    <div class="col-proposal-head">
+      <span class="col-proposal-title">✨ Proposed layout — header row detected (${named.length} columns)</span>
+      <button id="col-proposal-dismiss" class="col-proposal-x" title="Dismiss this proposal">×</button>
+    </div>
+    <div class="col-proposal-sample" title="A real sample line split into the detected columns">${cells}</div>
+    <div class="col-proposal-actions">
+      <button id="col-proposal-accept" class="primary-btn">✅ Accept as layout</button>
+      <button id="col-proposal-edit" class="secondary-btn">✎ Edit below</button>
+    </div>`;
+  el.style.display = 'flex';
+
+  document.getElementById('col-proposal-accept')?.addEventListener('click', () => { void acceptProposedLayout(); });
+  document.getElementById('col-proposal-edit')?.addEventListener('click', () => {
+    el.style.display = 'none';
+    elements.columnsList.querySelector<HTMLInputElement>('.column-name-input')?.focus();
+  });
+  document.getElementById('col-proposal-dismiss')?.addEventListener('click', () => {
+    el.style.display = 'none';
+  });
+}
+
+// Accept the proposed header-derived layout: the column-name inputs are already pre-filled with
+// the detected header names (all visible), so we reuse the existing save path (which carries MCP
+// parity via logan_column_layouts) then apply the config to the viewer.
+async function acceptProposedLayout(): Promise<void> {
+  const base = (state.filePath ? state.filePath.split(/[\\/]/).pop() : '') || '';
+  const suggested = base.replace(/\.[^.]+$/, '') || 'layout';
+  const saved = await saveCurrentColumnLayout(suggested);
+  if (saved) await applyColumnsConfig();
 }
 
 // Apply a pattern (regex/grok/paint) as the active column model: the viewer renders columns
