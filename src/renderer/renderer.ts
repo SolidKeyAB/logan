@@ -210,11 +210,15 @@ interface ColumnConfig {
     visible: boolean;
     name?: string; // user-assigned column name (Columns panel) — drives labels, save/template, filter
     muted?: boolean; // dim this column in place (view-only de-emphasis; the column-level line-mute)
+    width?: number; // fixed column width in `ch` when headerMode is on (resizable grid); unset = default
   }>;
   // Pattern mode (Phase 2): columns come from a regex/grok/paint pattern's capture groups
   // instead of a delimiter. When set, the viewer segments lines by the pattern; `columns[].index`
   // = capture-group index. `delimiter` is unused/marker in this mode.
   pattern?: { regex: string; flags: string; fields: string[] };
+  // Header mode: show a frozen, always-visible column-name header strip and render each column at a
+  // FIXED width (an inline-block grid), which is what lets the header align + columns be resized.
+  headerMode?: boolean;
 }
 
 // Tab State - stores per-file state for inactive tabs
@@ -1232,6 +1236,8 @@ const elements = {
 let logViewerElement: HTMLDivElement | null = null;
 let logContentElement: HTMLDivElement | null = null;
 let logViewerWrapper: HTMLDivElement | null = null;
+let columnHeaderStripEl: HTMLDivElement | null = null; // frozen column-header strip (header mode)
+let columnHeaderTrackEl: HTMLDivElement | null = null; // its inner track (translated to mirror scroll)
 let minimapElement: HTMLDivElement | null = null;
 let minimapContentElement: HTMLDivElement | null = null;
 let minimapCanvasElement: HTMLCanvasElement | null = null;
@@ -2230,6 +2236,19 @@ function createLogViewer(): void {
 
   logViewerElement.appendChild(logContentElement);
 
+  // Frozen column-header strip: lives ABOVE the scroll area (so it's always visible / frozen
+  // vertically) inside a vertical stack that also holds the scroll viewer. Hidden until header
+  // mode is on. Its inner track is translated horizontally to mirror the viewer's scrollLeft.
+  const viewerStack = document.createElement('div');
+  viewerStack.className = 'viewer-stack';
+  columnHeaderStripEl = document.createElement('div');
+  columnHeaderStripEl.className = 'column-header-strip hidden';
+  columnHeaderTrackEl = document.createElement('div');
+  columnHeaderTrackEl.className = 'column-header-track';
+  columnHeaderStripEl.appendChild(columnHeaderTrackEl);
+  viewerStack.appendChild(columnHeaderStripEl);
+  viewerStack.appendChild(logViewerElement);
+
   // Create minimap
   minimapElement = document.createElement('div');
   minimapElement.className = 'minimap';
@@ -2261,8 +2280,9 @@ function createLogViewer(): void {
     annotationBarElement.classList.add('hidden');
   }
 
-  // Add to wrapper
-  logViewerWrapper.appendChild(logViewerElement);
+  // Add to wrapper (the viewer stack — header strip + scroll viewer — sits where the bare
+  // viewer used to, so the minimap/annotation bar still flank it as before)
+  logViewerWrapper.appendChild(viewerStack);
   logViewerWrapper.appendChild(minimapElement);
   logViewerWrapper.appendChild(annotationBarElement);
   elements.editorContainer.appendChild(logViewerWrapper);
@@ -2404,6 +2424,9 @@ function lineToScrollTop(lineNumber: number): number {
 
 function handleScroll(): void {
   if (!logViewerElement || !logContentElement) return;
+
+  // Keep the frozen column header aligned with horizontal scroll (cheap; no-op when hidden).
+  syncColumnHeaderScroll();
 
   // In JSON mode, content flows naturally - just update minimap
   if (jsonFormattingEnabled) {
@@ -19736,6 +19759,10 @@ async function showColumnsModal(): Promise<void> {
       elements.columnsLoading.style.display = 'none';
       elements.columnsContent.style.display = 'block';
 
+      // Reflect the current frozen-header/fixed-width mode in the toggle.
+      const headerModeCb = document.getElementById('columns-header-mode') as HTMLInputElement | null;
+      if (headerModeCb) headerModeCb.checked = !!state.columnConfig?.headerMode;
+
       // Template-driven: show saved layouts to apply, and enable "Save as layout".
       void loadColumnLayouts();
 
@@ -19786,6 +19813,8 @@ async function applyColumnsConfig(): Promise<void> {
   const tempConfig = (elements.columnsModal as any)._tempConfig;
   if (!tempConfig) return;
 
+  const headerMode = (document.getElementById('columns-header-mode') as HTMLInputElement | null)?.checked ?? false;
+
   // Pattern mode: visibility-only. Spans are already rendered per capture group, so hiding
   // is one instant CSS rule — no re-render, no delimiter logic.
   if (tempConfig.pattern && state.columnConfig?.pattern) {
@@ -19799,6 +19828,12 @@ async function applyColumnsConfig(): Promise<void> {
       const col = state.columnConfig!.columns.find(c => c.index === idx);
       if (col) col.muted = cb.checked;
     });
+    state.columnConfig.headerMode = headerMode;
+    if (headerMode) {
+      for (const col of state.columnConfig.columns) {
+        if (col.width == null) col.width = defaultColumnWidthCh(col);
+      }
+    }
     updateColumnHideStyle();
     hideColumnsModal();
     return;
@@ -19840,12 +19875,14 @@ async function applyColumnsConfig(): Promise<void> {
   state.columnConfig = {
     delimiter: tempConfig.delimiter,
     delimiterName: tempConfig.delimiterName,
+    headerMode,
     columns: tempConfig.columns.map((c: any) => ({
       index: c.index,
       sample: c.sample,
       visible: c.visible,
       name: c.name,
       muted: !!c.muted,
+      width: c.width ?? (headerMode ? defaultColumnWidthCh(c) : undefined),
     })),
   };
 
@@ -20384,7 +20421,9 @@ function updateColumnHideStyle(): void {
   columnHideStyleEl.textContent = hidden.length
     ? hidden.map(i => `.log-col[data-col="${i}"]`).join(',') + '{display:none}'
     : '';
-  updateColumnMuteStyle(); // keep the mute rule in sync with every hide refresh
+  updateColumnMuteStyle();  // keep the mute rule in sync with every hide refresh
+  updateColumnWidthStyle(); // keep fixed-width (header/grid mode) rule in sync too
+  renderColumnHeaderStrip(); // rebuild + show/hide the frozen header strip
 }
 
 // The single CSS rule that COLLAPSES muted columns to a thin dimmed sliver — the column-level
@@ -20404,6 +20443,76 @@ function updateColumnMuteStyle(): void {
   columnMuteStyleEl.textContent = muted.length
     ? muted.map(i => `.log-col[data-col="${i}"]`).join(',') + '{display:inline-block;max-width:2ch;overflow:hidden;white-space:pre;vertical-align:bottom;opacity:0.35}'
     : '';
+}
+
+// Header/grid mode: render every VISIBLE, non-muted column at a FIXED width (in ch) so the columns
+// line up into a grid and the frozen header strip can align to them + be resized. One CSS rule per
+// column keyed on data-col — same instant, no-re-render mechanism as hide/mute. Muted columns keep
+// their 2ch collapse (their rule is emitted after this one and wins); hidden columns stay display:none.
+let columnWidthStyleEl: HTMLStyleElement | null = null;
+const DEFAULT_COL_WIDTH_CH = 16;
+function updateColumnWidthStyle(): void {
+  if (!columnWidthStyleEl) {
+    columnWidthStyleEl = document.createElement('style');
+    columnWidthStyleEl.id = 'logan-col-width';
+    document.head.appendChild(columnWidthStyleEl);
+  }
+  const cfg = state.columnConfig;
+  const rules: string[] = [];
+  if (cfg && cfg.headerMode) {
+    for (const c of cfg.columns) {
+      if (!c.visible || c.muted) continue;
+      const w = Math.max(2, Math.round(c.width ?? DEFAULT_COL_WIDTH_CH));
+      rules.push(`.log-col[data-col="${c.index}"]{display:inline-block;box-sizing:border-box;width:${w}ch;overflow:hidden;white-space:pre;vertical-align:bottom}`);
+    }
+  }
+  columnWidthStyleEl.textContent = rules.join('');
+}
+
+// A sensible starting width (ch) for a column in header mode: fits its name and a bounded sample.
+function defaultColumnWidthCh(col: { name?: string; sample?: string[] }): number {
+  const nameLen = (col.name || '').length + 1;
+  const sampleLen = (col.sample || []).reduce((m, s) => Math.max(m, (s || '').length), 0);
+  return Math.min(60, Math.max(6, nameLen, Math.min(sampleLen, 40)));
+}
+
+// The frozen, always-visible column-header strip. It reuses the EXACT line structure the viewer
+// uses (a blank .line-number gutter + one .log-col[data-col] span per column) so the same width
+// rules make it align to the data automatically. It lives OUTSIDE the vertical scroll (in the
+// viewer stack, above the scroll area) so it's frozen vertically; we mirror horizontal scroll by
+// translating its inner track by -scrollLeft. Shown only when headerMode is on + a layout is active.
+function renderColumnHeaderStrip(): void {
+  if (!columnHeaderStripEl || !columnHeaderTrackEl) return;
+  const cfg = state.columnConfig;
+  if (!cfg || !cfg.headerMode) {
+    columnHeaderStripEl.classList.add('hidden');
+    columnHeaderTrackEl.innerHTML = '';
+    return;
+  }
+  // Match the viewer's line metrics so `ch` widths and the gutter line up with the data rows.
+  columnHeaderStripEl.style.height = `${getLineHeight()}px`;
+  columnHeaderTrackEl.style.fontSize = `${getFontSize()}px`;
+  columnHeaderTrackEl.style.lineHeight = `${getLineHeight()}px`;
+  // Mirror the actual data gutter width (line numbers can be wider than the CSS min-width).
+  const dataGutter = logContentElement?.querySelector('.log-line .line-number') as HTMLElement | null;
+  const gutterW = dataGutter ? Math.round(dataGutter.getBoundingClientRect().width) : 60;
+  const cells = cfg.columns
+    .filter(c => c.visible)
+    .map(c => {
+      const label = c.name || `col ${c.index + 1}`;
+      return `<span class="log-col col-header-cell" data-col="${c.index}" title="${escapeHtml(label)}">${escapeHtml(label)}</span>`;
+    })
+    .join('');
+  columnHeaderTrackEl.innerHTML =
+    `<span class="line-number col-header-gutter" style="min-width:${gutterW}px;width:${gutterW}px">&nbsp;</span>${cells}`;
+  columnHeaderStripEl.classList.remove('hidden');
+  syncColumnHeaderScroll();
+}
+
+// Keep the header strip aligned with horizontal scroll (it's outside the scroll box, so translate it).
+function syncColumnHeaderScroll(): void {
+  if (!columnHeaderTrackEl || !logViewerElement) return;
+  columnHeaderTrackEl.style.transform = `translateX(${-logViewerElement.scrollLeft}px)`;
 }
 
 // Toggle / clear column mute (right-click in the viewer, or the Columns window).
