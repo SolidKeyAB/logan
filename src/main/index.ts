@@ -20,6 +20,7 @@ if (process.platform !== 'linux') {
   console.warn('node-pty not available on Linux — using child_process fallback for terminal');
 }
 import { FileHandler, filterLineToVisibleColumns, splitLineIntoColumns, ColumnConfig } from './fileHandler';
+import { detectDelimiter, findHeaderRow, isCommentOrBanner } from '../shared/columnDetect';
 import { CompositeFileHandler, CompositeMemberHandler, CompositeBoundary } from './compositeFileHandler';
 import { SegmentedFileHandler } from './segmentedFileHandler';
 import { computeSegmentPlan, readSystemMemory } from './segmentPlan';
@@ -3038,99 +3039,10 @@ interface ColumnAnalysis {
   headerConfident?: boolean;
 }
 
-// Recognizable column-header words (normalized: lowercase, alnum only). A first row carrying
-// ≥2 of these is almost certainly a header — this is what lets us auto-propose a named layout
-// (incl. esotrace-style "PacketID SessionID Label LoggerTime … Channel Source Level" exports).
-const HEADER_WORDS = new Set([
-  'packetid', 'sessionid', 'session', 'timestamp', 'time', 'date', 'datetime', 'loggertime',
-  'tracetime', 'uptime', 'level', 'severity', 'loglevel', 'priority', 'message', 'msg', 'text',
-  'content', 'description', 'source', 'process', 'thread', 'origin', 'class', 'channel',
-  'component', 'module', 'category', 'logger', 'id', 'name', 'label', 'tag', 'pid', 'tid',
-  'function', 'func', 'file', 'line', 'event', 'status', 'code', 'type', 'seq', 'index', 'ts',
-]);
-
-// Split a line respecting quoted fields (basic CSV support)
-// Detect delimiter by analyzing character frequencies
-function detectDelimiter(lines: string[]): { delimiter: string; name: string } {
-  const candidates = [
-    { char: '\t', name: 'Tab' },
-    { char: ',', name: 'Comma' },
-    { char: '|', name: 'Pipe' },
-    { char: ';', name: 'Semicolon' },
-    { char: ':', name: 'Colon' },
-    { char: '=', name: 'Equals' },
-  ];
-
-  // Count occurrences of each delimiter and check consistency
-  const scores: Map<string, number> = new Map();
-
-  for (const { char } of candidates) {
-    const escapedChar = char === '|' ? '\\|' : char === '=' ? '=' : char;
-    const counts = lines.map(line => (line.match(new RegExp(escapedChar, 'g')) || []).length);
-    const nonZeroCounts = counts.filter(c => c > 0);
-
-    if (nonZeroCounts.length === 0) continue;
-
-    // Check if count is consistent across lines (good delimiter has consistent column count)
-    const avgCount = nonZeroCounts.reduce((a, b) => a + b, 0) / nonZeroCounts.length;
-    const consistency = nonZeroCounts.filter(c => Math.abs(c - avgCount) <= 1).length / nonZeroCounts.length;
-
-    // Score based on: presence, count, and consistency
-    let score = avgCount * consistency * (nonZeroCounts.length / lines.length);
-
-    // Colon heuristic: penalize if it looks like timestamps (e.g. 10:30:45)
-    if (char === ':' && avgCount <= 3) {
-      const timestampPattern = /\d{1,2}:\d{2}/;
-      const timestampLines = lines.filter(l => timestampPattern.test(l)).length;
-      if (timestampLines / lines.length > 0.8) {
-        score *= 0.3; // Strong penalty
-      }
-    }
-
-    scores.set(char, score);
-  }
-
-  // Find best delimiter
-  let bestDelimiter = { char: ' ', name: 'Space' }; // Default to space
-  let bestScore = 0;
-
-  for (const { char, name } of candidates) {
-    const score = scores.get(char) || 0;
-    if (score > bestScore && score > 1) { // Must have at least some presence
-      bestScore = score;
-      bestDelimiter = { char, name };
-    }
-  }
-
-  return { delimiter: bestDelimiter.char, name: bestDelimiter.name };
-}
-
-// Check if the first row looks like a header row. Returns `hasHeader` (loose positional guess,
-// drives sample-row skipping) and `confident` (recognizable header KEYWORDS → safe to proactively
-// propose a named layout to the user). Keeping them separate means the proposal only fires when
-// we're fairly sure, while the existing sample-skip behaviour is unchanged.
-function inferHeaderRow(firstRow: string[]): { hasHeader: boolean; names: string[]; confident: boolean } {
-  if (firstRow.length === 0) return { hasHeader: false, names: [], confident: false };
-
-  const trimmed = firstRow.map(v => v.trim());
-  const allNonEmpty = trimmed.every(v => v.length > 0);
-  const allNonNumeric = trimmed.every(v => isNaN(Number(v)));
-  const allUnique = new Set(trimmed.map(v => v.toLowerCase())).size === trimmed.length;
-
-  // Loose positional heuristic (unchanged): all cells non-empty, non-numeric, unique.
-  const hasHeader = allNonEmpty && allNonNumeric && allUnique && trimmed.length >= 2;
-
-  // Confidence signal: how many cells are recognizable header keywords (e.g. "Level",
-  // "LoggerTime"). Normalize to alnum so "Logger-Time" / "log_level" still match.
-  const keywordHits = trimmed.filter(v => HEADER_WORDS.has(v.toLowerCase().replace(/[^a-z0-9]/g, ''))).length;
-
-  // Propose only when confident: ≥2 keyword cells (catches headers even with a numeric/dup cell),
-  // OR the positional heuristic backed by ≥1 keyword (which rules out a prose log line that just
-  // happens to split into all-unique words but contains no real column name).
-  const confident = trimmed.length >= 2 && allNonEmpty && (keywordHits >= 2 || (hasHeader && keywordHits >= 1));
-
-  return { hasHeader: hasHeader || confident, names: trimmed, confident };
-}
+// detectDelimiter(), findHeaderRow(), isCommentOrBanner() and the header-keyword set now live
+// in ../shared/columnDetect (pure + unit-tested). They understand whitespace-ALIGNED formats
+// (\s{2,} columns) and locate the header among the first rows, not just row 0 — so a leading
+// "#----- BEGIN:" banner no longer masquerades as the header (see esotrace 11-column exports).
 
 ipcMain.handle('analyze-columns', async () => {
   const handler = getFileHandler();
@@ -3140,26 +3052,33 @@ ipcMain.handle('analyze-columns', async () => {
     // Get sample lines (first 100 non-empty lines)
     const sampleSize = 100;
     const lines = handler.getLines(1, sampleSize);
-    const nonEmptyLines = lines.filter(l => l.text.trim().length > 0).map(l => l.text);
+    const rawLines = lines.filter(l => l.text.trim().length > 0).map(l => l.text);
 
-    if (nonEmptyLines.length === 0) {
+    if (rawLines.length === 0) {
       return { success: false, error: 'No content to analyze' };
     }
 
-    // Detect delimiter
-    const { delimiter, name: delimiterName } = detectDelimiter(nonEmptyLines);
+    // Drop banner/comment lines (e.g. the esotrace "#----- BEGIN:" header) so they don't skew
+    // delimiter detection or pose as the header row. Fall back to the raw lines if stripping
+    // would leave us with almost nothing to analyze.
+    const stripped = rawLines.filter(l => !isCommentOrBanner(l));
+    const analysisLines = stripped.length >= 2 ? stripped : rawLines;
+
+    // Detect delimiter (handles whitespace-aligned / \s{2,} columns)
+    const { delimiter, name: delimiterName } = detectDelimiter(analysisLines);
 
     // Split lines into columns (shared canonical splitter — must match the filter paths)
-    const splitLines = nonEmptyLines.map(line => splitLineIntoColumns(line, delimiter));
+    const splitLines = analysisLines.map(line => splitLineIntoColumns(line, delimiter));
 
     // Find max column count
     const maxColumns = Math.max(...splitLines.map(cols => cols.length));
 
-    // Check if first row is a header
-    const { hasHeader, names: headerNames, confident: headerConfident } = inferHeaderRow(splitLines[0] || []);
+    // Locate the header row among the first rows (may be > 0) via type contrast + keywords
+    const { headerIndex, names: headerNames, confident: headerConfident } = findHeaderRow(splitLines);
+    const hasHeader = headerIndex >= 0;
 
-    // Build column info with samples (skip header row for samples if detected)
-    const sampleStartIdx = hasHeader ? 1 : 0;
+    // Build column info with samples (skip everything up to & including the header row)
+    const sampleStartIdx = hasHeader ? headerIndex + 1 : 0;
     const columns: ColumnInfo[] = [];
     for (let i = 0; i < maxColumns; i++) {
       const samples = splitLines
@@ -3180,7 +3099,7 @@ ipcMain.handle('analyze-columns', async () => {
       delimiter,
       delimiterName,
       columns,
-      sampleLines: nonEmptyLines.slice(0, 5), // First 5 lines as preview
+      sampleLines: analysisLines.slice(0, 5), // First 5 non-banner lines as preview
       hasHeaderRow: hasHeader,
       headerConfident,
     };
