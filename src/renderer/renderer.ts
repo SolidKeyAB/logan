@@ -20358,9 +20358,11 @@ function updateColumnHideStyle(): void {
   updateColumnMuteStyle(); // keep the mute rule in sync with every hide refresh
 }
 
-// The single CSS rule that DIMS muted columns in place — the column-level sibling of
-// the line mute, and the instant-toggle twin of updateColumnHideStyle (no re-render).
-// MIRROR of buildColumnMuteCss() in src/shared/columnMute.ts — keep in sync.
+// The single CSS rule that COLLAPSES muted columns to a thin dimmed sliver — the column-level
+// sibling of the line mute, and the instant-toggle twin of updateColumnHideStyle (no re-render).
+// MIRROR of buildColumnMuteCss() in src/shared/columnMute.ts — keep in sync (2ch width, 0.35
+// opacity). Only VISIBLE columns are squeezed: a hidden column is display:none and this rule's
+// display:inline-block must not resurrect it.
 let columnMuteStyleEl: HTMLStyleElement | null = null;
 function updateColumnMuteStyle(): void {
   if (!columnMuteStyleEl) {
@@ -20369,9 +20371,9 @@ function updateColumnMuteStyle(): void {
     document.head.appendChild(columnMuteStyleEl);
   }
   const cfg = state.columnConfig;
-  const muted = cfg ? cfg.columns.filter(c => c.muted).map(c => c.index) : [];
+  const muted = cfg ? cfg.columns.filter(c => c.muted && c.visible).map(c => c.index) : [];
   columnMuteStyleEl.textContent = muted.length
-    ? muted.map(i => `.log-col[data-col="${i}"]`).join(',') + '{opacity:0.35}'
+    ? muted.map(i => `.log-col[data-col="${i}"]`).join(',') + '{display:inline-block;max-width:2ch;overflow:hidden;white-space:pre;vertical-align:bottom;opacity:0.35}'
     : '';
 }
 
