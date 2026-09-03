@@ -19209,6 +19209,9 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       // Kick off the background severity index (jump-to-problem via F8). This same
       // cheap rg pass also builds the "Start here" quick-start card (see below).
       void prefetchSeverityIndex();
+      // In parallel, a cheap column scan folds a layout suggestion into the same card:
+      // a matching saved layout to Apply, or a freshly detected header to set up.
+      void prefetchColumnGuidance();
 
       // Auto-analyze if enabled in settings
       if (userSettings.autoAnalyze && !isMarkdownFile) {
@@ -20927,6 +20930,16 @@ function goToLine(displayIndex: number, originalLineNumber?: number): void {
 let severityCounts: { fatal: number; error: number; warning: number } | null = null;
 let severitySeenForFile: string | null = null;
 
+// The "Start here" card is fed by TWO independent, cheap on-open scans that each render the
+// card from scratch (so there's no partial-append race): the severity index, and a column
+// scan that either matches an existing saved layout or flags a freshly-detected header row.
+type LayoutGuidance =
+  | { kind: 'match'; layout: any }
+  | { kind: 'header'; names: string[] };
+let triageSeverity: { counts: { fatal: number; error: number; warning: number }; firstFatal: number | null; firstError: number | null; capped: boolean } | null = null;
+let pendingLayoutGuidance: LayoutGuidance | null = null;
+let layoutGuidanceSeenForFile: string | null = null;
+
 // Modest minimap-tick resolution (also cheap to transfer over IPC).
 function severityBucketCount(): number {
   const h = minimapCanvasElement?.height || 600;
@@ -20948,6 +20961,8 @@ function severityBucketCount(): number {
 // work belongs: behind the on-demand "📋 Full brief" button.
 
 function hideTriageCard(): void {
+  triageSeverity = null;
+  pendingLayoutGuidance = null;
   document.getElementById('triage-card')?.setAttribute('hidden', '');
 }
 
@@ -20959,17 +20974,31 @@ function showStartHereCard(
   firstError: number | null,
   capped: boolean,
 ): void {
+  if (counts.fatal + counts.error + counts.warning === 0) return; // nothing to look at
+  triageSeverity = { counts, firstFatal, firstError, capped };
+  renderTriageCard();
+}
+
+// Single source of truth for the "Start here" card: rebuild it from whatever cheap on-open
+// scans have resolved so far (severity and/or column-layout guidance). A full rebuild each
+// call means the two async scans never clobber each other's partial DOM.
+function renderTriageCard(): void {
   const el = document.getElementById('triage-card');
   if (!el) return;
-  const { fatal, error, warning } = counts;
-  if (fatal + error + warning === 0) return; // nothing to look at — stay hidden
-  const sev = (fatal > 0 || error > 0) ? 'critical' : 'warning';
-  const plus = capped ? '+' : '';
-  const verdict = [
-    fatal ? `💥 ${fatal.toLocaleString()}${plus}` : '',
-    error ? `⛔ ${error.toLocaleString()}${plus}` : '',
-    warning ? `⚠ ${warning.toLocaleString()}${plus}` : '',
-  ].filter(Boolean).join('  ');
+  const sevState = triageSeverity;
+  const guidance = pendingLayoutGuidance;
+  if (!sevState && !guidance) { el.setAttribute('hidden', ''); return; }
+  const wasHidden = el.hasAttribute('hidden');
+
+  const c = sevState?.counts;
+  const hasProblems = !!c && (c.fatal + c.error + c.warning > 0);
+  const sev = hasProblems ? ((c!.fatal > 0 || c!.error > 0) ? 'critical' : 'warning') : 'healthy';
+  const plus = sevState?.capped ? '+' : '';
+  const verdict = hasProblems ? [
+    c!.fatal ? `💥 ${c!.fatal.toLocaleString()}${plus}` : '',
+    c!.error ? `⛔ ${c!.error.toLocaleString()}${plus}` : '',
+    c!.warning ? `⚠ ${c!.warning.toLocaleString()}${plus}` : '',
+  ].filter(Boolean).join('  ') : '';
 
   el.innerHTML = '';
   const header = document.createElement('div');
@@ -20988,23 +21017,125 @@ function showStartHereCard(
   enableFloatingDrag(header, el); // drag the card around by its header
 
   // Actionable jump rows — the fast path to the first real problem.
-  const rows: Array<{ icon: string; cls: string; text: string; line: number }> = [];
-  if (fatal > 0 && firstFatal != null) rows.push({ icon: '💥', cls: 'crash', text: 'Jump to first fatal', line: firstFatal });
-  if (error > 0 && firstError != null) rows.push({ icon: '⛔', cls: 'comp', text: 'Jump to first error', line: firstError });
-  if (rows.length) {
-    const list = document.createElement('div'); list.className = 'triage-rows';
-    for (const r of rows) {
-      const row = document.createElement('button');
-      row.className = `triage-row ${r.cls}`;
-      row.title = `Jump to line ${(r.line + 1).toLocaleString()}`;
-      row.innerHTML = `<span class="triage-row-icon">${r.icon}</span><span class="triage-row-text">${escapeHtml(r.text)}</span><span class="triage-row-line">L${(r.line + 1).toLocaleString()}</span>`;
-      row.addEventListener('click', () => { goToLine(r.line); });
-      list.appendChild(row);
+  if (sevState) {
+    const rows: Array<{ icon: string; cls: string; text: string; line: number }> = [];
+    if (c!.fatal > 0 && sevState.firstFatal != null) rows.push({ icon: '💥', cls: 'crash', text: 'Jump to first fatal', line: sevState.firstFatal });
+    if (c!.error > 0 && sevState.firstError != null) rows.push({ icon: '⛔', cls: 'comp', text: 'Jump to first error', line: sevState.firstError });
+    if (rows.length) {
+      const list = document.createElement('div'); list.className = 'triage-rows';
+      for (const r of rows) {
+        const row = document.createElement('button');
+        row.className = `triage-row ${r.cls}`;
+        row.title = `Jump to line ${(r.line + 1).toLocaleString()}`;
+        row.innerHTML = `<span class="triage-row-icon">${r.icon}</span><span class="triage-row-text">${escapeHtml(r.text)}</span><span class="triage-row-line">L${(r.line + 1).toLocaleString()}</span>`;
+        row.addEventListener('click', () => { goToLine(r.line); });
+        list.appendChild(row);
+      }
+      el.appendChild(list);
     }
-    el.appendChild(list);
   }
+
+  // Column-layout guidance row — apply a matching saved layout, or set up the detected header.
+  if (guidance) appendLayoutGuidanceRow(el, guidance);
+
   el.removeAttribute('hidden');
-  trackUsage('triage:show');
+  if (wasHidden) trackUsage('triage:show');
+}
+
+// Append the on-open column-layout guidance to the card: either "a saved layout fits — Apply"
+// or "header detected — set up columns" (which opens the Columns window with its accept-proposal).
+function appendLayoutGuidanceRow(el: HTMLElement, guidance: LayoutGuidance): void {
+  const list = document.createElement('div');
+  list.className = 'triage-rows triage-layout';
+  const row = document.createElement('button');
+  row.className = 'triage-row layout';
+  if (guidance.kind === 'match') {
+    const l = guidance.layout;
+    const nCols = (l.columns || []).length;
+    row.title = `Apply the saved column layout “${l.name}” (${nCols} columns) to this file`;
+    row.innerHTML = `<span class="triage-row-icon">📐</span><span class="triage-row-text">Layout “${escapeHtml(l.name)}” fits — Apply</span><span class="triage-row-line">${nCols} cols</span>`;
+    row.addEventListener('click', () => { hideTriageCard(); void applyMatchedLayout(l); });
+  } else {
+    const preview = guidance.names.slice(0, 4).join(', ');
+    row.title = 'Open the Columns window to accept the detected header row as a layout';
+    row.innerHTML = `<span class="triage-row-icon">📐</span><span class="triage-row-text">Header detected${preview ? ': ' + escapeHtml(preview) + '…' : ''} — set up columns</span><span class="triage-row-line">${guidance.names.length} cols</span>`;
+    row.addEventListener('click', () => { hideTriageCard(); void showColumnsModal(); });
+  }
+  list.appendChild(row);
+  el.appendChild(list);
+}
+
+// Apply a saved layout straight to the viewer (no modal). Pattern layouts reuse the pattern
+// path; delimiter layouts map their columns by index over the file's freshly detected columns.
+async function applyMatchedLayout(layout: any): Promise<void> {
+  if (layout.method === 'pattern' && layout.pattern && Array.isArray(layout.pattern.fields)) {
+    applyColumnPattern(layout.pattern.regex, layout.pattern.flags, layout.pattern.fields, layout.columns);
+    return;
+  }
+  const res = await window.api.analyzeColumns();
+  if (!res?.success || !res.analysis) { showToast('Could not apply layout'); return; }
+  const a = res.analysis;
+  const cols = (a.columns || []).map((ac, i) => {
+    const lc = (layout.columns || []).find((c: any) => c.index === i);
+    return { index: i, sample: ac.sample || [], visible: lc ? lc.visible !== false : true, name: (lc && lc.name) || ac.name, muted: !!(lc && lc.muted) };
+  });
+  state.columnConfig = { delimiter: a.delimiter, delimiterName: a.delimiterName, columns: cols };
+  updateColumnHideStyle();
+  if (logContentElement) { logContentElement.innerHTML = ''; lineElementPool.releaseAll(); }
+  await loadVisibleLines();
+  showToast(`Applied layout “${layout.name}”`);
+}
+
+// Mirror of matchColumnLayout() in src/shared/layoutMatch.ts — MUST stay in sync (the renderer
+// is a script and can't import it). Kept minimal: find a saved delimiter layout that fits this
+// file (same delimiter + column count) and whose named columns overlap the detected header.
+function matchColumnLayoutLocal(analysis: ColumnAnalysis, layouts: any[]): any | null {
+  const colCount = (analysis.columns || []).length;
+  const headerNames = (analysis.columns || []).map(c => (c.name || '').toLowerCase()).filter(Boolean);
+  if (!colCount || !headerNames.length) return null; // only match when we have a header to key on
+  let best: any = null; let bestScore = 0;
+  for (const l of layouts || []) {
+    if (l.method !== 'delimiter' || l.delimiter !== analysis.delimiter || !Array.isArray(l.columns)) continue;
+    if (l.columns.length !== colCount) continue;
+    const lnames = new Set(l.columns.map((c: any) => (c.name || '').toLowerCase()).filter(Boolean));
+    const score = headerNames.filter(n => lnames.has(n)).length;
+    if (score > bestScore) { bestScore = score; best = l; }
+  }
+  return best;
+}
+
+// Cheap on-open column scan (first ~100 lines) that folds a layout suggestion into the "Start
+// here" card: a matching saved layout to Apply, or a freshly detected header to set up. Skipped
+// when the card feature is off or a column config is already active. Fire-and-forget.
+async function prefetchColumnGuidance(): Promise<void> {
+  pendingLayoutGuidance = null;
+  const forFile = state.filePath;
+  if (!forFile) return;
+  if (!isFeatureEnabled('triage-on-open')) return;
+  if (layoutGuidanceSeenForFile === forFile) return;
+  if (state.columnConfig) return; // the user already set columns up — don't nag
+  try {
+    const [colRes, layoutsRes] = await Promise.all([
+      window.api.analyzeColumns(),
+      (window.api as any).columnLayoutList(),
+    ]);
+    if (state.filePath !== forFile) return; // file changed while scanning
+    if (!colRes?.success || !colRes.analysis) return;
+    const analysis = colRes.analysis;
+    const saved = (layoutsRes && layoutsRes.layouts) || [];
+    const match = matchColumnLayoutLocal(analysis, saved);
+    if (match) {
+      pendingLayoutGuidance = { kind: 'match', layout: match };
+    } else if (analysis.headerConfident) {
+      const names = (analysis.columns || []).map(c => c.name).filter((n): n is string => !!n);
+      if (names.length < 2) return;
+      pendingLayoutGuidance = { kind: 'header', names };
+    } else {
+      return;
+    }
+    layoutGuidanceSeenForFile = forFile;
+    renderTriageCard();
+  } catch { /* ignore — Columns window still offers the proposal on demand */ }
 }
 
 // Kick off the background problem-index build right after open and, once per file,
