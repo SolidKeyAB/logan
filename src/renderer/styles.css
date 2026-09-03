@@ -2694,6 +2694,29 @@ button.is-cancelable:hover, .btn.is-cancelable:hover { filter: brightness(1.12);
   color: var(--text-primary);
   border-right: 1px solid var(--border-color);
   padding: 0 2px;
+  position: relative; /* anchors the resize handle to the cell's right border */
+}
+/* Drag the right border of a header cell to resize its column (Stage 2). Sits inside the cell's
+   right edge (the cell is overflow:hidden, so keep it in-bounds). Hover shows an accent bar. */
+.col-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+.col-resize-handle:hover,
+body.col-resizing .col-resize-handle {
+  background: var(--accent-color);
+  opacity: 0.85;
+}
+/* While dragging, force the resize cursor everywhere and kill text selection. */
+body.col-resizing,
+body.col-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 /* Virtual Log Viewer */

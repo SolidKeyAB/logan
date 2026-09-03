@@ -2246,6 +2246,16 @@ function createLogViewer(): void {
   columnHeaderTrackEl = document.createElement('div');
   columnHeaderTrackEl.className = 'column-header-track';
   columnHeaderStripEl.appendChild(columnHeaderTrackEl);
+  // Delegated resize wiring (Stage 2): the track's innerHTML is rebuilt on every layout change, so
+  // bind once here and route by the handle's data-col. Drag = resize; double-click = auto-fit.
+  columnHeaderStripEl.addEventListener('mousedown', (e) => {
+    const h = (e.target as HTMLElement)?.closest?.('.col-resize-handle') as HTMLElement | null;
+    if (h) beginColumnResize(parseInt(h.dataset.col || '0', 10), e);
+  });
+  columnHeaderStripEl.addEventListener('dblclick', (e) => {
+    const h = (e.target as HTMLElement)?.closest?.('.col-resize-handle') as HTMLElement | null;
+    if (h) autoFitColumn(parseInt(h.dataset.col || '0', 10));
+  });
   viewerStack.appendChild(columnHeaderStripEl);
   viewerStack.appendChild(logViewerElement);
 
@@ -19716,6 +19726,7 @@ async function showColumnsModal(): Promise<void> {
             columns[i].visible = state.columnConfig.columns[i].visible;
             (columns[i] as any).name = state.columnConfig.columns[i].name;
             (columns[i] as any).muted = state.columnConfig.columns[i].muted;
+            (columns[i] as any).width = state.columnConfig.columns[i].width; // keep drag-set widths across a modal round-trip
           }
         }
       }
@@ -19987,6 +19998,14 @@ function applyColumnLayoutToModal(layout: any): void {
     const lc = byIndex.get(parseInt(inp.dataset.colIndex || '0', 10));
     if (lc && typeof lc.name === 'string') inp.value = lc.name;
   });
+  // Reflect saved header/fixed-width mode in the toggle, and carry saved widths into tempConfig so a
+  // subsequent Apply keeps them (applyColumnsConfig reads width off tempConfig.columns).
+  const headerCb = document.getElementById('columns-header-mode') as HTMLInputElement | null;
+  if (headerCb) headerCb.checked = !!layout.headerMode;
+  for (const c of (tempConfig.columns || [])) {
+    const lc = byIndex.get(c.index);
+    if (lc && typeof lc.width === 'number') c.width = lc.width;
+  }
   const mismatch = tempConfig.delimiter && layout.delimiter && tempConfig.delimiter !== layout.delimiter;
   showToast(`Loaded layout “${layout.name}”${mismatch ? ' (different delimiter — mapped by position)' : ''} — click Apply`);
 }
@@ -20007,6 +20026,14 @@ async function saveCurrentColumnLayout(defaultName = ''): Promise<boolean> {
   elements.columnsList.querySelectorAll<HTMLInputElement>('.col-mute-cb').forEach((cb) => {
     muteById.set(parseInt(cb.dataset.colMute || '0', 10), cb.checked);
   });
+  // Header/fixed-width mode + drag-set widths: the checkbox is the modal's current intent; live
+  // widths come from state.columnConfig (that's what the in-viewer drag mutates).
+  const headerMode = (document.getElementById('columns-header-mode') as HTMLInputElement | null)?.checked
+    ?? !!state.columnConfig?.headerMode;
+  const widthById = new Map<number, number>();
+  for (const c of (state.columnConfig?.columns || [])) {
+    if (typeof c.width === 'number') widthById.set(c.index, c.width);
+  }
   const name = await showInputPrompt('Name this column layout (e.g. "access-log", "sensor"):', defaultName);
   if (!name) return false;
   const layout = {
@@ -20015,11 +20042,13 @@ async function saveCurrentColumnLayout(defaultName = ''): Promise<boolean> {
     method: 'delimiter',
     delimiter: tempConfig.delimiter,
     delimiterName: tempConfig.delimiterName,
+    ...(headerMode ? { headerMode: true } : {}),
     columns: (tempConfig.columns || []).map((c: any) => ({
       index: c.index,
       name: nameById.get(c.index),
       visible: visById.has(c.index) ? visById.get(c.index)! : (c.visible !== false),
       ...(muteById.get(c.index) ? { muted: true } : {}),
+      ...(widthById.has(c.index) ? { width: widthById.get(c.index) } : (typeof c.width === 'number' ? { width: c.width } : {})),
     })),
   };
   const res = await (window.api as any).columnLayoutSave(layout);
@@ -20500,7 +20529,10 @@ function renderColumnHeaderStrip(): void {
     .filter(c => c.visible)
     .map(c => {
       const label = c.name || `col ${c.index + 1}`;
-      return `<span class="log-col col-header-cell" data-col="${c.index}" title="${escapeHtml(label)}">${escapeHtml(label)}</span>`;
+      // A grab handle on the cell's right border resizes the column (Stage 2). Skip it on muted
+      // columns — they're collapsed to a 2ch sliver, so there's nothing to size.
+      const handle = c.muted ? '' : `<span class="col-resize-handle" data-col="${c.index}" title="Drag to resize · double-click to auto-fit"></span>`;
+      return `<span class="log-col col-header-cell" data-col="${c.index}" title="${escapeHtml(label)}">${escapeHtml(label)}${handle}</span>`;
     })
     .join('');
   columnHeaderTrackEl.innerHTML =
@@ -20513,6 +20545,51 @@ function renderColumnHeaderStrip(): void {
 function syncColumnHeaderScroll(): void {
   if (!columnHeaderTrackEl || !logViewerElement) return;
   columnHeaderTrackEl.style.transform = `translateX(${-logViewerElement.scrollLeft}px)`;
+}
+
+// ── Stage 2: drag a header border to resize its column ───────────────────────────────────────────
+// A column's width is ONE CSS rule (`.log-col[data-col="i"]{width:Nch}`) shared by the header cell
+// and every data row, so a resize is just: mutate col.width → re-emit that rule (updateColumnWidthStyle).
+// Header + all rows resize together, no row re-render — zero-perf at any file size. Handles are wired
+// via one delegated mousedown/dblclick listener on the strip (bound once in createLogViewer).
+let columnResize: { colIndex: number; startX: number; startWidth: number } | null = null;
+
+function beginColumnResize(colIndex: number, e: MouseEvent): void {
+  const col = state.columnConfig?.columns.find(c => c.index === colIndex);
+  if (!col) return;
+  columnResize = { colIndex, startX: e.clientX, startWidth: Math.max(2, Math.round(col.width ?? DEFAULT_COL_WIDTH_CH)) };
+  document.body.classList.add('col-resizing');
+  window.addEventListener('mousemove', onColumnResizeMove);
+  window.addEventListener('mouseup', endColumnResize);
+  e.preventDefault();
+  e.stopPropagation();
+}
+
+function onColumnResizeMove(e: MouseEvent): void {
+  if (!columnResize) return;
+  const col = state.columnConfig?.columns.find(c => c.index === columnResize!.colIndex);
+  if (!col) return;
+  const charW = getCharWidth() || 8;               // px per char → convert the pixel drag into ch
+  const deltaCh = (e.clientX - columnResize.startX) / charW;
+  col.width = Math.max(2, Math.round(columnResize.startWidth + deltaCh));
+  updateColumnWidthStyle();                          // one rule → header + data rows resize together
+  syncColumnHeaderScroll();                          // total width changed; re-align to scrollLeft
+}
+
+function endColumnResize(): void {
+  columnResize = null;
+  document.body.classList.remove('col-resizing');
+  window.removeEventListener('mousemove', onColumnResizeMove);
+  window.removeEventListener('mouseup', endColumnResize);
+}
+
+// Double-click a header border → auto-fit that column back to its default width (name + bounded sample).
+function autoFitColumn(colIndex: number): void {
+  const col = state.columnConfig?.columns.find(c => c.index === colIndex);
+  if (!col) return;
+  col.width = defaultColumnWidthCh(col);
+  updateColumnWidthStyle();
+  syncColumnHeaderScroll();
 }
 
 // Toggle / clear column mute (right-click in the viewer, or the Columns window).
@@ -25616,10 +25693,15 @@ async function applyColumnLayoutToView(layout: any): Promise<void> {
     return;
   }
   const prevDelimiter = state.columnConfig?.delimiter ?? null;
+  const headerMode = !!layout.headerMode;
   state.columnConfig = {
     delimiter: layout.delimiter,
     delimiterName: layout.delimiterName,
-    columns: (layout.columns || []).map((c: any) => ({ index: c.index, sample: c.sample, visible: c.visible !== false, name: c.name, muted: !!c.muted })),
+    headerMode,
+    columns: (layout.columns || []).map((c: any) => ({
+      index: c.index, sample: c.sample, visible: c.visible !== false, name: c.name, muted: !!c.muted,
+      width: typeof c.width === 'number' ? c.width : (headerMode ? defaultColumnWidthCh(c) : undefined),
+    })),
   };
   updateColumnHideStyle();
   if (prevDelimiter !== state.columnConfig.delimiter) {
