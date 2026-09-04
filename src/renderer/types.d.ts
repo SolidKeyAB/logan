@@ -778,6 +778,9 @@ interface Api {
   setInvestigationParams: (name: string, patches: any[]) => Promise<{ success: boolean; template?: any; applied?: number; errors?: string[]; error?: string }>;
   suggestInvestigationRequirements: () => Promise<{ success: boolean; requirements?: any; error?: string }>;
   listEntities: (kind?: string) => Promise<{ success: boolean; count?: number; entities?: any[]; error?: string }>;
+  catalogExport: () => Promise<{ success: boolean; canceled?: boolean; path?: string; summary?: Array<{ kind: string; count: number }>; error?: string }>;
+  catalogImport: () => Promise<{ success: boolean; canceled?: boolean; applied?: any[]; error?: string }>;
+  onCatalogImported: (callback: (payload: { applied: any[] }) => void) => () => void;
   onInvestigationTemplatesChanged: (callback: () => void) => () => void;
   onInvestigationRunStep: (callback: (payload: { name?: string; slug?: string; phase?: string; index?: number; total?: number; ok?: boolean; summary?: string; label?: string }) => void) => () => void;
   onEntityApply: (callback: (payload: { kind: string; id: string; name: string }) => void) => () => void;

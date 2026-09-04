@@ -447,6 +447,10 @@ export interface ApiContext {
   // Apply a saved LENS entity (filter/highlightGroup/columnLayout/session) to the open view —
   // the agent-parity write-half of listSavedEntities (reuses the human applySavedEntity).
   applyEntityRef(ref: { kind: string; id?: string; name?: string }): { success: boolean; applied?: boolean; entity?: any; error?: string };
+  // Portable catalogue: pack the reusable GLOBAL entity stores into a `.logan-pack` text
+  // (optionally passphrase-encrypted), and merge one back in. Import defaults to a dry run.
+  exportCatalog(opts?: { kinds?: string[]; passphrase?: string }): { text: string; encrypted: boolean; manifest: any; summary: Array<{ kind: string; count: number }> };
+  importCatalog(input: { text: string; passphrase?: string; dryRun?: boolean; policy?: 'skip' | 'overwrite' | 'keepBoth'; kinds?: string[] }): any;
   investigateCrashes(options: { contextLines?: number; maxCrashes?: number; autoBookmark?: boolean; autoHighlight?: boolean }): Promise<any>;
   investigateComponent(options: { component: string; maxSamplesPerLevel?: number; includeErrorContext?: boolean; contextLines?: number }): Promise<any>;
   investigateTimerange(options: { startTime: string; endTime: string; maxSamples?: number }): Promise<any>;
@@ -1218,6 +1222,39 @@ export function startApiServer(ctx: ApiContext): void {
           // Apply a saved lens entity to the open view (agent parity for the human ▶ Apply).
           const result = ctx.applyEntityRef({ kind: body.kind, id: body.id, name: body.name });
           if (!result.success) return sendError(res, result.error || 'Could not apply');
+          sendJson(res, result);
+          return;
+        }
+        if (url === '/api/export-catalog') {
+          // Pack the reusable global catalogue → a `.logan-pack`. If `path` is given, write the
+          // file server-side and return a summary; otherwise return the pack text inline.
+          const out = ctx.exportCatalog({ kinds: Array.isArray(body.kinds) ? body.kinds : undefined, passphrase: body.passphrase });
+          if (body.path) {
+            try {
+              const dir = path.dirname(String(body.path));
+              if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+              fs.writeFileSync(String(body.path), out.text, 'utf-8');
+            } catch (e: any) { return sendError(res, `Could not write ${body.path}: ${e?.message || e}`); }
+            sendJson(res, { success: true, path: body.path, encrypted: out.encrypted, summary: out.summary, manifest: out.manifest });
+            return;
+          }
+          sendJson(res, { success: true, text: out.text, encrypted: out.encrypted, summary: out.summary, manifest: out.manifest });
+          return;
+        }
+        if (url === '/api/import-catalog') {
+          // Merge a `.logan-pack` into the global catalogue. Reads `path` or inline `text`.
+          // Defaults to a DRY RUN (returns a plan, writes nothing) unless dryRun:false.
+          let text: string | undefined = typeof body.text === 'string' ? body.text : undefined;
+          if (!text && body.path) {
+            try { text = fs.readFileSync(String(body.path), 'utf-8'); }
+            catch (e: any) { return sendError(res, `Could not read ${body.path}: ${e?.message || e}`); }
+          }
+          if (!text) return sendError(res, 'Provide `path` to a .logan-pack file or inline `text`.');
+          const result = ctx.importCatalog({
+            text, passphrase: body.passphrase,
+            dryRun: body.dryRun !== false, policy: body.policy,
+            kinds: Array.isArray(body.kinds) ? body.kinds : undefined,
+          });
           sendJson(res, result);
           return;
         }
