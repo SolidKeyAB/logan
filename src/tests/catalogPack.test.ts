@@ -183,6 +183,12 @@ describe('export coverage guardrail', () => {
     }
   });
 
+  it('records the current export decisions (baselines in, per-file context out)', () => {
+    // A deliberate snapshot: changing what's exportable should show up as a diff here.
+    expect(EXPORTABLE_KINDS).toContain('baseline');
+    expect(CATALOG_EXPORT_POLICY.contextManifest.export).toBe(false);
+  });
+
   it('every identity spec has at least one id key and one name key', () => {
     for (const [kind, spec] of Object.entries(CATALOG_IDENTITY)) {
       expect(spec.idKeys.length, `${kind} idKeys`).toBeGreaterThan(0);
