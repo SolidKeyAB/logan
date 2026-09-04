@@ -535,7 +535,9 @@ export async function buildEvidencePack(
   opts: EvidencePackOptions = {}
 ): Promise<{ success: boolean; pack?: any; error?: string }> {
   const filePath = ctx.getCurrentFilePath();
-  const handler = ctx.getFileHandler();
+  // getReadHandler so an evidence pack can be built over a virtual (composite/segmented)
+  // session — this only needs getTotalLines(); the sub-steps use ctx.analyze/detectTimeGaps.
+  const handler = ctx.getReadHandler();
   if (!filePath || !handler) return { success: false, error: 'No file open' };
   const totalLines = handler.getTotalLines();
 
@@ -671,7 +673,9 @@ export async function buildConclusion(
   opts: BuildConclusionOptions = {}
 ): Promise<{ success: boolean; conclusion?: ConclusionReport; error?: string }> {
   const filePath = ctx.getCurrentFilePath();
-  const handler = ctx.getFileHandler();
+  // getReadHandler so a conclusion can be built over a virtual (composite/segmented)
+  // session — this only needs getTotalLines(); the sub-steps use ctx.analyze/detectTimeGaps.
+  const handler = ctx.getReadHandler();
   if (!filePath || !handler) return { success: false, error: 'No file open' };
   const totalLines = handler.getTotalLines();
 
@@ -1908,7 +1912,8 @@ export function startApiServer(ctx: ApiContext): void {
 
         if (url === '/api/baseline-save') {
           const filePath = ctx.getCurrentFilePath();
-          const handler = ctx.getFileHandler();
+          // getReadHandler so a baseline can be saved from a virtual (composite/segmented) session.
+          const handler = ctx.getReadHandler();
           const analysisResult = ctx.getAnalysisResult();
           if (!filePath || !handler) return sendError(res, 'No file open');
           if (!analysisResult) return sendError(res, 'Run analysis first');
@@ -1925,7 +1930,8 @@ export function startApiServer(ctx: ApiContext): void {
 
         if (url === '/api/baseline-compare') {
           const filePath = ctx.getCurrentFilePath();
-          const handler = ctx.getFileHandler();
+          // getReadHandler so a virtual (composite/segmented) session can be compared to a baseline.
+          const handler = ctx.getReadHandler();
           const analysisResult = ctx.getAnalysisResult();
           if (!filePath || !handler) return sendError(res, 'No file open');
           if (!analysisResult) return sendError(res, 'Run analysis first');

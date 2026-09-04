@@ -2,15 +2,17 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { AnalysisResult } from './analyzers/types';
-import { FileHandler } from './fileHandler';
-import { CompositeFileHandler } from './compositeFileHandler';
-import { SegmentedFileHandler } from './segmentedFileHandler';
+import type { FileInfo, LineData } from '../shared/types';
 import { diffEnv, envDiffIsEmpty, envDiffToStrings } from './contextManifest';
 
-// A baseline can be fingerprinted from a real file OR from a virtual session (a
-// single-session composite / segmented big file). All three share the getTotalLines/
-// getFileInfo/getLines read surface buildFingerprint uses.
-type FingerprintSource = FileHandler | CompositeFileHandler | SegmentedFileHandler;
+// buildFingerprint reads only these three methods, so a baseline can be captured from a
+// real FileHandler, a virtual session (single-session composite / segmented big file, via
+// getReadHandler()), or the api-server read-handler Pick — all satisfy this structurally.
+type FingerprintSource = {
+  getTotalLines(): number;
+  getFileInfo(): FileInfo | null;
+  getLines(startLine: number, count: number): LineData[];
+};
 
 // --- Types ---
 
