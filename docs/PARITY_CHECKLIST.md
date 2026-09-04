@@ -336,3 +336,18 @@ when each is next touched):
   talking to the agent, then run/tweak/fork it in the hub like any recipe). Follow-up P1 =
   a human "＋ Compose" surface (pick sub-recipes, set params, set each `when`) + top-level
   composite inputs that forward into sub-recipes, and output→input value binding.
+
+- **Portable catalogue export/import — `logan_export_catalog` / `logan_import_catalog`.**
+  Pack the reusable GLOBAL catalogue into a `.logan-pack` (JSON container + manifest with
+  per-store SHA-256) and merge one back (dry-run by default; skip/overwrite/keep-both). Engine
+  is pure + unit-tested (`src/main/catalogPack.ts`). **RUN at full parity:** agent via the two
+  MCP verbs + `/api/export-catalog` · `/api/import-catalog`; human via the Saved-panel
+  **⤓ Export / ⤒ Import** buttons, whose whole flow (picker → dry-run preview → policy →
+  apply) runs in main via native dialogs against the SAME `apiContext.exportCatalog/importCatalog`.
+  **COVERAGE GUARDRAIL (the "keep it updated" rule):** every `EntityKind` must be classified in
+  `catalogPack.CATALOG_EXPORT_POLICY` (a `Record<EntityKind,…>` → tsc fails on an unclassified
+  kind); exportable kinds must appear in `CATALOG_IDENTITY` and `buildCatalogRegistry()`
+  (`Record<ExportableKind,…>` → tsc) and are cross-checked by a test. **So: when you add a new
+  saveable entity kind, the build stays red until you decide its export status** — no silent drift.
+  **Logged parity DEBT (small):** human-side passphrase entry (encrypted packs import via the
+  agent verb for now, since native message boxes can't take text input); baselines excluded (P1).
