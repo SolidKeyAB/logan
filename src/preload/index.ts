@@ -72,6 +72,8 @@ const IPC = {
   INVESTIGATION_COMPOSE: 'investigation-compose',
   WORKFLOW_SHOW: 'workflow-show',
   ENTITIES_LIST: 'entities-list',
+  CATALOG_EXPORT: 'catalog-export',
+  CATALOG_IMPORT: 'catalog-import',
   SERIAL_LIST_PORTS: 'serial-list-ports',
   LOGCAT_LIST_DEVICES: 'logcat-list-devices',
   SSH_PARSE_CONFIG: 'ssh-parse-config',
@@ -843,6 +845,17 @@ const api = {
   // Entity Registry — the saved-entities browse catalog
   listEntities: (kind?: string): Promise<{ success: boolean; count?: number; entities?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.ENTITIES_LIST, kind),
+  // Portable catalogue — the whole export/import flow (file dialogs + conflict prompt) runs in
+  // main via native dialogs; the renderer just kicks it off and refreshes afterward.
+  catalogExport: (): Promise<{ success: boolean; canceled?: boolean; path?: string; summary?: Array<{ kind: string; count: number }>; error?: string }> =>
+    ipcRenderer.invoke(IPC.CATALOG_EXPORT),
+  catalogImport: (): Promise<{ success: boolean; canceled?: boolean; applied?: any[]; error?: string }> =>
+    ipcRenderer.invoke(IPC.CATALOG_IMPORT),
+  onCatalogImported: (callback: (payload: { applied: any[] }) => void): (() => void) => {
+    const handler = (_e: any, payload: { applied: any[] }) => callback(payload);
+    ipcRenderer.on('catalog-imported', handler);
+    return () => ipcRenderer.removeListener('catalog-imported', handler);
+  },
   onInvestigationTemplatesChanged: (callback: () => void): (() => void) => {
     const handler = () => callback();
     ipcRenderer.on('investigation-templates-changed', handler);

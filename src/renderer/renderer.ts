@@ -25582,6 +25582,23 @@ async function loadSavedEntitiesPanel(): Promise<void> {
     const filterInput = document.getElementById('saved-filter') as HTMLInputElement | null;
     filterInput?.addEventListener('input', () => renderSavedEntities(filterInput.value));
     document.getElementById('btn-saved-refresh')?.addEventListener('click', () => { void loadSavedEntitiesPanel(); });
+    // Portable catalogue — ⤓ Export / ⤒ Import. The file picker + conflict prompt happen in
+    // main (native dialogs); here we just kick it off and refresh the panel on a real import.
+    document.getElementById('btn-saved-export')?.addEventListener('click', async () => {
+      trackUsage('saved:export:catalog');
+      const res = await window.api.catalogExport();
+      if (res?.canceled) return;
+      if (!res?.success) showToast(res?.error || 'Export failed');
+    });
+    document.getElementById('btn-saved-import')?.addEventListener('click', async () => {
+      trackUsage('saved:import:catalog');
+      const res = await window.api.catalogImport();
+      if (res?.canceled) return;
+      if (!res?.success) { showToast(res?.error || 'Import failed'); return; }
+      await loadSavedEntitiesPanel();
+    });
+    // An agent import (logan_import_catalog) mutated the stores → refresh the browse catalog.
+    window.api.onCatalogImported?.(() => { void loadSavedEntitiesPanel(); });
     // Agent added a clue (logan_add_clue) or another surface changed a sequence → refresh
     // the inline trails live. Registered once, when the Saved panel first opens.
     (window.api as any).onSequencesChanged?.(() => { void loadSavedEntitiesPanel(); });
