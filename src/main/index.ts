@@ -24,6 +24,7 @@ import { detectDelimiter, findHeaderRow, isCommentOrBanner } from '../shared/col
 import { launchPathCandidates } from './launchArgs';
 import { CompositeFileHandler, CompositeMemberHandler, CompositeBoundary } from './compositeFileHandler';
 import { SegmentedFileHandler } from './segmentedFileHandler';
+import { deriveOutputTarget, type OutputTarget } from './outputTarget';
 import { computeSegmentPlan, readSystemMemory } from './segmentPlan';
 import { getRipgrepPath } from './ripgrepPath';
 import { openWithAdapter, NormalizedSource, isTextPassthrough } from './sourceAdapter';
@@ -413,6 +414,21 @@ function getReadHandler(): FileHandler | CompositeFileHandler | SegmentedFileHan
   // getFileHandler() instead and stay disabled in segmented mode, exactly like composite mode.
   if (activeSegmented && currentFilePath === activeSegmentedPath) return activeSegmented;
   return getFileHandler();
+}
+
+// Where a WRITE tool (extract / save-selected / notes / split / bookmark export) should
+// put its output for the current view. A real file or a segmented big file has a real path;
+// a single-session composite has only a display label, so anchor writes to its FIRST
+// member's directory (deriveOutputTarget does the path math). Returns null if nothing is open.
+function resolveOutputTarget(): OutputTarget | null {
+  if (activeComposite && currentFilePath === activeCompositeId) {
+    const members = activeComposite.boundaries();
+    if (members.length === 0) return null;
+    return deriveOutputTarget({ kind: 'composite', label: activeComposite.getFileInfo().path, memberPath: members[0].filePath });
+  }
+  const info = getReadHandler()?.getFileInfo();
+  if (!info) return null;
+  return deriveOutputTarget({ kind: 'file', path: info.path });
 }
 
 // Open each path (reusing the FileHandler cache) and wrap them in a CompositeFileHandler.
@@ -1338,7 +1354,10 @@ app.whenReady().then(() => {
     },
     analyze: async (analyzerName?: string, scope?: ScopeDescriptor) => {
       if (!currentFilePath) return { success: false, error: 'No file open' };
-      const handler = getFileHandler();
+      // getReadHandler so scoped analysis + the line count also work over an active
+      // single-session composite / segmented big file (whole-file analysis already is
+      // composite-aware via analyzeCurrentTarget). Matches the human analyze-file path.
+      const handler = getReadHandler();
       const resolved = resolveCurrentScope(scope);
       const total = handler ? handler.getTotalLines() : 0;
 
@@ -1365,7 +1384,9 @@ app.whenReady().then(() => {
       }
     },
     applyFilter: async (config: any) => {
-      const handler = getFileHandler();
+      // getReadHandler so the agent's logan_filter runs over a composite / segmented view
+      // too — parity with the human apply-filter IPC, which already uses it.
+      const handler = getReadHandler();
       if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
       filterSignal = { cancelled: false };
       const tFilter0 = Date.now();
@@ -3147,7 +3168,12 @@ interface ColumnAnalysis {
 // "#----- BEGIN:" banner no longer masquerades as the header (see esotrace 11-column exports).
 
 ipcMain.handle('analyze-columns', async () => {
-  const handler = getFileHandler();
+  // getReadHandler (not getFileHandler) so column detection works over an active single-session
+  // composite / segmented big file too — they're kept out of fileHandlerCache, so getFileHandler
+  // returns null there and the Columns modal's Detect used to report "No file open" (which meant
+  // you couldn't set up — hence couldn't hide/mute — columns on a merged/virtual session). All
+  // three handler types share the sync getLines(start,count) shape this uses.
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
   try {
@@ -3857,23 +3883,24 @@ ipcMain.handle('export-bookmarks', async () => {
   }
 
   try {
-    const handler = getFileHandler();
-    const fileInfo = handler?.getFileInfo();
-    if (!fileInfo) {
+    // getReadHandler + resolveOutputTarget so bookmark export works on a virtual
+    // (composite/segmented) session — a composite's path is a label, so writes anchor to
+    // its first member's directory.
+    const handler = getReadHandler();
+    const target = resolveOutputTarget();
+    if (!target) {
       return { success: false, error: 'No file info available' };
     }
 
     // Generate export filename
-    const currentDir = path.dirname(fileInfo.path);
-    const baseName = path.basename(fileInfo.path, path.extname(fileInfo.path));
     const timestamp = new Date().toISOString().substring(0, 10).replace(/-/g, '');
-    const exportPath = path.join(currentDir, `${baseName}_bookmarks_${timestamp}.md`);
+    const exportPath = path.join(target.dir, `${target.baseName}_bookmarks_${timestamp}.md`);
 
     // Build markdown content with clickable links
     const lines: string[] = [
       `# Bookmarks`,
       ``,
-      `**Source:** \`${fileInfo.path}\``,
+      `**Source:** \`${target.displayPath}\``,
       `**Exported:** ${new Date().toISOString().replace('T', ' ').substring(0, 19)}`,
       `**Total Bookmarks:** ${bookmarks.size}`,
       ``,
@@ -3895,8 +3922,9 @@ ipcMain.handle('export-bookmarks', async () => {
         lines.push(`**Note:** ${bookmark.label}`);
         lines.push(``);
       }
-      // File link in format that some editors/tools can open (VSCode, etc)
-      lines.push(`**Link:** \`${fileInfo.path}:${bookmark.lineNumber + 1}\``);
+      // File link in format that some editors/tools can open (VSCode, etc). For a composite
+      // this references the session label (a global line has no single real-file path).
+      lines.push(`**Link:** \`${target.displayPath}:${bookmark.lineNumber + 1}\``);
       lines.push(``);
       lines.push(`\`\`\``);
       lines.push(lineText);
@@ -4869,7 +4897,9 @@ ipcMain.handle('context-definition-delete', async (_, id: string) => {
 });
 
 ipcMain.handle(IPC.CONTEXT_SEARCH, async (_, contextIds: string[]) => {
-  const handler = getFileHandler();
+  // getReadHandler so context search (must/clue proximity) runs over a composite /
+  // segmented view too — it only reads via search()/getLines()/getFileInfo().
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
   const allDefs = loadContextDefinitionsForFile(currentFilePath || '');
@@ -4993,7 +5023,8 @@ function extractComponent(text: string): string | null {
 }
 
 ipcMain.handle(IPC.TRACEBACK, async (_, request: { targetLine: number; windowLines?: number; windowSeconds?: number; maxResults?: number }) => {
-  const handler = getFileHandler();
+  // getReadHandler so traceback works over a composite / segmented view (read-only via getLines()).
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
   const { targetLine, windowLines = 200, windowSeconds = 60, maxResults = 50 } = request;
@@ -5158,7 +5189,8 @@ ipcMain.handle(IPC.TRACEBACK, async (_, request: { targetLine: number; windowLin
 // === Utility ===
 
 ipcMain.handle('get-file-info', async () => {
-  const handler = getFileHandler();
+  // getReadHandler so a composite / segmented session reports its own info, not "No file open".
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
   return { success: true, info: handler.getFileInfo() };
 });
@@ -5226,7 +5258,7 @@ const SAVE_RANGE_READ_BATCH = 20000;
 const SAVE_RANGE_FLUSH_CHARS = 8 * 1024 * 1024; // flush the buffer well before any string-size limits
 function streamLineBodiesToFd(
   fd: number,
-  handler: NonNullable<ReturnType<typeof getFileHandler>>,
+  handler: NonNullable<ReturnType<typeof getReadHandler>>,
   startLine: number,
   endLine: number,
   filteredRange: number[] | null,
@@ -5261,7 +5293,8 @@ function streamLineBodiesToFd(
 // === Save Selected Lines ===
 
 ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: number, columnConfig?: ColumnConfig) => {
-  const handler = getFileHandler();
+  // getReadHandler so a range can be saved from a composite/segmented session too.
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
   try {
@@ -5278,12 +5311,11 @@ ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: numb
       return { success: false, error: 'No lines to save' };
     }
 
-    // Get current file's directory
-    const fileInfo = handler.getFileInfo();
-    if (!fileInfo) return { success: false, error: 'No file info' };
+    // Resolve a real output directory (a composite's own path is a label, not a folder).
+    const target = resolveOutputTarget();
+    if (!target) return { success: false, error: 'No file info' };
 
-    const currentDir = path.dirname(fileInfo.path);
-    const selectedDir = path.join(currentDir, 'selected');
+    const selectedDir = path.join(target.dir, 'selected');
 
     // Create 'selected' folder if it doesn't exist
     if (!fs.existsSync(selectedDir)) {
@@ -5319,7 +5351,7 @@ ipcMain.handle('save-selected-lines', async (_, startLine: number, endLine: numb
 // save-range writer) so a huge subset can't overflow V8's ~512MB string cap.
 function streamFilteredExtractToFd(
   fd: number,
-  handler: NonNullable<ReturnType<typeof getFileHandler>>,
+  handler: NonNullable<ReturnType<typeof getReadHandler>>,
   filteredLineNumbers: number[],
   columnConfig: ColumnConfig | undefined,
   includeLineNumbers: boolean,
@@ -5351,19 +5383,19 @@ function streamFilteredExtractToFd(
 // same instrument, two operators. Materializes the active-filter subset to a NEW
 // small file and returns its path.
 async function runFilteredExtract(opts?: { includeLineNumbers?: boolean; columnConfig?: ColumnConfig }): Promise<{ success: boolean; filePath?: string; lineCount?: number; error?: string }> {
-  const handler = getFileHandler();
+  // getReadHandler so "Extract filter → file" works on a composite/segmented session;
+  // resolveOutputTarget gives a real output dir (a composite's path is a label).
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
   const filtered = getFilteredLines();
   if (!filtered || filtered.length === 0) {
     return { success: false, error: 'No active filter — apply a filter first, then Extract.' };
   }
   try {
-    const fileInfo = handler.getFileInfo();
-    if (!fileInfo) return { success: false, error: 'No file info' };
-    const dir = path.dirname(fileInfo.path);
-    const base = path.basename(fileInfo.path).replace(/\.[^.]+$/, '');
+    const target = resolveOutputTarget();
+    if (!target) return { success: false, error: 'No file info' };
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filePath = path.join(dir, `${base}.filtered_${stamp}.log`);
+    const filePath = path.join(target.dir, `${target.baseName}.filtered_${stamp}.log`);
     const includeLineNumbers = opts?.includeLineNumbers !== false; // default true
     const total = handler.getTotalLines();
 
@@ -5371,7 +5403,7 @@ async function runFilteredExtract(opts?: { includeLineNumbers?: boolean; columnC
     let lineCount: number;
     try {
       // Self-describing header (a plain comment line; not a #SPLIT header).
-      fs.writeSync(fd, extractHeaderLine(filtered.length, total, path.basename(fileInfo.path), includeLineNumbers) + '\n');
+      fs.writeSync(fd, extractHeaderLine(filtered.length, total, path.basename(target.displayPath), includeLineNumbers) + '\n');
       lineCount = streamFilteredExtractToFd(fd, handler, filtered, opts?.columnConfig, includeLineNumbers);
     } finally {
       fs.closeSync(fd);
@@ -5493,14 +5525,13 @@ function getNotesFileSource(notesFilePath: string): string | null {
 
 // Find existing notes files for the current log file
 ipcMain.handle('find-notes-files', async () => {
-  const handler = getFileHandler();
-  if (!handler) return { success: false, error: 'No file open' };
+  // resolveOutputTarget so notes are found for a composite/segmented session too; a
+  // composite's notes live in its first member's dir keyed to the session label.
+  const target = resolveOutputTarget();
+  if (!target) return { success: false, error: 'No file open' };
 
-  const fileInfo = handler.getFileInfo();
-  if (!fileInfo) return { success: false, error: 'No file info' };
-
-  const currentDir = path.dirname(fileInfo.path);
-  const logFilePath = fileInfo.path;
+  const currentDir = target.dir;
+  const logFilePath = target.displayPath;
 
   try {
     const files = fs.readdirSync(currentDir);
@@ -5540,7 +5571,9 @@ ipcMain.handle('save-to-notes', async (
   targetFilePath?: string, // If provided, append to this file; otherwise create new
   columnConfig?: ColumnConfig
 ) => {
-  const handler = getFileHandler();
+  // getReadHandler so notes can be saved from a composite/segmented session (reads via
+  // streamLineBodiesToFd); resolveOutputTarget gives a real notes directory + base name.
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
   try {
@@ -5557,11 +5590,11 @@ ipcMain.handle('save-to-notes', async (
       return { success: false, error: 'No lines to save' };
     }
 
-    // Get current file info
-    const fileInfo = handler.getFileInfo();
-    if (!fileInfo) return { success: false, error: 'No file info' };
+    // Resolve a real notes directory + base name (a composite's path is a label).
+    const target = resolveOutputTarget();
+    if (!target) return { success: false, error: 'No file info' };
 
-    const currentDir = path.dirname(fileInfo.path);
+    const currentDir = target.dir;
     const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
     const separator = '='.repeat(80);
 
@@ -5573,7 +5606,7 @@ ipcMain.handle('save-to-notes', async (
       notesFilePath = targetFilePath;
     } else {
       // Create new file with unique name
-      const originalFileName = path.basename(fileInfo.path, path.extname(fileInfo.path));
+      const originalFileName = target.baseName;
       const dateStr = new Date().toISOString().substring(0, 10).replace(/-/g, '');
       let counter = 1;
       let notesFileName = `${originalFileName}_${dateStr}.notes.txt`;
@@ -5590,7 +5623,7 @@ ipcMain.handle('save-to-notes', async (
 
     // Header block (new file only) and the per-entry header line.
     const header = isNewFile
-      ? [separator, 'LOGAN Notes', `Source: ${fileInfo.path}`, `Created: ${timestamp}`, separator, ''].join('\n')
+      ? [separator, 'LOGAN Notes', `Source: ${target.displayPath}`, `Created: ${timestamp}`, separator, ''].join('\n')
       : '';
     const noteDesc = note ? ` | ${note}` : '';
     const entryHeader = `--- [${timestamp}] Lines ${startLine + 1}-${endLine + 1}${noteDesc} ---`;
@@ -5900,7 +5933,9 @@ function selfApiCall(method: string, urlPath: string, body?: any): Promise<any> 
 }
 
 ipcMain.handle(IPC.TRIAGE_RECIPE, async (_, options: RecipeOptions) => {
-  const handler = getFileHandler();
+  // getReadHandler for the open-file gate: the recipe reads via selfApiCall (which is
+  // already composite/segmented-aware), so this only needs to know a session is open.
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
   if (!options?.symptom) return { success: false, error: 'symptom required' };
   try {
@@ -6006,7 +6041,9 @@ ipcMain.handle(IPC.BASELINE_LIST, async () => {
 
 ipcMain.handle(IPC.BASELINE_SAVE, async (_, name: string, description: string, tags: string[]) => {
   if (!currentFilePath) return { success: false, error: 'No file open' };
-  const handler = getFileHandler();
+  // getReadHandler so a baseline can be captured from a composite / segmented session
+  // (buildFingerprint only reads getTotalLines/getFileInfo/getLines).
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file handler' };
   const analysisResult = analysisResultCache.get(currentFilePath);
   if (!analysisResult) return { success: false, error: 'Run analysis first' };
@@ -6050,7 +6087,8 @@ ipcMain.handle(IPC.BASELINE_DELETE, async (_, id: string) => {
 
 ipcMain.handle(IPC.BASELINE_COMPARE, async (_, baselineId: string) => {
   if (!currentFilePath) return { success: false, error: 'No file open' };
-  const handler = getFileHandler();
+  // getReadHandler so a composite / segmented session can be compared against a baseline.
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file handler' };
   const analysisResult = analysisResultCache.get(currentFilePath);
   if (!analysisResult) return { success: false, error: 'Run analysis first' };
@@ -6404,7 +6442,7 @@ const yieldToEventLoop = () => new Promise<void>(resolve => setTimeout(resolve, 
 
 // Get timestamp from a specific line
 ipcMain.handle(IPC.GET_LINE_TIMESTAMP, async (_, lineNumber: number) => {
-  const handler = getFileHandler();
+  const handler = getReadHandler();
   if (!handler) {
     return { epochMs: null, timestampStr: null };
   }
@@ -6539,7 +6577,7 @@ ipcMain.handle(IPC.VIDEO_TRANSCODE, async (_, srcPath: string) => {
 
 // Batch timestamp fetch for Time Align
 ipcMain.handle(IPC.GET_LINE_TIMESTAMPS, async (_, lineNumbers: number[]) => {
-  const handler = getFileHandler();
+  const handler = getReadHandler();
   if (!handler) return [];
   const results: Array<{ lineNumber: number; epochMs: number }> = [];
   try {
@@ -6565,7 +6603,8 @@ ipcMain.handle(IPC.FILE_HANDLER_RUN, async (_, id: string, query: FileHandlerQue
 });
 
 ipcMain.handle('detect-time-gaps', async (_, options: TimeGapOptions) => {
-  const handler = getFileHandler();
+  // getReadHandler so time-gap detection scans a composite / segmented view too.
+  const handler = getReadHandler();
   if (!handler || !currentFilePath) {
     return { success: false, error: 'No file open' };
   }
@@ -6753,7 +6792,8 @@ function cadenceLiteral(tmpl: string): string {
 }
 
 ipcMain.handle('detect-cadence', async (_, options: CadenceOptions) => {
-  const handler = getFileHandler();
+  // getReadHandler so cadence detection runs over a composite / segmented view too.
+  const handler = getReadHandler();
   if (!handler || !currentFilePath) {
     return { success: false, error: 'No file open' };
   }
@@ -6942,7 +6982,8 @@ ipcMain.handle('cancel-cadence', async () => {
 // Auto-suggest: scan the file for frequently-recurring line "templates" and
 // return the strongest candidates as clickable patterns for cadence detection.
 ipcMain.handle('suggest-cadence-events', async () => {
-  const handler = getFileHandler();
+  // getReadHandler so cadence auto-suggest samples a composite / segmented view too.
+  const handler = getReadHandler();
   if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
   try {
     const totalLines = handler.getTotalLines();
@@ -6987,18 +7028,19 @@ interface SplitOptions {
 }
 
 ipcMain.handle('split-file', async (_, options: SplitOptions) => {
-  const handler = getFileHandler();
+  // getReadHandler so a composite/segmented session can be split; resolveOutputTarget
+  // gives a real output dir + base (a composite's own path is a label).
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
   try {
-    const fileInfo = handler.getFileInfo();
-    if (!fileInfo) return { success: false, error: 'No file info' };
+    const target = resolveOutputTarget();
+    if (!target) return { success: false, error: 'No file info' };
 
     const totalLines = handler.getTotalLines();
-    const currentDir = path.dirname(fileInfo.path);
-    const baseName = path.basename(fileInfo.path, path.extname(fileInfo.path));
-    const ext = path.extname(fileInfo.path);
-    const splitDir = path.join(currentDir, `${baseName}_split`);
+    const baseName = target.baseName;
+    const ext = target.ext;
+    const splitDir = path.join(target.dir, `${baseName}_split`);
 
     // Create split folder
     if (!fs.existsSync(splitDir)) {
