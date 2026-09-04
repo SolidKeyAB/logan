@@ -51,7 +51,7 @@ export const CATALOG_EXPORT_POLICY: Record<EntityKind, ExportDisposition> = {
   contextDef:      { export: true },
   sequence:        { export: true },
   investigation:   { export: true },
-  baseline:        { export: false, reason: 'binary SQLite store (baselines.db) + analysis artifact, not reusable toolkit — planned for P1' },
+  baseline:        { export: true },   // JSON store (baselines.json) w/ JSON fingerprint — reusable known-good reference
   contextManifest: { export: false, reason: 'per-file static-env sidecar — travels with its log, not the portable toolkit' },
 };
 
@@ -77,6 +77,7 @@ export const CATALOG_IDENTITY = {
   contextDef:     { idKeys: ['id'],   nameKeys: ['name'] },
   sequence:       { idKeys: ['id'],   nameKeys: ['name'] },
   investigation:  { idKeys: ['slug'], nameKeys: ['name'] },
+  baseline:       { idKeys: ['id'],   nameKeys: ['name'] },
 } satisfies Record<string, IdentitySpec>;
 
 // The union of exportable kinds, derived from the identity table. buildCatalogRegistry() in

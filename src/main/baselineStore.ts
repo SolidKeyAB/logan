@@ -392,6 +392,33 @@ export class BaselineStore {
     };
   }
 
+  // Every baseline as a FULL record (incl. fingerprint) — for portable catalogue export.
+  // Deep-copied so callers can't mutate the store's in-memory data.
+  allFull(): BaselineRecordFull[] {
+    return this.data.baselines.map(b => JSON.parse(JSON.stringify(b)) as BaselineRecordFull);
+  }
+
+  // Upsert a full baseline record, PRESERVING its id (catalogue import). Replaces an existing
+  // record with the same id, else prepends. Skips anything without an id or fingerprint.
+  importRecord(rec: BaselineRecordFull): boolean {
+    if (!rec || !rec.id || !rec.fingerprint) return false;
+    const stored: StoredBaseline = {
+      id: rec.id,
+      name: rec.name || '(unnamed)',
+      description: rec.description || '',
+      tags: Array.isArray(rec.tags) ? rec.tags : [],
+      sourceFile: rec.sourceFile || rec.fingerprint.sourceFile || '',
+      totalLines: rec.totalLines || rec.fingerprint.totalLines || 0,
+      createdAt: rec.createdAt || Date.now(),
+      updatedAt: rec.updatedAt || Date.now(),
+      fingerprint: rec.fingerprint,
+    };
+    const idx = this.data.baselines.findIndex(b => b.id === stored.id);
+    if (idx === -1) this.data.baselines.unshift(stored); else this.data.baselines[idx] = stored;
+    this.persist();
+    return true;
+  }
+
   update(id: string, fields: { name?: string; description?: string; tags?: string[] }): boolean {
     const b = this.data.baselines.find(b => b.id === id);
     if (!b) return false;
