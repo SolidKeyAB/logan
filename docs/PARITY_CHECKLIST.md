@@ -349,5 +349,10 @@ when each is next touched):
   kind); exportable kinds must appear in `CATALOG_IDENTITY` and `buildCatalogRegistry()`
   (`Record<ExportableKind,…>` → tsc) and are cross-checked by a test. **So: when you add a new
   saveable entity kind, the build stays red until you decide its export status** — no silent drift.
+  **Coverage is a STANDING duty:** as new exportable entity/config types appear, fold them into
+  the pack (flip the policy to `export:true` + add identity + a store binding) rather than
+  leaving them parked — the guardrail only forces a *decision*, not the inclusion. (E.g. baselines
+  moved from excluded→exportable once their store became JSON.)
   **Logged parity DEBT (small):** human-side passphrase entry (encrypted packs import via the
-  agent verb for now, since native message boxes can't take text input); baselines excluded (P1).
+  agent verb for now, since native message boxes can't take text input). Only `contextManifest`
+  is intentionally excluded (per-file sidecar — travels with its log, not the portable toolkit).

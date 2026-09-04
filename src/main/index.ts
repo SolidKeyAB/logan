@@ -195,6 +195,10 @@ function buildCatalogRegistry(): Record<ExportableKind, CatalogStore> {
       load: () => listTemplates(),
       saveAll: (r) => { for (const t of r as any[]) { if (t && t.slug) saveTemplate(t); } },
     },
+    baseline: {
+      load: () => baselineStore.allFull(),
+      saveAll: (r) => { for (const b of r as any[]) baselineStore.importRecord(b); },
+    },
   };
 }
 
