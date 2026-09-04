@@ -14,6 +14,7 @@
 // owned here in CATALOG_IDENTITY so both the engine and its callers agree on one rule.
 
 import { createHash, createCipheriv, createDecipheriv, scryptSync, randomBytes, randomUUID } from 'crypto';
+import type { EntityKind } from './entityRegistry';
 
 export const PACK_FORMAT_VERSION = 1;   // bumps only on a breaking container-shape change
 export const PACK_SCHEMA_VERSION = 1;   // bumps when the per-kind record shapes migrate
@@ -25,9 +26,43 @@ export interface IdentitySpec {
   nameKeys: string[];  // human-name fields; a shared name also counts as a collision
 }
 
+// ── Export coverage guardrail ──────────────────────────────────────────────
+// The catalogue MUST stay in lockstep with LOGAN's entity kinds: every time a new saveable
+// kind is added to entityRegistry's `EntityKind`, someone has to consciously decide whether it
+// belongs in a portable `.logan-pack`. This policy is that decision, keyed by EntityKind — so
+// the `Record<EntityKind, …>` type below makes tsc FAIL the moment a new kind is unclassified.
+// (A test in catalogPack.test.ts also cross-checks it against ENTITY_KINDS, CATALOG_IDENTITY
+// and reasons.) To make a kind exportable: mark it `export: true` here AND add it to
+// CATALOG_IDENTITY (below) AND to buildCatalogRegistry() in index.ts — both are compile-checked.
+export type ExportDisposition = { export: true } | { export: false; reason: string };
+
+export const CATALOG_EXPORT_POLICY: Record<EntityKind, ExportDisposition> = {
+  search:          { export: true },
+  session:         { export: true },
+  composite:       { export: true },
+  filter:          { export: true },
+  highlightGroup:  { export: true },
+  bookmarkSet:     { export: true },
+  columnLayout:    { export: true },
+  columnPattern:   { export: true },
+  constant:        { export: true },
+  trendProperty:   { export: true },
+  pattern:         { export: true },
+  contextDef:      { export: true },
+  sequence:        { export: true },
+  investigation:   { export: true },
+  baseline:        { export: false, reason: 'binary SQLite store (baselines.db) + analysis artifact, not reusable toolkit — planned for P1' },
+  contextManifest: { export: false, reason: 'per-file static-env sidecar — travels with its log, not the portable toolkit' },
+};
+
+// The kinds a `.logan-pack` actually carries, derived from the policy (single source of truth).
+export const EXPORTABLE_KINDS: EntityKind[] =
+  (Object.keys(CATALOG_EXPORT_POLICY) as EntityKind[]).filter((k) => CATALOG_EXPORT_POLICY[k].export);
+
 // The one place that knows how each catalogue kind is identified. Mirrors resolveSavedEntity
-// in index.ts (match by id OR by a name-ish field). Kinds absent here are not importable.
-export const CATALOG_IDENTITY: Record<string, IdentitySpec> = {
+// in index.ts (match by id OR by a name-ish field). Must cover exactly the exportable kinds —
+// enforced by a test; `satisfies` keeps the literal keys so ExportableKind can be derived.
+export const CATALOG_IDENTITY = {
   search:         { idKeys: ['id'],   nameKeys: ['pattern', 'description'] },
   session:        { idKeys: ['id'],   nameKeys: ['name'] },
   composite:      { idKeys: ['id'],   nameKeys: ['name'] },
@@ -42,7 +77,11 @@ export const CATALOG_IDENTITY: Record<string, IdentitySpec> = {
   contextDef:     { idKeys: ['id'],   nameKeys: ['name'] },
   sequence:       { idKeys: ['id'],   nameKeys: ['name'] },
   investigation:  { idKeys: ['slug'], nameKeys: ['name'] },
-};
+} satisfies Record<string, IdentitySpec>;
+
+// The union of exportable kinds, derived from the identity table. buildCatalogRegistry() in
+// index.ts is typed Record<ExportableKind, …>, so tsc forces its store bindings to match.
+export type ExportableKind = keyof typeof CATALOG_IDENTITY;
 
 export const CATALOG_KINDS: string[] = Object.keys(CATALOG_IDENTITY);
 
