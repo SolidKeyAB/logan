@@ -41,8 +41,14 @@ import { BaselineStore, buildFingerprint } from './baselineStore';
 import { bumpUsage, getUsage, clearUsage, flushUsage, isAiContext } from './usageStore';
 import { canonicalizeHumanVerb, aggregateUsageByFeature } from '../shared/verbRegistry';
 import { saveConstant, getConstants, deleteConstant, flushConstants } from './constantsStore';
-import { flushSequences } from './sequenceStore';
-import { loadColumnLayouts, upsertColumnLayout, deleteColumnLayout, ColumnLayoutSaved } from './columnLayoutsStore';
+import { flushSequences, listSequences, saveSequence } from './sequenceStore';
+import { listTemplates, saveTemplate } from './investigationStore';
+import { loadColumnLayouts, upsertColumnLayout, deleteColumnLayout, saveColumnLayouts, ColumnLayoutSaved } from './columnLayoutsStore';
+import {
+  buildPack, serializePack, parsePack, verifyPack, planImport, mergeRecords,
+  encryptPack, decryptPack, isEncryptedEnvelope, CATALOG_IDENTITY, CATALOG_KINDS,
+  PACK_FILE_EXT, type ConflictPolicy, type CatalogPack,
+} from './catalogPack';
 import { EntityDescriptor, EntityKind, toDescriptors } from './entityRegistry';
 import { ContextManifest, mergeFacts, factsToPlain, factCount } from './contextManifest';
 import { getPatternLog, clearPatternLog, logPattern, PatternLogEntry, flushPatternLog } from './patternLog';
@@ -147,6 +153,47 @@ async function maybeOpenSegmented(
 // Set in app.whenReady(); reused by top-level IPC handlers that need the same
 // in-process bridge the API server uses (e.g. the native "📋 Brief" evidence pack).
 let apiContext: ApiContext | null = null;
+
+// --- Portable catalogue (export/import) ------------------------------------
+// One place that binds each importable/exportable entity kind to its store's load + write-all.
+// The pack SHAPE, merge rules and identity live in the pure catalogPack module; this registry
+// is the only part that touches the real ~/.logan stores. Secret stores (agent-config,
+// ssh-profiles, connections) and per-file working state are deliberately absent — scope A is
+// the reusable GLOBAL toolkit only. Built lazily (loaders are hoisted) so a fresh read hits disk.
+interface CatalogStore { load: () => any[]; saveAll: (records: any[]) => void; }
+function buildCatalogRegistry(): Record<string, CatalogStore> {
+  return {
+    search: {
+      load: () => loadSearchConfigsStore()['_global'] || [],
+      saveAll: (r) => { const s = loadSearchConfigsStore(); s['_global'] = r as any; saveSearchConfigsStore(s); },
+    },
+    session:        { load: () => loadGlobalSearchConfigSessions(), saveAll: (r) => saveGlobalSearchConfigSessions(r as any) },
+    composite:      { load: () => loadGlobalSingleSessions(),       saveAll: (r) => saveGlobalSingleSessions(r as any) },
+    filter:         { load: () => loadFilterPresets(),              saveAll: (r) => saveFilterPresets(r as any) },
+    highlightGroup: { load: () => loadHighlightGroups(),            saveAll: (r) => saveHighlightGroups(r as any) },
+    bookmarkSet:    { load: () => loadBookmarkSets(),               saveAll: (r) => saveBookmarkSets(r as any) },
+    columnLayout:   { load: () => loadColumnLayouts(),              saveAll: (r) => saveColumnLayouts(r as any) },
+    columnPattern:  { load: () => loadColumnPatternsStore(),        saveAll: (r) => saveColumnPatternsStore(r as any) },
+    trendProperty:  { load: () => loadPatternPropertiesStore(),     saveAll: (r) => savePatternPropertiesStore(r as any) },
+    pattern:        { load: () => loadPatternLibraryStore(),        saveAll: (r) => savePatternLibraryStore(r as any) },
+    contextDef: {
+      load: () => loadContextDefinitionsStore()[GLOBAL_CONTEXT_KEY] || [],
+      saveAll: (r) => { const s = loadContextDefinitionsStore(); s[GLOBAL_CONTEXT_KEY] = r as any; saveContextDefinitionsStore(s); },
+    },
+    constant: {
+      load: () => getConstants(),
+      saveAll: (r) => { for (const c of r as any[]) { if (c && c.name) saveConstant(c.name, c.value ?? '', undefined, c.description); } flushConstants(); },
+    },
+    sequence: {
+      load: () => listSequences(),
+      saveAll: (r) => { for (const s of r as any[]) { if (s && (s.name || s.id)) saveSequence({ id: s.id, name: s.name, scope: s.scope, description: s.description, clues: s.clues }); } flushSequences(); },
+    },
+    investigation: {
+      load: () => listTemplates(),
+      saveAll: (r) => { for (const t of r as any[]) { if (t && t.slug) saveTemplate(t); } },
+    },
+  };
+}
 
 // Built-in agent child process
 import type { ChildProcess } from 'child_process';
@@ -1716,6 +1763,60 @@ app.whenReady().then(() => {
       // Push to the renderer's shared apply dispatcher (set-semantics — apply, never toggle off).
       mainWindow?.webContents.send('entity-apply', { kind: ref.kind, id, name });
       return { success: true, applied: true, entity: { kind: ref.kind, id, name } };
+    },
+    // Pack the reusable GLOBAL catalogue into a portable `.logan-pack` (a JSON container +
+    // manifest with per-store checksums). Returns the serialized text (optionally encrypted)
+    // for the caller to write to disk. Never touches per-file analysis or secret stores.
+    exportCatalog: (opts?: { kinds?: string[]; passphrase?: string }) => {
+      const reg = buildCatalogRegistry();
+      const wanted = (opts?.kinds && opts.kinds.length ? opts.kinds : CATALOG_KINDS).filter(k => reg[k]);
+      const storesByKind: Record<string, any[]> = {};
+      for (const k of wanted) { try { storesByKind[k] = reg[k].load() || []; } catch { storesByKind[k] = []; } }
+      let version = ''; try { version = app.getVersion(); } catch { /* not ready */ }
+      const pack = buildPack(storesByKind, { createdAt: new Date().toISOString(), generator: `logan ${version}`.trim() });
+      let text = serializePack(pack);
+      let encrypted = false;
+      if (opts?.passphrase) { text = JSON.stringify(encryptPack(text, opts.passphrase), null, 2); encrypted = true; }
+      const summary = pack.manifest.kinds.map((k) => ({ kind: k.kind, count: k.count }));
+      return { text, encrypted, manifest: pack.manifest, summary };
+    },
+    // Import a `.logan-pack` into the global catalogue. Defaults to a DRY RUN (returns a plan
+    // + integrity report, writes nothing); pass dryRun:false + a policy to actually merge.
+    // Import only ADDS/overwrites by the chosen policy — it never deletes existing entities.
+    importCatalog: (input: { text: string; passphrase?: string; dryRun?: boolean; policy?: ConflictPolicy; kinds?: string[] }) => {
+      let obj: any;
+      try { obj = JSON.parse(input.text); } catch { return { success: false, error: 'File is not valid JSON.' }; }
+      if (isEncryptedEnvelope(obj)) {
+        if (!input.passphrase) return { success: false, error: 'This pack is encrypted — a passphrase is required.', needsPassphrase: true };
+        let dec: string;
+        try { dec = decryptPack(obj, input.passphrase); } catch { return { success: false, error: 'Wrong passphrase or corrupt encrypted pack.' }; }
+        try { obj = JSON.parse(dec); } catch { return { success: false, error: 'Decrypted content is not valid JSON.' }; }
+      }
+      let pack: CatalogPack;
+      try { pack = parsePack(JSON.stringify(obj)); } catch (e: any) { return { success: false, error: `Not a LOGAN catalogue pack: ${e.message}` }; }
+      const verify = verifyPack(pack);
+      const reg = buildCatalogRegistry();
+      const wantKinds = (input.kinds && input.kinds.length ? input.kinds : Object.keys(pack.stores)).filter(k => reg[k]);
+      const existingByKind: Record<string, any[]> = {};
+      for (const k of wantKinds) { try { existingByKind[k] = reg[k].load() || []; } catch { existingByKind[k] = []; } }
+      const scoped: CatalogPack = { ...pack, stores: {} };
+      for (const k of wantKinds) scoped.stores[k] = pack.stores[k] || [];
+      const plan = planImport(existingByKind, scoped, CATALOG_IDENTITY);
+      plan.unknownKinds = planImport({}, pack, CATALOG_IDENTITY).unknownKinds;
+      const dryRun = input.dryRun !== false; // default true — safe preview
+      if (dryRun) return { success: true, dryRun: true, plan, verify, manifest: pack.manifest };
+      const policy: ConflictPolicy = input.policy || 'skip';
+      const applied: any[] = [];
+      for (const k of wantKinds) {
+        const incoming = pack.stores[k] || [];
+        if (!incoming.length) continue;
+        const existing = reg[k].load() || [];
+        const mr = mergeRecords(existing, incoming, CATALOG_IDENTITY[k], policy);
+        try { reg[k].saveAll(mr.merged); applied.push({ kind: k, added: mr.added, overwritten: mr.overwritten, skipped: mr.skipped, keptBoth: mr.keptBoth }); }
+        catch (e: any) { applied.push({ kind: k, error: String(e?.message || e) }); }
+      }
+      try { mainWindow?.webContents.send('catalog-imported', { applied }); } catch { /* renderer may be gone */ }
+      return { success: true, dryRun: false, applied, verify, manifest: pack.manifest };
     },
     investigateCrashes: async (options) => {
       // getReadHandler so this runs over an active single-session composite too: analysis
@@ -8394,6 +8495,88 @@ ipcMain.handle(IPC.INVESTIGATION_SUGGEST_REQS, async () => callApiServer('/api/i
 ipcMain.handle(IPC.INVESTIGATION_COMPOSE, async (_e, input: any) => callApiServer('/api/investigation-compose', input || {}));
 ipcMain.handle(IPC.WORKFLOW_SHOW, async (_e, investigation?: string) => callApiServer('/api/workflow-show', { investigation }));
 ipcMain.handle(IPC.ENTITIES_LIST, async (_e, kind?: string) => callApiServer('/api/entities', { kind }));
+
+// Portable catalogue — human ⤓ Export / ⤒ Import. The full flow (file picker + conflict
+// prompt) runs here via native dialogs so the renderer stays thin; both paths call the SAME
+// apiContext.exportCatalog/importCatalog the agent verbs use (one impl, two operators).
+ipcMain.handle(IPC.CATALOG_EXPORT, async () => {
+  if (!apiContext) return { success: false, error: 'Not ready yet' };
+  const packExt = PACK_FILE_EXT.replace(/^\./, '');
+  const res = await showSaveDialog({
+    title: 'Export LOGAN catalogue',
+    defaultPath: `logan-catalogue${PACK_FILE_EXT}`,
+    filters: [{ name: 'LOGAN catalogue pack', extensions: [packExt] }, { name: 'All files', extensions: ['*'] }],
+  });
+  if (res.canceled || !res.filePath) return { success: false, canceled: true };
+  try {
+    const out = apiContext.exportCatalog();
+    fs.writeFileSync(res.filePath, out.text, 'utf-8');
+    const counts = out.summary.filter(s => s.count > 0).map(s => `${s.count} ${s.kind}`).join(', ') || 'nothing saved yet';
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      await dialog.showMessageBox(mainWindow, { type: 'info', title: 'Catalogue exported', message: 'Your LOGAN catalogue was exported.', detail: `${counts}\n\n${res.filePath}` });
+    }
+    return { success: true, path: res.filePath, summary: out.summary };
+  } catch (e: any) {
+    return { success: false, error: String(e?.message || e) };
+  }
+});
+
+ipcMain.handle(IPC.CATALOG_IMPORT, async () => {
+  if (!apiContext) return { success: false, error: 'Not ready yet' };
+  const packExt = PACK_FILE_EXT.replace(/^\./, '');
+  const res = await showOpenDialog({
+    title: 'Import LOGAN catalogue',
+    properties: ['openFile'],
+    filters: [{ name: 'LOGAN catalogue pack', extensions: [packExt, 'json'] }, { name: 'All files', extensions: ['*'] }],
+  });
+  if (res.canceled || !res.filePaths?.[0]) return { success: false, canceled: true };
+  const file = res.filePaths[0];
+  let text: string;
+  try { text = fs.readFileSync(file, 'utf-8'); } catch (e: any) { return { success: false, error: `Could not read file: ${e?.message || e}` }; }
+  // Encrypted packs need a passphrase; native message boxes can't take text input, so an
+  // encrypted pack is imported via the agent verb (logan_import_catalog) for now.
+  try {
+    const probe = JSON.parse(text);
+    if (probe && probe.logan_pack_encrypted === true) {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        await dialog.showMessageBox(mainWindow, { type: 'info', title: 'Encrypted pack', message: 'This catalogue pack is encrypted.', detail: 'Import an encrypted pack via the AI agent (logan_import_catalog) with its passphrase — passphrase entry isn’t available in this dialog yet.' });
+      }
+      return { success: false, error: 'encrypted — import via agent with passphrase' };
+    }
+  } catch { /* not JSON — importCatalog reports it below */ }
+  const dry = apiContext.importCatalog({ text, dryRun: true });
+  if (!dry.success) {
+    if (mainWindow && !mainWindow.isDestroyed()) await dialog.showMessageBox(mainWindow, { type: 'error', title: 'Import failed', message: 'This file isn’t a valid LOGAN catalogue pack.', detail: dry.error || '' });
+    return { success: false, error: dry.error };
+  }
+  const p = dry.plan || {};
+  const perKind = (p.stores || []).filter((s: any) => s.incoming > 0).map((s: any) => `• ${s.incoming} ${s.kind} (${s.add} new, ${s.conflict} already exist)`).join('\n') || 'nothing to import';
+  const unknown = (p.unknownKinds || []).length ? `\n\nSkipped (unknown to this LOGAN): ${p.unknownKinds.join(', ')}` : '';
+  const integrity = (dry.verify && !dry.verify.ok) ? `\n\n⚠ Integrity warnings:\n${(dry.verify.problems || []).map((x: any) => x.message).join('\n')}` : '';
+  let policy: ConflictPolicy | null = null;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const choice = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      title: 'Import catalogue',
+      message: `Import ${p.totalAdd || 0} new entities? (${p.totalConflict || 0} already exist)`,
+      detail: `${perKind}${unknown}${integrity}\n\nFor entities that already exist, choose how to resolve them:`,
+      buttons: ['Cancel', 'Skip existing', 'Overwrite existing', 'Keep both'],
+      cancelId: 0, defaultId: 1,
+    });
+    policy = ({ 1: 'skip', 2: 'overwrite', 3: 'keepBoth' } as Record<number, ConflictPolicy>)[choice.response] || null;
+  }
+  if (!policy) return { success: false, canceled: true };
+  const applied = apiContext.importCatalog({ text, dryRun: false, policy });
+  if (!applied.success) {
+    if (mainWindow && !mainWindow.isDestroyed()) await dialog.showMessageBox(mainWindow, { type: 'error', title: 'Import failed', message: 'Import failed.', detail: applied.error || '' });
+    return { success: false, error: applied.error };
+  }
+  const total = (applied.applied || []).reduce((n: number, a: any) => n + (a.added || 0) + (a.overwritten || 0) + (a.keptBoth || 0), 0);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    await dialog.showMessageBox(mainWindow, { type: 'info', title: 'Catalogue imported', message: `Imported ${total} entities.`, detail: (applied.applied || []).map((a: any) => `• ${a.kind}: +${a.added || 0} new, ${a.overwritten || 0} overwritten, ${a.keptBoth || 0} kept-both, ${a.skipped || 0} skipped`).join('\n') });
+  }
+  return { success: true, applied: applied.applied };
+});
 // Clue sequences (ordered evidence trails) — human side proxies to the same /api/sequence-*
 // endpoints the agent uses (one store, two operators).
 ipcMain.handle(IPC.SEQUENCE_LIST, async () => callApiServer('/api/sequences', {}));
