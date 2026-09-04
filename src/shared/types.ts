@@ -443,6 +443,9 @@ export const IPC = {
   WORKFLOW_SHOW: 'workflow-show',                                     // project a hunt (journal or saved investigation) → WorkflowGraph
   // Entity Registry — one browse catalog over every saved entity
   ENTITIES_LIST: 'entities-list',
+  // Portable catalogue — export/import the reusable global entity stores as a .logan-pack
+  CATALOG_EXPORT: 'catalog-export',
+  CATALOG_IMPORT: 'catalog-import',
   // Device discovery (kept per-source)
   SERIAL_LIST_PORTS: 'serial-list-ports',
   LOGCAT_LIST_DEVICES: 'logcat-list-devices',
