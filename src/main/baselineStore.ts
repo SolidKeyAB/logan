@@ -2,8 +2,17 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { AnalysisResult } from './analyzers/types';
-import { FileHandler } from './fileHandler';
+import type { FileInfo, LineData } from '../shared/types';
 import { diffEnv, envDiffIsEmpty, envDiffToStrings } from './contextManifest';
+
+// buildFingerprint reads only these three methods, so a baseline can be captured from a
+// real FileHandler, a virtual session (single-session composite / segmented big file, via
+// getReadHandler()), or the api-server read-handler Pick — all satisfy this structurally.
+type FingerprintSource = {
+  getTotalLines(): number;
+  getFileInfo(): FileInfo | null;
+  getLines(startLine: number, count: number): LineData[];
+};
 
 // --- Types ---
 
@@ -98,7 +107,7 @@ function parseTimestamp(text: string): Date | null {
 export function buildFingerprint(
   filePath: string,
   analysisResult: AnalysisResult,
-  fileHandler: FileHandler,
+  fileHandler: FingerprintSource,
   env?: Record<string, string>
 ): BaselineFingerprint {
   const totalLines = fileHandler.getTotalLines();
