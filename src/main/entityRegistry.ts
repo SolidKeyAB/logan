@@ -8,6 +8,10 @@
 // so the shape stays unit-testable. The actual store reads are injected from index.ts (which
 // owns the stores) via ApiContext.listSavedEntities, mirroring resolveSavedEntity.
 
+// ADDING A KIND HERE? You must also classify it for portable export in
+// catalogPack.ts → CATALOG_EXPORT_POLICY (tsc + a test will fail until you do): either
+// export:true (then add it to CATALOG_IDENTITY + buildCatalogRegistry in index.ts) or
+// export:false with a reason. This keeps the .logan-pack export/import in lockstep.
 export type EntityKind =
   | 'search'          // SearchConfig (global)
   | 'session'         // SearchConfigSession (global)

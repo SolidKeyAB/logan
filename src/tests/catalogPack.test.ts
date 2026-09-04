@@ -4,8 +4,10 @@ import {
   collidesWith, mergeRecords, planImport,
   encryptPack, decryptPack, isEncryptedEnvelope,
   CATALOG_IDENTITY, PACK_FORMAT_VERSION,
+  CATALOG_EXPORT_POLICY, EXPORTABLE_KINDS, CATALOG_KINDS,
   type CatalogPack,
 } from '../main/catalogPack';
+import { ENTITY_KINDS } from '../main/entityRegistry';
 
 const META = { createdAt: '2026-09-03T00:00:00.000Z', generator: 'logan test' };
 
@@ -154,6 +156,38 @@ describe('planImport', () => {
     expect(searchPlan).toMatchObject({ incoming: 2, existing: 1, add: 1, conflict: 1 });
     expect(plan.totalConflict).toBe(1);
     expect(plan.unknownKinds).toContain('mysteryKind');
+  });
+});
+
+// The forcing function: if a new EntityKind is added but not wired into the catalogue, these
+// fail (alongside the tsc gates on CATALOG_EXPORT_POLICY / buildCatalogRegistry). This is what
+// keeps export/import in lockstep with the entity registry as LOGAN grows.
+describe('export coverage guardrail', () => {
+  it('classifies EVERY entity kind (policy ⇔ ENTITY_KINDS)', () => {
+    // If this fails, a new kind was added to entityRegistry — add it to CATALOG_EXPORT_POLICY
+    // (export:true → also add to CATALOG_IDENTITY + buildCatalogRegistry; else export:false + reason).
+    expect(Object.keys(CATALOG_EXPORT_POLICY).sort()).toEqual([...ENTITY_KINDS].sort());
+  });
+
+  it('identity table covers exactly the exportable kinds', () => {
+    expect(Object.keys(CATALOG_IDENTITY).sort()).toEqual([...EXPORTABLE_KINDS].sort());
+  });
+
+  it('CATALOG_KINDS (export order) matches the exportable set', () => {
+    expect([...CATALOG_KINDS].sort()).toEqual([...EXPORTABLE_KINDS].sort());
+  });
+
+  it('every excluded kind states a reason', () => {
+    for (const [kind, d] of Object.entries(CATALOG_EXPORT_POLICY)) {
+      if (!d.export) expect(d.reason, `excluded kind "${kind}" needs a reason`).toBeTruthy();
+    }
+  });
+
+  it('every identity spec has at least one id key and one name key', () => {
+    for (const [kind, spec] of Object.entries(CATALOG_IDENTITY)) {
+      expect(spec.idKeys.length, `${kind} idKeys`).toBeGreaterThan(0);
+      expect(spec.nameKeys.length, `${kind} nameKeys`).toBeGreaterThan(0);
+    }
   });
 });
 
