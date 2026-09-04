@@ -3147,7 +3147,12 @@ interface ColumnAnalysis {
 // "#----- BEGIN:" banner no longer masquerades as the header (see esotrace 11-column exports).
 
 ipcMain.handle('analyze-columns', async () => {
-  const handler = getFileHandler();
+  // getReadHandler (not getFileHandler) so column detection works over an active single-session
+  // composite / segmented big file too — they're kept out of fileHandlerCache, so getFileHandler
+  // returns null there and the Columns modal's Detect used to report "No file open" (which meant
+  // you couldn't set up — hence couldn't hide/mute — columns on a merged/virtual session). All
+  // three handler types share the sync getLines(start,count) shape this uses.
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
   try {
