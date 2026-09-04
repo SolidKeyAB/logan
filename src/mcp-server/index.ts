@@ -1080,6 +1080,62 @@ server.tool(
   }
 );
 
+// === Tool: logan_export_catalog ===
+server.tool(
+  'logan_export_catalog',
+  'Export LOGAN\'s reusable GLOBAL catalogue (searches, sessions, single-sessions, filter presets, highlight groups, bookmark sets, column layouts, column patterns, constants, trend properties, saved patterns, context definitions, clue sequences, investigations) into ONE portable `.logan-pack` file — the same stores the human ⤓ Export button packs. This is the "carry my LOGAN setup with me" file: a readable JSON container + a manifest with per-store SHA-256 checksums. It does NOT include per-log analysis (annotations/notes/findings) or secret stores (agent config, ssh profiles, connections). Pass `path` to write the file (recommended), or omit it to get the pack text back inline. Optionally restrict to certain `kinds`, or set a `passphrase` to AES-256-GCM encrypt the pack for sharing outside the team.',
+  {
+    path: z.string().optional().describe('Absolute path to write the .logan-pack file to. Omit to return the pack text inline instead.'),
+    kinds: z.array(z.string()).optional().describe('Restrict to these entity kinds (omit to export the whole catalogue).'),
+    passphrase: z.string().optional().describe('If set, encrypt the pack (AES-256-GCM, scrypt) — required again to import it.'),
+  },
+  async ({ path, kinds, passphrase }) => {
+    try {
+      const result = await apiCall('POST', '/api/export-catalog', { path, kinds, passphrase });
+      if (!result?.success) return { content: [{ type: 'text', text: `Export failed: ${result?.error || 'unknown error'}` }], isError: true };
+      const counts = (result.summary || []).filter((s: any) => s.count > 0).map((s: any) => `${s.count} ${s.kind}`).join(', ') || 'nothing saved yet';
+      const where = result.path ? ` → ${result.path}` : ' (returned inline)';
+      return { content: [{ type: 'text', text: `Exported catalogue${where}${result.encrypted ? ' [encrypted]' : ''}: ${counts}.\n\n${JSON.stringify(result, null, 2)}` }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
+// === Tool: logan_import_catalog ===
+server.tool(
+  'logan_import_catalog',
+  'Import a portable `.logan-pack` into LOGAN\'s global catalogue — the agent half of the human ⤒ Import button. DEFAULTS TO A DRY RUN: it returns a plan (per kind: how many would be added vs already exist) plus an integrity report, and writes NOTHING. Review the plan, then call again with `dryRun:false` and a `policy` to actually merge. Import only ADDS or overwrites by the chosen policy — it never deletes the user\'s existing entities. Pass `path` to a .logan-pack (or inline `text`). If the pack is encrypted, also pass its `passphrase`.',
+  {
+    path: z.string().optional().describe('Absolute path to the .logan-pack file to import.'),
+    text: z.string().optional().describe('Inline pack text (alternative to path).'),
+    passphrase: z.string().optional().describe('Passphrase, if the pack was exported encrypted.'),
+    dryRun: z.boolean().optional().describe('Default true = preview only. Set false to actually merge.'),
+    policy: z.enum(['skip', 'overwrite', 'keepBoth']).optional().describe('On a name/id collision: skip (keep existing, default), overwrite (replace with imported), or keepBoth (import as a distinct copy).'),
+    kinds: z.array(z.string()).optional().describe('Restrict the import to these entity kinds.'),
+  },
+  async ({ path, text, passphrase, dryRun, policy, kinds }) => {
+    try {
+      const result = await apiCall('POST', '/api/import-catalog', { path, text, passphrase, dryRun: dryRun !== false, policy, kinds });
+      if (!result?.success) return { content: [{ type: 'text', text: `Import failed: ${result?.error || 'unknown error'}${result?.needsPassphrase ? ' (pass the passphrase)' : ''}` }], isError: true };
+      let head: string;
+      if (result.dryRun) {
+        const p = result.plan || {};
+        head = `DRY RUN — nothing written. Would import: ${p.totalAdd || 0} new, ${p.totalConflict || 0} already exist (across ${(p.stores || []).length} kinds).` +
+          ((p.unknownKinds || []).length ? ` Skipped unknown kinds: ${p.unknownKinds.join(', ')}.` : '') +
+          ((result.verify && !result.verify.ok) ? ` ⚠ integrity: ${(result.verify.problems || []).map((x: any) => x.message).join('; ')}.` : '') +
+          ` Re-run with dryRun:false and a policy to apply.`;
+      } else {
+        const total = (result.applied || []).reduce((n: number, a: any) => n + (a.added || 0) + (a.overwritten || 0) + (a.keptBoth || 0), 0);
+        head = `Imported ${total} entities into the catalogue.`;
+      }
+      return { content: [{ type: 'text', text: `${head}\n\n${JSON.stringify(result, null, 2)}` }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_save_sequence ===
 server.tool(
   'logan_save_sequence',
