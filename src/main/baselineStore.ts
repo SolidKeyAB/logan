@@ -3,7 +3,14 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { AnalysisResult } from './analyzers/types';
 import { FileHandler } from './fileHandler';
+import { CompositeFileHandler } from './compositeFileHandler';
+import { SegmentedFileHandler } from './segmentedFileHandler';
 import { diffEnv, envDiffIsEmpty, envDiffToStrings } from './contextManifest';
+
+// A baseline can be fingerprinted from a real file OR from a virtual session (a
+// single-session composite / segmented big file). All three share the getTotalLines/
+// getFileInfo/getLines read surface buildFingerprint uses.
+type FingerprintSource = FileHandler | CompositeFileHandler | SegmentedFileHandler;
 
 // --- Types ---
 
@@ -98,7 +105,7 @@ function parseTimestamp(text: string): Date | null {
 export function buildFingerprint(
   filePath: string,
   analysisResult: AnalysisResult,
-  fileHandler: FileHandler,
+  fileHandler: FingerprintSource,
   env?: Record<string, string>
 ): BaselineFingerprint {
   const totalLines = fileHandler.getTotalLines();

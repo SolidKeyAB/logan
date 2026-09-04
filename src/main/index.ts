@@ -1338,7 +1338,10 @@ app.whenReady().then(() => {
     },
     analyze: async (analyzerName?: string, scope?: ScopeDescriptor) => {
       if (!currentFilePath) return { success: false, error: 'No file open' };
-      const handler = getFileHandler();
+      // getReadHandler so scoped analysis + the line count also work over an active
+      // single-session composite / segmented big file (whole-file analysis already is
+      // composite-aware via analyzeCurrentTarget). Matches the human analyze-file path.
+      const handler = getReadHandler();
       const resolved = resolveCurrentScope(scope);
       const total = handler ? handler.getTotalLines() : 0;
 
@@ -1365,7 +1368,9 @@ app.whenReady().then(() => {
       }
     },
     applyFilter: async (config: any) => {
-      const handler = getFileHandler();
+      // getReadHandler so the agent's logan_filter runs over a composite / segmented view
+      // too — parity with the human apply-filter IPC, which already uses it.
+      const handler = getReadHandler();
       if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
       filterSignal = { cancelled: false };
       const tFilter0 = Date.now();
@@ -4874,7 +4879,9 @@ ipcMain.handle('context-definition-delete', async (_, id: string) => {
 });
 
 ipcMain.handle(IPC.CONTEXT_SEARCH, async (_, contextIds: string[]) => {
-  const handler = getFileHandler();
+  // getReadHandler so context search (must/clue proximity) runs over a composite /
+  // segmented view too — it only reads via search()/getLines()/getFileInfo().
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
   const allDefs = loadContextDefinitionsForFile(currentFilePath || '');
@@ -4998,7 +5005,8 @@ function extractComponent(text: string): string | null {
 }
 
 ipcMain.handle(IPC.TRACEBACK, async (_, request: { targetLine: number; windowLines?: number; windowSeconds?: number; maxResults?: number }) => {
-  const handler = getFileHandler();
+  // getReadHandler so traceback works over a composite / segmented view (read-only via getLines()).
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
 
   const { targetLine, windowLines = 200, windowSeconds = 60, maxResults = 50 } = request;
@@ -5163,7 +5171,8 @@ ipcMain.handle(IPC.TRACEBACK, async (_, request: { targetLine: number; windowLin
 // === Utility ===
 
 ipcMain.handle('get-file-info', async () => {
-  const handler = getFileHandler();
+  // getReadHandler so a composite / segmented session reports its own info, not "No file open".
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
   return { success: true, info: handler.getFileInfo() };
 });
@@ -5905,7 +5914,9 @@ function selfApiCall(method: string, urlPath: string, body?: any): Promise<any> 
 }
 
 ipcMain.handle(IPC.TRIAGE_RECIPE, async (_, options: RecipeOptions) => {
-  const handler = getFileHandler();
+  // getReadHandler for the open-file gate: the recipe reads via selfApiCall (which is
+  // already composite/segmented-aware), so this only needs to know a session is open.
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file open' };
   if (!options?.symptom) return { success: false, error: 'symptom required' };
   try {
@@ -6011,7 +6022,9 @@ ipcMain.handle(IPC.BASELINE_LIST, async () => {
 
 ipcMain.handle(IPC.BASELINE_SAVE, async (_, name: string, description: string, tags: string[]) => {
   if (!currentFilePath) return { success: false, error: 'No file open' };
-  const handler = getFileHandler();
+  // getReadHandler so a baseline can be captured from a composite / segmented session
+  // (buildFingerprint only reads getTotalLines/getFileInfo/getLines).
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file handler' };
   const analysisResult = analysisResultCache.get(currentFilePath);
   if (!analysisResult) return { success: false, error: 'Run analysis first' };
@@ -6055,7 +6068,8 @@ ipcMain.handle(IPC.BASELINE_DELETE, async (_, id: string) => {
 
 ipcMain.handle(IPC.BASELINE_COMPARE, async (_, baselineId: string) => {
   if (!currentFilePath) return { success: false, error: 'No file open' };
-  const handler = getFileHandler();
+  // getReadHandler so a composite / segmented session can be compared against a baseline.
+  const handler = getReadHandler();
   if (!handler) return { success: false, error: 'No file handler' };
   const analysisResult = analysisResultCache.get(currentFilePath);
   if (!analysisResult) return { success: false, error: 'Run analysis first' };
@@ -6409,7 +6423,7 @@ const yieldToEventLoop = () => new Promise<void>(resolve => setTimeout(resolve, 
 
 // Get timestamp from a specific line
 ipcMain.handle(IPC.GET_LINE_TIMESTAMP, async (_, lineNumber: number) => {
-  const handler = getFileHandler();
+  const handler = getReadHandler();
   if (!handler) {
     return { epochMs: null, timestampStr: null };
   }
@@ -6544,7 +6558,7 @@ ipcMain.handle(IPC.VIDEO_TRANSCODE, async (_, srcPath: string) => {
 
 // Batch timestamp fetch for Time Align
 ipcMain.handle(IPC.GET_LINE_TIMESTAMPS, async (_, lineNumbers: number[]) => {
-  const handler = getFileHandler();
+  const handler = getReadHandler();
   if (!handler) return [];
   const results: Array<{ lineNumber: number; epochMs: number }> = [];
   try {
@@ -6570,7 +6584,8 @@ ipcMain.handle(IPC.FILE_HANDLER_RUN, async (_, id: string, query: FileHandlerQue
 });
 
 ipcMain.handle('detect-time-gaps', async (_, options: TimeGapOptions) => {
-  const handler = getFileHandler();
+  // getReadHandler so time-gap detection scans a composite / segmented view too.
+  const handler = getReadHandler();
   if (!handler || !currentFilePath) {
     return { success: false, error: 'No file open' };
   }
@@ -6758,7 +6773,8 @@ function cadenceLiteral(tmpl: string): string {
 }
 
 ipcMain.handle('detect-cadence', async (_, options: CadenceOptions) => {
-  const handler = getFileHandler();
+  // getReadHandler so cadence detection runs over a composite / segmented view too.
+  const handler = getReadHandler();
   if (!handler || !currentFilePath) {
     return { success: false, error: 'No file open' };
   }
@@ -6947,7 +6963,8 @@ ipcMain.handle('cancel-cadence', async () => {
 // Auto-suggest: scan the file for frequently-recurring line "templates" and
 // return the strongest candidates as clickable patterns for cadence detection.
 ipcMain.handle('suggest-cadence-events', async () => {
-  const handler = getFileHandler();
+  // getReadHandler so cadence auto-suggest samples a composite / segmented view too.
+  const handler = getReadHandler();
   if (!handler || !currentFilePath) return { success: false, error: 'No file open' };
   try {
     const totalLines = handler.getTotalLines();
