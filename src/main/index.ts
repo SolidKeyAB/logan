@@ -47,7 +47,7 @@ import { loadColumnLayouts, upsertColumnLayout, deleteColumnLayout, saveColumnLa
 import {
   buildPack, serializePack, parsePack, verifyPack, planImport, mergeRecords,
   encryptPack, decryptPack, isEncryptedEnvelope, CATALOG_IDENTITY, CATALOG_KINDS,
-  PACK_FILE_EXT, type ConflictPolicy, type CatalogPack,
+  PACK_FILE_EXT, type ConflictPolicy, type CatalogPack, type ExportableKind, type IdentitySpec,
 } from './catalogPack';
 import { EntityDescriptor, EntityKind, toDescriptors } from './entityRegistry';
 import { ContextManifest, mergeFacts, factsToPlain, factCount } from './contextManifest';
@@ -161,7 +161,10 @@ let apiContext: ApiContext | null = null;
 // ssh-profiles, connections) and per-file working state are deliberately absent — scope A is
 // the reusable GLOBAL toolkit only. Built lazily (loaders are hoisted) so a fresh read hits disk.
 interface CatalogStore { load: () => any[]; saveAll: (records: any[]) => void; }
-function buildCatalogRegistry(): Record<string, CatalogStore> {
+// Return type is Record<ExportableKind, …>: tsc forces this to bind EXACTLY the kinds marked
+// exportable in catalogPack's CATALOG_EXPORT_POLICY (a missing/extra kind fails to compile),
+// so a newly-exportable entity can't be silently omitted from packs.
+function buildCatalogRegistry(): Record<ExportableKind, CatalogStore> {
   return {
     search: {
       load: () => loadSearchConfigsStore()['_global'] || [],
@@ -1768,7 +1771,7 @@ app.whenReady().then(() => {
     // manifest with per-store checksums). Returns the serialized text (optionally encrypted)
     // for the caller to write to disk. Never touches per-file analysis or secret stores.
     exportCatalog: (opts?: { kinds?: string[]; passphrase?: string }) => {
-      const reg = buildCatalogRegistry();
+      const reg: Record<string, CatalogStore> = buildCatalogRegistry();
       const wanted = (opts?.kinds && opts.kinds.length ? opts.kinds : CATALOG_KINDS).filter(k => reg[k]);
       const storesByKind: Record<string, any[]> = {};
       for (const k of wanted) { try { storesByKind[k] = reg[k].load() || []; } catch { storesByKind[k] = []; } }
@@ -1795,7 +1798,8 @@ app.whenReady().then(() => {
       let pack: CatalogPack;
       try { pack = parsePack(JSON.stringify(obj)); } catch (e: any) { return { success: false, error: `Not a LOGAN catalogue pack: ${e.message}` }; }
       const verify = verifyPack(pack);
-      const reg = buildCatalogRegistry();
+      const reg: Record<string, CatalogStore> = buildCatalogRegistry();
+      const identity = CATALOG_IDENTITY as Record<string, IdentitySpec>;
       const wantKinds = (input.kinds && input.kinds.length ? input.kinds : Object.keys(pack.stores)).filter(k => reg[k]);
       const existingByKind: Record<string, any[]> = {};
       for (const k of wantKinds) { try { existingByKind[k] = reg[k].load() || []; } catch { existingByKind[k] = []; } }
@@ -1811,7 +1815,7 @@ app.whenReady().then(() => {
         const incoming = pack.stores[k] || [];
         if (!incoming.length) continue;
         const existing = reg[k].load() || [];
-        const mr = mergeRecords(existing, incoming, CATALOG_IDENTITY[k], policy);
+        const mr = mergeRecords(existing, incoming, identity[k], policy);
         try { reg[k].saveAll(mr.merged); applied.push({ kind: k, added: mr.added, overwritten: mr.overwritten, skipped: mr.skipped, keptBoth: mr.keptBoth }); }
         catch (e: any) { applied.push({ kind: k, error: String(e?.message || e) }); }
       }
