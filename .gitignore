@@ -32,6 +32,7 @@ scripts/poll_chat.py
 # nexum: agent MCP configs carry an injected Lore token — never commit
 .gemini/
 .agents/
+.mcp.json
 
 # nexum: managed generated files (self-healed each prep; .nexum-shared/ = phone file-drop scratch) — never commit
 GEMINI.md
