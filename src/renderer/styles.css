@@ -4942,13 +4942,13 @@ kbd {
   display: flex;
   align-items: center;
   gap: 5px;
-  color: #aaa;
+  color: var(--text-secondary, #aaa);
   font-size: 11px;
   transition: border-color 0.15s, color 0.15s, background 0.15s;
 }
 .bottom-panel-color-btn:hover {
   border-color: rgba(255, 255, 255, 0.45);
-  color: #fff;
+  color: var(--text-primary, #fff);
   background: rgba(255, 255, 255, 0.07);
 }
 
@@ -5086,7 +5086,7 @@ kbd {
 
 .notes-save-status {
   font-size: 11px;
-  color: #888;
+  color: var(--text-muted, #888);
   transition: color 0.2s;
 }
 
@@ -5119,7 +5119,7 @@ kbd {
 .notes-textarea {
   flex: 1;
   background: transparent;
-  color: #d4d4d4;
+  color: var(--text-primary, #d4d4d4);
   border: none;
   padding: 12px;
   font-family: var(--font-mono);
@@ -5131,7 +5131,7 @@ kbd {
 }
 
 .notes-textarea::placeholder {
-  color: #555;
+  color: var(--text-muted, #555);
 }
 
 /* Agent Chat tab */
@@ -5900,13 +5900,13 @@ kbd {
   cursor: pointer;
   user-select: none;
   font-size: 11px;
-  color: #9aa4b2;
+  color: var(--text-secondary, #9aa4b2);
   padding-bottom: 5px;
   border-bottom: 1px solid var(--panel-border, rgba(255, 255, 255, 0.05));
 }
 .sc-chip-group.collapsed .sc-chip-group-header { border-bottom: none; padding-bottom: 0; }
 
-.sc-chip-group-header:hover { color: #cfd6df; }
+.sc-chip-group-header:hover { color: var(--text-primary, #cfd6df); }
 
 /* Per-row ON/OFF switch — the "enable/disable the row dynamically" control. */
 .sc-row-switch {
@@ -5957,7 +5957,7 @@ kbd {
 .sc-group-count {
   font-size: 10px;
   font-weight: 700;
-  color: #cbd2db;
+  color: var(--text-primary, #cbd2db);
   background: var(--panel-surface, rgba(0, 0, 0, 0.32));
   border-radius: 8px;
   padding: 0 6px;
@@ -5970,7 +5970,7 @@ kbd {
   margin-left: auto;
   background: none;
   border: none;
-  color: #7c8492;
+  color: var(--text-muted, #7c8492);
   cursor: pointer;
   padding: 0 2px;
   line-height: 1;
@@ -5998,7 +5998,7 @@ kbd {
   background: var(--panel-surface, rgba(255, 255, 255, 0.08));
   border: 1px solid var(--panel-border, rgba(255, 255, 255, 0.12));
   font-size: 12px;
-  color: #ccc;
+  color: var(--text-primary, #ccc);
   cursor: pointer;
   transition: background 0.15s, opacity 0.15s;
   max-width: 250px;
@@ -6067,7 +6067,7 @@ kbd {
 .sc-chip-toggle {
   background: none;
   border: none;
-  color: #888;
+  color: var(--text-muted, #888);
   font-size: 11px;
   cursor: pointer;
   padding: 0 2px;
@@ -6075,13 +6075,13 @@ kbd {
 }
 
 .sc-chip-toggle:hover {
-  color: #fff;
+  color: var(--text-primary, #fff);
 }
 
 .sc-chip-delete {
   background: none;
   border: none;
-  color: #666;
+  color: var(--text-muted, #666);
   font-size: 13px;
   cursor: pointer;
   padding: 0 2px;
@@ -6155,7 +6155,7 @@ kbd {
   align-items: center;
   gap: 3px;
   font-size: 11px;
-  color: #999;
+  color: var(--text-muted, #999);
   cursor: pointer;
 }
 
@@ -6178,7 +6178,7 @@ kbd {
   border: 1px solid var(--panel-border, rgba(255, 255, 255, 0.15));
   border-radius: 4px;
   background: var(--panel-surface, rgba(255, 255, 255, 0.08));
-  color: #ccc;
+  color: var(--text-primary, #ccc);
   font-size: 12px;
   cursor: pointer;
   transition: background 0.15s;
@@ -9246,7 +9246,7 @@ kbd {
 .ta-toolbar { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-bottom: 1px solid var(--panel-border, #2e3a4a); flex-shrink: 0; }
 .ta-axis { display: flex; align-items: flex-end; height: 22px; padding: 0 10px 0 100px; position: relative; flex-shrink: 0; border-bottom: 1px solid var(--panel-border, #2e3a4a); }
 .ta-axis-tick { position: absolute; bottom: 0; width: 1px; height: 8px; background: #4a5568; }
-.ta-axis-label { position: absolute; bottom: 10px; font-size: 9px; color: #7a8a9a; transform: translateX(-50%); white-space: nowrap; font-family: var(--font-mono); }
+.ta-axis-label { position: absolute; bottom: 10px; font-size: 9px; color: var(--text-muted, #7a8a9a); transform: translateX(-50%); white-space: nowrap; font-family: var(--font-mono); }
 .ta-lanes { display: flex; flex-direction: column; gap: 3px; padding: 6px 10px; overflow-y: auto; flex: 1; }
 .ta-lane { display: flex; align-items: center; height: 28px; gap: 6px; }
 .ta-lane-label { font-size: 11px; color: #c0b8a0; width: 90px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 5px; font-weight: 500; }
