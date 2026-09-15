@@ -7729,7 +7729,9 @@ function initInvestigatePanel(): void {
   // The agent applied a saved lens entity → run the SAME dispatcher the human ▶ Apply uses
   // (set-semantics, so a re-apply is idempotent). One impl, two operators.
   // entity-apply is pushed only by the agent (ApiContext.applyEntityRef), so mark the
-  // provenance 'ai' → its chips group under "✨ AI suggested", not the human's working set.
+  // provenance 'ai'. If the applied entity is a session its chips still carry that
+  // session's id, so they land in the session's own row; a session-less AI pattern
+  // lands in the "✨ AI (no session)" row rather than the human's working set.
   window.api.onEntityApply((p) => { if (p && p.kind) void applySavedEntity(p.kind, p.id, p.name, { set: true, origin: 'ai' }); });
   void loadInvestigationTemplates();
 }
@@ -15147,26 +15149,30 @@ function isSearchConfigSaved(c: SearchConfigDef): boolean {
       !!sc.wholeWord === !!c.wholeWord));
 }
 
-// ─── Chip provenance grouping ────────────────────────────────────────────────
-// Every search config carries an `origin` (user / ai / session). The chip strip
-// USED to dump all three into one flat wrap, so a "burst" of AI-applied +
-// session-selected + hand-typed patterns read as an indistinguishable mess. We
-// now bucket chips into labeled, collapsible groups with per-group bulk actions
-// (toggle-all / clear-all), so each provenance is legible and manageable.
+// ─── Chip rows: one per source ───────────────────────────────────────────────
+// The chip strip USED to dump every pattern into one flat wrap, so a "burst" of
+// AI-applied + session-selected + hand-typed patterns read as an indistinguishable
+// mess. Now each SOURCE gets its own labeled, collapsible ROW you can flip on/off
+// as a unit:
+//   • one row per enabled session (🔖 <name>) — human- OR AI-applied,
+//   • one "New items" row (🆕) for patterns you added by hand,
+//   • one "AI (no session)" row (✨) for agent patterns not tied to a session.
+// Session membership wins: any chip carrying an originId clusters under that
+// session's row even when the AI applied it — so a row means "everything from
+// this source," never "everyone who happened to use the same channel."
 function chipGroupKey(c: SearchConfigDef): string {
-  const o = c.origin || 'user';
-  if (o === 'session') return `session:${c.originId || c.originLabel || ''}`;
-  if (o === 'ai') return 'ai';
-  return 'user';
+  if (c.originId) return `session:${c.originId}`; // from a session (human or AI)
+  if ((c.origin || 'user') === 'ai') return 'ai'; // AI, not tied to any session
+  return 'user';                                  // you added it by hand
 }
 function chipGroupRank(key: string): number {
   if (key === 'user') return 0;            // your working set first
   if (key.startsWith('session:')) return 1; // then each applied session
-  return 2;                                 // AI suggestions last (easy to dismiss)
+  return 2;                                 // AI (no session) last (easy to dismiss)
 }
 function chipGroupMeta(key: string, configs: SearchConfigDef[]): { icon: string; label: string } {
-  if (key === 'user') return { icon: '👤', label: 'Yours' };
-  if (key === 'ai') return { icon: '✨', label: 'AI suggested' };
+  if (key === 'user') return { icon: '🆕', label: 'New items' };
+  if (key === 'ai') return { icon: '✨', label: 'AI (no session)' };
   return { icon: '🔖', label: configs[0]?.originLabel || 'Session' };
 }
 // Collapsed group keys (transient this session; not persisted). Collapsing folds a
@@ -15227,12 +15233,30 @@ function buildSearchConfigChip(config: SearchConfigDef): HTMLElement {
   return chip;
 }
 
-// Build the header row for a provenance group: caret · icon+label · count, plus
-// bulk toggle-all and clear-all. Clicking the header (not a button) collapses it.
+// Build the header bar for a chip row: [ON/OFF switch] · caret · icon+label ·
+// count · (spacer) · clear. The switch flips every pattern in the row at once
+// (the "enable/disable the row dynamically" control); clicking elsewhere on the
+// bar collapses the row. Both stopPropagation so they don't cross-fire.
 function buildChipGroupHeader(key: string, configs: SearchConfigDef[], collapsed: boolean): HTMLElement {
   const meta = chipGroupMeta(key, configs);
   const header = document.createElement('div');
   header.className = 'sc-chip-group-header';
+
+  const enabledN = configs.filter(c => c.enabled).length;
+  const rowState = enabledN === 0 ? 'off' : (enabledN === configs.length ? 'on' : 'mixed');
+
+  // Per-row master switch — one flip enables/disables every pattern in the row.
+  // A partly-on row reads as "mixed" and a click turns the whole row ON.
+  const sw = document.createElement('button');
+  sw.className = `sc-row-switch ${rowState}`;
+  sw.title = rowState === 'on' ? 'Disable this row' : 'Enable this row';
+  sw.setAttribute('aria-label', sw.title);
+  sw.setAttribute('role', 'switch');
+  sw.setAttribute('aria-checked', rowState === 'on' ? 'true' : (rowState === 'off' ? 'false' : 'mixed'));
+  const knob = document.createElement('span');
+  knob.className = 'sc-row-switch-knob';
+  sw.appendChild(knob);
+  sw.addEventListener('click', (e) => { e.stopPropagation(); void toggleConfigGroupEnabled(key); });
 
   const caret = document.createElement('span');
   caret.className = 'sc-group-caret';
@@ -15242,32 +15266,24 @@ function buildChipGroupHeader(key: string, configs: SearchConfigDef[], collapsed
   label.className = 'sc-group-label';
   label.textContent = `${meta.icon} ${meta.label}`;
   if (key.startsWith('session:')) label.title = `Patterns from the saved session “${meta.label}”`;
-  else if (key === 'ai') label.title = 'Patterns the AI agent applied';
+  else if (key === 'ai') label.title = 'Patterns the AI agent applied that aren’t tied to a saved session';
   else label.title = 'Patterns you added by hand';
 
   const cnt = document.createElement('span');
   cnt.className = 'sc-group-count';
-  const enabledN = configs.filter(c => c.enabled).length;
   cnt.textContent = enabledN === configs.length ? String(configs.length) : `${enabledN}/${configs.length}`;
   cnt.title = `${configs.length} pattern${configs.length === 1 ? '' : 's'} (${enabledN} enabled)`;
-
-  const anyEnabled = configs.some(c => c.enabled);
-  const toggleAll = document.createElement('button');
-  toggleAll.className = 'sc-group-toggle';
-  toggleAll.innerHTML = anyEnabled ? '&#9673;' : '&#9675;';
-  toggleAll.title = anyEnabled ? 'Disable all in this group' : 'Enable all in this group';
-  toggleAll.addEventListener('click', (e) => { e.stopPropagation(); void toggleConfigGroupEnabled(key); });
 
   const clear = document.createElement('button');
   clear.className = 'sc-group-clear';
   clear.innerHTML = '&times;';
-  clear.title = `Remove all ${configs.length} pattern${configs.length === 1 ? '' : 's'} in this group`;
+  clear.title = `Remove all ${configs.length} pattern${configs.length === 1 ? '' : 's'} in this row`;
   clear.addEventListener('click', (e) => { e.stopPropagation(); void clearConfigGroup(key); });
 
+  header.appendChild(sw);
   header.appendChild(caret);
   header.appendChild(label);
   header.appendChild(cnt);
-  header.appendChild(toggleAll);
   header.appendChild(clear);
 
   header.addEventListener('click', () => {
@@ -15278,18 +15294,19 @@ function buildChipGroupHeader(key: string, configs: SearchConfigDef[], collapsed
   return header;
 }
 
-// Enable/disable every config in a provenance group in one click (if any are on,
-// turn them all off; otherwise turn them all on).
+// Flip every pattern in a row in one click: turn the row fully ON unless it's
+// already fully on, in which case turn it OFF. (So a mixed row → ON, matching
+// the switch's "enable this row" affordance.)
 async function toggleConfigGroupEnabled(groupKey: string): Promise<void> {
   const inGroup = state.searchConfigs.filter(c => chipGroupKey(c) === groupKey);
   if (inGroup.length === 0) return;
-  const next = !inGroup.some(c => c.enabled);
+  const next = !inGroup.every(c => c.enabled);
   for (const c of inGroup) { c.enabled = next; await window.api.searchConfigSave(c); }
   renderSearchConfigsChips();
   await runSearchConfigsBatch(true);
 }
 
-// Remove every config in a provenance group at once. Session-contributed chips are
+// Remove every config in a chip row at once. Session-contributed chips are
 // pulled via their session bookkeeping (so the session chip de-highlights too);
 // loose (manual / reloaded) chips are deleted directly.
 async function clearConfigGroup(groupKey: string): Promise<void> {
@@ -15350,8 +15367,9 @@ function renderSearchConfigsChips(): void {
     for (const key of groupKeys) {
       const configs = groups.get(key)!;
       const collapsed = collapsedChipGroups.has(key);
+      const allOff = !configs.some(c => c.enabled);
       const group = document.createElement('div');
-      group.className = `sc-chip-group${collapsed ? ' collapsed' : ''}`;
+      group.className = `sc-chip-group${collapsed ? ' collapsed' : ''}${allOff ? ' row-off' : ''}`;
       group.appendChild(buildChipGroupHeader(key, configs, collapsed));
       if (!collapsed) {
         const chipsWrap = document.createElement('div');
@@ -17523,8 +17541,8 @@ async function selectSearchConfigSession(sessionId: string, opts?: { origin?: 'a
   const session = searchConfigSessions.find(s => s.id === sessionId);
   if (!session) return;
 
-  // Provenance so the chip strip can group these under "🔖 <name>" (human select)
-  // or fold them into "✨ AI suggested" (agent apply) instead of an anonymous burst.
+  // Every chip carries the session's id + name, so it lands in that session's own
+  // "🔖 <name>" row — whether a human selected the session or the agent applied it.
   const origin: 'ai' | 'session' = opts?.origin || 'session';
   const addedIds: string[] = [];
   for (const config of session.configs) {
