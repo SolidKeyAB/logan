@@ -246,6 +246,10 @@ interface SearchConfigDef {
   isGlobal: boolean;
   createdAt: number;
   description?: string; // optional human/AI note: what this is for / why it was added
+  // Provenance for the grouped chip strip (see SearchConfig in shared/types.ts).
+  origin?: 'user' | 'ai' | 'session';
+  originId?: string;    // source session id (for session/ai-from-session)
+  originLabel?: string; // source session name (group label)
 }
 
 // A reusable, named pattern-property: a regex whose 1st capture group (or whole

@@ -7728,7 +7728,9 @@ function initInvestigatePanel(): void {
   window.api.onInvestigationTemplatesChanged(() => { void loadInvestigationTemplates(); });
   // The agent applied a saved lens entity → run the SAME dispatcher the human ▶ Apply uses
   // (set-semantics, so a re-apply is idempotent). One impl, two operators.
-  window.api.onEntityApply((p) => { if (p && p.kind) void applySavedEntity(p.kind, p.id, p.name, { set: true }); });
+  // entity-apply is pushed only by the agent (ApiContext.applyEntityRef), so mark the
+  // provenance 'ai' → its chips group under "✨ AI suggested", not the human's working set.
+  window.api.onEntityApply((p) => { if (p && p.kind) void applySavedEntity(p.kind, p.id, p.name, { set: true, origin: 'ai' }); });
   void loadInvestigationTemplates();
 }
 
@@ -14550,6 +14552,7 @@ async function addSearchConfig(): Promise<void> {
   hideSearchConfigForm();
   elements.scPatternInput.value = '';
 
+  const existing = editingId ? state.searchConfigs.find(c => c.id === editingId) : undefined;
   const config: SearchConfigDef = {
     id: editingId || `sc-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
     pattern,
@@ -14559,9 +14562,11 @@ async function addSearchConfig(): Promise<void> {
     color: elements.scColorInput.value,
     enabled: true,
     isGlobal: elements.scGlobal.checked,
-    createdAt: editingId
-      ? (state.searchConfigs.find(c => c.id === editingId)?.createdAt || Date.now())
-      : Date.now(),
+    createdAt: existing?.createdAt || Date.now(),
+    // Preserve provenance when editing an existing chip; a brand-new chip is "Yours".
+    origin: existing?.origin || 'user',
+    originId: existing?.originId,
+    originLabel: existing?.originLabel,
   };
 
   // Remove old if editing
@@ -14786,6 +14791,7 @@ async function applySavedPattern(p: SavedPatternDef): Promise<string | null> {
     enabled: true,
     isGlobal: false,
     createdAt: Date.now(),
+    origin: 'user', // the human clicked a Pattern-Library pattern → their working set
   };
   state.searchConfigs.push(config);
   renderSearchConfigsChips();
@@ -15141,6 +15147,179 @@ function isSearchConfigSaved(c: SearchConfigDef): boolean {
       !!sc.wholeWord === !!c.wholeWord));
 }
 
+// ─── Chip provenance grouping ────────────────────────────────────────────────
+// Every search config carries an `origin` (user / ai / session). The chip strip
+// USED to dump all three into one flat wrap, so a "burst" of AI-applied +
+// session-selected + hand-typed patterns read as an indistinguishable mess. We
+// now bucket chips into labeled, collapsible groups with per-group bulk actions
+// (toggle-all / clear-all), so each provenance is legible and manageable.
+function chipGroupKey(c: SearchConfigDef): string {
+  const o = c.origin || 'user';
+  if (o === 'session') return `session:${c.originId || c.originLabel || ''}`;
+  if (o === 'ai') return 'ai';
+  return 'user';
+}
+function chipGroupRank(key: string): number {
+  if (key === 'user') return 0;            // your working set first
+  if (key.startsWith('session:')) return 1; // then each applied session
+  return 2;                                 // AI suggestions last (easy to dismiss)
+}
+function chipGroupMeta(key: string, configs: SearchConfigDef[]): { icon: string; label: string } {
+  if (key === 'user') return { icon: '👤', label: 'Yours' };
+  if (key === 'ai') return { icon: '✨', label: 'AI suggested' };
+  return { icon: '🔖', label: configs[0]?.originLabel || 'Session' };
+}
+// Collapsed group keys (transient this session; not persisted). Collapsing folds a
+// whole burst down to a single summary header.
+const collapsedChipGroups = new Set<string>();
+
+// Build one chip element for a config. Extracted so grouped + flat paths share it.
+function buildSearchConfigChip(config: SearchConfigDef): HTMLElement {
+  const saved = isSearchConfigSaved(config);
+  const chip = document.createElement('div');
+  chip.className = `search-config-chip${config.enabled ? '' : ' disabled'}${saved ? '' : ' unsaved'}`;
+  chip.dataset.configId = config.id;
+
+  const swatch = document.createElement('span');
+  swatch.className = 'sc-chip-swatch';
+  swatch.style.backgroundColor = config.color;
+
+  const patternText = document.createElement('span');
+  patternText.className = 'sc-chip-pattern';
+  patternText.textContent = config.pattern;
+  const savedHint = saved ? '' : '  ·  unsaved (not in a saved session yet)';
+  patternText.title = config.pattern + savedHint + descTitleSuffix(config.description);
+  if (config.description) patternText.textContent = `📝 ${config.pattern}`;
+
+  const count = document.createElement('span');
+  count.className = 'sc-chip-count';
+  const resultCount = state.searchConfigResults.get(config.id)?.length || 0;
+  count.textContent = config.enabled ? `(${resultCount.toLocaleString()})` : '';
+
+  const toggleBtn = document.createElement('button');
+  toggleBtn.className = 'sc-chip-toggle';
+  toggleBtn.innerHTML = config.enabled ? '&#9673;' : '&#9675;';
+  toggleBtn.title = config.enabled ? 'Disable' : 'Enable';
+  toggleBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleSearchConfigEnabled(config.id);
+  });
+
+  const deleteBtn = document.createElement('button');
+  deleteBtn.className = 'sc-chip-delete';
+  deleteBtn.innerHTML = '&times;';
+  deleteBtn.title = 'Delete';
+  deleteBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    deleteSearchConfig(config.id);
+  });
+
+  chip.appendChild(swatch);
+  chip.appendChild(patternText);
+  chip.appendChild(count);
+  chip.appendChild(toggleBtn);
+  chip.appendChild(deleteBtn);
+
+  chip.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    showSearchConfigContextMenu(e, config);
+  });
+  return chip;
+}
+
+// Build the header row for a provenance group: caret · icon+label · count, plus
+// bulk toggle-all and clear-all. Clicking the header (not a button) collapses it.
+function buildChipGroupHeader(key: string, configs: SearchConfigDef[], collapsed: boolean): HTMLElement {
+  const meta = chipGroupMeta(key, configs);
+  const header = document.createElement('div');
+  header.className = 'sc-chip-group-header';
+
+  const caret = document.createElement('span');
+  caret.className = 'sc-group-caret';
+  caret.textContent = collapsed ? '▸' : '▾';
+
+  const label = document.createElement('span');
+  label.className = 'sc-group-label';
+  label.textContent = `${meta.icon} ${meta.label}`;
+  if (key.startsWith('session:')) label.title = `Patterns from the saved session “${meta.label}”`;
+  else if (key === 'ai') label.title = 'Patterns the AI agent applied';
+  else label.title = 'Patterns you added by hand';
+
+  const cnt = document.createElement('span');
+  cnt.className = 'sc-group-count';
+  const enabledN = configs.filter(c => c.enabled).length;
+  cnt.textContent = enabledN === configs.length ? String(configs.length) : `${enabledN}/${configs.length}`;
+  cnt.title = `${configs.length} pattern${configs.length === 1 ? '' : 's'} (${enabledN} enabled)`;
+
+  const anyEnabled = configs.some(c => c.enabled);
+  const toggleAll = document.createElement('button');
+  toggleAll.className = 'sc-group-toggle';
+  toggleAll.innerHTML = anyEnabled ? '&#9673;' : '&#9675;';
+  toggleAll.title = anyEnabled ? 'Disable all in this group' : 'Enable all in this group';
+  toggleAll.addEventListener('click', (e) => { e.stopPropagation(); void toggleConfigGroupEnabled(key); });
+
+  const clear = document.createElement('button');
+  clear.className = 'sc-group-clear';
+  clear.innerHTML = '&times;';
+  clear.title = `Remove all ${configs.length} pattern${configs.length === 1 ? '' : 's'} in this group`;
+  clear.addEventListener('click', (e) => { e.stopPropagation(); void clearConfigGroup(key); });
+
+  header.appendChild(caret);
+  header.appendChild(label);
+  header.appendChild(cnt);
+  header.appendChild(toggleAll);
+  header.appendChild(clear);
+
+  header.addEventListener('click', () => {
+    if (collapsedChipGroups.has(key)) collapsedChipGroups.delete(key);
+    else collapsedChipGroups.add(key);
+    renderSearchConfigsChips();
+  });
+  return header;
+}
+
+// Enable/disable every config in a provenance group in one click (if any are on,
+// turn them all off; otherwise turn them all on).
+async function toggleConfigGroupEnabled(groupKey: string): Promise<void> {
+  const inGroup = state.searchConfigs.filter(c => chipGroupKey(c) === groupKey);
+  if (inGroup.length === 0) return;
+  const next = !inGroup.some(c => c.enabled);
+  for (const c of inGroup) { c.enabled = next; await window.api.searchConfigSave(c); }
+  renderSearchConfigsChips();
+  await runSearchConfigsBatch(true);
+}
+
+// Remove every config in a provenance group at once. Session-contributed chips are
+// pulled via their session bookkeeping (so the session chip de-highlights too);
+// loose (manual / reloaded) chips are deleted directly.
+async function clearConfigGroup(groupKey: string): Promise<void> {
+  const inGroup = state.searchConfigs.filter(c => chipGroupKey(c) === groupKey);
+  if (inGroup.length === 0) return;
+  const sessionIds = new Set<string>();
+  const looseIds: string[] = [];
+  for (const c of inGroup) {
+    if (c.originId && activeSessionIds.has(c.originId)) sessionIds.add(c.originId);
+    else looseIds.push(c.id);
+  }
+  for (const sid of sessionIds) {
+    const ids = new Set(sessionConfigIds.get(sid) || []);
+    for (const c of inGroup) if (c.originId === sid) ids.add(c.id);
+    for (const id of ids) { await window.api.searchConfigDelete(id); state.searchConfigResults.delete(id); }
+    state.searchConfigs = state.searchConfigs.filter(c => !ids.has(c.id));
+    sessionConfigIds.delete(sid);
+    activeSessionIds.delete(sid);
+  }
+  if (looseIds.length) {
+    for (const id of looseIds) { await window.api.searchConfigDelete(id); state.searchConfigResults.delete(id); }
+    const loose = new Set(looseIds);
+    state.searchConfigs = state.searchConfigs.filter(c => !loose.has(c.id));
+  }
+  collapsedChipGroups.delete(groupKey);
+  renderSearchConfigsChips();
+  renderSearchConfigSessionsUI();
+  await runSearchConfigsBatch(true);
+}
+
 function renderSearchConfigsChips(): void {
   const container = elements.searchConfigsChips;
   // Keep the add button, remove existing chips
@@ -15149,59 +15328,39 @@ function renderSearchConfigsChips(): void {
 
   const fragment = document.createDocumentFragment();
 
+  // Bucket configs by provenance, preserving first-seen order within each group.
+  const groups = new Map<string, SearchConfigDef[]>();
   for (const config of state.searchConfigs) {
-    const saved = isSearchConfigSaved(config);
-    const chip = document.createElement('div');
-    chip.className = `search-config-chip${config.enabled ? '' : ' disabled'}${saved ? '' : ' unsaved'}`;
-    chip.dataset.configId = config.id;
+    const key = chipGroupKey(config);
+    let arr = groups.get(key);
+    if (!arr) { arr = []; groups.set(key, arr); }
+    arr.push(config);
+  }
+  const groupKeys = Array.from(groups.keys()).sort((a, b) => chipGroupRank(a) - chipGroupRank(b));
 
-    const swatch = document.createElement('span');
-    swatch.className = 'sc-chip-swatch';
-    swatch.style.backgroundColor = config.color;
+  // Show headers only when there's an actual mix to disambiguate — either several
+  // groups, or a single group that isn't the user's own set (so incoming AI /
+  // session chips are always labeled + bulk-clearable). A lone "Yours" group stays
+  // flat, keeping the common case chrome-free (identical to the old look).
+  const showHeaders = groupKeys.length > 1 || (groupKeys.length === 1 && groupKeys[0] !== 'user');
 
-    const patternText = document.createElement('span');
-    patternText.className = 'sc-chip-pattern';
-    patternText.textContent = config.pattern;
-    const savedHint = saved ? '' : '  ·  unsaved (not in a saved session yet)';
-    patternText.title = config.pattern + savedHint + descTitleSuffix(config.description);
-    if (config.description) patternText.textContent = `📝 ${config.pattern}`;
-
-    const count = document.createElement('span');
-    count.className = 'sc-chip-count';
-    const resultCount = state.searchConfigResults.get(config.id)?.length || 0;
-    count.textContent = config.enabled ? `(${resultCount.toLocaleString()})` : '';
-
-    const toggleBtn = document.createElement('button');
-    toggleBtn.className = 'sc-chip-toggle';
-    toggleBtn.innerHTML = config.enabled ? '&#9673;' : '&#9675;';
-    toggleBtn.title = config.enabled ? 'Disable' : 'Enable';
-    toggleBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      toggleSearchConfigEnabled(config.id);
-    });
-
-    const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'sc-chip-delete';
-    deleteBtn.innerHTML = '&times;';
-    deleteBtn.title = 'Delete';
-    deleteBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      deleteSearchConfig(config.id);
-    });
-
-    chip.appendChild(swatch);
-    chip.appendChild(patternText);
-    chip.appendChild(count);
-    chip.appendChild(toggleBtn);
-    chip.appendChild(deleteBtn);
-
-    // Right-click context menu
-    chip.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      showSearchConfigContextMenu(e, config);
-    });
-
-    fragment.appendChild(chip);
+  if (!showHeaders) {
+    for (const config of state.searchConfigs) fragment.appendChild(buildSearchConfigChip(config));
+  } else {
+    for (const key of groupKeys) {
+      const configs = groups.get(key)!;
+      const collapsed = collapsedChipGroups.has(key);
+      const group = document.createElement('div');
+      group.className = `sc-chip-group${collapsed ? ' collapsed' : ''}`;
+      group.appendChild(buildChipGroupHeader(key, configs, collapsed));
+      if (!collapsed) {
+        const chipsWrap = document.createElement('div');
+        chipsWrap.className = 'sc-chip-group-chips';
+        for (const config of configs) chipsWrap.appendChild(buildSearchConfigChip(config));
+        group.appendChild(chipsWrap);
+      }
+      fragment.appendChild(group);
+    }
   }
 
   container.appendChild(fragment);
@@ -17359,14 +17518,23 @@ async function toggleSearchConfigSession(sessionId: string): Promise<void> {
 }
 
 // Select a session: append its configs to the current working set (does NOT clear others).
-async function selectSearchConfigSession(sessionId: string): Promise<void> {
+async function selectSearchConfigSession(sessionId: string, opts?: { origin?: 'ai' | 'session' }): Promise<void> {
   if (activeSessionIds.has(sessionId)) return; // already applied
   const session = searchConfigSessions.find(s => s.id === sessionId);
   if (!session) return;
 
+  // Provenance so the chip strip can group these under "🔖 <name>" (human select)
+  // or fold them into "✨ AI suggested" (agent apply) instead of an anonymous burst.
+  const origin: 'ai' | 'session' = opts?.origin || 'session';
   const addedIds: string[] = [];
   for (const config of session.configs) {
-    const newConfig = { ...config, id: `sc-${Date.now()}-${Math.random().toString(36).substring(2, 7)}` };
+    const newConfig: SearchConfigDef = {
+      ...config,
+      id: `sc-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      origin,
+      originId: sessionId,
+      originLabel: session.name,
+    };
     await window.api.searchConfigSave(newConfig);
     state.searchConfigs.push(newConfig);
     addedIds.push(newConfig.id);
@@ -25745,7 +25913,7 @@ function insertConstantIntoSearch(value: string, name: string): void {
 // Apply / run a saved entity straight from the catalog (the "same instrument" the human
 // reaches for in each entity's own panel — routed here for the kinds where a one-click
 // apply is clean and self-contained). Reuses the existing per-kind apply functions.
-async function applySavedEntity(kind: string, id: string, name: string, opts?: { set?: boolean }): Promise<void> {
+async function applySavedEntity(kind: string, id: string, name: string, opts?: { set?: boolean; origin?: 'ai' | 'session' }): Promise<void> {
   trackUsage(`saved:apply:${kind}`);
   try {
     if (kind === 'investigation') {
@@ -25758,7 +25926,8 @@ async function applySavedEntity(kind: string, id: string, name: string, opts?: {
     } else if (kind === 'session') {
       await loadSearchConfigSessions();       // ensure the session set is in memory
       openBottomTab('search-configs');
-      await selectSearchConfigSession(id);    // idempotent if already applied
+      // origin defaults to 'session' (human ▶ Apply); the agent path passes 'ai'.
+      await selectSearchConfigSession(id, { origin: opts?.origin || 'session' }); // idempotent if already applied
       showToast(`Applied session “${name}”`);
     } else if (kind === 'composite') {
       await applySavedSingleSession(id, name);
