@@ -5876,16 +5876,22 @@ kbd {
    Each source of chips (your own / a saved session / the AI) renders as its own
    full-width, labeled, collapsible group so a mixed burst reads as tidy clusters
    instead of one anonymous wrap. */
+/* One SOURCE per row: each session / "New items" / "AI (no session)" bucket is a
+   self-contained, full-width block with its own header bar + ON/OFF switch, so
+   it's obvious at a glance what a row contains and it flips as a unit. */
 .sc-chip-group {
   flex: 0 0 100%;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 4px 6px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  gap: 6px;
+  padding: 5px 8px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(255, 255, 255, 0.025);
 }
+.sc-chip-group + .sc-chip-group { margin-top: 4px; }
+/* A fully-off row recedes so the active rows stand out. */
+.sc-chip-group.row-off { opacity: 0.62; }
 
 .sc-chip-group-header {
   display: flex;
@@ -5895,9 +5901,42 @@ kbd {
   user-select: none;
   font-size: 11px;
   color: #9aa4b2;
+  padding-bottom: 5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
+.sc-chip-group.collapsed .sc-chip-group-header { border-bottom: none; padding-bottom: 0; }
 
 .sc-chip-group-header:hover { color: #cfd6df; }
+
+/* Per-row ON/OFF switch — the "enable/disable the row dynamically" control. */
+.sc-row-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 30px;
+  height: 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.sc-row-switch:hover { border-color: rgba(255, 255, 255, 0.38); }
+.sc-row-switch-knob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #c2c8d0;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+.sc-row-switch.on { background: #2e7d46; border-color: #3a9a58; }
+.sc-row-switch.on .sc-row-switch-knob { transform: translateX(14px); background: #eafbef; }
+.sc-row-switch.mixed { background: rgba(58, 154, 88, 0.30); border-color: rgba(58, 154, 88, 0.55); }
+.sc-row-switch.mixed .sc-row-switch-knob { transform: translateX(7px); background: #dfe6ee; }
+.sc-row-switch.off .sc-row-switch-knob { transform: translateX(0); }
 
 .sc-group-caret {
   font-size: 9px;
@@ -5926,22 +5965,18 @@ kbd {
   flex-shrink: 0;
 }
 
-/* Push the bulk-action buttons to the right edge of the header row. */
-.sc-group-toggle { margin-left: auto; }
-
-.sc-group-toggle,
+/* Clear (×) sits at the far right of the header bar. */
 .sc-group-clear {
+  margin-left: auto;
   background: none;
   border: none;
   color: #7c8492;
   cursor: pointer;
   padding: 0 2px;
   line-height: 1;
-  font-size: 12px;
+  font-size: 14px;
   flex-shrink: 0;
 }
-.sc-group-toggle:hover { color: #fff; }
-.sc-group-clear { font-size: 14px; }
 .sc-group-clear:hover { color: #ff6b6b; }
 
 .sc-chip-group-chips {
@@ -5951,7 +5986,7 @@ kbd {
   gap: 6px;
 }
 
-.sc-chip-group.collapsed { padding-bottom: 4px; }
+.sc-chip-group.collapsed { padding-bottom: 5px; }
 .sc-chip-group.collapsed .sc-group-label { opacity: 0.85; }
 
 .search-config-chip {
