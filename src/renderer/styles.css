@@ -5866,7 +5866,93 @@ kbd {
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   flex-shrink: 0;
   min-height: 36px;
+  /* A big burst of chips scrolls instead of eating the whole panel; grouping +
+     per-group collapse are the primary way to tame it. */
+  max-height: 32vh;
+  overflow-y: auto;
 }
+
+/* ── Provenance groups ──────────────────────────────────────────────────────
+   Each source of chips (your own / a saved session / the AI) renders as its own
+   full-width, labeled, collapsible group so a mixed burst reads as tidy clusters
+   instead of one anonymous wrap. */
+.sc-chip-group {
+  flex: 0 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 4px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.sc-chip-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  color: #9aa4b2;
+}
+
+.sc-chip-group-header:hover { color: #cfd6df; }
+
+.sc-group-caret {
+  font-size: 9px;
+  width: 10px;
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.sc-group-label {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.sc-group-count {
+  font-size: 10px;
+  font-weight: 700;
+  color: #cbd2db;
+  background: rgba(0, 0, 0, 0.32);
+  border-radius: 8px;
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+/* Push the bulk-action buttons to the right edge of the header row. */
+.sc-group-toggle { margin-left: auto; }
+
+.sc-group-toggle,
+.sc-group-clear {
+  background: none;
+  border: none;
+  color: #7c8492;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.sc-group-toggle:hover { color: #fff; }
+.sc-group-clear { font-size: 14px; }
+.sc-group-clear:hover { color: #ff6b6b; }
+
+.sc-chip-group-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.sc-chip-group.collapsed { padding-bottom: 4px; }
+.sc-chip-group.collapsed .sc-group-label { opacity: 0.85; }
 
 .search-config-chip {
   display: inline-flex;

@@ -178,6 +178,15 @@ export interface SearchConfig {
   isGlobal: boolean;
   createdAt: number;
   description?: string; // optional human/AI note: what this is for / why it was added
+  // Provenance — where this chip came from, so the panel can GROUP the strip
+  // instead of dumping every source into one flat "burst" of chips.
+  //   'user'    — the human typed/added it (or applied a Pattern-Library pattern)
+  //   'ai'      — the agent applied it (e.g. logan_apply_entity session)
+  //   'session' — the human selected a saved search-config session
+  // Absent on legacy/stored configs → treated as 'user'.
+  origin?: 'user' | 'ai' | 'session';
+  originId?: string;    // for session/ai-from-session: the source session id (exact deselect)
+  originLabel?: string; // for session/ai-from-session: the source session name (group label)
 }
 
 // A reusable, named pattern-property: a regex whose 1st capture group (or the
