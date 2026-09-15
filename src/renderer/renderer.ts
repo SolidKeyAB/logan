@@ -10809,40 +10809,55 @@ function readableTextColor(bg: string, dark = '#111111', light = '#f2f2f2'): str
   return contrastBlack >= contrastWhite ? dark : light;
 }
 
-// Smart, CONTINUOUS contrast: from the chosen panel bg, compute a full set of
-// foreground tokens (text shades, borders, control surfaces) that are guaranteed
-// readable — for ANY colour, including medium/saturated ones a binary light/dark
-// flip handles badly. These are set as CSS custom properties on the panel so every
-// label, button and surface that references them adapts automatically.
+// MIRROR of computePanelTokens() in src/shared/panelTokens.ts (tested there) — keep
+// in sync. From the chosen panel bg, derive a full token set: text shades PLUS
+// SOLID, contrast-SOLVED surfaces + borders that are guaranteed visibly distinct
+// from the bg for ANY colour — including light / saturated / mid ones that a plain
+// "foreground at N% alpha" overlay washes out. Set as CSS custom properties on the
+// panel so every descendant reading var(--token, fallback) adapts. See the shared
+// module for the full algorithm + commentary.
 function computePanelTokens(color: string): Record<string, string> {
-  const m = color.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
-  const r = m ? +m[1] : 30, g = m ? +m[2] : 30, b = m ? +m[3] : 30;
-  const lin = (v: number): number => {
-    const c = v / 255;
-    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  const bg = parseRgbColor(color) ?? [30, 30, 30];
+  const lin = (v: number): number => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+  const lumOf = (c: number[]): number => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
+  const cr = (a: number, b: number): number => { const hi = Math.max(a, b), lo = Math.min(a, b); return (hi + 0.05) / (lo + 0.05); };
+  const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
+  const mixC = (a: number[], b: number[], t: number): number[] => [
+    Math.round(a[0] + (b[0] - a[0]) * t), Math.round(a[1] + (b[1] - a[1]) * t), Math.round(a[2] + (b[2] - a[2]) * t),
+  ];
+  const rgb = (c: number[]): string => `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+  const Lbg = lumOf(bg);
+  // Foreground pole = whichever of near-white / near-black reads better as TEXT.
+  const fgIsLight = cr(Lbg, lumOf([242, 242, 242])) >= cr(Lbg, lumOf([17, 17, 17]));
+  const fg = fgIsLight ? [242, 242, 242] : [17, 17, 17];
+  // Surfaces elevate toward the ink pole (lighter on dark panels, darker on light).
+  const pole = fgIsLight ? [255, 255, 255] : [0, 0, 0];
+  // Blend bg toward the pole until contrast vs bg reaches `target` (binary search;
+  // luminance is monotonic along bg→pole).
+  const surface = (target: number): string => {
+    const poleLighter = lumOf(pole) >= Lbg;
+    const wantL = clamp01(poleLighter ? target * (Lbg + 0.05) - 0.05 : (Lbg + 0.05) / target - 0.05);
+    let lo = 0, hi = 1;
+    for (let i = 0; i < 24; i++) {
+      const mid = (lo + hi) / 2;
+      const Lmid = lumOf(mixC(bg, pole, mid));
+      if (poleLighter ? Lmid < wantL : Lmid > wantL) lo = mid; else hi = mid;
+    }
+    return rgb(mixC(bg, pole, (lo + hi) / 2));
   };
-  const L = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
-  // Pick black or white text by whichever yields the higher WCAG contrast ratio.
-  const contrastWhite = 1.05 / (L + 0.05);
-  const contrastBlack = (L + 0.05) / 0.05;
-  const fg = contrastBlack >= contrastWhite ? [17, 17, 17] : [242, 242, 242];
-  // Solid shade = fg blended over the panel bg at `a` (no alpha surprises on text).
-  const mix = (a: number): string => {
-    const rr = Math.round(fg[0] * a + r * (1 - a));
-    const gg = Math.round(fg[1] * a + g * (1 - a));
-    const bb = Math.round(fg[2] * a + b * (1 - a));
-    return `rgb(${rr}, ${gg}, ${bb})`;
-  };
-  const fgA = (a: number): string => `rgba(${fg[0]}, ${fg[1]}, ${fg[2]}, ${a})`;
+  const textMix = (a: number): string => rgb(mixC(bg, fg, a));
   return {
-    '--text-primary': mix(1),
-    '--text-secondary': mix(0.72),
-    '--text-muted': mix(0.52),
-    '--text-muted-bright': mix(0.82),
-    '--panel-fg-strong': mix(1),
-    '--panel-border': fgA(0.22),
-    '--panel-surface': fgA(0.10),
-    '--panel-surface-strong': fgA(0.20),
+    '--panel-bg': rgb(bg),
+    '--text-primary': textMix(1),
+    '--text-secondary': textMix(0.74),
+    '--text-muted': textMix(0.54),
+    '--text-muted-bright': textMix(0.84),
+    '--panel-fg-strong': textMix(1),
+    '--panel-surface': surface(1.15),
+    '--panel-surface-strong': surface(1.35),
+    '--panel-surface-active': surface(1.6),
+    '--panel-border': surface(1.9),
+    '--panel-border-strong': surface(2.7),
   };
 }
 
