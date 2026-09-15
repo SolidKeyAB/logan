@@ -5692,7 +5692,7 @@ kbd {
   padding: 0 0 6px 0;
   gap: 8px;
   flex-shrink: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--panel-border, rgba(255, 255, 255, 0.06));
   margin-bottom: 6px;
 }
 
@@ -5771,7 +5771,7 @@ kbd {
   align-items: center;
   gap: 6px;
   padding: 4px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--panel-border, rgba(255, 255, 255, 0.06));
   flex-shrink: 0;
   min-height: 0;
 }
@@ -5838,20 +5838,20 @@ kbd {
   font-size: 9px;
   padding: 0 4px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--panel-surface, rgba(255, 255, 255, 0.15));
   color: var(--text-muted);
   line-height: 16px;
 }
 
 .sc-session-chip.active .sc-session-chip-badge {
-  background: rgba(255, 255, 255, 0.25);
+  background: var(--panel-surface-active, rgba(255, 255, 255, 0.25));
   color: #ffffff;
   font-weight: 700;
 }
 
 /* Active chip's ✕ badge = deselect affordance; brighten it on hover. */
 .sc-session-chip.active:hover .sc-session-chip-badge {
-  background: rgba(255, 255, 255, 0.45);
+  background: var(--panel-surface-active, rgba(255, 255, 255, 0.45));
 }
 
 /* ─── Search Configs content (inside bottom panel tab) ─── */
@@ -5863,7 +5863,7 @@ kbd {
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--panel-border, rgba(255, 255, 255, 0.06));
   flex-shrink: 0;
   min-height: 36px;
   /* A big burst of chips scrolls instead of eating the whole panel; grouping +
@@ -5885,9 +5885,9 @@ kbd {
   flex-direction: column;
   gap: 6px;
   padding: 5px 8px 7px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--panel-border, rgba(255, 255, 255, 0.08));
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.025);
+  background: var(--panel-surface, rgba(255, 255, 255, 0.025));
 }
 .sc-chip-group + .sc-chip-group { margin-top: 4px; }
 /* A fully-off row recedes so the active rows stand out. */
@@ -5902,7 +5902,7 @@ kbd {
   font-size: 11px;
   color: #9aa4b2;
   padding-bottom: 5px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid var(--panel-border, rgba(255, 255, 255, 0.05));
 }
 .sc-chip-group.collapsed .sc-chip-group-header { border-bottom: none; padding-bottom: 0; }
 
@@ -5915,13 +5915,13 @@ kbd {
   width: 30px;
   height: 16px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--panel-border, rgba(255, 255, 255, 0.18));
+  background: var(--panel-surface, rgba(255, 255, 255, 0.08));
   padding: 0;
   cursor: pointer;
   transition: background 0.12s ease, border-color 0.12s ease;
 }
-.sc-row-switch:hover { border-color: rgba(255, 255, 255, 0.38); }
+.sc-row-switch:hover { border-color: var(--panel-border-strong, rgba(255, 255, 255, 0.38)); }
 .sc-row-switch-knob {
   position: absolute;
   top: 1px;
@@ -5958,7 +5958,7 @@ kbd {
   font-size: 10px;
   font-weight: 700;
   color: #cbd2db;
-  background: rgba(0, 0, 0, 0.32);
+  background: var(--panel-surface, rgba(0, 0, 0, 0.32));
   border-radius: 8px;
   padding: 0 6px;
   font-variant-numeric: tabular-nums;
@@ -5995,8 +5995,8 @@ kbd {
   gap: 4px;
   padding: 3px 8px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--panel-surface, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--panel-border, rgba(255, 255, 255, 0.12));
   font-size: 12px;
   color: #ccc;
   cursor: pointer;
@@ -6005,7 +6005,7 @@ kbd {
 }
 
 .search-config-chip:hover {
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--panel-surface-strong, rgba(255, 255, 255, 0.14));
 }
 
 .search-config-chip.disabled {
@@ -6118,8 +6118,8 @@ kbd {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(0, 0, 0, 0.2);
+  border-bottom: 1px solid var(--panel-border, rgba(255, 255, 255, 0.1));
+  background: var(--panel-surface, rgba(0, 0, 0, 0.2));
   flex-shrink: 0;
 }
 
@@ -6131,7 +6131,7 @@ kbd {
   flex: 1;
   min-width: 180px;
   padding: 4px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--panel-border, rgba(255, 255, 255, 0.2));
   border-radius: 4px;
   background: var(--bg-primary);
   color: var(--text-primary);
@@ -6175,9 +6175,9 @@ kbd {
 
 .sc-form-btn {
   padding: 4px 12px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid var(--panel-border, rgba(255, 255, 255, 0.15));
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--panel-surface, rgba(255, 255, 255, 0.08));
   color: #ccc;
   font-size: 12px;
   cursor: pointer;
@@ -6185,7 +6185,7 @@ kbd {
 }
 
 .sc-form-btn:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--panel-surface-strong, rgba(255, 255, 255, 0.15));
 }
 
 .sc-form-btn.primary {
@@ -6203,14 +6203,14 @@ kbd {
 .sc-distance-panel {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border-color);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--panel-surface, rgba(255, 255, 255, 0.03));
 }
 
 /* ── Relations matrix ── */
 .sc-relations-panel {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border-color);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--panel-surface, rgba(255, 255, 255, 0.03));
 }
 
 .sc-relations-panel.hidden { display: none; }
@@ -6251,7 +6251,7 @@ kbd {
 }
 
 .sc-rel-head {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--panel-surface-strong, rgba(255, 255, 255, 0.04));
   color: var(--text-secondary);
   gap: 4px;
   overflow: hidden;
@@ -6301,7 +6301,7 @@ kbd {
 }
 
 .sc-rel-diag {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--panel-surface, rgba(255, 255, 255, 0.02));
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -6409,7 +6409,7 @@ kbd {
 .sc-hist-bar-wrap {
   flex: 1;
   height: 12px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--panel-surface, rgba(255, 255, 255, 0.06));
   border-radius: 3px;
   overflow: hidden;
 }
@@ -6884,7 +6884,7 @@ kbd {
 }
 
 .sc-ov-swatch-multi {
-  border: 1px solid rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--panel-border, rgba(0, 0, 0, 0.35));
 }
 
 .sc-ov-swatch {
@@ -6921,7 +6921,7 @@ kbd {
   min-width: 0;
   display: block;
   border-radius: 2px;
-  background: #14141a;
+  background: var(--panel-surface, #14141a);
 }
 
 /* Pinned first/last carets: a bright vertical tick overlaying the strip, with a
@@ -9243,15 +9243,15 @@ kbd {
 
 /* === Time Align === */
 .ta-panel-body { display: flex; flex-direction: column; height: 100%; }
-.ta-toolbar { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-bottom: 1px solid #2e3a4a; flex-shrink: 0; }
-.ta-axis { display: flex; align-items: flex-end; height: 22px; padding: 0 10px 0 100px; position: relative; flex-shrink: 0; border-bottom: 1px solid #2e3a4a; }
+.ta-toolbar { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-bottom: 1px solid var(--panel-border, #2e3a4a); flex-shrink: 0; }
+.ta-axis { display: flex; align-items: flex-end; height: 22px; padding: 0 10px 0 100px; position: relative; flex-shrink: 0; border-bottom: 1px solid var(--panel-border, #2e3a4a); }
 .ta-axis-tick { position: absolute; bottom: 0; width: 1px; height: 8px; background: #4a5568; }
 .ta-axis-label { position: absolute; bottom: 10px; font-size: 9px; color: #7a8a9a; transform: translateX(-50%); white-space: nowrap; font-family: var(--font-mono); }
 .ta-lanes { display: flex; flex-direction: column; gap: 3px; padding: 6px 10px; overflow-y: auto; flex: 1; }
 .ta-lane { display: flex; align-items: center; height: 28px; gap: 6px; }
 .ta-lane-label { font-size: 11px; color: #c0b8a0; width: 90px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 5px; font-weight: 500; }
 .ta-lane-color { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; box-shadow: 0 0 4px currentColor; }
-.ta-lane-track { flex: 1; position: relative; height: 24px; border-radius: 3px; border: 1px solid #2e3a4a; overflow: hidden; cursor: grab; }
+.ta-lane-track { flex: 1; position: relative; height: 24px; border-radius: 3px; border: 1px solid var(--panel-border, #2e3a4a); overflow: hidden; cursor: grab; }
 .ta-lane-track.dragging { cursor: grabbing; }
 .ta-lane-mark { position: absolute; top: 2px; bottom: 2px; width: 3px; border-radius: 1px; cursor: pointer; transition: opacity 0.15s; box-shadow: 0 0 3px currentColor; }
 .ta-lane-mark:hover { opacity: 0.8; box-shadow: 0 0 8px currentColor; z-index: 2; }
@@ -9395,7 +9395,7 @@ kbd {
   flex-shrink: 0;
   max-height: 96px;
   overflow-y: auto;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--panel-border, rgba(255, 255, 255, 0.06));
   margin-bottom: 6px;
 }
 
@@ -9438,7 +9438,7 @@ kbd {
   flex-shrink: 0;
   max-height: 96px;
   overflow-y: auto;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--panel-border, rgba(255, 255, 255, 0.06));
   margin-bottom: 6px;
 }
 .trends-props-bar.hidden { display: none; }
@@ -10674,7 +10674,7 @@ kbd {
 .sum-row {
   display: grid; grid-template-columns: 20px minmax(0,1fr) 92px 156px 22px;
   align-items: center; gap: 10px; padding: 7px 10px;
-  border-bottom: 1px solid rgba(255,255,255,.05);
+  border-bottom: 1px solid var(--panel-border, rgba(255,255,255,.05));
 }
 .sum-row:last-child { border-bottom: none; }
 .sum-head { background: var(--bg-tertiary); font-size: 10px; text-transform: uppercase; letter-spacing: .6px; color: var(--text-muted); font-weight: 600; }
@@ -10718,7 +10718,7 @@ kbd {
 .sum-tmpl.expanded .sum-exp-caret { transform: rotate(90deg); }
 
 /* Examples drawer */
-.sum-examples { padding: 7px 10px 9px 40px; background: var(--bg-primary); border-bottom: 1px solid rgba(255,255,255,.05); display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sum-examples { padding: 7px 10px 9px 40px; background: var(--bg-primary); border-bottom: 1px solid var(--panel-border, rgba(255,255,255,.05)); display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .sum-examples-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px; margin-right: 4px; }
 .sum-ex-chip { padding: 2px 8px; background: var(--bg-tertiary); border: 1px solid var(--border-color); border-radius: 10px; font-size: 10.5px; font-variant-numeric: tabular-nums; }
 .sum-ex-chip:hover { border-color: var(--accent-color); text-decoration: none; }
