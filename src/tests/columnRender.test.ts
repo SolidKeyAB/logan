@@ -77,16 +77,16 @@ describe('computeColumnSegments — space', () => {
 
 describe('computeColumnSegments — multi-space (whitespace-aligned "  ")', () => {
   it('splits on runs of >=2 spaces; single spaces stay inside a cell', () => {
-    // esotrace-style: "date time" pairs and free-text keep their single spaces.
-    const text = '0.18628   0   --     11.12.2025 10:38:21.686  info      [16388:1:0] boot timer 1069997[us';
+    // whitespace-aligned style: "date time" pairs and free-text keep their single spaces.
+    const text = '0.10001   0   --     01.01.2000 00:00:00.100  info      [1000:1:0] boot timer 1069997[us';
     expect(splitLineIntoColumns(text, '  ')).toEqual([
-      '0.18628', '0', '--', '11.12.2025 10:38:21.686', 'info', '[16388:1:0] boot timer 1069997[us',
+      '0.10001', '0', '--', '01.01.2000 00:00:00.100', 'info', '[1000:1:0] boot timer 1069997[us',
     ]);
     assertTilesAndCounts(text, '  ');
   });
   it('the header row splits into the same number of columns as data rows', () => {
     const header = 'PacketID  SessionID  Label  LoggerTime               TraceTime                Channel  Source  Level  PrivFlag  Size  Message';
-    const data   = '0.18628   0   --     11.12.2025 10:38:21.686  01.01.1970 00:00:00.027  Slog2Reader  traceserver  info  --  82  [16388:1:0] boot timer';
+    const data   = '0.10001   0   --     01.01.2000 00:00:00.100  01.01.1970 00:00:00.010  Reader.metrics  tracesource  info  --  82  [1000:1:0] boot timer';
     expect(splitLineIntoColumns(header, '  ').length).toBe(11);
     expect(splitLineIntoColumns(data, '  ').length).toBe(11);
     assertTilesAndCounts(header, '  ');
