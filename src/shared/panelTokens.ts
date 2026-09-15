@@ -96,25 +96,57 @@ export function computePanelTokens(color: string): Record<string, string> {
   // Foreground pole = whichever of near-black / near-white contrasts better as TEXT.
   const fgIsLight = contrastRatio(Lbg, relativeLuminance(NEAR_WHITE)) >= contrastRatio(Lbg, relativeLuminance(NEAR_BLACK));
   const fg: RGB = fgIsLight ? NEAR_WHITE : NEAR_BLACK;
-  // Surfaces "elevate" toward the same pole as the ink: lighter on dark panels,
-  // darker on light panels — the direction that keeps them distinct from the bg.
-  const pole: RGB = fgIsLight ? WHITE : BLACK;
+
+  // BORDERS elevate toward the ink pole — the side the panel has the most luminance
+  // range in — so a hairline can reach the firm border contrast targets.
+  const borderPole: RGB = fgIsLight ? WHITE : BLACK;
+  // FILLS (surfaces that HOLD TEXT) elevate AWAY from the ink pole, so text contrast
+  // GROWS as a surface is raised instead of shrinking. If a fill went the ink-ward way
+  // (as borders do), a raised card on a mid-tone panel would drift toward the ink and
+  // the text on it would fall below AA — the bug that left grey/blue/red panels hard to
+  // read. Fall back to the ink-ward pole ONLY when the away pole can't reach the
+  // strongest fill target (a near-black / near-white panel), where the ink-ward
+  // direction has ample text headroom anyway.
+  const awayPole: RGB = fgIsLight ? BLACK : WHITE;
+  const awayReachesFills = contrastRatio(Lbg, relativeLuminance(awayPole)) >= TARGETS.surfaceActive;
+  const fillPole: RGB = awayReachesFills ? awayPole : borderPole;
 
   // Text shades = fg blended over the panel bg (solid, so no alpha compositing
   // surprises when text lands on an already-tinted surface).
   const textMix = (a: number): string => rgbStr(mix(bg, fg, a));
 
+  // Compute each elevation once and reuse. Fills use fillPole (away from ink), borders
+  // use borderPole (toward ink / max range) — see the pole selection above.
+  const surface = rgbStr(surfaceAtContrast(bg, fillPole, Lbg, TARGETS.surface));
+  const surfaceStrong = rgbStr(surfaceAtContrast(bg, fillPole, Lbg, TARGETS.surfaceStrong));
+  const surfaceActive = rgbStr(surfaceAtContrast(bg, fillPole, Lbg, TARGETS.surfaceActive));
+  const border = rgbStr(surfaceAtContrast(bg, borderPole, Lbg, TARGETS.border));
+  const borderStrong = rgbStr(surfaceAtContrast(bg, borderPole, Lbg, TARGETS.borderStrong));
+  const textPrimary = textMix(1);
+
   return {
     '--panel-bg': rgbStr(bg),
-    '--text-primary': textMix(1),
+    '--text-primary': textPrimary,
     '--text-secondary': textMix(0.74),
     '--text-muted': textMix(0.54),
     '--text-muted-bright': textMix(0.84),
-    '--panel-fg-strong': textMix(1),
-    '--panel-surface': rgbStr(surfaceAtContrast(bg, pole, Lbg, TARGETS.surface)),
-    '--panel-surface-strong': rgbStr(surfaceAtContrast(bg, pole, Lbg, TARGETS.surfaceStrong)),
-    '--panel-surface-active': rgbStr(surfaceAtContrast(bg, pole, Lbg, TARGETS.surfaceActive)),
-    '--panel-border': rgbStr(surfaceAtContrast(bg, pole, Lbg, TARGETS.border)),
-    '--panel-border-strong': rgbStr(surfaceAtContrast(bg, pole, Lbg, TARGETS.borderStrong)),
+    '--panel-fg-strong': textPrimary,
+    '--panel-surface': surface,
+    '--panel-surface-strong': surfaceStrong,
+    '--panel-surface-active': surfaceActive,
+    '--panel-border': border,
+    '--panel-border-strong': borderStrong,
+    // ALSO override the app's core theme vars on the panel, so the MANY components
+    // that reference the standard theme palette (var(--bg-primary), var(--border-color),
+    // var(--bg-hover)…) re-theme automatically — without touching each rule. Without
+    // this, such a component keeps the global DARK --bg-primary while its text flips to
+    // the panel's contrast-picked --text-primary → dark-on-dark on a light panel.
+    // Only defined on .bottom-panel, so the rest of the app is untouched.
+    '--bg-primary': surface,
+    '--bg-secondary': surfaceStrong,
+    '--bg-tertiary': surfaceActive,
+    '--bg-hover': surfaceStrong,
+    '--bg-hover-subtle': surface,
+    '--border-color': border,
   };
 }
