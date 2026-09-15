@@ -10830,11 +10830,18 @@ function computePanelTokens(color: string): Record<string, string> {
   // Foreground pole = whichever of near-white / near-black reads better as TEXT.
   const fgIsLight = cr(Lbg, lumOf([242, 242, 242])) >= cr(Lbg, lumOf([17, 17, 17]));
   const fg = fgIsLight ? [242, 242, 242] : [17, 17, 17];
-  // Surfaces elevate toward the ink pole (lighter on dark panels, darker on light).
-  const pole = fgIsLight ? [255, 255, 255] : [0, 0, 0];
-  // Blend bg toward the pole until contrast vs bg reaches `target` (binary search;
+  // Borders elevate toward the ink pole (the panel's max-luminance-range side) so a
+  // hairline reaches its firm target; FILLS elevate AWAY from the ink pole so text
+  // contrast GROWS as a surface is raised (else a raised card on a mid-tone panel
+  // drifts toward the ink and its text drops below AA). Fall back to the ink-ward pole
+  // only when the away pole can't reach the strongest fill target (near-black/-white
+  // panels, where the ink-ward direction has ample text headroom). See shared module.
+  const borderPole = fgIsLight ? [255, 255, 255] : [0, 0, 0];
+  const awayPole = fgIsLight ? [0, 0, 0] : [255, 255, 255];
+  const fillPole = cr(Lbg, lumOf(awayPole)) >= 1.6 ? awayPole : borderPole;
+  // Blend bg toward `pole` until contrast vs bg reaches `target` (binary search;
   // luminance is monotonic along bg→pole).
-  const surface = (target: number): string => {
+  const surface = (target: number, pole: number[]): string => {
     const poleLighter = lumOf(pole) >= Lbg;
     const wantL = clamp01(poleLighter ? target * (Lbg + 0.05) - 0.05 : (Lbg + 0.05) / target - 0.05);
     let lo = 0, hi = 1;
@@ -10846,18 +10853,31 @@ function computePanelTokens(color: string): Record<string, string> {
     return rgb(mixC(bg, pole, (lo + hi) / 2));
   };
   const textMix = (a: number): string => rgb(mixC(bg, fg, a));
+  const surf = surface(1.15, fillPole), surfStrong = surface(1.35, fillPole), surfActive = surface(1.6, fillPole);
+  const bord = surface(1.9, borderPole), bordStrong = surface(2.7, borderPole), textPrimary = textMix(1);
   return {
     '--panel-bg': rgb(bg),
-    '--text-primary': textMix(1),
+    '--text-primary': textPrimary,
     '--text-secondary': textMix(0.74),
     '--text-muted': textMix(0.54),
     '--text-muted-bright': textMix(0.84),
-    '--panel-fg-strong': textMix(1),
-    '--panel-surface': surface(1.15),
-    '--panel-surface-strong': surface(1.35),
-    '--panel-surface-active': surface(1.6),
-    '--panel-border': surface(1.9),
-    '--panel-border-strong': surface(2.7),
+    '--panel-fg-strong': textPrimary,
+    '--panel-surface': surf,
+    '--panel-surface-strong': surfStrong,
+    '--panel-surface-active': surfActive,
+    '--panel-border': bord,
+    '--panel-border-strong': bordStrong,
+    // ALSO override the app's core theme vars on the panel so components that use the
+    // standard palette (var(--bg-primary)/--border-color/--bg-hover…) re-theme too —
+    // otherwise they keep the global DARK --bg-primary while their text flips to the
+    // panel's dark --text-primary → invisible dark-on-dark on a light panel. Scoped to
+    // .bottom-panel, so the rest of the app is untouched. (See shared/panelTokens.ts.)
+    '--bg-primary': surf,
+    '--bg-secondary': surfStrong,
+    '--bg-tertiary': surfActive,
+    '--bg-hover': surfStrong,
+    '--bg-hover-subtle': surf,
+    '--border-color': bord,
   };
 }
 
@@ -15185,11 +15205,25 @@ function chipGroupRank(key: string): number {
   if (key.startsWith('session:')) return 1; // then each applied session
   return 2;                                 // AI (no session) last (easy to dismiss)
 }
-function chipGroupMeta(key: string, configs: SearchConfigDef[]): { icon: string; label: string } {
-  if (key === 'user') return { icon: '🆕', label: 'New items' };
-  if (key === 'ai') return { icon: '✨', label: 'AI (no session)' };
-  return { icon: '🔖', label: configs[0]?.originLabel || 'Session' };
+// The SOURCE CATEGORY behind a group key — drives the row's colour accent + legend
+// so origin reads pre-attentively (colour) as well as textually (icon + label).
+type ChipSourceCat = 'user' | 'session' | 'ai';
+function chipGroupCategory(key: string): ChipSourceCat {
+  if (key === 'user') return 'user';
+  if (key === 'ai') return 'ai';
+  return 'session';
 }
+function chipGroupMeta(key: string, configs: SearchConfigDef[]): { icon: string; label: string; cat: ChipSourceCat; isSession: boolean } {
+  if (key === 'user') return { icon: '🆕', label: 'Your additions', cat: 'user', isSession: false };
+  if (key === 'ai') return { icon: '✨', label: 'AI analysis', cat: 'ai', isSession: false };
+  return { icon: '🔖', label: configs[0]?.originLabel || 'Session', cat: 'session', isSession: true };
+}
+// Human wording for each source category (legend + tooltips).
+const CHIP_SOURCE_LABEL: Record<ChipSourceCat, string> = {
+  user: 'Your additions',
+  session: 'Saved session',
+  ai: 'AI analysis',
+};
 // Collapsed group keys (transient this session; not persisted). Collapsing folds a
 // whole burst down to a single summary header.
 const collapsedChipGroups = new Set<string>();
@@ -15284,6 +15318,18 @@ function buildChipGroupHeader(key: string, configs: SearchConfigDef[], collapsed
   else if (key === 'ai') label.title = 'Patterns the AI agent applied that aren’t tied to a saved session';
   else label.title = 'Patterns you added by hand';
 
+  // A session row's label is just the session's name — so tag it explicitly, so the
+  // name is unmistakably "a saved, reusable session" (the other two labels already
+  // state their category outright).
+  let tag: HTMLElement | null = null;
+  if (meta.isSession) {
+    tag = document.createElement('span');
+    tag.className = 'sc-source-tag';
+    tag.dataset.sourceCat = 'session';
+    tag.textContent = 'session';
+    tag.title = 'A saved, reusable session';
+  }
+
   const cnt = document.createElement('span');
   cnt.className = 'sc-group-count';
   cnt.textContent = enabledN === configs.length ? String(configs.length) : `${enabledN}/${configs.length}`;
@@ -15298,6 +15344,7 @@ function buildChipGroupHeader(key: string, configs: SearchConfigDef[], collapsed
   header.appendChild(sw);
   header.appendChild(caret);
   header.appendChild(label);
+  if (tag) header.appendChild(tag);
   header.appendChild(cnt);
   header.appendChild(clear);
 
@@ -15352,6 +15399,32 @@ async function clearConfigGroup(groupKey: string): Promise<void> {
   await runSearchConfigsBatch(true);
 }
 
+// A compact, colour-keyed legend mapping each accent hue → its source category.
+// Shown only when 2+ categories are actually present (see renderSearchConfigsChips),
+// so it explains the row colours exactly when there's a mix to disambiguate — a
+// persistent, touch-friendly alternative to a hover-only tooltip.
+function buildChipSourceLegend(cats: ChipSourceCat[]): HTMLElement {
+  const legend = document.createElement('div');
+  legend.className = 'sc-chip-legend';
+  const title = document.createElement('span');
+  title.className = 'sc-chip-legend-title';
+  title.textContent = 'Source';
+  legend.appendChild(title);
+  for (const cat of cats) {
+    const item = document.createElement('span');
+    item.className = 'sc-chip-legend-item';
+    item.dataset.sourceCat = cat;
+    const sw = document.createElement('span');
+    sw.className = 'sc-chip-legend-swatch';
+    const lbl = document.createElement('span');
+    lbl.textContent = CHIP_SOURCE_LABEL[cat];
+    item.appendChild(sw);
+    item.appendChild(lbl);
+    legend.appendChild(item);
+  }
+  return legend;
+}
+
 function renderSearchConfigsChips(): void {
   const container = elements.searchConfigsChips;
   // Keep the add button, remove existing chips
@@ -15379,12 +15452,21 @@ function renderSearchConfigsChips(): void {
   if (!showHeaders) {
     for (const config of state.searchConfigs) fragment.appendChild(buildSearchConfigChip(config));
   } else {
+    // Legend first — but only when there's an actual mix of source TYPES to explain
+    // (colour coding a single category is just noise; its header already names it).
+    const catsPresent: ChipSourceCat[] = [];
+    for (const cat of ['user', 'session', 'ai'] as ChipSourceCat[]) {
+      if (groupKeys.some(k => chipGroupCategory(k) === cat)) catsPresent.push(cat);
+    }
+    if (catsPresent.length > 1) fragment.appendChild(buildChipSourceLegend(catsPresent));
+
     for (const key of groupKeys) {
       const configs = groups.get(key)!;
       const collapsed = collapsedChipGroups.has(key);
       const allOff = !configs.some(c => c.enabled);
       const group = document.createElement('div');
       group.className = `sc-chip-group${collapsed ? ' collapsed' : ''}${allOff ? ' row-off' : ''}`;
+      group.dataset.sourceCat = chipGroupCategory(key); // drives the row's colour accent
       group.appendChild(buildChipGroupHeader(key, configs, collapsed));
       if (!collapsed) {
         const chipsWrap = document.createElement('div');

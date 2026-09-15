@@ -5698,7 +5698,7 @@ kbd {
 
 .search-results-summary {
   font-size: 11px;
-  color: #888;
+  color: var(--text-secondary, #888);
 }
 
 .search-results-list {
@@ -5988,6 +5988,62 @@ kbd {
 
 .sc-chip-group.collapsed { padding-bottom: 5px; }
 .sc-chip-group.collapsed .sc-group-label { opacity: 0.85; }
+
+/* Source-category accent — a fixed-hue bar down the row's left edge so origin reads
+   pre-attentively (colour) as well as textually. Fixed semantic hues (like the
+   severity colours), painted as an inset shadow so they survive any panel bg and
+   respect the row's rounded corners: amber = your additions, blue = saved session,
+   violet = AI. Mirrored by the legend swatches + the "session" tag. */
+.sc-chip-group[data-source-cat="user"]    { box-shadow: inset 3px 0 0 #e0a83a; }
+.sc-chip-group[data-source-cat="session"] { box-shadow: inset 3px 0 0 #4a90d9; }
+.sc-chip-group[data-source-cat="ai"]      { box-shadow: inset 3px 0 0 #a06cff; }
+
+/* Explicit "session" tag beside a session row's name — the name alone doesn't say
+   "saved session" the way the other two rows' labels state their category. */
+.sc-source-tag {
+  font-size: 8.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  line-height: 1.6;
+  padding: 0 5px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  color: var(--text-secondary, #9aa4b2);
+  background: var(--panel-surface-strong, rgba(255, 255, 255, 0.10));
+  border: 1px solid var(--panel-border, rgba(255, 255, 255, 0.14));
+}
+
+/* Colour → source legend. Full-width row above the groups; only rendered when 2+
+   source types are present. Text uses the adaptive tokens so it reads on any panel;
+   the swatch carries the fixed category hue. */
+.sc-chip-legend {
+  flex: 0 0 100%;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px 12px;
+  font-size: 10px;
+  color: var(--text-muted, #7c8492);
+  padding: 1px 2px 6px;
+}
+.sc-chip-legend-title {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.85;
+}
+.sc-chip-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+.sc-chip-legend-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  background: var(--sc-src, #888);
+}
+.sc-chip-legend-item[data-source-cat="user"]    { --sc-src: #e0a83a; }
+.sc-chip-legend-item[data-source-cat="session"] { --sc-src: #4a90d9; }
+.sc-chip-legend-item[data-source-cat="ai"]      { --sc-src: #a06cff; }
 
 .search-config-chip {
   display: inline-flex;
@@ -6678,7 +6734,7 @@ kbd {
   width: 100%;
   height: 180px;
   display: block;
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--panel-surface, rgba(0, 0, 0, 0.25));
   border-radius: 4px;
   cursor: pointer;
 }
@@ -6714,7 +6770,7 @@ kbd {
   height: 11px;
   border-radius: 3px;
   flex-shrink: 0;
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  border: 1px solid var(--panel-border, rgba(255, 255, 255, 0.25));
 }
 
 .dist-add-row { margin-top: -2px; }
@@ -9073,7 +9129,7 @@ kbd {
 
 /* === Baseline Section === */
 .baseline-section { margin-top: 12px; }
-.section-divider { font-size: 10px; text-transform: uppercase; color: var(--text-secondary); border-top: 1px solid rgba(255,255,255,0.08); padding-top: 8px; margin-bottom: 8px; letter-spacing: 0.5px; }
+.section-divider { font-size: 10px; text-transform: uppercase; color: var(--text-secondary); border-top: 1px solid var(--panel-border, rgba(255,255,255,0.08)); padding-top: 8px; margin-bottom: 8px; letter-spacing: 0.5px; }
 .baseline-save-form { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .baseline-save-form input, .baseline-save-form textarea { background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 3px; padding: 4px 6px; font-size: 11px; font-family: inherit; }
 .baseline-save-form textarea { resize: vertical; min-height: 32px; }
@@ -9088,7 +9144,7 @@ kbd {
 .comparison-finding .finding-title { font-weight: 500; }
 .comparison-finding .finding-detail { color: var(--text-secondary); font-size: 10px; margin-top: 1px; }
 .comparison-summary { display: flex; gap: 12px; font-size: 11px; margin: 6px 0; }
-.baseline-tag { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 8px; background: rgba(255,255,255,0.08); color: var(--text-secondary); margin-right: 3px; }
+.baseline-tag { display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 8px; background: var(--panel-surface, rgba(255,255,255,0.08)); color: var(--text-secondary); margin-right: 3px; }
 .baseline-item { display: flex; align-items: center; justify-content: space-between; padding: 3px 0; font-size: 11px; }
 .baseline-item .baseline-delete-btn { opacity: 0; background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 12px; padding: 0 4px; }
 .baseline-item:hover .baseline-delete-btn { opacity: 1; }
@@ -9282,7 +9338,7 @@ kbd {
 .traceback-summary-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .traceback-results { flex: 1; overflow-y: auto; }
 .traceback-item { display: flex; align-items: flex-start; gap: 6px; padding: 3px 6px; border-left: 3px solid #5c6370; cursor: pointer; border-radius: 2px; transition: background 0.15s; margin-bottom: 1px; }
-.traceback-item:hover { background: rgba(255,255,255,0.04); }
+.traceback-item:hover { background: var(--panel-surface-strong, rgba(255,255,255,0.04)); }
 .traceback-item.cat-error { border-left-color: #e06c75; }
 .traceback-item.cat-warning { border-left-color: #e5c07b; }
 .traceback-item.cat-state-change { border-left-color: #61afef; }
@@ -10686,7 +10742,7 @@ kbd {
 
 /* Severity accent — left bar + status dot */
 .sc-sev { display: flex; align-items: center; justify-content: center; align-self: stretch; }
-.sum-sev-dot { width: 8px; height: 8px; border-radius: 50%; background: #4a4a4a; }
+.sum-sev-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--panel-surface, #4a4a4a); }
 .sum-tmpl.sev-fatal { box-shadow: inset 3px 0 0 var(--fatal-color); }
 .sum-tmpl.sev-fatal .sum-sev-dot { background: var(--fatal-color); }
 .sum-tmpl.sev-error { box-shadow: inset 3px 0 0 var(--error-color); }

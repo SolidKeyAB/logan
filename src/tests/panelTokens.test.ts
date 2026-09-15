@@ -61,6 +61,18 @@ describe('computePanelTokens — guaranteed surface/border contrast', () => {
       // WCAG AA for normal text is 4.5:1; primary text clears it comfortably.
       expect(cr(t['--text-primary'], bg)).toBeGreaterThanOrEqual(4.5);
     });
+
+    it(`re-themed --bg-* are distinct from ${bg} and hold readable text`, () => {
+      // The panel also overrides the app's core theme vars; a component that uses
+      // var(--bg-primary) as its background with var(--text-primary) text must NOT
+      // end up dark-on-dark (the bug this guards). So text must read on each bg var,
+      // and each bg var must be visibly off the panel background.
+      const t = computePanelTokens(bg);
+      for (const v of ['--bg-primary', '--bg-secondary', '--bg-tertiary']) {
+        expect(cr(t[v], bg), `${v} distinct from ${bg}`).toBeGreaterThanOrEqual(1.13);
+        expect(cr(t['--text-primary'], t[v]), `text on ${v} @ ${bg}`).toBeGreaterThanOrEqual(4.5);
+      }
+    });
   }
 
   it('elevates lighter on a dark panel, darker on a light panel', () => {
