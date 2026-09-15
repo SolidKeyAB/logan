@@ -2,14 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { detectDelimiter, findHeaderRow, isCommentOrBanner, MULTISPACE_DELIM } from '../shared/columnDetect';
 import { splitLineIntoColumns } from '../main/fileHandler';
 
-// The real esotrace 11-column export (banner + header + aligned data rows) — the exact shape
-// that was failing before this fix.
+// A synthetic 11-column whitespace-aligned export (banner + header + aligned data rows) —
+// the exact shape that was failing before this fix.
 const ESOTRACE = [
   '#----- BEGIN: sample_capture.esotrace: session #0',
   'PacketID  SessionID  Label  LoggerTime               TraceTime                Channel                    Source            Level     PrivFlag    Size  Message',
-  '0.18628   0   --     11.12.2025 10:38:21.686  01.01.1970 00:00:00.027  Reader.metrics.16388  tracesource    info      --          82    [16388:1:16023:0] boot timer 1069997[us',
-  '0.18629   0   --     11.12.2025 10:38:21.686  01.01.1970 00:00:00.027  Reader.metrics.16388  tracesource    info      --          37    [16388:1:16023:1] 78162[us]: PBL, End',
-  '0.18630   0   --     11.12.2025 10:38:21.686  01.01.1970 00:00:00.027  Reader.metrics.16388  tracesource    info      --          40    [16388:1:16023:2] 91556[us]: SBL1, St',
+  '0.10001   0   --     01.01.2000 00:00:00.100  01.01.1970 00:00:00.010  Reader.metrics.1000         tracesource       info      --          82    [1000:1:2000:0] boot timer 1069997[us',
+  '0.10002   0   --     01.01.2000 00:00:00.100  01.01.1970 00:00:00.010  Reader.metrics.1000         tracesource       info      --          37    [1000:1:2000:1] 78162[us]: stage one done',
+  '0.10003   0   --     01.01.2000 00:00:00.100  01.01.1970 00:00:00.010  Reader.metrics.1000         tracesource       info      --          40    [1000:1:2000:2] 91556[us]: stage two start',
 ];
 
 describe('isCommentOrBanner', () => {
