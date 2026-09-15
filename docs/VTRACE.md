@@ -18,8 +18,8 @@ Opening a `log_NNNN.esotrace` file produces normalized text lines, one per trace
 record:
 
 ```
-296.004473 L2 [4532:4532:1310123] [renderer]: Using simple cache
-296.005975 L1 [4532:4532:1310123] Coordinator Animate camera ...
+296.004473 L2 [4532:4532:1310123] [renderer]: cache ready
+296.005975 L1 [4532:4532:1310123] worker step complete ...
 ```
 
 `<uptime-seconds> L<level> <message>` — the **raw** monotonic device-uptime in
@@ -128,7 +128,7 @@ severity level:
 > field from the packet layout — see §5 for the authoritative source of that layout.
 
 The capture *bundle* also carries `session.json` / `segments.json` (session boundaries
-+ 1-second segments) and `de.example.fw.tools.trace.versioninfo/` (per-app
++ 1-second segments) and a per-app `…trace.versioninfo/` directory (per-app
 versions) — not yet consumed.
 
 ---

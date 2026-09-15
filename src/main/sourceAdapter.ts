@@ -463,7 +463,10 @@ export class Mf4Adapter implements SourceAdapter {
  */
 export class VtraceAdapter implements SourceAdapter {
   readonly id = 'vtrace';
-  readonly decoderVersion = 1;
+  // v2: record-index PacketID, per-session SessionID + banners, PrivFlag bitmask, newline
+  // splitting, dropped-data rows, hierarchical channel/source names, corrected level table,
+  // coarse-ms TraceTime — a full re-calibration against the official export.
+  readonly decoderVersion = 2;
   readonly label = 'IVI binary trace (.esotrace)';
   readonly capabilities: AdapterCapabilities = {
     isBinary: true,
