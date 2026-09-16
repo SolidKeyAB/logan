@@ -4509,6 +4509,9 @@ kbd {
 .column-layouts-picker { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .column-layouts-title { color: var(--text-secondary); font-size: 12px; }
 .column-layouts-empty { color: var(--text-secondary); font-size: 11px; font-style: italic; }
+/* One-line panel/modal purpose statement — the "self-explaining" header text. */
+.modal-purpose { color: var(--text-secondary); font-size: 12px; line-height: 1.5; margin: 0 0 10px; }
+.patcol-saved-empty { color: var(--text-secondary); font-size: 11px; font-style: italic; }
 
 /* Constants ("tags") picker popup — reuse .context-menu base */
 .constants-picker-menu { min-width: 220px; max-width: 320px; max-height: 320px; overflow-y: auto; }

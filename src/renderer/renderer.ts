@@ -19576,7 +19576,7 @@ async function patcolRefreshSaved(): Promise<void> {
 function renderPatcolSaved(): void {
   const el = document.getElementById('patcol-saved');
   if (!el) return;
-  if (patcolSaved.length === 0) { el.innerHTML = ''; return; }
+  if (patcolSaved.length === 0) { el.innerHTML = '<span class="patcol-saved-empty">No saved patterns yet — build one below, then “💾 Save…” to reuse it on any log.</span>'; return; }
   el.innerHTML = '<span class="patcol-saved-label">Saved:</span>' + patcolSaved.map(p =>
     `<span class="patcol-chip" data-id="${escapeHtml(p.id)}"><span class="patcol-chip-name" title="${escapeHtml((p.fields || []).join(', '))}">${escapeHtml(p.name)}</span><button class="patcol-chip-x" data-id="${escapeHtml(p.id)}" title="Delete">×</button></span>`
   ).join('');
@@ -20496,7 +20496,7 @@ function renderColumnLayoutChips(): void {
   const el = document.getElementById('column-layouts-chips');
   if (!el) return;
   if (columnLayouts.length === 0) {
-    el.innerHTML = '<span class="column-layouts-empty">none yet — set names/visibility below, then “Save as layout…”</span>';
+    el.innerHTML = '<span class="column-layouts-empty">No saved layouts yet. A layout remembers your column names + which are shown, so you can reuse it on similar logs — name the columns below, then “💾 Save as layout…”.</span>';
     return;
   }
   el.innerHTML = columnLayouts.map((l: any) =>
