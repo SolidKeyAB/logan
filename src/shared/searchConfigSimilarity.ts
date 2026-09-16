@@ -127,6 +127,50 @@ export function computeOverlaps(configs: SimConfig[]): Map<string, ConfigOverlap
   return out;
 }
 
+/** A config plus its on/off state — for redundancy decisions that only care about
+ *  duplicates that are ACTUALLY running. */
+export interface SimConfigState extends SimConfig {
+  enabled?: boolean;
+}
+
+/**
+ * The first already-ENABLED exact duplicate of `candidate` among `existing`, or
+ * null. This is the signal to add a brand-new chip switched OFF (its search is
+ * fully redundant — an identical enabled chip already produces those matches).
+ * Only EXACT duplicates qualify: a narrower/broader overlap is a valid distinct
+ * lens and must NOT be auto-disabled. A disabled duplicate also doesn't count —
+ * if nothing is running the pattern yet, the new chip should run.
+ */
+export function firstActiveDuplicate(
+  candidate: SimConfig,
+  existing: SimConfigState[],
+): SimConfigState | null {
+  const sig = configSignature(candidate);
+  for (const c of existing) {
+    if (c.id !== candidate.id && c.enabled !== false && configSignature(c) === sig) return c;
+  }
+  return null;
+}
+
+/**
+ * The first already-ENABLED config that is strictly BROADER than `candidate`
+ * (candidate's matches ⊆ its), or null — used to gently note "you already have a
+ * broader pattern covering these" without disabling the narrower view.
+ */
+export function firstActiveBroader(
+  candidate: SimConfigState,
+  existing: SimConfigState[],
+): SimConfigState | null {
+  const all = [candidate, ...existing.filter(c => c.id !== candidate.id)];
+  const overlaps = computeOverlaps(all).get(candidate.id) || [];
+  for (const o of overlaps) {
+    if (o.relation !== 'broader') continue;
+    const other = existing.find(c => c.id === o.otherId);
+    if (other && other.enabled !== false) return other;
+  }
+  return null;
+}
+
 /** Human-readable one-liner for a chip's overlap badge tooltip. */
 export function describeOverlaps(overlaps: ConfigOverlap[]): string {
   if (!overlaps.length) return '';

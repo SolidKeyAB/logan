@@ -6170,6 +6170,8 @@ kbd {
 }
 .sc-chip-overlap[data-kind="dup"] { color: #e0a83a; }
 .sc-chip-overlap[data-kind="overlap"] { color: #4a90d9; }
+/* Duplicate deliberately left OFF to skip redundant work — amber, emphasised. */
+.sc-chip-overlap[data-kind="dup-off"] { color: #e0a83a; font-style: italic; opacity: 1; }
 
 .search-config-add-btn {
   display: inline-flex;

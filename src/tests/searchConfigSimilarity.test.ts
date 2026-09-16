@@ -4,10 +4,17 @@ import {
   groupBySignature,
   computeOverlaps,
   describeOverlaps,
+  firstActiveDuplicate,
+  firstActiveBroader,
   type SimConfig,
+  type SimConfigState,
   type ConfigOverlap,
   type OverlapRelation,
 } from '../shared/searchConfigSimilarity';
+
+const mkEn = (id: string, pattern: string, enabled: boolean, over: Partial<SimConfig> = {}): SimConfigState => ({
+  id, pattern, isRegex: false, matchCase: false, wholeWord: false, enabled, ...over,
+});
 
 const mk = (id: string, pattern: string, over: Partial<SimConfig> = {}): SimConfig => ({
   id,
@@ -98,6 +105,37 @@ describe('computeOverlaps', () => {
     // Same text, but different case-sensitivity → match sets differ, no clean subset.
     const m = computeOverlaps([mk('a', 'foo'), mk('b', 'foo', { matchCase: true })]);
     expect(m.get('a')).toBeUndefined();
+  });
+});
+
+describe('firstActiveDuplicate', () => {
+  const cand = mkEn('new', 'ERROR', true);
+  it('finds an enabled exact duplicate', () => {
+    expect(firstActiveDuplicate(cand, [mkEn('a', 'ERROR', true)])?.id).toBe('a');
+  });
+  it('ignores a DISABLED duplicate (nothing is running it yet)', () => {
+    expect(firstActiveDuplicate(cand, [mkEn('a', 'ERROR', false)])).toBeNull();
+  });
+  it('ignores itself and non-duplicates', () => {
+    expect(firstActiveDuplicate(cand, [mkEn('new', 'ERROR', true), mkEn('b', 'WARN', true)])).toBeNull();
+  });
+  it('does NOT treat a narrower/broader overlap as a duplicate', () => {
+    expect(firstActiveDuplicate(mkEn('n', 'height=', true), [mkEn('a', 'height', true)])).toBeNull();
+  });
+});
+
+describe('firstActiveBroader', () => {
+  it('finds an enabled broader pattern covering the candidate', () => {
+    const cand = mkEn('n', 'height=', true);
+    expect(firstActiveBroader(cand, [mkEn('a', 'height', true)])?.id).toBe('a');
+  });
+  it('ignores a disabled broader pattern', () => {
+    const cand = mkEn('n', 'height=', true);
+    expect(firstActiveBroader(cand, [mkEn('a', 'height', false)])).toBeNull();
+  });
+  it('returns null when the candidate is the broad one', () => {
+    const cand = mkEn('n', 'height', true);
+    expect(firstActiveBroader(cand, [mkEn('a', 'height=', true)])).toBeNull();
   });
 });
 

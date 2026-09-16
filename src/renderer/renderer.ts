@@ -14717,6 +14717,22 @@ async function addSearchConfig(): Promise<void> {
     originLabel: existing?.originLabel,
   };
 
+  // Redundancy guard: if this brand-new chip exactly duplicates a pattern that's
+  // ALREADY running, add it switched OFF rather than doubling the work — it stays
+  // visible with a "kept off — duplicate" ❝ mark (see buildSearchConfigChip) and one
+  // toggle turns it on. A narrower/broader overlap is a valid distinct lens, so those
+  // come in enabled; we only note that a broader pattern already covers them.
+  if (!editingId) {
+    const dup = firstActiveConfigDuplicate(config, state.searchConfigs);
+    if (dup) {
+      config.enabled = false;
+      showToast(`Already searched by “${dup.pattern}” — added but kept OFF to skip duplicate work. Toggle it on to override.`);
+    } else {
+      const broader = firstActiveConfigBroader(config, state.searchConfigs);
+      if (broader) showToast(`Heads-up: “${broader.pattern}” already covers these matches — this is a narrower view. Remove it if it's redundant.`);
+    }
+  }
+
   // Remove old if editing
   state.searchConfigs = state.searchConfigs.filter(c => c.id !== config.id);
   state.searchConfigs.push(config);
@@ -15391,6 +15407,29 @@ function describeConfigOverlaps(overlaps: ConfigOverlap[]): string {
   return parts.join('\n');
 }
 
+// The first already-ENABLED exact duplicate of `candidate` — signal to add a new
+// chip switched OFF (fully redundant). Disabled dups and narrower/broader overlaps
+// don't count. MIRROR of firstActiveDuplicate in searchConfigSimilarity.ts.
+function firstActiveConfigDuplicate(candidate: SearchConfigDef, existing: SearchConfigDef[]): SearchConfigDef | null {
+  const sig = overlapSignature(candidate);
+  for (const c of existing) {
+    if (c.id !== candidate.id && c.enabled !== false && overlapSignature(c) === sig) return c;
+  }
+  return null;
+}
+// The first already-ENABLED config strictly BROADER than `candidate` (candidate ⊆
+// it). MIRROR of firstActiveBroader in searchConfigSimilarity.ts.
+function firstActiveConfigBroader(candidate: SearchConfigDef, existing: SearchConfigDef[]): SearchConfigDef | null {
+  const all = [candidate, ...existing.filter(c => c.id !== candidate.id)];
+  const overlaps = computeConfigOverlaps(all).get(candidate.id) || [];
+  for (const o of overlaps) {
+    if (o.relation !== 'broader') continue;
+    const other = existing.find(c => c.id === o.otherId);
+    if (other && other.enabled !== false) return other;
+  }
+  return null;
+}
+
 function chipGroupKey(c: SearchConfigDef): string {
   if (c.originId) return `session:${c.originId}`; // from a session (human or AI)
   if ((c.origin || 'user') === 'ai') return 'ai'; // AI, not tied to any session
@@ -15477,9 +15516,20 @@ function buildSearchConfigChip(config: SearchConfigDef, overlaps?: ConfigOverlap
     const ov = document.createElement('span');
     ov.className = 'sc-chip-overlap';
     const hasDup = overlaps.some(o => o.relation === 'duplicate');
-    ov.dataset.kind = hasDup ? 'dup' : 'overlap';
-    ov.textContent = hasDup ? '⧉' : (overlaps.some(o => o.relation === 'broader') ? '⊂' : '⊃');
-    ov.title = describeConfigOverlaps(overlaps);
+    // "Kept off" ❝ mark: this chip is a duplicate left disabled while an identical
+    // chip runs (the redundancy guard in addSearchConfig). Distinct from the plain
+    // ⧉ shown when both duplicates are enabled.
+    const keptOffDup = !config.enabled && overlaps.some(o =>
+      o.relation === 'duplicate' && state.searchConfigs.find(c => c.id === o.otherId)?.enabled);
+    if (keptOffDup) {
+      ov.dataset.kind = 'dup-off';
+      ov.textContent = '❝';
+      ov.title = `Kept off — duplicate of an active pattern. Toggle on to override.\n${describeConfigOverlaps(overlaps)}`;
+    } else {
+      ov.dataset.kind = hasDup ? 'dup' : 'overlap';
+      ov.textContent = hasDup ? '⧉' : (overlaps.some(o => o.relation === 'broader') ? '⊂' : '⊃');
+      ov.title = describeConfigOverlaps(overlaps);
+    }
     chip.appendChild(ov);
   }
 
