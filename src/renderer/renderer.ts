@@ -15443,11 +15443,14 @@ function renderSearchConfigsChips(): void {
   }
   const groupKeys = Array.from(groups.keys()).sort((a, b) => chipGroupRank(a) - chipGroupRank(b));
 
-  // Show headers only when there's an actual mix to disambiguate — either several
-  // groups, or a single group that isn't the user's own set (so incoming AI /
-  // session chips are always labeled + bulk-clearable). A lone "Yours" group stays
-  // flat, keeping the common case chrome-free (identical to the old look).
-  const showHeaders = groupKeys.length > 1 || (groupKeys.length === 1 && groupKeys[0] !== 'user');
+  // Always show the labeled group rows once there's at least one pattern, so the
+  // provenance boxes (🆕 yours / 🔖 session / ✨ AI) are consistently visible and
+  // discoverable — INCLUDING a lone "Yours" set. Previously a single 'user' group
+  // stayed flat "to keep the common case chrome-free," but that meant hand-typed-
+  // only patterns never grew a box, so the grouping read as "not working." Each row
+  // carries its own master switch + count + bulk-clear, so a header is useful even
+  // for one source. (The colour legend below is still gated on a real source MIX.)
+  const showHeaders = groupKeys.length >= 1;
 
   if (!showHeaders) {
     for (const config of state.searchConfigs) fragment.appendChild(buildSearchConfigChip(config));
