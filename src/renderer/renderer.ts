@@ -658,6 +658,96 @@ let jsonOriginalFile: string | null = null; // Track original file when viewing 
 let esotraceDecodeEnabled = false;
 let esotraceOriginalFile: string | null = null; // Track original file when viewing decoded esotrace
 
+// sherlog: in-place decode of tokenized `@LOG <id> {json}` lines. This is a
+// script-scope MIRROR of the portable @sherlog/decode core (renderer.ts must stay
+// a SCRIPT, so it cannot `import` the shared module — same pattern LOGAN already
+// uses for other shared pure helpers). Keep in sync with src/shared/sherlogDecode.ts.
+let sherlogDecodeEnabled = false;
+let sherlogTokenDb: SherlogTokenDb | null = null;
+let sherlogTokenDbSource = '';
+const SHERLOG_LINE = /@LOG\s+([0-9a-f]{6,})\s*(\{.*\})?\s*$/;
+
+function sherlogFormatScalar(v: unknown): string {
+  if (v === null) return 'null';
+  if (typeof v === 'object') return JSON.stringify(v);
+  return String(v);
+}
+
+// Returns the readable line, or null if `line` is not a sherlog token line
+// (so the caller leaves non-matching lines untouched).
+function decodeSherlogLine(line: string): string | null {
+  const m = SHERLOG_LINE.exec(line.trim());
+  if (!m || !sherlogTokenDb) return null;
+  const id = m[1];
+  const raw = m[2];
+  let values: Record<string, unknown> = {};
+  if (raw) {
+    try { values = JSON.parse(raw); } catch { values = { _raw: raw }; }
+  }
+  const vals = Object.entries(values).map(([k, v]) => `${k}=${sherlogFormatScalar(v)}`).join(' ');
+  const entry = sherlogTokenDb.tokens[id];
+  if (!entry) return `[?] unknown token ${id} (map drift? wrong build) values={${vals}}`;
+  const loc = `${entry.file}:${entry.function}`;
+  return `[${entry.level}] ${loc} — ${entry.description}` + (vals ? ` | ${vals}` : '');
+}
+
+// localStorage key for a token DB the user explicitly picked — remembered so a
+// one-time "point at sherlog/out/tokens.json" sticks across sessions and files.
+const SHERLOG_DB_PATH_KEY = 'logan-sherlog-token-db-path';
+
+// Toggle sherlog decode on/off. Lazily loads the token DB the first time it's
+// enabled — auto-detected next to the open file / a remembered pick / the global
+// ~/.logan/sherlog-tokens.json, and if all miss, a file picker so the user can
+// point at the DB. Then re-renders. No backend file rewrite — purely a
+// render-time transform.
+async function toggleSherlogDecode(): Promise<void> {
+  const btn = elements.btnSherlogDecode;
+  if (sherlogDecodeEnabled) {
+    sherlogDecodeEnabled = false;
+    btn?.classList.remove('active');
+    showToast('sherlog decode OFF');
+    renderVisibleLines();
+    return;
+  }
+
+  if (!sherlogTokenDb) {
+    const saved = localStorage.getItem(SHERLOG_DB_PATH_KEY) || undefined;
+    let res = await window.api.loadSherlogTokenDb(state.filePath || undefined, saved);
+    if (!res.success || !res.db) {
+      // Auto-detect missed — offer a picker instead of silently doing nothing.
+      const pick = await window.api.pickSherlogTokenDb();
+      if (!pick.path) {
+        showToast(res.error || 'No sherlog token DB found');
+        return;
+      }
+      res = await window.api.loadSherlogTokenDb(state.filePath || undefined, pick.path);
+      if (!res.success || !res.db) {
+        showToast(res.error || 'Could not load that token DB');
+        return;
+      }
+      localStorage.setItem(SHERLOG_DB_PATH_KEY, res.source || pick.path); // remember explicit pick
+    }
+    sherlogTokenDb = res.db;
+    sherlogTokenDbSource = res.source || '';
+  }
+
+  sherlogDecodeEnabled = true;
+  btn?.classList.add('active');
+  renderVisibleLines();
+
+  // Make a silent no-op impossible: if the DB loaded but nothing in view is a
+  // tokenized @LOG line, say so (the #1 "nothing changed" confusion) rather than
+  // just claiming success.
+  const n = Object.keys(sherlogTokenDb.tokens).length;
+  const from = sherlogTokenDbSource ? ' from ' + sherlogTokenDbSource.split('/').pop() : '';
+  const decodedInView = logContentElement?.querySelectorAll('.sherlog-decoded').length || 0;
+  showToast(
+    decodedInView === 0
+      ? `sherlog decode ON — ${n} tokens${from}, but no @LOG token lines are visible here (is this a tokenized log?)`
+      : `sherlog decode ON — ${n} tokens${from} · decoded ${decodedInView} lines in view`,
+  );
+}
+
 // Check if text contains JSON
 function containsJson(text: string): boolean {
   // Quick check for JSON-like content
@@ -948,6 +1038,7 @@ const elements = {
   btnColumns: document.getElementById('btn-columns') as HTMLButtonElement,
   btnWordWrap: document.getElementById('btn-word-wrap') as HTMLButtonElement,
   btnJsonFormat: document.getElementById('btn-json-format') as HTMLButtonElement,
+  btnSherlogDecode: document.getElementById('btn-sherlog-decode') as HTMLButtonElement,
   btnEsotraceDecode: document.getElementById('btn-esotrace-decode') as HTMLButtonElement,
   columnsModal: document.getElementById('columns-modal') as HTMLDivElement,
   columnsLoading: document.getElementById('columns-loading') as HTMLDivElement,
@@ -3030,11 +3121,21 @@ function createLineElementPooled(line: LogLine): HTMLDivElement {
     truncated = true;
   }
 
+  // sherlog: expand a tokenized `@LOG` line into readable text IN PLACE (no file
+  // rewrite — the toggle is instant and reversible). A decoded line is plain text,
+  // so it flows through the normal search-highlight path below and is excluded from
+  // JSON formatting. The original token line is kept on data-sherlog-raw for hover.
+  let sherlogDecoded = false;
+  if (sherlogDecodeEnabled && sherlogTokenDb) {
+    const decoded = decodeSherlogLine(displayText);
+    if (decoded !== null) { displayText = decoded; sherlogDecoded = true; }
+  }
+
   // Check if there are active highlights or search
   const hasActiveHighlights = state.highlights.length > 0 || state.searchResults.length > 0 || state.searchConfigs.some(c => c.enabled);
 
   let formattedContent: string;
-  if (jsonFormattingEnabled && containsJson(displayText)) {
+  if (!sherlogDecoded && jsonFormattingEnabled && containsJson(displayText)) {
     // Skip JSON.parse/stringify on already-formatted files (lines are already short)
     const isAlreadyFormatted = state.filePath?.includes('.formatted.');
     if (isAlreadyFormatted) {
@@ -3068,6 +3169,16 @@ function createLineElementPooled(line: LogLine): HTMLDivElement {
   }
   const contentHtml = `<span class="line-content">${formattedContent}</span>`;
   div.innerHTML = lineNumHtml + contentHtml;
+
+  // Mark decoded rows (styling) and stash the raw token line for hover/reveal.
+  // The class list was fully reset above via `div.className`, so non-decoded rows
+  // clear the marker automatically; we only clear the stale dataset here.
+  if (sherlogDecoded) {
+    div.classList.add('sherlog-decoded');
+    div.dataset.sherlogRaw = line.text;
+  } else if (div.dataset.sherlogRaw) {
+    delete div.dataset.sherlogRaw;
+  }
 
   return div;
 }
@@ -27998,6 +28109,7 @@ function init(): void {
 
   // JSON formatting toggle
   elements.btnJsonFormat.addEventListener('click', formatAndLoadJson);
+  elements.btnSherlogDecode?.addEventListener('click', toggleSherlogDecode);
   elements.btnEsotraceDecode.addEventListener('click', decodeEsotraceAndLoad);
   document.getElementById('btn-time-sync-merge')?.addEventListener('click', (e) => withButtonBusy(e.currentTarget as HTMLElement, () => runTimeSyncMerge()));
   document.getElementById('btn-time-sync-add')?.addEventListener('click', addTimeSyncFile);

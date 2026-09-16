@@ -14,6 +14,7 @@ import * as http from 'http';
 import { Obfuscator } from './obfuscate';
 import { runRecipe, RECIPE_SYMPTOMS, DOMAIN_IDS } from './recipes';
 import { toApiScope } from '../shared/scopeConvert';
+import { decodeSherlogLine, parseTokenDb } from '../shared/sherlogDecode';
 
 const PORT_FILE = path.join(os.homedir(), '.logan', 'mcp-port');
 
@@ -233,6 +234,49 @@ server.tool(
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
     }
   }
+);
+
+// === Tool: sherlog_decode ===
+// Expand sherlog tokenized `@LOG <id> {json}` lines into readable text using a
+// token DB. Pure + local (no running LOGAN required) — same decoder core the
+// LOGAN viewer and the VSCode extension use.
+server.tool(
+  'sherlog_decode',
+  'Decode sherlog tokenized log lines (e.g. "@LOG a1b2c3d4 {\\"user_id\\":42}") into readable text ' +
+    '("[DEBUG] auth.py:login — user rejected | user_id=42") using a token DB. Pass `line` for one line or ' +
+    '`stream` for many. Unknown tokens are flagged (map drift), never dropped. Non-token lines pass through unchanged.',
+  {
+    line: z.string().optional().describe('A single sherlog line to decode'),
+    stream: z.string().optional().describe('Newline-separated sherlog lines to decode'),
+    tokenDbPath: z
+      .string()
+      .optional()
+      .describe('Path to the token DB (tokens.json). Defaults to ~/.logan/sherlog-tokens.json'),
+  },
+  async ({ line, stream, tokenDbPath }) => {
+    try {
+      const dbPath = tokenDbPath || path.join(os.homedir(), '.logan', 'sherlog-tokens.json');
+      if (!fs.existsSync(dbPath)) {
+        return {
+          content: [{ type: 'text', text: `Token DB not found: ${dbPath}` }],
+          isError: true,
+        };
+      }
+      const db = parseTokenDb(fs.readFileSync(dbPath, 'utf-8'));
+      const lines = stream != null ? stream.split(/\r?\n/) : line != null ? [line] : [];
+      if (lines.length === 0) {
+        return { content: [{ type: 'text', text: 'Provide `line` or `stream`.' }], isError: true };
+      }
+      const out = lines.map((l) => {
+        if (!l) return '';
+        const r = decodeSherlogLine(l, db);
+        return r ? r.text : l; // pass non-sherlog lines through unchanged
+      });
+      return { content: [{ type: 'text', text: out.join('\n') }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  },
 );
 
 // === Tool: logan_single_session ===
