@@ -21,6 +21,7 @@ if (process.platform !== 'linux') {
 }
 import { FileHandler, filterLineToVisibleColumns, splitLineIntoColumns, ColumnConfig } from './fileHandler';
 import { detectDelimiter, findHeaderRow, isCommentOrBanner } from '../shared/columnDetect';
+import { parseTokenDb, type SherlogTokenDb } from '../shared/sherlogDecode';
 import { launchPathCandidates } from './launchArgs';
 import { CompositeFileHandler, CompositeMemberHandler, CompositeBoundary } from './compositeFileHandler';
 import { SegmentedFileHandler } from './segmentedFileHandler';
@@ -2518,6 +2519,80 @@ ipcMain.handle('window-close', () => {
 
 ipcMain.handle('get-platform', () => {
   return process.platform;
+});
+
+// === sherlog: load the token DB used to decode tokenized @LOG lines ===
+// Resolution order (first hit wins): an explicit `preferredPath` (a DB the user
+// picked/persisted earlier), then a `*.tokens.json` sitting next to the open
+// file, then a `tokens.json` in the same folder, then the global
+// `~/.logan/sherlog-tokens.json`. Keeps the viewer decode zero-config for the
+// common "the token map lives beside the log" case, while still working when the
+// DB lives in a sherlog repo's out/ folder (point at it once → remembered).
+ipcMain.handle('sherlog-load-token-db', async (
+  _e,
+  currentFilePath?: string,
+  preferredPath?: string,
+): Promise<{ success: boolean; db?: SherlogTokenDb; source?: string; count?: number; error?: string; tried?: string[] }> => {
+  const candidates: string[] = [];
+  try {
+    // An adjacent DB wins first (it's the map from the SAME build as this log),
+    if (currentFilePath) {
+      const dir = path.dirname(currentFilePath);
+      const base = path.basename(currentFilePath, path.extname(currentFilePath));
+      candidates.push(path.join(dir, `${base}.tokens.json`));
+      candidates.push(path.join(dir, 'tokens.json'));
+      // any *.tokens.json in the same folder
+      try {
+        for (const f of fs.readdirSync(dir)) {
+          if (f.endsWith('.tokens.json')) candidates.push(path.join(dir, f));
+        }
+      } catch { /* dir unreadable — skip */ }
+    }
+    // then a remembered/explicit DB the user pointed at (e.g. a sherlog repo's
+    // out/tokens.json) — this is how a one-time pick survives across sessions and
+    // unrelated open files — then the global fallback.
+    if (preferredPath) candidates.push(preferredPath);
+    candidates.push(path.join(os.homedir(), '.logan', 'sherlog-tokens.json'));
+
+    const tried: string[] = [];
+    for (const p of candidates) {
+      if (tried.includes(p)) continue; // de-dupe (preferredPath may equal a next-to-file hit)
+      tried.push(p);
+      try {
+        if (!fs.existsSync(p)) continue;
+        const db = parseTokenDb(fs.readFileSync(p, 'utf-8'));
+        const count = Object.keys(db.tokens || {}).length;
+        if (count > 0) return { success: true, db, source: p, count };
+      } catch { /* try next candidate */ }
+    }
+    return {
+      success: false,
+      tried,
+      error: 'No sherlog token DB found (looked for *.tokens.json next to the file or ~/.logan/sherlog-tokens.json).',
+    };
+  } catch (err: any) {
+    return { success: false, error: err?.message || String(err) };
+  }
+});
+
+// === sherlog: let the user pick a token DB when auto-detection fails ===
+// Returns the chosen path (or null if cancelled). The renderer persists it and
+// passes it back as `preferredPath` on the next load, so a one-time pick sticks.
+ipcMain.handle('sherlog-pick-token-db', async (): Promise<{ path: string | null }> => {
+  try {
+    const result = await showOpenDialog({
+      title: 'Select sherlog token DB (tokens.json)',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Token DB', extensions: ['json'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    });
+    if (result.canceled || !result.filePaths.length) return { path: null };
+    return { path: result.filePaths[0] };
+  } catch {
+    return { path: null };
+  }
 });
 
 // === Device Discovery (per-source) ===

@@ -930,12 +930,37 @@ interface Api {
   setActiveScope: (desc: ScopeDescriptor | null) => Promise<{ success: boolean; scope?: ScopeDescriptor | null; info?: ScopeInfo | null; error?: string }>;
   getActiveScope: () => Promise<{ success: boolean; scope?: ScopeDescriptor | null; info?: ScopeInfo | null }>;
 
+  // sherlog: load the token DB for decoding tokenized @LOG lines in the viewer.
+  // `preferredPath` (a DB the user picked earlier) is tried first.
+  loadSherlogTokenDb: (
+    currentFilePath?: string,
+    preferredPath?: string,
+  ) => Promise<{ success: boolean; db?: SherlogTokenDb; source?: string; count?: number; error?: string; tried?: string[] }>;
+
+  // sherlog: open a file dialog to pick a token DB when auto-detection fails.
+  pickSherlogTokenDb: () => Promise<{ path: string | null }>;
+
   // Window controls
   windowMinimize: () => Promise<void>;
   windowMaximize: () => Promise<void>;
   windowClose: () => Promise<void>;
   getPlatform: () => Promise<string>;
   getPathForFile: (file: File) => string;
+}
+
+// sherlog token DB shape (mirrors ../shared/sherlogDecode). Declared here so both
+// the renderer script and the preload Api type can reference it globally.
+interface SherlogTokenEntry {
+  description: string;
+  level: string;
+  values: string[];
+  file: string;
+  function: string;
+  kind: string;
+}
+interface SherlogTokenDb {
+  version: string;
+  tokens: Record<string, SherlogTokenEntry>;
 }
 
 interface Window {

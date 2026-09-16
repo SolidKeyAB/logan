@@ -569,6 +569,17 @@ body.platform-darwin .titlebar {
   color: var(--accent-color);
   background: rgba(0,122,204,0.1);
 }
+/* sherlog: a line whose opaque `@LOG <id>` token was expanded in place. Subtle
+   accent rail + hover affordance to show it's a decoded (derived) view. */
+.log-line.sherlog-decoded {
+  box-shadow: inset 2px 0 0 var(--accent-color);
+}
+.log-line.sherlog-decoded .line-content {
+  opacity: 0.95;
+}
+.log-line.sherlog-decoded:hover {
+  background: rgba(0,122,204,0.06);
+}
 .right-sidebar-separator {
   width: 20px;
   height: 1px;
