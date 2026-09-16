@@ -15190,7 +15190,20 @@ async function runSearchConfigsBatchOnce(showUiProgress = false): Promise<void> 
   );
 
   if (toScan.length > 0) {
-    const batchArgs = toScan.map(c => ({
+    // Collapse EXACT duplicates (same pattern+flags+filter) so an identical pattern
+    // living in two chips/groups is scanned ONCE; the result is copied to every chip
+    // that shares its signature (see fan-out below). Similar-but-not-identical
+    // patterns are NOT collapsed — their match sets differ — only flagged in the UI
+    // (computeConfigOverlaps). searchConfigSignature already keys on pattern+flags +
+    // the active filter generation, so it's exactly the right dedup key.
+    const sigToConfigs = new Map<string, SearchConfigDef[]>();
+    for (const c of toScan) {
+      const sig = searchConfigSignature(c);
+      const arr = sigToConfigs.get(sig);
+      if (arr) arr.push(c); else sigToConfigs.set(sig, [c]);
+    }
+    const repConfigs = Array.from(sigToConfigs.values(), g => g[0]);
+    const batchArgs = repConfigs.map(c => ({
       id: c.id,
       pattern: c.pattern,
       isRegex: c.isRegex,
@@ -15205,9 +15218,9 @@ async function runSearchConfigsBatchOnce(showUiProgress = false): Promise<void> 
     // progress text (visible even behind the big-file overlay that covers the chips).
     let unsubscribeProgress: (() => void) | undefined;
     if (showUiProgress) {
-      const label = toScan.length === 1
+      const label = repConfigs.length === 1
         ? 'Searching config…'
-        : `Searching ${toScan.length} configs…`;
+        : `Searching ${repConfigs.length} configs…`;
       showProgress(`${label} 0%`);
       const liveCounts = new Map<string, number>();
       unsubscribeProgress = window.api.onSearchConfigBatchProgress(({ percent, configId, matchCount }) => {
@@ -15249,7 +15262,17 @@ async function runSearchConfigsBatchOnce(showUiProgress = false): Promise<void> 
         for (const [configId, matches] of Object.entries(result.results)) {
           state.searchConfigResults.set(configId, matches as SearchResult[]);
         }
-        // Remember what each scanned config was scanned with, so an unchanged re-run skips it.
+        // Fan each representative's results out to its exact-duplicate siblings, so a
+        // pattern that appears in two chips shows identical results despite one search.
+        for (const group of sigToConfigs.values()) {
+          if (group.length < 2) continue;
+          const repResults = state.searchConfigResults.get(group[0].id) || [];
+          for (let k = 1; k < group.length; k++) {
+            state.searchConfigResults.set(group[k].id, repResults.map(r => ({ ...r })));
+          }
+        }
+        // Remember what each scanned config was scanned with (reps AND their
+        // duplicates), so an unchanged re-run skips it.
         for (const c of toScan) {
           searchConfigScanSignatures.set(c.id, searchConfigSignature(c));
         }
@@ -15306,6 +15329,68 @@ function isSearchConfigSaved(c: SearchConfigDef): boolean {
 // Session membership wins: any chip carrying an originId clusters under that
 // session's row even when the AI applied it — so a row means "everything from
 // this source," never "everyone who happened to use the same channel."
+// ─── Search-config overlap detection ────────────────────────────────────────
+// MIRROR of src/shared/searchConfigSimilarity.ts (tested there) — the renderer's
+// script scope can't import, so keep the two in sync. Flags exact duplicates and
+// PROVEN substring-subsumption (height ⊃ height= ⊃ ", height=5") so a chip can show
+// an "overlaps another chip" badge. Only proven relationships are reported (regex,
+// whole-word, or mismatched case-sensitivity → no claim). Exact dups are also
+// searched once and their result fanned out (see runSearchConfigsBatchOnce).
+type OverlapRelation = 'duplicate' | 'broader' | 'narrower';
+interface ConfigOverlap { otherId: string; otherPattern: string; relation: OverlapRelation; }
+function overlapSignature(c: SearchConfigDef): string {
+  return `${c.pattern}|${c.isRegex ? 1 : 0}|${c.matchCase ? 1 : 0}|${c.wholeWord ? 1 : 0}`;
+}
+function comparableConfigLiterals(a: SearchConfigDef, b: SearchConfigDef): { na: string; nb: string } | null {
+  if (a.isRegex || b.isRegex) return null;       // can't reason about arbitrary regex
+  if (a.wholeWord || b.wholeWord) return null;    // word boundaries break substring ⊆
+  if (!!a.matchCase !== !!b.matchCase) return null; // match sets not comparable
+  if (!a.pattern || !b.pattern) return null;
+  const na = a.matchCase ? a.pattern : a.pattern.toLowerCase();
+  const nb = b.matchCase ? b.pattern : b.pattern.toLowerCase();
+  return { na, nb };
+}
+function computeConfigOverlaps(configs: SearchConfigDef[]): Map<string, ConfigOverlap[]> {
+  const out = new Map<string, ConfigOverlap[]>();
+  const push = (id: string, o: ConfigOverlap) => {
+    const arr = out.get(id); if (arr) arr.push(o); else out.set(id, [o]);
+  };
+  for (let i = 0; i < configs.length; i++) {
+    for (let j = i + 1; j < configs.length; j++) {
+      const a = configs[i], b = configs[j];
+      if (a.id === b.id) continue;
+      if (overlapSignature(a) === overlapSignature(b)) {
+        push(a.id, { otherId: b.id, otherPattern: b.pattern, relation: 'duplicate' });
+        push(b.id, { otherId: a.id, otherPattern: a.pattern, relation: 'duplicate' });
+        continue;
+      }
+      const lit = comparableConfigLiterals(a, b);
+      if (!lit) continue;
+      const { na, nb } = lit;
+      if (na === nb) continue; // same text, different flags → no clean subset
+      if (nb.includes(na)) {           // a ⊂ b ⇒ matches(b) ⊆ matches(a): b narrower
+        push(a.id, { otherId: b.id, otherPattern: b.pattern, relation: 'narrower' });
+        push(b.id, { otherId: a.id, otherPattern: a.pattern, relation: 'broader' });
+      } else if (na.includes(nb)) {
+        push(a.id, { otherId: b.id, otherPattern: b.pattern, relation: 'broader' });
+        push(b.id, { otherId: a.id, otherPattern: a.pattern, relation: 'narrower' });
+      }
+    }
+  }
+  return out;
+}
+function describeConfigOverlaps(overlaps: ConfigOverlap[]): string {
+  if (!overlaps.length) return '';
+  const dup = overlaps.filter(o => o.relation === 'duplicate').map(o => o.otherPattern);
+  const broader = overlaps.filter(o => o.relation === 'broader').map(o => o.otherPattern);
+  const narrower = overlaps.filter(o => o.relation === 'narrower').map(o => o.otherPattern);
+  const parts: string[] = [];
+  if (dup.length) parts.push(`⧉ Exact duplicate of: ${dup.join(', ')} — searched once, result shared`);
+  if (broader.length) parts.push(`⊂ Already covered by broader pattern(s): ${broader.join(', ')}`);
+  if (narrower.length) parts.push(`⊃ Contains narrower pattern(s): ${narrower.join(', ')}`);
+  return parts.join('\n');
+}
+
 function chipGroupKey(c: SearchConfigDef): string {
   if (c.originId) return `session:${c.originId}`; // from a session (human or AI)
   if ((c.origin || 'user') === 'ai') return 'ai'; // AI, not tied to any session
@@ -15340,7 +15425,7 @@ const CHIP_SOURCE_LABEL: Record<ChipSourceCat, string> = {
 const collapsedChipGroups = new Set<string>();
 
 // Build one chip element for a config. Extracted so grouped + flat paths share it.
-function buildSearchConfigChip(config: SearchConfigDef): HTMLElement {
+function buildSearchConfigChip(config: SearchConfigDef, overlaps?: ConfigOverlap[]): HTMLElement {
   const saved = isSearchConfigSaved(config);
   const chip = document.createElement('div');
   chip.className = `search-config-chip${config.enabled ? '' : ' disabled'}${saved ? '' : ' unsaved'}`;
@@ -15383,6 +15468,21 @@ function buildSearchConfigChip(config: SearchConfigDef): HTMLElement {
   chip.appendChild(swatch);
   chip.appendChild(patternText);
   chip.appendChild(count);
+
+  // Overlap badge — this chip's matches duplicate or nest with another chip's.
+  // ⧉ = exact duplicate (searched once, result shared); ⊃/⊂ = proven substring
+  // subsumption (e.g. this is broader/narrower than another). Purely a heads-up so
+  // the user can consolidate; never mutates or hides the chip.
+  if (overlaps && overlaps.length) {
+    const ov = document.createElement('span');
+    ov.className = 'sc-chip-overlap';
+    const hasDup = overlaps.some(o => o.relation === 'duplicate');
+    ov.dataset.kind = hasDup ? 'dup' : 'overlap';
+    ov.textContent = hasDup ? '⧉' : (overlaps.some(o => o.relation === 'broader') ? '⊂' : '⊃');
+    ov.title = describeConfigOverlaps(overlaps);
+    chip.appendChild(ov);
+  }
+
   chip.appendChild(toggleBtn);
   chip.appendChild(deleteBtn);
 
@@ -15544,6 +15644,11 @@ function renderSearchConfigsChips(): void {
 
   const fragment = document.createDocumentFragment();
 
+  // Detect exact-duplicate / substring-subsuming chips ONCE for the whole set, so
+  // each chip can show an overlap badge (see buildSearchConfigChip). Cheap O(n²)
+  // over the handful of chips.
+  const overlaps = computeConfigOverlaps(state.searchConfigs);
+
   // Bucket configs by provenance, preserving first-seen order within each group.
   const groups = new Map<string, SearchConfigDef[]>();
   for (const config of state.searchConfigs) {
@@ -15564,7 +15669,7 @@ function renderSearchConfigsChips(): void {
   const showHeaders = groupKeys.length >= 1;
 
   if (!showHeaders) {
-    for (const config of state.searchConfigs) fragment.appendChild(buildSearchConfigChip(config));
+    for (const config of state.searchConfigs) fragment.appendChild(buildSearchConfigChip(config, overlaps.get(config.id)));
   } else {
     // Legend first — but only when there's an actual mix of source TYPES to explain
     // (colour coding a single category is just noise; its header already names it).
@@ -15585,7 +15690,7 @@ function renderSearchConfigsChips(): void {
       if (!collapsed) {
         const chipsWrap = document.createElement('div');
         chipsWrap.className = 'sc-chip-group-chips';
-        for (const config of configs) chipsWrap.appendChild(buildSearchConfigChip(config));
+        for (const config of configs) chipsWrap.appendChild(buildSearchConfigChip(config, overlaps.get(config.id)));
         group.appendChild(chipsWrap);
       }
       fragment.appendChild(group);
