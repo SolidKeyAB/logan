@@ -6159,6 +6159,20 @@ kbd {
   color: #ff6b6b;
 }
 
+/* Overlap badge: this chip's matches duplicate/nest with another chip's.
+   ⧉ dup = amber, ⊃/⊂ subsumption = blue. Purely informational (cursor: help). */
+.sc-chip-overlap {
+  font-size: 10px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: help;
+  opacity: 0.9;
+}
+.sc-chip-overlap[data-kind="dup"] { color: #e0a83a; }
+.sc-chip-overlap[data-kind="overlap"] { color: #4a90d9; }
+/* Duplicate deliberately left OFF to skip redundant work — amber, emphasised. */
+.sc-chip-overlap[data-kind="dup-off"] { color: #e0a83a; font-style: italic; opacity: 1; }
+
 .search-config-add-btn {
   display: inline-flex;
   align-items: center;
