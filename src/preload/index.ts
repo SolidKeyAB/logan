@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { ScopeDescriptor, ScopeInfo } from '../shared/types';
+import type { SherlogTokenDb } from '../shared/sherlogDecode';
 
 // IPC Channel constants (must match main process)
 const IPC = {
@@ -54,6 +55,8 @@ const IPC = {
   SEARCH_CONFIG_SESSION_SAVE: 'search-config-session-save',
   SEARCH_CONFIG_SESSION_DELETE: 'search-config-session-delete',
   GET_LINE_TIMESTAMP: 'get-line-timestamp',
+  SHERLOG_LOAD_TOKEN_DB: 'sherlog-load-token-db',
+  SHERLOG_PICK_TOKEN_DB: 'sherlog-pick-token-db',
   VIDEO_TRANSCODE: 'video-transcode',
   VIDEO_TRANSCODE_PROGRESS: 'video-transcode-progress',
   VIDEO_TRANSCODE_CANCEL: 'video-transcode-cancel',
@@ -1155,6 +1158,18 @@ const api = {
     ipcRenderer.invoke(IPC.SET_ACTIVE_SCOPE, desc),
   getActiveScope: (): Promise<{ success: boolean; scope?: ScopeDescriptor | null; info?: ScopeInfo | null }> =>
     ipcRenderer.invoke(IPC.GET_ACTIVE_SCOPE),
+
+  // sherlog: load the token DB for decoding tokenized @LOG lines in the viewer.
+  // `preferredPath` (a DB the user picked earlier) is tried first.
+  loadSherlogTokenDb: (
+    currentFilePath?: string,
+    preferredPath?: string,
+  ): Promise<{ success: boolean; db?: SherlogTokenDb; source?: string; count?: number; error?: string; tried?: string[] }> =>
+    ipcRenderer.invoke(IPC.SHERLOG_LOAD_TOKEN_DB, currentFilePath, preferredPath),
+
+  // sherlog: open a file dialog to pick a token DB when auto-detection fails.
+  pickSherlogTokenDb: (): Promise<{ path: string | null }> =>
+    ipcRenderer.invoke(IPC.SHERLOG_PICK_TOKEN_DB),
 
   // Window controls
   windowMinimize: (): Promise<void> => ipcRenderer.invoke('window-minimize'),
