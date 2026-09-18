@@ -9940,7 +9940,13 @@ kbd {
 .recipe-row-caret { flex: 0 0 auto; width: 10px; font-size: 9px; color: var(--text-muted); }
 .recipe-row-name { flex: 0 0 auto; font-weight: 600; white-space: nowrap; }
 /* Goal + match hint reuse the chip classes but flow inline within the row header. */
-.recipe-row-header .investigate-pattern-aim { flex: 0 1 auto; min-width: 0; max-width: none; }
+/* The recipe's goal on the collapsed row — bigger + higher-contrast + upright so it's
+   easy to read at a glance (it's the recipe's description). Still ellipsises if long;
+   the full goal shows in the expanded detail. */
+.recipe-row-header .investigate-pattern-aim {
+  flex: 0 1 auto; min-width: 0; max-width: none;
+  font-size: 12.5px; color: var(--text-secondary); font-style: normal;
+}
 .recipe-row-header .investigate-pattern-matchhint { flex: 0 0 auto; border-left: none; padding-left: 0; }
 .recipe-row-header .investigate-pattern-count { margin-left: auto; flex: 0 0 auto; }
 .recipe-row-tier { flex: 0 0 auto; font-size: 10px; color: var(--text-secondary); }
@@ -9951,7 +9957,7 @@ kbd {
   background: var(--bg-primary);
   font-size: 11px;
 }
-.recipe-detail-aim { color: var(--text-secondary); margin-bottom: 7px; line-height: 1.4; }
+.recipe-detail-aim { font-size: 13px; color: var(--text-primary); margin-bottom: 8px; line-height: 1.45; }
 .recipe-detail-section { margin-bottom: 7px; }
 .recipe-detail-label {
   font-size: 9px; text-transform: uppercase; letter-spacing: 0.4px;
