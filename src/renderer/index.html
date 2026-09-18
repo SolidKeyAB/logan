@@ -1871,6 +1871,19 @@
     </div>
   </div>
 
+  <!-- Recipe detail drawer — slides in from the right when a recipe CARD is clicked in the
+       Investigate panel. Shows that recipe's full goal / applies-to / steps / fill-ins +
+       actions. Closes on ×, backdrop click, or Esc. -->
+  <div id="recipe-drawer-overlay" class="recipe-drawer-overlay" hidden>
+    <aside class="recipe-drawer" role="dialog" aria-modal="true" aria-label="Recipe details">
+      <div class="recipe-drawer-header">
+        <span id="recipe-drawer-title" class="recipe-drawer-title"></span>
+        <button id="recipe-drawer-close" class="recipe-drawer-close" title="Close (Esc)" aria-label="Close">×</button>
+      </div>
+      <div id="recipe-drawer-body" class="recipe-drawer-body"></div>
+    </aside>
+  </div>
+
   <!-- Quick-start triage "Start here" card — a floating, dismissable briefing that
        auto-appears on file open (top crashes / errors / components / gaps, click to
        jump). Non-modal; toggle via Features → "Triage on open". -->

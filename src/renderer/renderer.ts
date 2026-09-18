@@ -7847,6 +7847,12 @@ function initInvestigatePanel(): void {
   // Group-by — re-group the list (no refetch).
   const groupSel = document.getElementById('investigate-recipe-groupby') as HTMLSelectElement | null;
   groupSel?.addEventListener('change', () => { recipeGroupBy = (groupSel.value as 'type' | 'file' | 'flat') || 'type'; renderRecipeList(); });
+  // Recipe detail drawer — close on ×, on backdrop click, or Esc.
+  document.getElementById('recipe-drawer-close')?.addEventListener('click', () => closeRecipeDrawer());
+  document.getElementById('recipe-drawer-overlay')?.addEventListener('click', (e) => { if (e.target === e.currentTarget) closeRecipeDrawer(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !document.getElementById('recipe-drawer-overlay')?.hasAttribute('hidden')) closeRecipeDrawer();
+  });
   window.api.onInvestigationTemplatesChanged(() => { void loadInvestigationTemplates(); });
   // The agent applied a saved lens entity → run the SAME dispatcher the human ▶ Apply uses
   // (set-semantics, so a re-apply is idempotent). One impl, two operators.
@@ -8014,60 +8020,149 @@ function describeRecipeApplicability(t: any): { text: string; strict: boolean } 
   return null;
 }
 
-// Build one recipe as a click-to-expand ROW (accordion): a full-width header (caret +
-// name + goal + step count + badges) that toggles an inline details panel (goal, steps,
-// fill-ins, source file, + Run / See-flow / Options / Delete). One recipe per row, so the
-// list reads as a clean stack — not a wrapping "chain" of pills you can't tell apart.
+// ── Recipe gallery: card tiles + a slide-in detail drawer ────────────────────
+// One CARD per recipe, reflowing to fill the panel width (like a template gallery), so a
+// growing catalog stays scannable instead of becoming one endless column. A card is a
+// compact summary (name · goal · chips · Run); clicking it opens the detail DRAWER
+// (buildRecipeDetail) with the full goal / applies-to / steps / fill-ins + actions.
 // `matchHint` (optional) shows WHY a search surfaced this recipe when the hit was inside a
 // step rather than the name/goal.
-function buildRecipeRow(t: any, matchHint?: string): HTMLElement {
+
+// Short chip label for "what kind of log this applies to" (the full text goes in the drawer).
+function recipeAppliesChip(t: any): string {
+  const ft = t?.requirements?.fileTemplate;
+  if (ft) {
+    if (ft.adapterId) return adapterLabel(ft.adapterId);
+    if (ft.columnPattern && (ft.columnPattern.name || ft.columnPattern.id)) return `⊞ ${ft.columnPattern.name || ft.columnPattern.id}`;
+    if (ft.filenameGlob) return ft.filenameGlob;
+    if (ft.signature?.regex) return 'signature match';
+    if (ft.note) return ft.note;
+  }
+  const src = recipeSourceFilesInfo(t);
+  if (src) return src.types.join(', ');
+  return 'any log';
+}
+
+function buildRecipeCard(t: any, matchHint?: string): HTMLElement {
   const stepCount = (t.steps || []).length;
   const pinned = (t.tier === 'fundamental' || t.tier === 'complex');
-  const srcInfo = recipeSourceFilesInfo(t);
+  const card = document.createElement('div');
+  card.className = 'recipe-card' + (t.composite ? ' composite' : '');
+  card.tabIndex = 0;
+  card.setAttribute('role', 'button');
+  card.title = t.aim ? `${t.aim}\n\nClick for details` : 'Click for details';
 
-  const row = document.createElement('div');
-  row.className = 'recipe-row';
-
-  // ── Header — the always-visible summary line; clicking it toggles the detail panel. ──
-  const header = document.createElement('button');
-  header.className = 'recipe-row-header';
-  header.setAttribute('aria-expanded', 'false');
-  const compositeMark = t.composite ? '<span class="investigate-pattern-composite" title="Composite — a recipe of recipes">⋔</span> ' : '';
-  header.innerHTML =
-    '<span class="recipe-row-caret" aria-hidden="true">▸</span>'
-    + `<span class="recipe-row-name">${compositeMark}${escapeHtml(t.name)}</span>`
-    + (t.aim ? `<span class="investigate-pattern-aim">🎯 ${escapeHtml(t.aim)}</span>` : '')
-    + (matchHint ? `<span class="investigate-pattern-matchhint">⌕ ${escapeHtml(matchHint)}</span>` : '')
-    + `<span class="investigate-pattern-count" title="${stepCount} step${stepCount === 1 ? '' : 's'}">${stepCount}</span>`;
-  // Preflight badge — only when the recipe declares a requirements manifest (✓ / ✗).
-  // The one preflight call (below) fills BOTH this badge and the detail "Applies to" verdict.
-  let reqBadge: HTMLElement | null = null;
+  // Top: name + badges
+  const top = document.createElement('div');
+  top.className = 'recipe-card-top';
+  const name = document.createElement('span');
+  name.className = 'recipe-card-name';
+  name.innerHTML = (t.composite ? '<span class="investigate-pattern-composite" title="Composite — a recipe of recipes">⋔</span> ' : '') + escapeHtml(t.name);
+  top.appendChild(name);
+  const badges = document.createElement('span');
+  badges.className = 'recipe-card-badges';
   if (t.requirements && (t.requirements.fileTemplate || (t.requirements.entities || []).length)) {
-    reqBadge = document.createElement('span');
-    reqBadge.className = 'investigation-req-badge checking';
-    reqBadge.textContent = '…';
-    reqBadge.title = 'Checking requirements against the open log…';
-    header.appendChild(reqBadge);
+    const badge = document.createElement('span');
+    badge.className = 'investigation-req-badge checking';
+    badge.textContent = '…';
+    badge.title = 'Checking requirements against the open log…';
+    badges.appendChild(badge);
+    void refreshInvestigationBadge(t.name, badge);
   }
-  // Tier marker only when the tier is PINNED (curated away from the smart default).
   if (pinned) {
     const tierBadge = document.createElement('span');
-    tierBadge.className = 'recipe-row-tier';
+    tierBadge.className = 'recipe-card-tier';
     tierBadge.textContent = t.tier === 'complex' ? '⋔' : '🧱';
     tierBadge.title = `Tier pinned: ${t.tier}`;
-    header.appendChild(tierBadge);
+    badges.appendChild(tierBadge);
   }
+  top.appendChild(badges);
+  card.appendChild(top);
 
-  // ── Detail panel — built up front (cheap), hidden until the row is expanded. ──
+  // Goal (clamped to 2 lines)
+  const goal = document.createElement('div');
+  goal.className = 'recipe-card-goal' + (t.aim ? '' : ' muted');
+  goal.textContent = t.aim || 'No goal set';
+  card.appendChild(goal);
+
+  // Chips: steps · applies-to · (match hint while searching)
+  const chips = document.createElement('div');
+  chips.className = 'recipe-card-chips';
+  const stepChip = document.createElement('span');
+  stepChip.className = 'recipe-card-chip';
+  stepChip.textContent = `${stepCount} step${stepCount === 1 ? '' : 's'}`;
+  chips.appendChild(stepChip);
+  const applyChip = document.createElement('span');
+  applyChip.className = 'recipe-card-chip applies';
+  applyChip.textContent = recipeAppliesChip(t);
+  const applies = describeRecipeApplicability(t);
+  if (applies) applyChip.title = applies.text;
+  chips.appendChild(applyChip);
+  if (matchHint) {
+    const mh = document.createElement('span');
+    mh.className = 'recipe-card-chip matchhint';
+    mh.textContent = `⌕ ${matchHint}`;
+    mh.title = matchHint;
+    chips.appendChild(mh);
+  }
+  card.appendChild(chips);
+
+  // Footer: Run (stops propagation) + a "details" affordance for the whole-card click
+  const footer = document.createElement('div');
+  footer.className = 'recipe-card-footer';
+  const runBtn = document.createElement('button');
+  runBtn.className = 'primary-btn small recipe-card-run';
+  runBtn.textContent = '▶ Run';
+  runBtn.title = 'Open the run / tweak hub';
+  runBtn.addEventListener('click', (e) => { e.stopPropagation(); void openTemplateHub(t.name); });
+  footer.appendChild(runBtn);
+  const more = document.createElement('span');
+  more.className = 'recipe-card-more';
+  more.textContent = 'Details ›';
+  footer.appendChild(more);
+  card.appendChild(footer);
+
+  const open = () => openRecipeDrawer(t);
+  card.addEventListener('click', open);
+  card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });
+  card.addEventListener('contextmenu', (e) => { e.preventDefault(); showInvestigationContextMenu(e as MouseEvent, t); });
+  return card;
+}
+
+// Full recipe detail — goal / applies-to (+ live verdict) / steps / fill-ins / source +
+// actions. Shown inside the slide-in drawer. Actions close the drawer first (the run hub,
+// flow overlay and context menu live in/over the panel behind it).
+function buildRecipeDetail(t: any): HTMLElement {
+  const stepCount = (t.steps || []).length;
+  const srcInfo = recipeSourceFilesInfo(t);
   const detail = document.createElement('div');
-  detail.className = 'recipe-row-detail';
-  detail.hidden = true;
+  detail.className = 'recipe-detail';
 
   if (t.aim) {
     const aim = document.createElement('div');
     aim.className = 'recipe-detail-aim';
     aim.textContent = `🎯 ${t.aim}`;
     detail.appendChild(aim);
+  }
+
+  // Applies to (+ live ✓/✗ verdict for the open log when there's a strict gate)
+  const applies = describeRecipeApplicability(t);
+  if (applies) {
+    const sec = document.createElement('div');
+    sec.className = 'recipe-detail-section';
+    sec.innerHTML = '<div class="recipe-detail-label">Applies to</div>';
+    const txt = document.createElement('div');
+    txt.className = 'recipe-detail-applies' + (applies.strict ? ' strict' : '');
+    txt.textContent = applies.text;
+    sec.appendChild(txt);
+    if (applies.strict) {
+      const verdict = document.createElement('div');
+      verdict.className = 'recipe-detail-verdict checking';
+      verdict.textContent = 'Checking this log…';
+      sec.appendChild(verdict);
+      void refreshInvestigationBadge(t.name, undefined, verdict);
+    }
+    detail.appendChild(sec);
   }
 
   if (stepCount) {
@@ -8091,7 +8186,6 @@ function buildRecipeRow(t: any, matchHint?: string): HTMLElement {
     detail.appendChild(sec);
   }
 
-  // Fill-ins — the promoted params (component/field/pattern/event/…) with a default value.
   const fillins = (t.params || []).filter((p: any) => p.default != null && String(p.default) !== '');
   if (fillins.length) {
     const sec = document.createElement('div');
@@ -8109,28 +8203,6 @@ function buildRecipeRow(t: any, matchHint?: string): HTMLElement {
     detail.appendChild(sec);
   }
 
-  // "Applies to" — what kind of log this recipe targets. From the recipe's explicit
-  // file-template requirement (with a live ✓/✗ verdict for the open log) or, failing
-  // that, a soft hint from the file type(s) it was recorded on.
-  let reqVerdict: HTMLElement | null = null;
-  const applies = describeRecipeApplicability(t);
-  if (applies) {
-    const sec = document.createElement('div');
-    sec.className = 'recipe-detail-section';
-    sec.innerHTML = '<div class="recipe-detail-label">Applies to</div>';
-    const txt = document.createElement('div');
-    txt.className = 'recipe-detail-applies' + (applies.strict ? ' strict' : '');
-    txt.textContent = applies.text;
-    sec.appendChild(txt);
-    if (applies.strict) {
-      reqVerdict = document.createElement('div');
-      reqVerdict.className = 'recipe-detail-verdict checking';
-      reqVerdict.textContent = 'Checking this log…';
-      sec.appendChild(reqVerdict);
-    }
-    detail.appendChild(sec);
-  }
-
   if (srcInfo) {
     const src = document.createElement('div');
     src.className = 'recipe-detail-src';
@@ -8141,48 +8213,58 @@ function buildRecipeRow(t: any, matchHint?: string): HTMLElement {
   const actions = document.createElement('div');
   actions.className = 'recipe-detail-actions';
   const runBtn = document.createElement('button');
-  runBtn.className = 'secondary-btn small recipe-action-run';
+  runBtn.className = 'primary-btn small';
   runBtn.textContent = '▶ Run…';
   runBtn.title = 'Open the run / tweak hub — set params and replay on this log';
-  runBtn.addEventListener('click', (e) => { e.stopPropagation(); void openTemplateHub(t.name); });
+  runBtn.addEventListener('click', () => { closeRecipeDrawer(); void openTemplateHub(t.name); });
   const flowBtn = document.createElement('button');
   flowBtn.className = 'secondary-btn small';
   flowBtn.textContent = '⋔ See flow';
   flowBtn.title = 'See this recipe as a visual flow';
-  flowBtn.addEventListener('click', (e) => { e.stopPropagation(); void showInvestigationWorkflow(t.name); });
+  flowBtn.addEventListener('click', () => { closeRecipeDrawer(); void showInvestigationWorkflow(t.name); });
   const optBtn = document.createElement('button');
   optBtn.className = 'secondary-btn small';
   optBtn.textContent = '⚙ Options';
   optBtn.title = 'Tier / requirements…';
-  optBtn.addEventListener('click', (e) => { e.stopPropagation(); showInvestigationContextMenu(e, t); });
+  optBtn.addEventListener('click', (e) => { const ev = e as MouseEvent; closeRecipeDrawer(); showInvestigationContextMenu(ev, t); });
   const delBtn = document.createElement('button');
   delBtn.className = 'secondary-btn small recipe-action-del';
   delBtn.textContent = '× Delete';
   delBtn.title = 'Delete this recipe';
-  delBtn.addEventListener('click', async (e) => {
-    e.stopPropagation();
+  delBtn.addEventListener('click', async () => {
     await window.api.deleteInvestigation(t.name);
+    closeRecipeDrawer();
     void loadInvestigationTemplates();
   });
   actions.append(runBtn, flowBtn, optBtn, delBtn);
   detail.appendChild(actions);
 
-  // One preflight call fills both the header ✓/✗ badge and the "Applies to" verdict line.
-  if (reqBadge) void refreshInvestigationBadge(t.name, reqBadge, reqVerdict ?? undefined);
+  return detail;
+}
 
-  const toggle = () => {
-    const open = row.classList.toggle('expanded');
-    detail.hidden = !open;
-    header.setAttribute('aria-expanded', open ? 'true' : 'false');
-    const caret = header.querySelector('.recipe-row-caret');
-    if (caret) caret.textContent = open ? '▾' : '▸';
-  };
-  header.addEventListener('click', toggle);
-  row.addEventListener('contextmenu', (e) => { e.preventDefault(); showInvestigationContextMenu(e as MouseEvent, t); });
+let recipeDrawerHideTimer: ReturnType<typeof setTimeout> | null = null;
 
-  row.appendChild(header);
-  row.appendChild(detail);
-  return row;
+// Slide the recipe detail drawer in from the right, filled with buildRecipeDetail(t).
+function openRecipeDrawer(t: any): void {
+  const overlay = document.getElementById('recipe-drawer-overlay');
+  const titleEl = document.getElementById('recipe-drawer-title');
+  const body = document.getElementById('recipe-drawer-body');
+  if (!overlay || !titleEl || !body) return;
+  if (recipeDrawerHideTimer) { clearTimeout(recipeDrawerHideTimer); recipeDrawerHideTimer = null; }
+  titleEl.innerHTML = (t.composite ? '<span class="investigate-pattern-composite" title="Composite — a recipe of recipes">⋔</span> ' : '') + escapeHtml(t.name);
+  body.innerHTML = '';
+  body.appendChild(buildRecipeDetail(t));
+  overlay.removeAttribute('hidden');
+  requestAnimationFrame(() => overlay.classList.add('open'));
+  trackUsage('recipe:drawer');
+}
+
+// Slide it out (then hide after the transition so it's not tab-reachable while hidden).
+function closeRecipeDrawer(): void {
+  const overlay = document.getElementById('recipe-drawer-overlay');
+  if (!overlay || overlay.hasAttribute('hidden')) return;
+  overlay.classList.remove('open');
+  recipeDrawerHideTimer = setTimeout(() => { overlay.setAttribute('hidden', ''); recipeDrawerHideTimer = null; }, 180);
 }
 
 // Fetch the saved recipes, cache them, then paint the list. Called on init and whenever
@@ -8260,7 +8342,7 @@ function renderRecipeList(): void {
     }
     const body = document.createElement('div');
     body.className = 'recipe-tier-body';
-    for (const t of g.items) body.appendChild(buildRecipeRow(t, searching ? recipeMatchHint(t, terms) : undefined));
+    for (const t of g.items) body.appendChild(buildRecipeCard(t, searching ? recipeMatchHint(t, terms) : undefined));
     section.appendChild(body);
     list.appendChild(section);
   }
@@ -8278,32 +8360,28 @@ function setRecipeSearch(q: string): void {
 }
 
 // Fetch the requirements preflight for one pattern and paint its badge ✓/✗.
-async function refreshInvestigationBadge(name: string, badge: HTMLElement, verdict?: HTMLElement): Promise<void> {
+async function refreshInvestigationBadge(name: string, badge?: HTMLElement, verdict?: HTMLElement): Promise<void> {
   try {
     const res = await window.api.checkInvestigation(name);
     const report = res.requirements;
     if (!res.success || !report) {
-      badge.className = 'investigation-req-badge'; badge.textContent = '';
+      if (badge) { badge.className = 'investigation-req-badge'; badge.textContent = ''; }
       if (verdict) { verdict.className = 'recipe-detail-verdict'; verdict.textContent = ''; }
       return;
     }
-    if (report.blocked) {
-      badge.className = 'investigation-req-badge blocked';
-      badge.textContent = '✗';
-    } else {
-      badge.className = 'investigation-req-badge ok';
-      badge.textContent = '✓';
+    if (badge) {
+      badge.className = report.blocked ? 'investigation-req-badge blocked' : 'investigation-req-badge ok';
+      badge.textContent = report.blocked ? '✗' : '✓';
     }
     const lines = (report.checks || []).map((c: any) => `${c.status === 'satisfied' ? '✓' : c.status === 'unsatisfied' ? '✗' : '?'} ${c.label} — ${c.detail}`);
-    badge.title = `${report.summary}${lines.length ? '\n' + lines.join('\n') : ''}`;
+    if (badge) badge.title = `${report.summary}${lines.length ? '\n' + lines.join('\n') : ''}`;
     if (verdict) {
       verdict.className = 'recipe-detail-verdict ' + (report.blocked ? 'blocked' : 'ok');
       verdict.textContent = `${report.blocked ? '✗' : '✓'} This open log — ${report.summary}`;
       verdict.title = lines.join('\n');
     }
   } catch {
-    badge.className = 'investigation-req-badge';
-    badge.textContent = '';
+    if (badge) { badge.className = 'investigation-req-badge'; badge.textContent = ''; }
     if (verdict) { verdict.className = 'recipe-detail-verdict'; verdict.textContent = ''; }
   }
 }
