@@ -18,7 +18,6 @@ const OUTPUT_LABEL_BY_PATH: Record<string, string> = {
   '/api/investigate-crashes': 'crash findings',
   '/api/investigate-component': 'component health',
   '/api/investigate-timerange': 'timerange findings',
-  '/api/build-conclusion': 'verdict',
   '/api/summarize': 'templates',
   '/api/evidence-pack': 'evidence pack',
   '/api/diff-runs': 'run diff',
@@ -106,11 +105,6 @@ export function deriveAnswerValue(path: string | undefined, result: any): Answer
   if (path === '/api/diff-runs') return count(num(result.diff?.summary?.onlyInTarget) ?? 0);
   if (path.startsWith('/api/trend')) {
     return count(num(result.totalPoints) ?? num(result.transitions?.length) ?? num(result.fields?.length) ?? 0);
-  }
-  if (path === '/api/build-conclusion') {
-    const v = result.report?.verdict?.headline ?? result.verdict?.headline ?? result.conclusion?.verdict ?? result.verdict;
-    const t = v != null ? String(v) : undefined;
-    return t ? { kind: 'text', bool: true, text: t } : { kind: 'boolean', bool: true };
   }
   if (path === '/api/evidence-pack') {
     const sev = result.pack?.severity;

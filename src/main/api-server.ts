@@ -22,7 +22,6 @@ import { loadColumnLayouts, upsertColumnLayout, deleteColumnLayout } from './col
 import { canonicalizeAiVerb } from '../shared/verbRegistry';
 import { compilePattern, CompileInput } from './compilePattern';
 import { logPattern } from './patternLog';
-import { synthesizeConclusion, type ConclusionReport, type ConclusionGap, type ConclusionAnnotation, type ConclusionEvent } from './conclusion';
 import { buildReportMarkdown, reportFileName, type ReportFinding, type ReportLogLine, type ReportStep, type ReportComponent } from './reportDoc';
 
 export const API_PORT = 19532;
@@ -37,7 +36,7 @@ const INVESTIGATIVE_PATHS = new Set<string>([
   '/api/trend-fields', '/api/trend-series', '/api/trend-transitions', '/api/trend-correlate',
   '/api/trend-show', '/api/investigate-crashes', '/api/investigate-component',
   '/api/investigate-timerange', '/api/navigate', '/api/evidence-pack',
-  '/api/build-conclusion', '/api/summarize', '/api/fold-regions', '/api/diff-runs',
+  '/api/summarize', '/api/fold-regions', '/api/diff-runs',
 ]);
 const JOURNAL_CAP = 200;
 // A composite recipe recurses (its steps run sub-recipes, which may themselves be composite).
@@ -71,7 +70,6 @@ function journalLabel(p: string, body: Record<string, any>): string {
   if (p.startsWith('/api/trend-')) return `${name} ${body.field ?? body.pattern ?? ''}`.trim();
   if (p === '/api/investigate-component') return `investigate component ${body.component ?? ''}`;
   if (p === '/api/evidence-pack') return `evidence-pack${body.baselineId ? ' (vs baseline)' : ''}`;
-  if (p === '/api/build-conclusion') return 'build-conclusion';
   if (p === '/api/summarize') return `summarize${body.opts?.contains ? ` ~"${body.opts.contains}"` : ''}`;
   if (p === '/api/fold-regions') return 'fold-regions';
   if (p === '/api/diff-runs') return `diff-runs vs ${String(body.reference ?? '').split(/[\\/]/).pop() || ''}`.trim();
@@ -651,71 +649,6 @@ export async function buildEvidencePack(
     },
   };
   return { success: true, pack };
-}
-
-// Options for the native root-cause conclusion (see buildConclusion).
-export interface BuildConclusionOptions {
-  thresholdSeconds?: number;
-  analyzerName?: string;
-}
-
-// Compose the native root-cause "conclusion" — the AI-side counterpart to the
-// human Conclusion panel. Assembles the same ingredients the panel uses:
-//   • analysis (crashes, levels, failing components) — cached or freshly run,
-//   • time gaps (native detector, default 10s threshold — matches the panel),
-//   • pinned findings / annotations (the agent's or the human's),
-// then calls the shared, deterministic synthesizeConclusion() to produce the
-// verdict: first anomaly (the trigger), likely root cause, chronological
-// timeline, and evidence. Returns the full ConclusionReport (no AI involved).
-export async function buildConclusion(
-  ctx: ApiContext,
-  opts: BuildConclusionOptions = {}
-): Promise<{ success: boolean; conclusion?: ConclusionReport; error?: string }> {
-  const filePath = ctx.getCurrentFilePath();
-  // getReadHandler so a conclusion can be built over a virtual (composite/segmented)
-  // session — this only needs getTotalLines(); the sub-steps use ctx.analyze/detectTimeGaps.
-  const handler = ctx.getReadHandler();
-  if (!filePath || !handler) return { success: false, error: 'No file open' };
-  const totalLines = handler.getTotalLines();
-
-  // 1) Analysis — reuse the cached result if present, else run a full scan.
-  let analysis = ctx.getAnalysisResult();
-  if (!analysis) {
-    const analysisResp = await ctx.analyze(opts.analyzerName);
-    analysis = analysisResp?.success ? analysisResp.result : (analysisResp?.result ?? null);
-  }
-
-  // 2) Time gaps — 10s catches stalls without drowning in noise (panel default).
-  const thresholdSeconds = opts.thresholdSeconds ?? 10;
-  let gaps: ConclusionGap[] = [];
-  try {
-    const gapsResp = await ctx.detectTimeGaps({ thresholdSeconds });
-    if (gapsResp?.success && Array.isArray(gapsResp.gaps)) gaps = gapsResp.gaps as ConclusionGap[];
-  } catch { /* gaps optional */ }
-
-  // 3) Pinned findings / annotations (agent or manual).
-  const annotations: ConclusionAnnotation[] = Array.from(ctx.getAnnotations().values()).map((a) => ({
-    lineNumber: a.lineNumber,
-    severity: a.severity,
-    text: a.text,
-  }));
-
-  // 4) Synthesize deterministically (shared with the human panel's logic).
-  const conclusion = synthesizeConclusion(analysis, gaps, annotations, {
-    sourceFilePath: filePath,
-    totalLinesFallback: totalLines,
-  });
-
-  // Add 1-based viewerLine to every event so the AI pins findings on the same
-  // line convention as every other tool (CLAUDE.md: pin using viewerLine). The
-  // 0-based lineNumber is kept for the human panel's existing consumers.
-  const withViewerLine = (e: ConclusionEvent | null): ConclusionEvent | null =>
-    e ? { ...e, viewerLine: e.lineNumber + 1 } : e;
-  conclusion.firstAnomaly = withViewerLine(conclusion.firstAnomaly);
-  conclusion.rootCause = withViewerLine(conclusion.rootCause);
-  conclusion.timeline = conclusion.timeline.map((e) => ({ ...e, viewerLine: e.lineNumber + 1 }));
-
-  return { success: true, conclusion };
 }
 
 export function startApiServer(ctx: ApiContext): void {
@@ -1718,7 +1651,6 @@ export function startApiServer(ctx: ApiContext): void {
 
           const includeFindings = body.includeFindings !== false;
           const includeSteps = body.includeSteps !== false;
-          const includeConclusion = body.includeConclusion === true; // opt-in (runs analysis)
 
           const readHandler = ctx.getReadHandler();
           const total = readHandler ? readHandler.getTotalLines() : 0;
@@ -1732,14 +1664,8 @@ export function startApiServer(ctx: ApiContext): void {
             ? agentJournal.map((e) => ({ label: e.label, ...(e.result ? { result: e.result } : {}) }))
             : [];
 
-          let conclusion: ConclusionReport | null = null;
-          if (includeConclusion) {
-            const c = await buildConclusion(ctx, {});
-            if (c.success && c.conclusion) conclusion = c.conclusion;
-          }
-
-          // Plan which raw lines to fetch: a context window per finding (deduped),
-          // plus the verdict's first-anomaly / root-cause lines. One batched read.
+          // Plan which raw lines to fetch: a context window per finding (deduped).
+          // One batched read.
           const wanted = new Set<number>();
           const rawFindings: { ann: Annotation; matchStart0: number; matchEnd0: number; win: [number, number] }[] = [];
           if (includeFindings) {
@@ -1763,14 +1689,6 @@ export function startApiServer(ctx: ApiContext): void {
               }
             }
           }
-          const eventViewerLines: number[] = [];
-          for (const ev of [conclusion?.firstAnomaly, conclusion?.rootCause]) {
-            if (!ev) continue;
-            const vl = ev.viewerLine ?? ev.lineNumber + 1;
-            eventViewerLines.push(vl);
-            if (readHandler && vl - 1 >= 0 && vl - 1 < total) wanted.add(vl - 1);
-          }
-
           // One batched read for every needed raw line (0-based → text).
           const lineText = new Map<number, string>();
           if (wanted.size && readHandler) {
@@ -1798,17 +1716,9 @@ export function startApiServer(ctx: ApiContext): void {
             };
           });
 
-          // Verdict evidence lines: viewerLine (1-based) → raw text.
-          const eventLines: Record<number, string> = {};
-          for (const vl of eventViewerLines) {
-            const text = lineText.get(vl - 1);
-            if (text !== undefined) eventLines[vl] = text;
-          }
-
-          // Components potentially responsible: agent-supplied wins; otherwise
-          // derive from the verdict's top failing components (sampleLine is
-          // 0-based internally → +1 for the viewer). Agent-supplied sampleLine is
-          // already a 1-based viewerLine, like everywhere else in the agent API.
+          // Components potentially responsible (agent-supplied — the areas to investigate).
+          // Agent-supplied sampleLine is already a 1-based viewerLine, like everywhere
+          // else in the agent API.
           let components: ReportComponent[] = [];
           if (Array.isArray(body.components) && body.components.length) {
             components = body.components
@@ -1823,17 +1733,6 @@ export function startApiServer(ctx: ApiContext): void {
                     : null)))
               .filter(Boolean)
               .slice(0, 50) as ReportComponent[];
-          } else if (conclusion && conclusion.topComponents?.length) {
-            components = conclusion.topComponents.map((c) => {
-              const bits: string[] = [];
-              if (c.errorCount) bits.push(`${c.errorCount} error${c.errorCount === 1 ? '' : 's'}`);
-              if (c.warningCount) bits.push(`${c.warningCount} warning${c.warningCount === 1 ? '' : 's'}`);
-              return {
-                name: c.name,
-                ...(bits.length ? { reason: bits.join(' / ') } : {}),
-                ...(typeof c.sampleLine === 'number' && c.sampleLine >= 0 ? { sampleLine: c.sampleLine + 1 } : {}),
-              };
-            });
           }
 
           // Open questions / follow-ups (agent-supplied).
@@ -1864,8 +1763,6 @@ export function startApiServer(ctx: ApiContext): void {
             agentName: activeAgent?.name,
             findings,
             steps,
-            conclusion,
-            eventLines,
             components,
             questions,
             envContext,
@@ -1887,7 +1784,6 @@ export function startApiServer(ctx: ApiContext): void {
             name: body.name,
             findings: findings.length,
             steps: steps.length,
-            conclusion: !!conclusion,
             components: components.length,
             questions: questions.length,
           });
@@ -2116,16 +2012,6 @@ export function startApiServer(ctx: ApiContext): void {
         // FIRST, instead of dozens of exploratory round-trips. Reuses existing
         // primitives (analyze / time-gaps / trend-fields / baseline) in-process;
         // returns counts + references (viewerLine), not raw log text.
-        if (url === '/api/build-conclusion') {
-          const result = await buildConclusion(ctx, {
-            thresholdSeconds: body.thresholdSeconds,
-            analyzerName: body.analyzerName,
-          });
-          if (!result.success) return sendError(res, result.error || 'No file open');
-          sendJson(res, result);
-          return;
-        }
-
         if (url === '/api/evidence-pack') {
           const result = await buildEvidencePack(ctx, {
             thresholdSeconds: body.thresholdSeconds,

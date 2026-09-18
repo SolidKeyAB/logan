@@ -46,14 +46,7 @@ author:  "<agent name>"
 
 ## Summary            (optional — the agent's narrative)
 
-## Verdict            (optional — includeConclusion:true)
-**<headline>** + detail
-- First anomaly — <label> (line N)
-- Likely root cause — <label> (line N)
-**Evidence lines**   ← the actual log lines behind the verdict
-### Timeline         ← chronological key events (line refs)
-
-## Components — potentially responsible   (agent-supplied, or derived from the verdict)
+## Components — potentially responsible   (agent-supplied)
 - **<name>** — <reason> (e.g. line N)
 
 ## Findings (N)
@@ -82,9 +75,8 @@ author:  "<agent name>"
 - **Findings carry their real logs.** Each finding embeds the matched line(s) plus
   `context` surrounding lines (default 3, `0`–`20`) in a fenced `text` block with a
   line-number gutter. `►` flags the finding line(s); context lines get a leading space.
-- **Components — potentially responsible** lists the subsystems behind the conclusion:
-  agent-supplied (`components`), or auto-derived from the verdict's top failing components
-  (`includeConclusion`). Each row is `name — reason (e.g. line N)`.
+- **Components — potentially responsible** lists the subsystems most likely responsible —
+  agent-supplied via `components`. Each row is `name — reason (e.g. line N)`.
 - **Open questions** are the agent's follow-ups, rendered as a `- [ ]` checklist.
 - **Ranges** (a finding with an end line) render the whole span, capped at 60 lines.
 - **Budget.** At most ~500 embedded log lines across the doc; findings past the budget
