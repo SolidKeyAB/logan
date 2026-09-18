@@ -7209,7 +7209,7 @@ kbd {
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
   padding: 4px 0;
-  z-index: 9999;
+  z-index: 10002; /* above the recipe drawer (10001) + hub/palette overlays (10000) — a context menu is always topmost */
   min-width: 140px;
 }
 

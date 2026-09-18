@@ -8226,7 +8226,9 @@ function buildRecipeDetail(t: any): HTMLElement {
   optBtn.className = 'secondary-btn small';
   optBtn.textContent = '⚙ Options';
   optBtn.title = 'Tier / requirements…';
-  optBtn.addEventListener('click', (e) => { const ev = e as MouseEvent; closeRecipeDrawer(); showInvestigationContextMenu(ev, t); });
+  // Options opens a MENU, not a navigation — keep the drawer open and show the menu on top
+  // (anchored to the button, not orphaned). The drawer closes only when a menu item is picked.
+  optBtn.addEventListener('click', (e) => { showInvestigationContextMenu(e as MouseEvent, t); });
   const delBtn = document.createElement('button');
   delBtn.className = 'secondary-btn small recipe-action-del';
   delBtn.textContent = '× Delete';
@@ -9578,7 +9580,9 @@ function showInvestigationContextMenu(e: MouseEvent, t: any): void {
     const b = document.createElement('button');
     b.className = 'sc-context-menu-item';
     b.textContent = label;
-    b.addEventListener('click', () => { menu.remove(); fn(); });
+    // Picking an item may open a dialog / render a report / regroup the list — close the
+    // recipe drawer first so that result isn't hidden behind it (no-op if no drawer is open).
+    b.addEventListener('click', () => { menu.remove(); closeRecipeDrawer(); fn(); });
     menu.appendChild(b);
   };
   // Tier — classify the recipe as fundamental (building block) or complex (workflow).
@@ -9595,6 +9599,12 @@ function showInvestigationContextMenu(e: MouseEvent, t: any): void {
     void loadInvestigationTemplates();
   });
   document.body.appendChild(menu);
+  // Keep the menu fully on-screen — it can be opened from the right-edge recipe drawer,
+  // where the button's x/y would otherwise push the menu off the right/bottom edge.
+  const r = menu.getBoundingClientRect();
+  const pad = 6;
+  if (e.clientX + r.width + pad > window.innerWidth) menu.style.left = `${Math.max(pad, window.innerWidth - r.width - pad)}px`;
+  if (e.clientY + r.height + pad > window.innerHeight) menu.style.top = `${Math.max(pad, window.innerHeight - r.height - pad)}px`;
   const closeMenu = (ev: MouseEvent) => {
     if (!menu.contains(ev.target as Node)) { menu.remove(); document.removeEventListener('click', closeMenu); }
   };
