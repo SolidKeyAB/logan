@@ -10,6 +10,7 @@
 | Ctrl+W | Close tab |
 | Ctrl+Tab | Next tab |
 | Ctrl+Shift+Tab | Previous tab |
+| Ctrl+R | Reload current file from disk |
 | Drag & drop | Drop files or folders into window to open |
 
 ### Navigation
@@ -20,6 +21,7 @@
 | Home / End | Jump to first / last line |
 | Arrow Left/Right | Scroll horizontally |
 | Shift+Scroll wheel | Horizontal scroll |
+| F8 / Shift+F8 | Jump to next / previous problem (fatal/error/warning) |
 
 ### Search
 | Shortcut | Action |
@@ -130,6 +132,30 @@ Save an analysis snapshot as a named baseline. Later, compare a different log ag
 
 ---
 
+## Triage on Open (Start-here pill)
+
+When a log opens, LOGAN runs a cheap severity index and shows a **Start-here pill** in the tab bar: a coloured dot plus fatal/error/warning counts (e.g. `💥5 ⛔12 ⚠3`). Click it for a pulldown with:
+
+- **Jump to first fatal / first error** — the fast path to the first real problem
+- A **column-layout suggestion** — apply a matching saved layout, or set up a detected header
+- **📋 Full brief** — run the heavier ranked briefing (crashes / worst components / time gaps) in the Analysis panel
+
+The pill is remembered per file, so it reappears instantly on reopen. Press **F8 / Shift+F8** to walk through problems without opening the pulldown. Toggle the whole behaviour in the Features gear (*Triage on open*).
+
+---
+
+## Cadence / Missing Sequence
+
+In the **Cadence** bottom tab, pick a repeating event. LOGAN auto-detects its period and flags **skipped occurrences** and **timing drift** on a negative-space strip. Click any gap to jump to where the event should have fired. Findings can be pinned. Native — no AI needed.
+
+---
+
+## Conclusion
+
+The **Conclusion** bottom tab produces a one-click, native root-cause verdict: the first anomaly / trigger, a timeline, and the supporting evidence lines. Export it to `.md` or `.pdf` to share.
+
+---
+
 ## Split & Diff View
 
 - **Split view** — open two files side by side with synchronized scrolling
@@ -234,13 +260,49 @@ Fetch logs directly from Datadog into LOGAN:
 
 ---
 
-## Column Filtering
+## Columns
 
-For structured logs (CSV, TSV, or fixed-width):
-1. Click **Analyze Columns** in the search options
-2. LOGAN auto-detects the delimiter and column structure
-3. Toggle individual columns on/off
+For structured logs (CSV, TSV, or whitespace-aligned/fixed-width), LOGAN turns rows into named columns you can shape:
+
+1. LOGAN auto-detects the delimiter and column structure (and can auto-propose a named layout from a detected header row)
+2. **Name** columns, **show/hide** them, or **mute** one to collapse it to a dimmed sliver
+3. **Freeze the header** and switch to fixed-width columns; **drag** a column edge to resize (double-click to auto-fit)
 4. Search and display only the columns you care about
+
+### Column Patterns
+When there's no clean delimiter, define a **column pattern** in the Column Patterns tab: grok (`%{name}`), paint-selected tokens, or a raw regex compile into a named-capture regex that drives live columns over the file.
+
+### Column Layouts
+Save a named **column layout** (per-file or as a generic template). On open, LOGAN offers to apply a matching layout from the Start-here pill; layouts also carry frozen-header and width settings.
+
+---
+
+## Multi-file: Single Session, Time Sync & Merge
+
+- **Single session** (🔗) — Select 2+ open files in the Time Sync panel to combine them into **one continuous read-only view**. Nothing is written to disk; every tool (search, analysis, trends, investigate) runs across the whole set at once.
+- **Time Sync** — Merge files onto a single **wall-clock timeline**, colour-tagged by source, with click-to-line — for answering "what did B log at the moment A errored?"
+- **Merge to file** (⬇) — Write the full wall-clock merge to a **new file** with `<timestamp> | <origin> | <line>` columns (carry-forward for untimestamped lines).
+
+---
+
+## Decoding Binary & Tokenized Logs
+
+- **Esotrace / vtrace decode** — A toolbar button force-runs the vtrace decoder on any file, producing the official byte-identical 11-column format. Recognized files also decode automatically on open.
+- **Sherlog token decode** — Expand `@LOG <id> {json}` tokenized lines back into readable text. LOGAN looks for a token database next to the log, then a remembered pick, then `~/.logan/sherlog-tokens.json`; if none is found it offers a file picker. It reports how many lines it decoded so a no-op is never silent.
+
+---
+
+## Trends & Signals
+
+- **Trends** (bottom tab) — **Discover** log variables (`key=value`, `key: value`, JSON), search them by name, and chart any field **over time**, as **value-flips**, or **correlated with an event**. Booleans render as a 0/1 step line. Right-click a value in the viewer for **📈 Chart over time** / **🔀 Show flips**.
+- **Signals** — Overlay multiple numeric signals (including MF4 channels) on one shared time axis, with a normalize toggle and click-to-line.
+
+---
+
+## Saved Entities & Portable Catalogue
+
+- **Saved panel** — One searchable, grouped panel lists every saveable entity: search configs, sessions, column layouts/patterns, highlight groups, bookmark sets, trend properties, baselines, investigations, contexts, and constants. Each row can **▶ Apply**, **↗ Open** (reveal its home panel), or **⧉ Copy**.
+- **Portable catalogue** — Export your reusable global setup to a single `.logan-pack` file (optionally scrypt/AES-256-GCM encrypted) from the Saved panel, and import it on another machine. Secrets are excluded.
 
 ---
 
@@ -258,12 +320,17 @@ The vertical bar on the right edge shows a visual overview of the entire file:
 
 | Location | Contents |
 |----------|----------|
-| `.logan/<file>.json` | Bookmarks, file-specific highlights, history (next to log file) |
+| `.logan/<file>.json` | Bookmarks, file-specific highlights, annotations, history (next to log file) |
 | `.logan/<file>.notes.txt` | Notes for that file |
+| `.logan/<file>.agent-memory.json` | Per-file agent session scratchpad (survives reconnects) |
+| `.logan/<file>.context-manifest.json` | Attached static environment (build/firmware/device/flags) |
+| `.logan/reports/` | Saved Log Analysis Reports (`.md`) |
 | `~/.logan/highlights.json` | Global highlights |
 | `~/.logan/highlight-groups.json` | Saved highlight groups |
 | `~/.logan/bookmark-sets.json` | Saved bookmark sets |
 | `~/.logan/baselines.db` | Baseline snapshots (SQLite) |
+| `~/.logan/sherlog-tokens.json` | Sherlog token database for `@LOG` decode |
+| `~/.logan/agent-config.json` | Selected agent (Claude Code / built-in / custom script) |
 | `~/.logan/redaction-rules.json` | Custom redaction rules for MCP/AI |
 
 If the directory next to the log file is read-only, LOGAN falls back to `~/.logan/` with a keyed approach.
@@ -272,12 +339,12 @@ If the directory next to the log file is read-only, LOGAN falls back to `~/.loga
 
 ## MCP Server (AI Integration)
 
-LOGAN exposes an MCP server for AI agents (like Claude Code) to control it programmatically:
+LOGAN exposes an MCP server (**75+ tools**) for AI agents (like Claude Code) to control it programmatically:
 
 ```bash
 npm run mcp
 ```
 
-The AI can open files, search, filter, analyze, manage bookmarks/highlights, save/compare baselines, and navigate — all through natural language. The server communicates via stdio (MCP protocol) to LOGAN's HTTP API on localhost.
+The AI can open files, search, filter, analyze, discover and trend fields, investigate crashes/components/time-ranges, manage bookmarks/highlights/annotations, save/compare baselines, diff run-vs-run, attach environment context, pin findings, save reports, run and compose investigation templates, and combine files into one session — all through natural language. The server communicates via stdio (MCP protocol) to LOGAN's HTTP API on localhost. See [LOGAN-AGENT.md](LOGAN-AGENT.md) for the full tool list and API reference.
 
 Sensitive data (IPs, emails, tokens) is automatically redacted before being sent to the AI. Custom redaction rules can be added in `~/.logan/redaction-rules.json`.

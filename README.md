@@ -1,6 +1,6 @@
 # LOGAN - Log Analyzer
 
-A fast, AI-ready log file viewer built with Electron. Handles **14 million+ lines** with virtual scrolling, integrates with AI agents via MCP, connects to live serial/logcat/SSH streams, and provides deep analysis tools — all in one desktop app.
+A fast, AI-ready log file viewer built with Electron. Handles **tens of millions of lines** with virtual scrolling, integrates with AI agents via MCP (**75+ tools**), connects to live serial/logcat/SSH streams, decodes binary/tokenized formats, and provides deep analysis and correlation tools — all in one desktop app.
 
 ## TL;DR
 
@@ -27,17 +27,20 @@ npm start
 ## Features
 
 ### Core Viewer
-- **Virtual scrolling** — Constant memory usage and smooth 60fps, even with multi-million line files
+- **Virtual scrolling** — Constant memory usage and smooth 60fps, even on files with tens of millions of lines
 - **Fast search** — Powered by ripgrep (10-100x faster), with regex, wildcard, whole word, and case-sensitive modes
 - **Multiple tabs** — Open and switch between files without losing state
 - **Minimap** — Bird's-eye overview with color-coded error/warning indicators, click to jump
+- **Jump to problem** — A cheap severity index lets you leap to the next/previous fatal/error/warning with **F8 / Shift+F8**, even on huge files
+- **Start-here pill** — On open, a severity pill appears in the tab bar (fatal/error/warning counts) with a pulldown that jumps to the first problem, suggests a column layout, and opens the full brief — remembered per file
 - **Word wrap & zoom** — Toggle wrapping, adjust font size with Ctrl+/- or mouse wheel
-- **Column visibility** — Auto-detect delimited columns and show/hide them
+- **Columns panel** — Auto-detect delimited/whitespace-aligned columns; name them, show/hide/mute, freeze the header, drag-to-resize, and save reusable **column layouts** and **column patterns** (grok/regex)
+- **Summarize & fold** — Collapse repeating vertical blocks into foldable regions to compress a noisy log while keeping its meaning
 - **JSON auto-format** — Pretty-print JSON files on open
 
 ### AI Agent Integration
 - **Setup Wizard** — Guided setup: auto-detects Claude Code CLI and configures the agent connection
-- **MCP support** — 30+ tools auto-discovered by Claude Code, Cursor, and other MCP clients via `.mcp.json`
+- **MCP support** — **75+ tools** auto-discovered by Claude Code, Cursor, and other MCP clients via `.mcp.json`
 - **Agent Chat tab** — Bidirectional messaging between LOGAN and AI agents with SSE real-time bridge
 - **Claude Code integration** — Launch Claude Code directly from LOGAN with full MCP tool access
 - **Built-in agent** — One-click launch from the Chat tab, handles triage/search/crash analysis/bookmarking
@@ -45,8 +48,13 @@ npm start
 - **Connection indicator** — Shows agent name and status, enforces single-agent connection
 - **Custom agent scripts** — Point to your own agent via `~/.logan/agent-config.json`
 - **Interrupt (⏹ Stop)** — Stop the agent's current task without killing the session; it acknowledges and goes back to waiting
+- **Findings & reports** — The agent pins clickable findings in the viewer (`logan_report_finding`), hands off a whole batch for you to tick through (`logan_import_findings`), and saves a Jira-ready **Log Analysis Report** (`logan_save_report`)
+- **Evidence pack** — One compact briefing (severity, crashes, components, discovered fields, filter hints, optional baseline delta) instead of dozens of exploratory calls (`logan_evidence_pack`)
+- **Logs + environment** — Attach the static capture context (build id, firmware, device, feature flags) as typed facts that auto-inject into briefings and baselines (`logan_context_attach`)
+- **Session memory** — A per-file scratchpad the agent writes so it can resume after a reconnect (`logan_memory_read`/`logan_memory_write`)
 - **Agent-driven charts** — The agent can render trend charts straight into the Trends panel (`logan_trend_show`)
-- **Investigation patterns** — The agent's investigative steps are recorded and can be saved as named, re-runnable templates (see [docs/INVESTIGATION_TEMPLATES.md](docs/INVESTIGATION_TEMPLATES.md))
+- **Investigation patterns** — The agent's investigative steps are recorded and can be saved as named, re-runnable, composable templates with requirement pre-flighting (see [docs/INVESTIGATION_TEMPLATES.md](docs/INVESTIGATION_TEMPLATES.md))
+- **Run-vs-run diff** — Semantic template diff of a failing run against a last-known-good one — what shapes are new, vanished, or shifted (`logan_diff_runs`)
 
 ### Live Connections
 - **Serial monitor** — Connect to serial ports with auto-device discovery
@@ -71,7 +79,24 @@ npm start
 - **Pattern distance** — Measure how far two patterns sit from each other (line gaps): between two search configs, or ad hoc via right-click → *Distance from "..."* with an over-the-log diagram and click-to-jump
 - **Trends** — Discover log variables (key=value/JSON), search them by name, and chart any field over time, as value-flips, or correlated with an event; booleans chart as a 0/1 step line
 - **Signals** — Overlay multiple numeric signals (including MF4 channels) on one shared time axis with normalize toggle and click-to-line
+- **Cadence / missing-sequence** — Pick a repeating event, auto-detect its period, and flag skipped occurrences and drift with a negative-space strip and click-to-line
+- **Conclusion** — One-click native root-cause verdict: first anomaly/trigger + timeline + evidence, exportable to `.md`/`.pdf`
 - **Guided Investigate** — One-tap symptom recipes (crashed/froze/slow/…) that search, trend, and pin findings; save the agent's steps as re-runnable patterns
+
+### Multi-file & Correlation
+- **Single session** — Combine several open files into one continuous read-only view (no on-disk merge) so every tool runs across the set at once
+- **Time Sync** — Merge 2+ files onto one wall-clock timeline, colour-tagged by source, with click-to-line — and optionally **merge to file** for a materialized interleaved log
+- **Run-vs-run diff** — Fold two runs into message templates and set-diff them: new shapes, vanished shapes, and frequency shifts between a failing run and a good one
+- **Compare & baseline** — Side-by-side diff view, plus fingerprint baselines to catch regressions across runs
+
+### Decoding & Formats
+- **Esotrace / vtrace decode** — Byte-identical decode of binary vtrace logs into the official 11-column format, on demand from the toolbar or auto-detected on open
+- **Sherlog token decode** — Expand `@LOG <id> {json}` tokenized lines back into readable text using a discoverable token database
+- **Column patterns** — Grok (`%{name}`) / paint-tokens / raw-regex → a compiled named-capture regex that drives live columns over any format
+
+### Saved setup & portability
+- **Saved panel** — Every saveable entity (search configs, sessions, column layouts/patterns, highlight groups, bookmark sets, trend properties, baselines, investigations, contexts, constants) is enumerable in one searchable panel — apply, reveal, or copy each
+- **Portable catalogue** — Export your reusable global setup to a single `.logan-pack` file (optionally encrypted) and import it on another machine
 
 ### Annotations
 - **Bookmarks** — Mark lines with comments and colors, save/load bookmark sets, export
@@ -224,11 +249,14 @@ See [LOGAN-AGENT.md](LOGAN-AGENT.md) for the full API reference, example scripts
 | Ctrl+H | Highlight all occurrences of selection |
 | Ctrl+Shift+H | Highlight first occurrence per line |
 | Ctrl+Shift+S | Save selected lines to notes |
+| F8 / Shift+F8 | Jump to next / previous problem (fatal/error/warning) |
 | PageDown / PageUp | Scroll one full page |
 | Ctrl+D / Ctrl+U | Half page down / up (Mac-friendly) |
 | Option+Down / Option+Up | Fast scroll (5 lines at a time) |
 | Ctrl++ / Ctrl+- / Ctrl+0 | Zoom in / out / reset |
-| Ctrl+1...7 | Toggle panels (Folders/Stats/Analysis/Gaps/Bookmarks/Highlights/History) |
+| Ctrl+R | Reload current file from disk |
+| Ctrl+1...5 | Toggle sidebar panels (Folders / Bookmarks / Highlights / Stats / History) |
+| Ctrl+6 / Ctrl+7 | Toggle Analysis / Time Gaps (bottom) |
 | Ctrl+8 | Toggle search configs |
 | Ctrl+9 | Toggle video player |
 | Ctrl+\ | Toggle panel visibility |
