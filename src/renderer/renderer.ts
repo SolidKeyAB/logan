@@ -8020,6 +8020,23 @@ function describeRecipeApplicability(t: any): { text: string; strict: boolean } 
   return null;
 }
 
+// Plain-language description of a step's dependency on a previous step's OUTPUT — i.e. its
+// `when` StepGuard (composite recipes gate a step on the preceding step's typed answer).
+// `prevNum` is the 1-based number of the step this one depends on. Mirrors describeGuard()
+// in shared/recipeComposition.ts but references the concrete step for a clearer visual.
+function describeStepGuard(g: any, prevNum: number): string {
+  const n = `step ${prevNum}`;
+  switch (g?.op) {
+    case 'true':     return `runs only if ${n} found something`;
+    case 'false':    return `runs only if ${n} found nothing`;
+    case 'gt':       return `runs only if ${n}'s count > ${g.value}`;
+    case 'lt':       return `runs only if ${n}'s count < ${g.value}`;
+    case 'eq':       return `runs only if ${n}'s result = ${g.value}`;
+    case 'contains': return `runs only if ${n}'s result contains “${g.value}”`;
+    default:         return `runs conditionally on ${n}`;
+  }
+}
+
 // ── Recipe gallery: card tiles + a slide-in detail drawer ────────────────────
 // One CARD per recipe, reflowing to fill the panel width (like a template gallery), so a
 // growing catalog stays scannable instead of becoming one endless column. A card is a
@@ -8168,21 +8185,51 @@ function buildRecipeDetail(t: any): HTMLElement {
   if (stepCount) {
     const sec = document.createElement('div');
     sec.className = 'recipe-detail-section';
-    sec.innerHTML = '<div class="recipe-detail-label">Steps</div>';
-    const ol = document.createElement('ol');
-    ol.className = 'recipe-detail-steps';
-    for (const s of (t.steps || [])) {
-      const li = document.createElement('li');
-      li.textContent = s.label || (s.path || '').replace('/api/', '');
-      if (s.when) {
-        const g = document.createElement('span');
-        g.className = 'recipe-detail-guard';
-        g.textContent = ' · conditional';
-        li.appendChild(g);
+    // The steps render as a connected timeline (numbered nodes + a rail), so they read as an
+    // ORDERED flow rather than independent lines. A step that depends on the previous step's
+    // OUTPUT (a `when` guard) gets a highlighted node + an "⤷ runs only if step N …" edge.
+    const anyDep = (t.steps || []).some((s: any, i: number) => s.when && i >= 1);
+    sec.innerHTML = `<div class="recipe-detail-label">Steps${anyDep ? ' <span class="recipe-steps-legend">— ⤷ = depends on a previous step’s result</span>' : ''}</div>`;
+    const list = document.createElement('div');
+    list.className = 'recipe-steps';
+    (t.steps || []).forEach((s: any, i: number) => {
+      const hasDep = !!s.when && i >= 1;
+      const step = document.createElement('div');
+      step.className = 'recipe-step' + (hasDep ? ' has-dep' : '');
+
+      const node = document.createElement('div');
+      node.className = 'recipe-step-node';
+      node.innerHTML = `<span class="recipe-step-idx">${i + 1}</span>`;
+      step.appendChild(node);
+
+      const main = document.createElement('div');
+      main.className = 'recipe-step-main';
+      const label = document.createElement('div');
+      label.className = 'recipe-step-label';
+      label.textContent = s.label || (s.path || '').replace('/api/', '');
+      main.appendChild(label);
+
+      // Composite step → name the sub-recipe it runs.
+      const subName = s.path === '/api/investigation-run' ? (s.body && s.body.name) : undefined;
+      if (subName) {
+        const sub = document.createElement('div');
+        sub.className = 'recipe-step-sub';
+        sub.textContent = `▶ runs recipe “${subName}”`;
+        main.appendChild(sub);
       }
-      ol.appendChild(li);
-    }
-    sec.appendChild(ol);
+
+      // Dependency edge — this step consumes the previous step's result.
+      if (hasDep) {
+        const dep = document.createElement('div');
+        dep.className = 'recipe-step-dep';
+        dep.textContent = `⤷ ${describeStepGuard(s.when, i)}`; // i = 1-based number of the previous step
+        dep.title = 'This step depends on the previous step’s result';
+        main.appendChild(dep);
+      }
+      step.appendChild(main);
+      list.appendChild(step);
+    });
+    sec.appendChild(list);
     detail.appendChild(sec);
   }
 

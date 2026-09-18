@@ -10044,6 +10044,37 @@ kbd {
 .recipe-detail-steps { margin: 0; padding-left: 18px; color: var(--text-primary); }
 .recipe-detail-steps li { font-family: var(--font-mono); font-size: 10.5px; line-height: 1.55; }
 .recipe-detail-guard { color: var(--text-muted); font-style: italic; }
+
+/* Step timeline — numbered nodes joined by a rail, so steps read as an ordered flow.
+   A step that depends on a previous step's OUTPUT (a `when` guard) is highlighted and
+   carries an "⤷ runs only if step N …" dependency edge. */
+.recipe-steps-legend { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-muted); }
+.recipe-steps { display: flex; flex-direction: column; }
+.recipe-step { display: flex; gap: 8px; }
+.recipe-step-node { position: relative; flex: 0 0 18px; display: flex; justify-content: center; }
+.recipe-step-idx {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--bg-tertiary); color: var(--text-secondary);
+  font-size: 10px; display: flex; align-items: center; justify-content: center;
+  position: relative; z-index: 1;
+}
+.recipe-step.has-dep .recipe-step-idx { background: var(--accent-color); color: #fff; }
+/* rail connecting each node down to the next */
+.recipe-step:not(:last-child) .recipe-step-node::after {
+  content: ''; position: absolute; top: 18px; bottom: -2px; left: 50%;
+  width: 2px; transform: translateX(-50%); background: var(--border-color);
+}
+/* accent the rail SEGMENT feeding into a dependent step (progressive enhancement via :has) */
+.recipe-step:has(+ .recipe-step.has-dep) .recipe-step-node::after { background: var(--accent-color); }
+.recipe-step-main { flex: 1 1 auto; min-width: 0; padding-bottom: 8px; }
+.recipe-step-label { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-primary); line-height: 1.45; overflow-wrap: anywhere; }
+.recipe-step-sub { font-size: 10px; color: var(--accent-hover); margin-top: 1px; }
+.recipe-step-dep {
+  display: inline-block; margin-top: 3px;
+  font-size: 10px; color: var(--accent-hover);
+  background: var(--bg-tertiary); border-left: 2px solid var(--accent-hover);
+  padding: 1px 7px; border-radius: 0 3px 3px 0; overflow-wrap: anywhere;
+}
 .recipe-detail-fillins { display: flex; flex-wrap: wrap; gap: 4px; }
 .recipe-detail-fillin {
   font-size: 10px; font-family: var(--font-mono);
