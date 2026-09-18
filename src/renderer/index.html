@@ -422,7 +422,7 @@
         <div class="bottom-panel-tabs">
           <button class="bottom-tab-btn" data-bottom-tab="analysis" data-help="Log level distribution, crash detection, component breakdown, and timestamp analysis.&#10;Click Run Analysis to scan the entire file.">Analysis</button>
           <button class="bottom-tab-btn" data-bottom-tab="summarize" data-help="Semantic summary — fold the whole log into its distinct message TEMPLATES. Near-duplicate lines (differing only by timestamp, id, or number) collapse into one shape with a count, so a million-line log becomes a scannable page.&#10;Click a template to jump to it. No AI required.">Summarize</button>
-          <button class="bottom-tab-btn" data-bottom-tab="investigate" data-help="Recipes — guided, replayable investigations. Pick a symptom to run a built-in recipe, or search &amp; run your saved recipes. Each recipe searches, checks time gaps, and trends fields, then pins clickable findings.&#10;No expertise needed.">Recipes</button>
+          <button class="bottom-tab-btn" data-bottom-tab="investigate" data-help="Recipes — saved, replayable investigations. Search &amp; run your saved recipes; each one replays its steps (search, time gaps, trends…) and pins clickable findings. Save the agent's steps as a recipe to replay on any log.&#10;No expertise needed.">Recipes</button>
           <button class="bottom-tab-btn" data-bottom-tab="conclusion" data-help="One-click native root-cause report. LOGAN scans the file itself (analysis + time gaps + your pinned findings), finds the FIRST anomaly (the trigger), orders the key events on a timeline, and writes a plain verdict.&#10;No AI required — click any event to jump to that line. Export the report as .md/.pdf.">Conclusion</button>
           <button class="bottom-tab-btn" data-bottom-tab="trends" data-help="Trend any field over time. Click Discover to auto-find log variables (key=value, JSON), then chart a field as value-over-time, value flips, or correlation.&#10;Click a chart point to jump to that line.">Trends</button>
           <button class="bottom-tab-btn" data-bottom-tab="signals" data-help="Overlay multiple numeric signals (e.g. MF4 channels) on one shared time axis.&#10;Check signals on the left to plot them; click a point to jump to that record.">Signals</button>
@@ -513,12 +513,8 @@
             </div>
           </div>
         </div>
-        <!-- Recipes tab (guided triage by symptom + saved recipes); internal id stays "investigate" -->
+        <!-- Recipes tab (saved, replayable investigations); internal id stays "investigate" -->
         <div class="bottom-tab-view" data-bottom-tab="investigate">
-          <div class="bottom-tab-sub-header investigate-toolbar">
-            <span class="investigate-label">What's the symptom?</span>
-            <div id="investigate-symptoms" class="investigate-symptoms"></div>
-          </div>
           <div class="bottom-tab-sub-header investigate-patterns-bar" data-help="Saved recipes. The agent records the steps it takes for a ticket (search → filter → trend → investigate); save that as a named recipe and replay it on any log — one click. A recipe is inputs (the params you tweak) → steps → outputs (what it yields). Values like component/field become fill-ins.">
             <span class="investigate-label">Saved recipes</span>
             <div class="investigate-recipe-search" title="Find a recipe by its name, its goal, or anything a step touches — a component, field, pattern, or the file it was recorded on.">
@@ -541,7 +537,7 @@
           <div class="investigate-recipe-caption">Saved investigations you can replay on any log — one click runs the steps and pins clickable findings. Search or group them below.<span id="investigate-recipe-count" class="investigate-recipe-count"></span></div>
           <div id="investigate-patterns-list" class="investigate-patterns-list"></div>
           <div id="investigate-results" class="investigate-content">
-            <p class="placeholder">Pick a <strong>symptom</strong> above — LOGAN runs the matching recipe and pins findings you can click to jump to.</p>
+            <p class="placeholder">Pick a <strong>recipe</strong> above and click <strong>▶ Run</strong> — LOGAN replays its steps and pins findings you can click to jump to.</p>
           </div>
         </div>
         <!-- Conclusion tab (native root-cause synthesis) -->
@@ -1403,7 +1399,7 @@
             <div class="shortcut-list">
               <div class="shortcut-item"><span><strong>Trends</strong> tab → Discover Fields, then type in <strong>Pick a field</strong> to search; chart value-over-time, flips, or correlation. Booleans (e.g. <code>isTokenExpired=false</code>) chart as a 0/1 step line.</span></div>
               <div class="shortcut-item"><span><strong>Signals</strong> tab → overlays numeric signals (incl. MF4 channels) on one shared time axis; Discover Signals auto-finds them.</span></div>
-              <div class="shortcut-item"><span><strong>Recipes</strong> tab → pick a symptom for a guided recipe. The AI agent's steps are recorded; <strong>💾 Save current</strong> turns them into a re-runnable <em>recipe</em> you replay (▶) on any log.</span></div>
+              <div class="shortcut-item"><span><strong>Recipes</strong> tab → search &amp; run your saved recipes. The AI agent's steps are recorded; <strong>💾 Save current</strong> turns them into a re-runnable <em>recipe</em> you replay (▶) on any log.</span></div>
               <div class="shortcut-item"><span><strong>Chat</strong> → <kbd>⏹ Stop</kbd> interrupts the agent's current task without ending the session. The agent can also push trend charts straight into the Trends panel.</span></div>
               <div class="shortcut-item"><span><strong>Video</strong> tab → plays MP4/WebM/Ogg directly; AVI/MKV/WMV are auto-converted to MP4 via ffmpeg.</span></div>
               <div class="shortcut-item"><span>Bottom panel <strong>color dot</strong> → recolor the panel; text/labels/buttons auto-adjust for contrast.</span></div>
