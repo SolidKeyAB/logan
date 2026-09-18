@@ -487,7 +487,6 @@ interface UserSettings {
   scrollSpeed: number;        // 10-100, percentage
   defaultFontSize: number;    // 10-20, pixels
   defaultGapThreshold: number; // 1-60, seconds
-  autoAnalyze: boolean;
   minimapVisible: boolean;
   theme: 'dark' | 'paper';
   sidebarSections: Record<string, boolean>; // section-id → visible
@@ -507,7 +506,6 @@ const DEFAULT_SETTINGS: UserSettings = {
   scrollSpeed: 30,
   defaultFontSize: 13,
   defaultGapThreshold: 5,
-  autoAnalyze: false,
   minimapVisible: true,
   theme: 'dark',
   sidebarSections: { ...DEFAULT_SIDEBAR_SECTIONS },
@@ -935,7 +933,6 @@ const elements = {
   btnPrevResult: document.getElementById('btn-prev-result') as HTMLButtonElement,
   btnNextResult: document.getElementById('btn-next-result') as HTMLButtonElement,
   btnFilter: document.getElementById('btn-filter') as HTMLButtonElement,
-  btnAnalyze: document.getElementById('btn-analyze') as HTMLButtonElement,
   searchInput: document.getElementById('search-input') as HTMLInputElement,
   searchRegex: document.getElementById('search-regex') as HTMLInputElement,
   searchWildcard: document.getElementById('search-wildcard') as HTMLInputElement,
@@ -972,7 +969,7 @@ const elements = {
   btnFolderSearchClear: document.getElementById('btn-folder-search-clear') as HTMLButtonElement,
   folderSearchResults: document.getElementById('folder-search-results') as HTMLDivElement,
   fileStats: document.getElementById('file-stats') as HTMLDivElement,
-  analysisResults: document.getElementById('analysis-results') as HTMLDivElement,
+  overviewEmpty: document.getElementById('overview-empty') as HTMLDivElement,
   briefResults: document.getElementById('brief-results') as HTMLDivElement,
   btnBrief: document.getElementById('btn-brief') as HTMLButtonElement,
   healthInput: document.getElementById('health-input') as HTMLInputElement,
@@ -992,9 +989,6 @@ const elements = {
   cadenceSummary: document.getElementById('cadence-summary') as HTMLDivElement,
   cadenceStrip: document.getElementById('cadence-strip') as HTMLCanvasElement,
   cadenceContent: document.getElementById('cadence-content') as HTMLDivElement,
-  baselineSection: document.getElementById('baseline-section') as HTMLDivElement,
-  baselineControls: document.getElementById('baseline-controls') as HTMLDivElement,
-  baselineComparisonResults: document.getElementById('baseline-comparison-results') as HTMLDivElement,
   bookmarksList: document.getElementById('bookmarks-list') as HTMLDivElement,
   btnExportBookmarks: document.getElementById('btn-export-bookmarks') as HTMLButtonElement,
   btnSaveBookmarkSet: document.getElementById('btn-save-bookmark-set') as HTMLButtonElement,
@@ -1085,7 +1079,6 @@ const elements = {
   defaultFontSizeValue: document.getElementById('default-font-size-value') as HTMLSpanElement,
   defaultGapThresholdSlider: document.getElementById('default-gap-threshold') as HTMLInputElement,
   defaultGapThresholdValue: document.getElementById('default-gap-threshold-value') as HTMLSpanElement,
-  autoAnalyzeCheckbox: document.getElementById('auto-analyze') as HTMLInputElement,
   minimapVisibleCheckbox: document.getElementById('minimap-visible') as HTMLInputElement,
 
   themeSelect: document.getElementById('theme-select') as HTMLSelectElement,
@@ -4081,6 +4074,9 @@ function renderMinimap(): void {
 function renderMinimapCanvas(): void {
   if (!minimapCanvasElement || !minimapElement) return;
   const density = state.analysisResult?.density;
+  // Lazy analysis: no density yet → kick off the hidden once-per-file analysis in the
+  // background; it re-renders the minimap when it lands. Guarded so we never loop.
+  if (!density && state.filePath && !analysisInFlight) void ensureAnalysis();
 
   const dpr = window.devicePixelRatio || 1;
   const cw = Math.floor(minimapCanvasElement.offsetWidth * dpr);
@@ -19734,12 +19730,15 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       // a ResizeObserver callback raced and cleared the content mid-flight.
       renderVisibleLines();
 
-      elements.btnAnalyze.disabled = false;
       if (elements.btnFoldRepeats) elements.btnFoldRepeats.disabled = false;
       elements.btnSplit.disabled = false;
       elements.btnColumns.disabled = false;
       state.columnConfig = null; // Reset column config for new file
       updateColumnHideStyle();    // drop any stale column-hide rule from the prior file
+      // Clear the Overview panel's detail views (Brief / Health) from the prior file.
+      if (elements.briefResults) elements.briefResults.innerHTML = '';
+      if (elements.healthResults) elements.healthResults.innerHTML = '';
+      updateOverviewEmptyState();
 
       // Show warning for files with long lines (only for JSON-like files where reformatting helps)
       const lowerPath = filePath.toLowerCase();
@@ -19803,11 +19802,9 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
       // a matching saved layout to Apply, or a freshly detected header to set up.
       void prefetchColumnGuidance();
 
-      // Auto-analyze if enabled in settings
-      if (userSettings.autoAnalyze && !isMarkdownFile) {
-        hideProgress();
-        await analyzeFile();
-      }
+      // Analysis now runs as a hidden background step (once per file) so the minimap
+      // density + level guards populate without any panel. Skip markdown/binary views.
+      if (!isMarkdownFile) void ensureAnalysis();
     } else {
       alert(`Failed to open file: ${result.error}`);
     }
@@ -19857,42 +19854,26 @@ async function refreshActiveTab(): Promise<void> {
 }
 
 // Analysis
-async function analyzeFile(): Promise<void> {
+// Analysis is a HIDDEN step now — no panel, no button. It runs at most ONCE per file,
+// lazily, in the background, whenever a feature needs its result (minimap density, the
+// level-isolate guard). Cached in state.analysisResult; re-renders the minimap when done.
+let analysisInFlight: Promise<void> | null = null;
+async function ensureAnalysis(): Promise<void> {
+  if (state.analysisResult) return;            // once per file (cached)
+  if (analysisInFlight) return analysisInFlight;
   if (!state.filePath) return;
-  // Single-flight + cancelable: while it runs, Analyze turns into a ✕ Cancel
-  // (abort via cancelAnalysis); a re-click can't launch a second analysis.
-  await runCancelable(elements.btnAnalyze, analyzeFileRun, () => { void window.api.cancelAnalysis(); });
-}
-
-async function analyzeFileRun(): Promise<void> {
-  openBottomTab('analysis');
-  showProgress('Analyzing...');
-
-  const unsubscribe = window.api.onAnalyzeProgress((progress) => {
-    const message = progress.message || progress.phase;
-    updateProgressText(`${message} ${progress.percent}%`);
-    updateProgress(progress.percent);
-  });
-
-  try {
-    // Use default analyzer (rule-based) - runs async without blocking UI
-    const result = await window.api.analyzeFile();
-
-    if (result.success && result.result) {
-      state.analysisResult = result.result;
-      state.comparisonReport = null;
-      renderMinimapCanvas();
-      await loadBaselineList();
-      updateAnalysisUI();
-    } else {
-      elements.analysisResults.innerHTML = `<p class="placeholder" style="color: var(--error-color);">Analysis failed: ${result.error}</p>`;
-    }
-  } catch (error) {
-    elements.analysisResults.innerHTML = `<p class="placeholder" style="color: var(--error-color);">Analysis error: ${error}</p>`;
-  } finally {
-    unsubscribe();
-    hideProgress();
-  }
+  analysisInFlight = (async () => {
+    try {
+      const result = await window.api.analyzeFile();
+      if (result.success && result.result) {
+        state.analysisResult = result.result;
+        state.comparisonReport = null;
+        renderMinimapCanvas();                 // paint density now that we have it
+      }
+    } catch { /* non-fatal — density / level guards simply stay absent */ }
+    finally { analysisInFlight = null; }
+  })();
+  return analysisInFlight;
 }
 
 // Column visibility
@@ -22104,61 +22085,9 @@ async function resumeFilter(): Promise<void> {
   await applyFilter(state.lastFilterConfig);
 }
 
-async function applyQuickLevelFilter(level: string): Promise<void> {
-  if (!state.analysisResult) return;
-
-  const config: FilterConfig = {
-    levels: [level],
-    includePatterns: [],
-    excludePatterns: [],
-    contextLines: 3,
-  };
-
-  showProgress(`Filtering ${level}...`);
-
-  const removeProgressListener = window.api.onFilterProgress(({ percent }) => {
-    updateProgress(percent);
-    updateProgressText(`Filtering ${level}... ${percent}%`);
-  });
-
-  try {
-    const result = await window.api.applyFilter(config);
-
-    if (result.success && result.stats) {
-      state.isFiltered = true;
-      state.filteredLines = result.stats.filteredLines;
-      state.filteredLineNumbers = result.filteredLineNumbers ?? null;
-      state.activeLevelFilter = level;
-      state.lastFilterConfig = config;
-      state.filterSuspended = null;
-      cachedLines.clear();
-
-      // Reset scroll to top of filtered view
-      state.visibleStartLine = 0;
-      state.visibleEndLine = Math.min(100, state.filteredLines - 1);
-      if (logViewerElement) {
-        logViewerElement.scrollTop = 0;
-      }
-
-      await loadVisibleLines();
-      updateStatusBar();
-      updateLevelBadgeStyles();
-    }
-  } finally {
-    removeProgressListener();
-    hideProgress();
-  }
-}
-
 function updateLevelBadgeStyles(): void {
-  elements.analysisResults.querySelectorAll('.level-badge[data-level]').forEach((badge) => {
-    const level = (badge as HTMLElement).dataset.level;
-    if (state.activeLevelFilter && state.activeLevelFilter === level) {
-      badge.classList.add('active-filter');
-    } else {
-      badge.classList.remove('active-filter');
-    }
-  });
+  // The panel-badge active-filter styling went away with the Analysis panel; the
+  // level-visibility pills (the real filter-by-level UI) are all that remain.
   updateLevelVisibilityBar();
 }
 
@@ -22981,17 +22910,10 @@ async function showCompareModal(): Promise<void> {
   const otherPath = await window.api.openFileDialog();
   if (!otherPath || otherPath === originalFilePath) return;
 
-  // Ensure the primary file has been analyzed (density data is required for the panel)
+  // Ensure the primary file has been analyzed (density data is required for the compare view)
   if (!state.analysisResult && originalFilePath) {
     showProgress('Analyzing primary file…');
-    try {
-      const r = await window.api.analyzeFile();
-      if (r.success && r.result) {
-        state.analysisResult = r.result;
-        renderMinimapCanvas();
-        updateAnalysisUI();
-      }
-    } finally { hideProgress(); }
+    try { await ensureAnalysis(); } finally { hideProgress(); }
   }
 
   // Load the second file (switches to its tab)
@@ -24409,184 +24331,6 @@ function updateFileStatsUI(): void {
   `;
 }
 
-function updateAnalysisUI(): void {
-  if (!state.analysisResult) {
-    elements.analysisResults.innerHTML =
-      '<p class="placeholder">Run analysis to see results</p>';
-    return;
-  }
-
-  const result = state.analysisResult;
-  const ins = result.insights;
-
-  // 1. Level counts - clickable to filter
-  let levelHtml = '<div class="level-counts">';
-  for (const [level, count] of Object.entries(result.levelCounts)) {
-    if (count > 0) {
-      levelHtml += `<span class="level-badge ${level}" data-level="${level}" title="Click to filter by ${level}">${level}: ${count.toLocaleString()}</span>`;
-    }
-  }
-  levelHtml += '</div>';
-
-  // 2. Crashes & Failures
-  let crashesHtml = '';
-  if (ins.crashes.length > 0) {
-    crashesHtml = `
-      <div class="insight-section crash-section">
-        <div class="insight-header">Crashes & Failures (${ins.crashes.length}${ins.crashes.length >= 50 ? '+' : ''})</div>
-        ${ins.crashes.map(c => `
-          <div class="crash-item" data-line="${c.lineNumber - 1}" title="Line ${c.lineNumber}">
-            <div class="crash-line">
-              <span class="crash-keyword">${escapeHtml(c.keyword)}</span>
-              <span class="crash-line-num">line ${c.lineNumber}</span>
-            </div>
-            <div class="crash-text">${escapeHtml(c.text.length > 100 ? c.text.substring(0, 100) + '...' : c.text)}</div>
-          </div>
-        `).join('')}
-      </div>
-    `;
-  } else {
-    crashesHtml = `
-      <div class="insight-section crash-section">
-        <div class="insight-header">Crashes & Failures</div>
-        <div class="no-crashes">No crashes detected</div>
-      </div>
-    `;
-  }
-
-  // 3. Top Failing Components
-  let componentsHtml = '';
-  if (ins.topFailingComponents.length > 0) {
-    const maxErrors = ins.topFailingComponents[0].errorCount;
-    componentsHtml = `
-      <div class="insight-section components-section">
-        <div class="insight-header">Top Failing Components</div>
-        ${ins.topFailingComponents.map(comp => `
-          <div class="component-item" data-line="${comp.sampleLine > 0 ? comp.sampleLine - 1 : -1}" title="${comp.errorCount} errors, ${comp.warningCount} warnings">
-            <div class="component-header">
-              <span class="component-name">${escapeHtml(comp.name)}</span>
-              <span class="component-errors">${comp.errorCount} err${comp.warningCount > 0 ? ` / ${comp.warningCount} warn` : ''}</span>
-            </div>
-            <div class="component-bar" style="width: ${Math.max(Math.round(comp.errorCount / maxErrors * 100), 4)}%"></div>
-          </div>
-        `).join('')}
-      </div>
-    `;
-  }
-
-  // 4. Filter Suggestions
-  let suggestionsHtml = '';
-  if (ins.filterSuggestions.length > 0 || state.appliedFilterSuggestion) {
-    suggestionsHtml = `
-      <div class="insight-section filter-suggestions">
-        <div class="insight-header">Suggested Filters</div>
-        ${state.appliedFilterSuggestion ? `
-          <div class="active-filter-indicator">
-            <span class="active-filter-label">Active: ${escapeHtml(state.appliedFilterSuggestion.title)}</span>
-            <button class="clear-filter-btn" id="clearSuggestedFilter">Clear</button>
-          </div>
-        ` : ''}
-        ${ins.filterSuggestions.map(s => `
-          <div class="filter-suggestion-item${state.appliedFilterSuggestion?.id === s.id ? ' applied' : ''}" data-filter-id="${s.id}" title="${escapeHtml(s.description)}">
-            <span class="filter-suggestion-title">${escapeHtml(s.title)}</span>
-            <button class="apply-filter-btn" data-filter-id="${s.id}"${state.appliedFilterSuggestion?.id === s.id ? ' disabled' : ''}>
-              ${state.appliedFilterSuggestion?.id === s.id ? 'Applied' : 'Apply'}
-            </button>
-          </div>
-        `).join('')}
-      </div>
-    `;
-  }
-
-  elements.analysisResults.innerHTML = `
-    ${levelHtml}
-    ${crashesHtml}
-    ${componentsHtml}
-    ${suggestionsHtml}
-    ${
-      result.timeRange
-        ? `
-    <div class="stat-row" style="margin-top: 8px;">
-      <span class="stat-label">Time range:</span>
-    </div>
-    <div style="font-size: 11px; color: var(--text-secondary);">
-      ${result.timeRange.start} - ${result.timeRange.end}
-    </div>
-    `
-        : ''
-    }
-  `;
-
-  // Add click handlers for level filtering
-  elements.analysisResults.querySelectorAll('.level-badge[data-level]').forEach((badge) => {
-    badge.addEventListener('click', async () => {
-      const level = (badge as HTMLElement).dataset.level;
-      if (!level) return;
-
-      if (state.isFiltered && state.activeLevelFilter === level) {
-        await clearFilter();
-        state.activeLevelFilter = null;
-        updateLevelBadgeStyles();
-        return;
-      }
-
-      await applyQuickLevelFilter(level);
-    });
-  });
-
-  // Click handlers for crash items - navigate to line
-  elements.analysisResults.querySelectorAll('.crash-item').forEach((item) => {
-    item.addEventListener('click', () => {
-      const line = parseInt((item as HTMLElement).dataset.line || '-1', 10);
-      if (line >= 0) navigateTo(line);
-    });
-  });
-
-  // Click handlers for component items - navigate to first error line
-  elements.analysisResults.querySelectorAll('.component-item').forEach((item) => {
-    item.addEventListener('click', () => {
-      const line = parseInt((item as HTMLElement).dataset.line || '-1', 10);
-      if (line >= 0) navigateTo(line);
-    });
-  });
-
-  // Click handlers for filter suggestions
-  elements.analysisResults.querySelectorAll('.apply-filter-btn').forEach((btn) => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const filterId = (btn as HTMLElement).dataset.filterId;
-      if (!filterId) return;
-
-      const suggestion = ins.filterSuggestions.find(s => s.id === filterId);
-      if (!suggestion) return;
-
-      state.appliedFilterSuggestion = { id: suggestion.id, title: suggestion.title };
-
-      const filterConfig: FilterConfig = {
-        excludePatterns: suggestion.filter.excludePatterns || [],
-        includePatterns: (suggestion.filter.includePatterns || []).map((p: string) => ({ pattern: p, caseSensitive: true })),
-        levels: suggestion.filter.levels || [],
-      };
-
-      await applyFilter(filterConfig);
-      updateAnalysisUI();
-    });
-  });
-
-  // Click handler for clear suggested filter button
-  const clearSuggestedFilterBtn = document.getElementById('clearSuggestedFilter');
-  if (clearSuggestedFilterBtn) {
-    clearSuggestedFilterBtn.addEventListener('click', async () => {
-      state.appliedFilterSuggestion = null;
-      await clearFilter();
-      updateAnalysisUI();
-    });
-  }
-
-  // Show baseline section when analysis is available
-  updateBaselineUI();
-}
-
 // ── 📋 Brief (native counterpart to the AI's logan_evidence_pack) ──
 // Fetches the SAME compact briefing the agent gets and renders it below the
 // analysis output, with clickable rows that jump to the referenced viewerLine.
@@ -24614,6 +24358,7 @@ async function runHealthLookup(rawTerm: string): Promise<void> {
   if (!state.filePath) { el.innerHTML = '<p class="health-hint">Open a log file first.</p>'; return; }
   if (elements.healthInput && elements.healthInput.value !== term) elements.healthInput.value = term;
   el.innerHTML = `<p class="health-hint">Checking “${escapeHtml(term)}”…</p>`;
+  updateOverviewEmptyState();
   trackUsage('health-lookup');
   if (elements.btnHealthLookup) elements.btnHealthLookup.disabled = true;
   try {
@@ -24624,6 +24369,7 @@ async function runHealthLookup(rawTerm: string): Promise<void> {
     el.innerHTML = `<p class="health-hint" style="color:var(--error-color)">Lookup error: ${escapeHtml(String(error))}</p>`;
   } finally {
     if (elements.btnHealthLookup) elements.btnHealthLookup.disabled = false;
+    updateOverviewEmptyState();
   }
 }
 
@@ -24738,14 +24484,25 @@ function openComponentHealth(term: string): void {
   void runHealthLookup(t);
 }
 
+// The Overview panel starts empty; hide its hint once Brief or Health has rendered
+// content, and show it again when both are cleared (e.g. on a new file).
+function updateOverviewEmptyState(): void {
+  if (!elements.overviewEmpty) return;
+  const hasBrief = !!elements.briefResults?.innerHTML.trim();
+  const hasHealth = !!elements.healthResults?.innerHTML.trim();
+  elements.overviewEmpty.style.display = (hasBrief || hasHealth) ? 'none' : '';
+}
+
 async function showBrief(): Promise<void> {
   const el = elements.briefResults;
   if (!el) return;
   if (!state.filePath) {
     el.innerHTML = '<p class="placeholder">Open a log file first to build a Brief.</p>';
+    updateOverviewEmptyState();
     return;
   }
   el.innerHTML = '<p class="placeholder">Building brief…</p>';
+  updateOverviewEmptyState();
   // Record the flagship parity action so Brief shows up in its own Usage Monitor.
   trackUsage('brief');
   if (elements.btnBrief) elements.btnBrief.disabled = true;
@@ -24760,6 +24517,7 @@ async function showBrief(): Promise<void> {
     el.innerHTML = `<p class="placeholder" style="color: var(--error-color);">Brief error: ${escapeHtml(String(error))}</p>`;
   } finally {
     if (elements.btnBrief) elements.btnBrief.disabled = false;
+    updateOverviewEmptyState();
   }
 }
 
@@ -24905,169 +24663,6 @@ function formatGapSeconds(seconds: number): string {
   if (seconds < 60) return `${seconds}s gap`;
   if (seconds < 3600) return `${Math.round(seconds / 60)}m gap`;
   return `${(seconds / 3600).toFixed(1)}h gap`;
-}
-
-async function loadBaselineList(): Promise<void> {
-  try {
-    const result = await window.api.baselineList();
-    if (result.success && result.baselines) {
-      state.baselineList = result.baselines;
-    }
-  } catch { /* ignore */ }
-}
-
-function updateBaselineUI(): void {
-  if (!state.analysisResult) {
-    elements.baselineSection.style.display = 'none';
-    return;
-  }
-  elements.baselineSection.style.display = '';
-
-  // Controls: save button + compare dropdown
-  let controlsHtml = `<button class="secondary-btn small" id="btn-baseline-save">Save as Baseline</button>`;
-  controlsHtml += `<div id="baseline-save-form-container"></div>`;
-
-  if (state.baselineList.length > 0) {
-    controlsHtml += `<div class="baseline-compare-row" style="margin-top: 6px;">`;
-    controlsHtml += `<select class="baseline-dropdown" id="baseline-select">`;
-    for (const bl of state.baselineList) {
-      const date = new Date(bl.createdAt).toLocaleDateString();
-      controlsHtml += `<option value="${bl.id}">${escapeHtml(bl.name)} (${date})</option>`;
-    }
-    controlsHtml += `</select>`;
-    controlsHtml += `<button class="secondary-btn small" id="btn-baseline-compare">Compare</button>`;
-    controlsHtml += `</div>`;
-
-    // List with delete buttons
-    controlsHtml += `<div id="baseline-list-items" style="margin-top: 4px;">`;
-    for (const bl of state.baselineList) {
-      const date = new Date(bl.createdAt).toLocaleDateString();
-      const tagsHtml = bl.tags.map((t: string) => `<span class="baseline-tag">${escapeHtml(t)}</span>`).join('');
-      controlsHtml += `<div class="baseline-item" data-id="${bl.id}">`;
-      controlsHtml += `<span>${escapeHtml(bl.name)} <span style="color: var(--text-secondary); font-size: 10px;">${date}</span> ${tagsHtml}</span>`;
-      controlsHtml += `<button class="baseline-delete-btn" data-id="${bl.id}" title="Delete baseline">&times;</button>`;
-      controlsHtml += `</div>`;
-    }
-    controlsHtml += `</div>`;
-  }
-
-  elements.baselineControls.innerHTML = controlsHtml;
-
-  // Save button handler
-  const btnSave = document.getElementById('btn-baseline-save');
-  if (btnSave) {
-    btnSave.addEventListener('click', () => {
-      const container = document.getElementById('baseline-save-form-container');
-      if (!container) return;
-      container.innerHTML = `
-        <div class="baseline-save-form">
-          <input type="text" id="baseline-name-input" placeholder="Baseline name (e.g. production-healthy)" />
-          <input type="text" id="baseline-tags-input" placeholder="Tags (comma-separated, e.g. production, v2.1)" />
-          <textarea id="baseline-desc-input" placeholder="Description (optional)" rows="2"></textarea>
-          <div class="baseline-form-actions">
-            <button class="secondary-btn small" id="btn-baseline-confirm-save">Save</button>
-            <button class="secondary-btn small" id="btn-baseline-cancel-save">Cancel</button>
-          </div>
-        </div>
-      `;
-      (document.getElementById('baseline-name-input') as HTMLInputElement)?.focus();
-
-      document.getElementById('btn-baseline-cancel-save')?.addEventListener('click', () => {
-        container.innerHTML = '';
-      });
-
-      document.getElementById('btn-baseline-confirm-save')?.addEventListener('click', async () => {
-        const name = (document.getElementById('baseline-name-input') as HTMLInputElement)?.value.trim();
-        if (!name) return;
-        const desc = (document.getElementById('baseline-desc-input') as HTMLTextAreaElement)?.value.trim() || '';
-        const tagsStr = (document.getElementById('baseline-tags-input') as HTMLInputElement)?.value.trim() || '';
-        const tags = tagsStr ? tagsStr.split(',').map(t => t.trim()).filter(Boolean) : [];
-
-        const result = await window.api.baselineSave(name, desc, tags);
-        if (result.success) {
-          container.innerHTML = '';
-          await loadBaselineList();
-          updateBaselineUI();
-          showToast(`Baseline "${name}" saved`);
-        } else {
-          showToast(result.error || 'Failed to save baseline');
-        }
-      });
-    });
-  }
-
-  // Compare button handler
-  const btnCompare = document.getElementById('btn-baseline-compare');
-  if (btnCompare) {
-    btnCompare.addEventListener('click', async () => {
-      const select = document.getElementById('baseline-select') as HTMLSelectElement;
-      if (!select) return;
-      const baselineId = select.value;
-      if (!baselineId) return;
-
-      (btnCompare as HTMLButtonElement).disabled = true;
-      (btnCompare as HTMLButtonElement).textContent = 'Comparing...';
-
-      const result = await window.api.baselineCompare(baselineId);
-
-      (btnCompare as HTMLButtonElement).disabled = false;
-      (btnCompare as HTMLButtonElement).textContent = 'Compare';
-
-      if (result.success && result.report) {
-        state.comparisonReport = result.report;
-        renderComparisonReport(result.report);
-      } else {
-        elements.baselineComparisonResults.innerHTML = `<div style="color: var(--error-color); font-size: 11px;">${escapeHtml(result.error || 'Comparison failed')}</div>`;
-      }
-    });
-  }
-
-  // Delete button handlers
-  elements.baselineControls.querySelectorAll('.baseline-delete-btn').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const id = (btn as HTMLElement).dataset.id;
-      if (!id) return;
-      const result = await window.api.baselineDelete(id);
-      if (result.success) {
-        await loadBaselineList();
-        state.comparisonReport = null;
-        elements.baselineComparisonResults.innerHTML = '';
-        updateBaselineUI();
-      }
-    });
-  });
-
-  // Re-render comparison if still present
-  if (state.comparisonReport) {
-    renderComparisonReport(state.comparisonReport);
-  }
-}
-
-function renderComparisonReport(report: ComparisonReport): void {
-  if (report.findings.length === 0) {
-    elements.baselineComparisonResults.innerHTML = `
-      <div class="section-divider">Comparison Results</div>
-      <div style="font-size: 11px; color: var(--text-secondary);">No anomalies detected — log matches baseline "${escapeHtml(report.baselineName)}".</div>
-    `;
-    return;
-  }
-
-  let html = `<div class="section-divider">Comparison Results</div>`;
-  html += `<div class="comparison-summary">`;
-  if (report.summary.critical > 0) html += `<span style="color: #e74c3c;">${report.summary.critical} critical</span>`;
-  if (report.summary.warning > 0) html += `<span style="color: #f1c40f;">${report.summary.warning} warning</span>`;
-  if (report.summary.info > 0) html += `<span style="color: #3498db;">${report.summary.info} info</span>`;
-  html += `</div>`;
-
-  for (const f of report.findings) {
-    html += `<div class="comparison-finding ${f.severity}">`;
-    html += `<div class="finding-title">${escapeHtml(f.title)}</div>`;
-    html += `<div class="finding-detail">${escapeHtml(f.detail)}</div>`;
-    html += `</div>`;
-  }
-
-  elements.baselineComparisonResults.innerHTML = html;
 }
 
 // ── Per-button progress ring (styles: .btn-busy / .btn-progress) ──────────────
@@ -25844,7 +25439,8 @@ const SAVED_REVEAL_TARGET: Record<string, { type: 'panel' | 'tab'; id: string }>
   columnPattern: { type: 'tab', id: 'pattern-columns' },
   trendProperty: { type: 'tab', id: 'trends' },
   contextDef: { type: 'tab', id: 'contexts' },
-  baseline: { type: 'tab', id: 'analysis' },
+  // baseline: no reveal target — the Analysis panel that hosted its UI is gone;
+  // baselines stay an agent-side entity (copy-only in the Saved panel).
   investigation: { type: 'tab', id: 'investigate' },
   highlightGroup: { type: 'panel', id: 'highlights' },
   bookmarkSet: { type: 'panel', id: 'bookmarks' },
@@ -26550,7 +26146,6 @@ function setupActivityBar(): void {
     elements.defaultFontSizeValue.textContent = `${userSettings.defaultFontSize}px`;
     elements.defaultGapThresholdSlider.value = userSettings.defaultGapThreshold.toString();
     elements.defaultGapThresholdValue.textContent = `${userSettings.defaultGapThreshold}s`;
-    elements.autoAnalyzeCheckbox.checked = userSettings.autoAnalyze;
     elements.minimapVisibleCheckbox.checked = userSettings.minimapVisible;
     if (minimapElement) minimapElement.style.display = userSettings.minimapVisible ? '' : 'none';
     elements.themeSelect.value = userSettings.theme;
@@ -26620,7 +26215,7 @@ function setupActivityBar(): void {
         togglePanel(PANEL_IDS[num - 1]);
         return;
       }
-      // Ctrl+6..7 — toggle bottom tabs (analysis, time-gaps)
+      // Ctrl+6..7 — toggle bottom tabs (overview, time-gaps)
       if (num === 6) { e.preventDefault(); toggleBottomTab('analysis'); return; }
       if (num === 7) { e.preventDefault(); toggleBottomTab('time-gaps'); return; }
     }
@@ -27252,9 +26847,6 @@ function init(): void {
   // Load user settings from localStorage
   loadSettings();
   applySettings();
-
-  // Load baselines list
-  loadBaselineList();
 
   // Toolbar scroll indicators
   const toolbar = document.querySelector('.toolbar') as HTMLElement;
@@ -27969,9 +27561,7 @@ function init(): void {
   elements.btnPrevGap.addEventListener('click', () => navigateGap('prev'));
   elements.btnNextGap.addEventListener('click', () => navigateGap('next'));
 
-  // Analysis
-  onCancelableClick(elements.btnAnalyze, () => { void analyzeFile(); });
-  document.getElementById('btn-run-analysis')?.addEventListener('click', analyzeFile);
+  // Overview: 📋 Brief renders into the panel (analysis itself is a hidden auto step now)
   elements.btnBrief?.addEventListener('click', showBrief);
 
   // Component/text health lookup — Check button + Enter in the input
@@ -28191,11 +27781,6 @@ function init(): void {
     }
   });
 
-  elements.autoAnalyzeCheckbox.addEventListener('change', () => {
-    userSettings.autoAnalyze = elements.autoAnalyzeCheckbox.checked;
-    saveSettings();
-  });
-
   elements.minimapVisibleCheckbox.addEventListener('change', () => {
     userSettings.minimapVisible = elements.minimapVisibleCheckbox.checked;
     saveSettings();
@@ -28218,7 +27803,6 @@ function init(): void {
     elements.defaultFontSizeValue.textContent = `${userSettings.defaultFontSize}px`;
     elements.defaultGapThresholdSlider.value = userSettings.defaultGapThreshold.toString();
     elements.defaultGapThresholdValue.textContent = `${userSettings.defaultGapThreshold}s`;
-    elements.autoAnalyzeCheckbox.checked = userSettings.autoAnalyze;
     elements.minimapVisibleCheckbox.checked = userSettings.minimapVisible;
     if (minimapElement) minimapElement.style.display = userSettings.minimapVisible ? '' : 'none';
     elements.themeSelect.value = userSettings.theme;
@@ -28779,8 +28363,7 @@ async function switchToTab(tabId: string): Promise<void> {
         await buildMinimap();
       }
 
-      // Restore analysis & filter UI
-      updateAnalysisUI();
+      // Restore filter UI (analysis is a hidden auto step now)
       updateLevelBadgeStyles();
 
       // Re-render annotations now that the viewer is laid out — the main process
