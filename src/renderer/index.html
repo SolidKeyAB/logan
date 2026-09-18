@@ -521,10 +521,25 @@
           </div>
           <div class="bottom-tab-sub-header investigate-patterns-bar" data-help="Saved recipes. The agent records the steps it takes for a ticket (search → filter → trend → investigate); save that as a named recipe and replay it on any log — one click. A recipe is inputs (the params you tweak) → steps → outputs (what it yields). Values like component/field become fill-ins.">
             <span class="investigate-label">Recipes</span>
+            <div class="investigate-recipe-search" title="Find a recipe by its name, its goal, or anything a step touches — a component, field, pattern, or the file it was recorded on.">
+              <span class="investigate-recipe-search-icon" aria-hidden="true">⌕</span>
+              <input id="investigate-recipe-search" type="text" class="investigate-recipe-search-input" placeholder="Search recipes — name, goal, or a step's component / field…" spellcheck="false" aria-label="Search recipes" />
+              <button id="investigate-recipe-search-clear" class="investigate-recipe-search-clear" title="Clear search" aria-label="Clear search" hidden>×</button>
+            </div>
+            <label class="investigate-recipe-groupby" title="How to group the recipe list.">
+              <span>Group</span>
+              <select id="investigate-recipe-groupby" class="investigate-recipe-groupby-select">
+                <option value="type">By type</option>
+                <option value="file">By source file</option>
+                <option value="flat">Flat (A–Z)</option>
+              </select>
+            </label>
+            <span class="investigate-spacer"></span>
             <button id="btn-save-investigation" class="secondary-btn small" title="Save the steps taken so far as a reusable recipe">💾 Save current</button>
             <button id="btn-compose-investigation" class="secondary-btn small" title="Build a composite recipe from saved recipes — chain them with optional conditions">＋ Compose</button>
-            <div id="investigate-patterns-list" class="investigate-patterns-list"></div>
           </div>
+          <div class="investigate-recipe-caption">Saved investigations you can replay on any log — one click runs the steps and pins clickable findings. Search or group them below.<span id="investigate-recipe-count" class="investigate-recipe-count"></span></div>
+          <div id="investigate-patterns-list" class="investigate-patterns-list"></div>
           <div id="investigate-results" class="investigate-content">
             <p class="placeholder">Pick a <strong>symptom</strong> above — LOGAN runs the matching recipe and pins findings you can click to jump to.</p>
           </div>
