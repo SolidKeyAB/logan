@@ -422,8 +422,7 @@
         <div class="bottom-panel-tabs">
           <button class="bottom-tab-btn" data-bottom-tab="analysis" data-help="Overview — your detail surface. 📋 Brief and 🩺 component health render here; future detailed views too.&#10;Analysis runs automatically in the background — no manual run needed.">Overview</button>
           <button class="bottom-tab-btn" data-bottom-tab="investigate" data-help="Recipes — saved, replayable investigations. Search &amp; run your saved recipes; each one replays its steps (search, time gaps, trends…) and pins clickable findings. Save the agent's steps as a recipe to replay on any log.&#10;No expertise needed.">Recipes</button>
-          <button class="bottom-tab-btn" data-bottom-tab="trends" data-help="Trend any field over time. Click Discover to auto-find log variables (key=value, JSON), then chart a field as value-over-time, value flips, or correlation.&#10;Click a chart point to jump to that line.">Trends</button>
-          <button class="bottom-tab-btn" data-bottom-tab="signals" data-help="Overlay multiple numeric signals (e.g. MF4 channels) on one shared time axis.&#10;Check signals on the left to plot them; click a point to jump to that record.">Signals</button>
+          <button class="bottom-tab-btn" data-bottom-tab="trends" data-help="Trend any field over time. Click Discover to auto-find log variables (key=value, JSON), then chart a field as value-over-time, value flips, or correlation.&#10;For numeric fields, the &quot;Numeric overlay&quot; cell type plots several signals (e.g. MF4 channels) together on one shared time axis.&#10;Click a chart point to jump to that line.">Trends</button>
           <button class="bottom-tab-btn" data-bottom-tab="time-gaps" data-help="Find gaps in log timestamps where no events were recorded.&#10;Useful for detecting hangs, freezes, or missing data periods.">Time Gaps</button>
           <button class="bottom-tab-btn" data-bottom-tab="cadence" data-help="Missing-Sequence / cadence tool — the negative-space instrument.&#10;Pick a repeating event (heartbeat, poll, keepalive, periodic status). LOGAN reads the timestamps of every match, AUTO-DETECTS the period, then flags every SKIPPED occurrence and any drift in the rhythm.&#10;It shows you the events that DIDN'T happen. No AI — click a gap to jump to where the sequence broke.">Cadence</button>
           <button class="bottom-tab-btn" data-bottom-tab="search-results" data-help="Results from Ctrl+F search. Click a result to jump to that line.&#10;Supports regex, wildcard, case-sensitive, and whole-word modes.">Search Results</button>
@@ -589,6 +588,7 @@
               <option value="series">Value over time</option>
               <option value="transitions">Value flips</option>
               <option value="correlate">Correlate with event</option>
+              <option value="overlay">Numeric overlay (multi-signal)</option>
             </select>
             <select id="trends-xaxis" class="trends-input" title="X axis for value-over-time cells (auto-detected; line number is always available)" disabled>
               <option value="">X: auto</option>
@@ -604,10 +604,10 @@
             <p class="placeholder">Click <strong>Discover Fields</strong> to scan the log for variables, then add a cell to chart one over time.</p>
           </div>
         </div>
-        <!-- Signals tab (multi-signal overlay viz) -->
-        <div class="bottom-tab-view" data-bottom-tab="signals">
-          <div class="bottom-tab-sub-header signals-toolbar">
-            <button id="btn-signals-discover" class="secondary-btn small">Discover Signals</button>
+        <!-- Numeric-overlay cell body — cloned into a Trends "Numeric overlay" cell (was the standalone Signals tab). -->
+        <template id="tpl-signals-cell">
+          <div class="signals-toolbar signals-cell-toolbar">
+            <button id="btn-signals-discover" class="secondary-btn small" title="Re-scan the log for numeric channels">↻ Rescan</button>
             <input id="signals-search" class="trends-input signals-search" type="text" placeholder="filter signals…" disabled>
             <div class="signals-mode-toggle" role="group" aria-label="Chart layout">
               <button id="signals-mode-overlay" class="signals-mode-btn active" data-mode="overlay" title="All signals on one shared plot">Overlay</button>
@@ -618,7 +618,7 @@
           </div>
           <div class="signals-body">
             <div id="signals-list" class="signals-list">
-              <p class="placeholder">Click <strong>Discover Signals</strong> to list numeric channels, then check signals to overlay them.</p>
+              <p class="placeholder">Scanning for numeric signals…</p>
             </div>
             <div class="signals-plot-wrap">
               <canvas id="signals-canvas" class="signals-canvas"></canvas>
@@ -626,7 +626,7 @@
               <div id="signals-legend" class="signals-legend"></div>
             </div>
           </div>
-        </div>
+        </template>
         <!-- Time Gaps tab -->
         <div class="bottom-tab-view" data-bottom-tab="time-gaps">
           <div class="time-gap-controls">
