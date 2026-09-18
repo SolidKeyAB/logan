@@ -74,7 +74,6 @@ export const VERB_REGISTRY: VerbFeature[] = [
   { feature: 'trend-transitions',    display: 'Trend transitions',    humanActions: [], aiSlugs: ['trend-transitions'] },
   { feature: 'trend-correlate',      display: 'Trend correlate',      humanActions: [], aiSlugs: ['trend-correlate'] },
   { feature: 'trend-show',           display: 'Show trend',           humanActions: [], aiSlugs: ['trend-show'] },
-  { feature: 'build-conclusion',     display: 'Build conclusion',     humanActions: [], aiSlugs: ['build-conclusion'] },
   { feature: 'save-report',          display: 'Save report',          humanActions: [], aiSlugs: ['save-report'] },
   { feature: 'evidence-pack',        display: 'Evidence pack / Brief', humanActions: [], aiSlugs: ['evidence-pack'] },
 ];

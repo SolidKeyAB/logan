@@ -1482,28 +1482,6 @@ server.tool(
   }
 );
 
-// === Tool: logan_build_conclusion ===
-server.tool(
-  'logan_build_conclusion',
-  'Produce the native root-cause VERDICT for the open log — the AI counterpart to LOGAN\'s human "Conclusion" panel. Deterministically (no AI) assembles what LOGAN already computes — analysis (crashes, levels, failing components), time gaps, and pinned findings/annotations — into: a plain verdict, the FIRST anomaly (the likely trigger), the likely root cause, a chronological timeline of the key events (each with a viewer line = lineNumber+1), and the supporting evidence (level counts + top failing components). Returns compact JSON, not raw log text. Call this to state a conclusion; use logan_report_finding to pin the specific lines it surfaces.',
-  {
-    thresholdSeconds: z.number().min(1).default(10).describe('Minimum time gap (seconds) to count as a stall (default 10, matching the human panel)'),
-    redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
-  },
-  async ({ thresholdSeconds, redact }) => {
-    try {
-      const result = await apiCall('POST', '/api/build-conclusion', { thresholdSeconds });
-      if (!result.success) {
-        return { content: [{ type: 'text', text: `Error: ${result.error || 'build conclusion failed'}` }], isError: true };
-      }
-      const output = redact ? maybeRedact(result.conclusion, true) : result.conclusion;
-      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
-    } catch (err: any) {
-      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
-    }
-  }
-);
-
 // === Tool: logan_investigate_crashes ===
 server.tool(
   'logan_investigate_crashes',
@@ -1768,7 +1746,7 @@ server.tool(
 // === Tool: logan_save_report ===
 server.tool(
   'logan_save_report',
-  'Save the current investigation as LOGAN\'s universal Log Analysis Report — a self-contained markdown DOCUMENT in the open log\'s .logan/reports/ folder, ready to read, share, or paste into Jira. Give it a clear NAME (title), the AIM (what you set out to find or prove) and the REASON (why — the trigger, symptom, or context), plus an optional TICKET. Each pinned finding is rendered with its ACTUAL related log-line sequence (the matched line(s) plus `context` lines of surrounding log, with a line-number gutter) followed by your description — so the doc shows the complete logs, not just line numbers. Pass `components` to name the subsystems potentially responsible for the conclusion (or let LOGAN fill them from the verdict when includeConclusion is set), and `questions` for the open follow-ups to investigate next. By default it also folds in the recorded investigation steps; pass `body` for a narrative and set includeConclusion:true to also run and embed the native root-cause verdict + evidence lines + timeline. Returns the saved file path. Pin findings first (logan_report_finding / logan_import_findings) so they appear with their log lines.',
+  'Save the current investigation as LOGAN\'s universal Log Analysis Report — a self-contained markdown DOCUMENT in the open log\'s .logan/reports/ folder, ready to read, share, or paste into Jira. Give it a clear NAME (title), the AIM (what you set out to find or prove) and the REASON (why — the trigger, symptom, or context), plus an optional TICKET. Each pinned finding is rendered with its ACTUAL related log-line sequence (the matched line(s) plus `context` lines of surrounding log, with a line-number gutter) followed by your description — so the doc shows the complete logs, not just line numbers. Pass `components` to name the subsystems potentially responsible for the findings, and `questions` for the open follow-ups to investigate next. By default it also folds in the recorded investigation steps; pass `body` for a narrative. Returns the saved file path. Pin findings first (logan_report_finding / logan_import_findings) so they appear with their log lines.',
   {
     name: z.string().describe('Clear document title, e.g. "Auth token-expiry root cause"'),
     aim: z.string().describe('What this investigation set out to find or prove'),
@@ -1778,18 +1756,17 @@ server.tool(
     context: z.number().int().min(0).max(20).default(3).describe('Log lines of surrounding context to show around each finding\'s matched line(s) (0 = just the match)'),
     components: z.array(z.object({
       name: z.string().describe('Component / subsystem name'),
-      reason: z.string().optional().describe('Why it is implicated in the conclusion'),
+      reason: z.string().optional().describe('Why it is implicated / potentially responsible'),
       sampleLine: z.number().int().min(1).optional().describe('1-based viewer line of an example occurrence'),
-    })).optional().describe('Components/subsystems potentially responsible for the conclusion (the areas to investigate). If omitted and includeConclusion is set, LOGAN fills this from the verdict\'s top failing components.'),
+    })).optional().describe('Components/subsystems potentially responsible for the findings (the areas to investigate).'),
     questions: z.array(z.string()).optional().describe('Open questions / follow-ups to investigate next (rendered as a checklist)'),
     includeFindings: z.boolean().default(true).describe('Embed pinned findings — each with its related log-line sequence + description'),
     includeSteps: z.boolean().default(true).describe('Embed the recorded investigation steps (what you did)'),
-    includeConclusion: z.boolean().default(false).describe('Also run the native root-cause conclusion and embed the verdict + evidence lines + timeline'),
   },
-  async ({ name, aim, reason, ticket, body, context, components, questions, includeFindings, includeSteps, includeConclusion }) => {
+  async ({ name, aim, reason, ticket, body, context, components, questions, includeFindings, includeSteps }) => {
     try {
       const result = await apiCall('POST', '/api/save-report', {
-        name, aim, reason, ticket, body, context, components, questions, includeFindings, includeSteps, includeConclusion,
+        name, aim, reason, ticket, body, context, components, questions, includeFindings, includeSteps,
       });
       if (!result.success) {
         return { content: [{ type: 'text', text: `Error: ${result.error || 'save report failed'}` }], isError: true };
@@ -1797,7 +1774,6 @@ server.tool(
       const parts = [`${result.findings} finding(s)`, `${result.steps} step(s)`];
       if (result.components) parts.push(`${result.components} component(s)`);
       if (result.questions) parts.push(`${result.questions} question(s)`);
-      if (result.conclusion) parts.push('verdict');
       return { content: [{ type: 'text', text: `Report saved: ${result.filePath}\n(${parts.join(', ')} embedded)` }] };
     } catch (err: any) {
       return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
