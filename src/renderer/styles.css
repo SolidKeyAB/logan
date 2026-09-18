@@ -9689,33 +9689,11 @@ kbd {
   overflow-y: auto;
 }
 
-/* ─── Investigate (Guided Triage) panel ─── */
-.investigate-toolbar {
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
+/* ─── Recipes panel ─── */
 .investigate-label {
   font-size: 11px;
   color: var(--text-secondary);
   margin-right: 4px;
-}
-.investigate-symptoms {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-.investigate-symptom-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.investigate-symptom-btn.active {
-  border-color: var(--accent-hover);
-  background: var(--bg-hover);
-}
-.investigate-symptom-btn .sym-icon {
-  font-size: 12px;
 }
 /* Saved investigation patterns */
 .investigate-patterns-bar {
@@ -10245,132 +10223,6 @@ kbd {
   min-height: 0;
   overflow-y: auto;
   padding-top: 6px;
-}
-.investigate-summary {
-  font-size: 12px;
-  color: var(--text-primary);
-  margin-bottom: 8px;
-}
-.investigate-domain {
-  font-size: 10px;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin-left: 6px;
-}
-.investigate-findings {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.investigate-finding {
-  border-left: 3px solid var(--border-color);
-  border-radius: 3px;
-  margin-bottom: 3px;
-}
-.investigate-finding .finding-row {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 4px 6px;
-  cursor: pointer;
-}
-.investigate-finding .finding-row:hover {
-  background: var(--bg-hover);
-}
-.investigate-finding .finding-why {
-  margin-left: auto;
-  flex-shrink: 0;
-  font-size: 10px;
-  padding: 1px 6px;
-  background: transparent;
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  opacity: 0;
-}
-.investigate-finding .finding-row:hover .finding-why { opacity: 1; }
-.investigate-finding .finding-why:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-.investigate-finding .finding-drill {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 3px;
-  padding: 4px 6px 6px 10px;
-}
-.investigate-finding .drill-act {
-  font-size: 11px;
-  padding: 2px 6px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 3px;
-  color: var(--text-primary);
-  cursor: pointer;
-  text-align: left;
-}
-.investigate-finding .drill-act:hover {
-  background: var(--bg-hover);
-}
-.investigate-finding.sev-error { border-left-color: #f48771; }
-.investigate-finding.sev-warning { border-left-color: #cca700; }
-.investigate-finding.sev-info { border-left-color: #569cd6; }
-.investigate-finding .finding-line {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--text-secondary);
-  flex-shrink: 0;
-  min-width: 56px;
-}
-.investigate-finding .finding-title {
-  font-size: 11px;
-  color: var(--text-primary);
-  flex-shrink: 0;
-}
-.investigate-finding .finding-sample {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.investigate-question {
-  margin-top: 8px;
-  padding: 6px 8px;
-  background: var(--bg-secondary);
-  border: 1px dashed var(--border-color);
-  border-radius: 5px;
-  font-size: 11px;
-  color: var(--text-primary);
-}
-.investigate-question label {
-  display: block;
-  margin-bottom: 4px;
-  color: var(--text-secondary);
-}
-.investigate-question .q-hint {
-  color: var(--text-secondary);
-  font-size: 10px;
-}
-.investigate-q-input {
-  width: 100%;
-  max-width: 280px;
-}
-.investigate-suggest {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px;
-  margin-top: 8px;
-}
-.investigate-suggest .suggest-label {
-  font-size: 11px;
-  color: var(--text-secondary);
-  margin-right: 2px;
 }
 
 /* ─── Conclusion (native root-cause report) ─────────────────────────────── */

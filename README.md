@@ -81,7 +81,7 @@ npm start
 - **Signals** — Overlay multiple numeric signals (including MF4 channels) on one shared time axis with normalize toggle and click-to-line
 - **Cadence / missing-sequence** — Pick a repeating event, auto-detect its period, and flag skipped occurrences and drift with a negative-space strip and click-to-line
 - **Conclusion** — One-click native root-cause verdict: first anomaly/trigger + timeline + evidence, exportable to `.md`/`.pdf`
-- **Guided Investigate** — One-tap symptom recipes (crashed/froze/slow/…) that search, trend, and pin findings; save the agent's steps as re-runnable patterns
+- **Recipes** — Save the agent's investigation steps as named, re-runnable recipes; replay one on any log to search, trend, and pin clickable findings in one click
 
 ### Multi-file & Correlation
 - **Single session** — Combine several open files into one continuous read-only view (no on-disk merge) so every tool runs across the set at once

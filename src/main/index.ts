@@ -38,7 +38,6 @@ import { analyzerRegistry, AnalyzerOptions, AnalysisResult, AnalyzeProgress, Log
 import { mergeAnalysisResults } from './compositeAnalysis';
 import { loadDatadogConfig, saveDatadogConfig, clearDatadogConfig, fetchDatadogLogs, DatadogConfig, DatadogFetchParams } from './datadogClient';
 import { startApiServer, stopApiServer, ApiContext, addChatMessage, getChatMessages, getSseClientCount, getAgentName, loadPersistedSession, broadcastInterrupt, disconnectActiveAgent, API_PORT, buildEvidencePack } from './api-server';
-import { runRecipe, RecipeOptions } from '../mcp-server/recipes';
 import { BaselineStore, buildFingerprint } from './baselineStore';
 import { bumpUsage, getUsage, clearUsage, flushUsage, isAiContext } from './usageStore';
 import { canonicalizeHumanVerb, aggregateUsageByFeature } from '../shared/verbRegistry';
@@ -5972,55 +5971,6 @@ ipcMain.handle(IPC.TREND_CORRELATE, async (_, options) => {
 });
 
 // === Guided triage recipe ===
-// Runs the shared recipe engine (src/mcp-server/recipes.ts) so the UI panel and the
-// MCP agent use the EXACT same code path. The engine speaks the /api/* HTTP contract,
-// so we let it call our own already-running api-server (localhost) — no logic is
-// duplicated and responses carry the same viewerLine augmentation the agent sees.
-function selfApiCall(method: string, urlPath: string, body?: any): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const payload = body ? JSON.stringify(body) : undefined;
-    const req = http.request(
-      {
-        hostname: '127.0.0.1',
-        port: API_PORT,
-        path: urlPath,
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),
-        },
-        timeout: 60000,
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => {
-          try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))); }
-          catch { resolve({ success: false }); }
-        });
-      },
-    );
-    req.on('error', reject);
-    req.on('timeout', () => { req.destroy(); reject(new Error('triage recipe timed out')); });
-    if (payload) req.write(payload);
-    req.end();
-  });
-}
-
-ipcMain.handle(IPC.TRIAGE_RECIPE, async (_, options: RecipeOptions) => {
-  // getReadHandler for the open-file gate: the recipe reads via selfApiCall (which is
-  // already composite/segmented-aware), so this only needs to know a session is open.
-  const handler = getReadHandler();
-  if (!handler) return { success: false, error: 'No file open' };
-  if (!options?.symptom) return { success: false, error: 'symptom required' };
-  try {
-    const result = await runRecipe(selfApiCall, options);
-    return { success: true, ...result };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-});
-
 // Semantic summary — human twin of logan_summarize. Reuses the exact same
 // ApiContext.summarize the agent's /api/summarize route calls (streaming
 // TemplateFolder over forEachScopeLine), so the panel and the AI agree.
