@@ -9910,8 +9910,65 @@ kbd {
   padding: 0 6px;
   margin-left: auto;
 }
-.recipe-tier-body { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+/* One recipe per row: a vertical stack of accordion rows (not wrapping chips). */
+.recipe-tier-body { display: flex; flex-direction: column; gap: 4px; }
 .recipe-tier-section.collapsed .recipe-tier-body { display: none; }
+
+/* ── Recipe accordion row ────────────────────────────────────────────────── */
+.recipe-row {
+  width: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+.recipe-row.expanded { border-color: var(--accent-hover); }
+.recipe-row-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 5px 9px;
+  text-align: left;
+  font-size: 11px;
+}
+.recipe-row-header:hover { background: var(--bg-hover); }
+.recipe-row-caret { flex: 0 0 auto; width: 10px; font-size: 9px; color: var(--text-muted); }
+.recipe-row-name { flex: 0 0 auto; font-weight: 600; white-space: nowrap; }
+/* Goal + match hint reuse the chip classes but flow inline within the row header. */
+.recipe-row-header .investigate-pattern-aim { flex: 0 1 auto; min-width: 0; max-width: none; }
+.recipe-row-header .investigate-pattern-matchhint { flex: 0 0 auto; border-left: none; padding-left: 0; }
+.recipe-row-header .investigate-pattern-count { margin-left: auto; flex: 0 0 auto; }
+.recipe-row-tier { flex: 0 0 auto; font-size: 10px; color: var(--text-secondary); }
+
+.recipe-row-detail {
+  padding: 7px 11px 9px 25px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  font-size: 11px;
+}
+.recipe-detail-aim { color: var(--text-secondary); margin-bottom: 7px; line-height: 1.4; }
+.recipe-detail-section { margin-bottom: 7px; }
+.recipe-detail-label {
+  font-size: 9px; text-transform: uppercase; letter-spacing: 0.4px;
+  color: var(--text-muted); margin-bottom: 3px;
+}
+.recipe-detail-steps { margin: 0; padding-left: 18px; color: var(--text-primary); }
+.recipe-detail-steps li { font-family: var(--font-mono); font-size: 10.5px; line-height: 1.55; }
+.recipe-detail-guard { color: var(--text-muted); font-style: italic; }
+.recipe-detail-fillins { display: flex; flex-wrap: wrap; gap: 4px; }
+.recipe-detail-fillin {
+  font-size: 10px; font-family: var(--font-mono);
+  background: var(--bg-tertiary); color: var(--text-secondary);
+  border-radius: 3px; padding: 1px 6px;
+}
+.recipe-detail-src { font-size: 10px; color: var(--text-muted); margin-bottom: 9px; }
+.recipe-detail-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+.recipe-action-del:hover { color: #e05a5a; border-color: #e05a5a; }
 .investigate-pattern-del {
   background: none;
   border: none;
