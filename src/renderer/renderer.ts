@@ -7982,74 +7982,149 @@ function groupRecipes(templates: any[], mode: 'type' | 'file' | 'flat'): RecipeG
     .filter(g => g.items.length > 0);
 }
 
-// Build one recipe card (chip). Extracted so the grouped view can place cards under
-// their section. `matchHint` (optional) shows WHY a search surfaced this recipe when the
-// match was inside a step rather than the name/goal.
-function buildRecipeChip(t: any, matchHint?: string): HTMLElement {
-  const chip = document.createElement('span');
-  chip.className = 'investigate-pattern-chip';
+// Build one recipe as a click-to-expand ROW (accordion): a full-width header (caret +
+// name + goal + step count + badges) that toggles an inline details panel (goal, steps,
+// fill-ins, source file, + Run / See-flow / Options / Delete). One recipe per row, so the
+// list reads as a clean stack — not a wrapping "chain" of pills you can't tell apart.
+// `matchHint` (optional) shows WHY a search surfaced this recipe when the hit was inside a
+// step rather than the name/goal.
+function buildRecipeRow(t: any, matchHint?: string): HTMLElement {
   const stepCount = (t.steps || []).length;
-  const stepsPreview = (t.steps || []).map((s: any) => s.label).join(' → ');
-  const srcInfo = recipeSourceFilesInfo(t);
-  const srcLine = srcInfo ? `\n📄 Recorded on ${srcInfo.names.length} file${srcInfo.names.length === 1 ? '' : 's'} (${srcInfo.types.join(', ')}): ${srcInfo.names.join(', ')}` : '';
   const pinned = (t.tier === 'fundamental' || t.tier === 'complex');
-  chip.title = `${t.aim ? `🎯 ${t.aim}\n\n` : ''}${stepCount} steps: ${stepsPreview}${srcLine}\nTier: ${resolveRecipeTier(t)}${pinned ? ' (pinned)' : ' (auto)'}\nRight-click for tier / requirements`;
-  const run = document.createElement('button');
-  run.className = 'investigate-pattern-run';
-  // The card reads as "what it is" at a glance: ⋔ marks a composite (recipe-of-recipes),
-  // the name identifies it, and the aim (its purpose) shows inline — not just on hover.
-  run.innerHTML = `▶ ${t.composite ? '<span class="investigate-pattern-composite" title="Composite — a recipe of recipes">⋔</span> ' : ''}${escapeHtml(t.name)}`
-    + (t.aim ? ` <span class="investigate-pattern-aim">🎯 ${escapeHtml(t.aim)}</span>` : '')
-    + ` <span class="investigate-pattern-count">${stepCount}</span>`;
-  run.addEventListener('click', () => { void openTemplateHub(t.name); });
-  chip.appendChild(run);
-  // Why this recipe surfaced in a search, when the hit was inside a step (not its name/goal).
-  if (matchHint) {
-    const hint = document.createElement('span');
-    hint.className = 'investigate-pattern-matchhint';
-    hint.textContent = matchHint;
-    hint.title = matchHint;
-    chip.appendChild(hint);
-  }
-  // Show a small tier marker only when the tier is PINNED (curated away from the default),
-  // so the grouped sections carry the common case and pinned recipes are visibly curated.
-  if (pinned) {
-    const tierBadge = document.createElement('span');
-    tierBadge.className = 'investigate-pattern-tier';
-    tierBadge.textContent = t.tier === 'complex' ? '⋔' : '🧱';
-    tierBadge.title = `Tier pinned: ${t.tier}`;
-    chip.appendChild(tierBadge);
-  }
-  // ⋔ Flow — open the read-only VISUAL flow (verb + nouns + dataflow + conditionals),
-  // so you can see what the recipe does; ▶ (the name) opens the run/tweak hub.
-  const steps = document.createElement('button');
-  steps.className = 'investigate-pattern-steps';
-  steps.textContent = '⋔';
-  steps.title = 'See this recipe as a visual flow';
-  steps.addEventListener('click', (e) => { e.stopPropagation(); void showInvestigationWorkflow(t.name); });
-  chip.appendChild(steps);
-  // Preflight badge — only for patterns that declare a requirements manifest. Shows
-  // whether THIS open log satisfies the pattern's required template (✓ / ✗ blocked).
+  const srcInfo = recipeSourceFilesInfo(t);
+
+  const row = document.createElement('div');
+  row.className = 'recipe-row';
+
+  // ── Header — the always-visible summary line; clicking it toggles the detail panel. ──
+  const header = document.createElement('button');
+  header.className = 'recipe-row-header';
+  header.setAttribute('aria-expanded', 'false');
+  const compositeMark = t.composite ? '<span class="investigate-pattern-composite" title="Composite — a recipe of recipes">⋔</span> ' : '';
+  header.innerHTML =
+    '<span class="recipe-row-caret" aria-hidden="true">▸</span>'
+    + `<span class="recipe-row-name">${compositeMark}${escapeHtml(t.name)}</span>`
+    + (t.aim ? `<span class="investigate-pattern-aim">🎯 ${escapeHtml(t.aim)}</span>` : '')
+    + (matchHint ? `<span class="investigate-pattern-matchhint">⌕ ${escapeHtml(matchHint)}</span>` : '')
+    + `<span class="investigate-pattern-count" title="${stepCount} step${stepCount === 1 ? '' : 's'}">${stepCount}</span>`;
+  // Preflight badge — only when the recipe declares a requirements manifest (✓ / ✗).
   if (t.requirements && (t.requirements.fileTemplate || (t.requirements.entities || []).length)) {
     const badge = document.createElement('span');
     badge.className = 'investigation-req-badge checking';
     badge.textContent = '…';
     badge.title = 'Checking requirements against the open log…';
-    chip.appendChild(badge);
+    header.appendChild(badge);
     void refreshInvestigationBadge(t.name, badge);
   }
-  const del = document.createElement('button');
-  del.className = 'investigate-pattern-del';
-  del.textContent = '×';
-  del.title = 'Delete this pattern';
-  del.addEventListener('click', async (e) => {
+  // Tier marker only when the tier is PINNED (curated away from the smart default).
+  if (pinned) {
+    const tierBadge = document.createElement('span');
+    tierBadge.className = 'recipe-row-tier';
+    tierBadge.textContent = t.tier === 'complex' ? '⋔' : '🧱';
+    tierBadge.title = `Tier pinned: ${t.tier}`;
+    header.appendChild(tierBadge);
+  }
+
+  // ── Detail panel — built up front (cheap), hidden until the row is expanded. ──
+  const detail = document.createElement('div');
+  detail.className = 'recipe-row-detail';
+  detail.hidden = true;
+
+  if (t.aim) {
+    const aim = document.createElement('div');
+    aim.className = 'recipe-detail-aim';
+    aim.textContent = `🎯 ${t.aim}`;
+    detail.appendChild(aim);
+  }
+
+  if (stepCount) {
+    const sec = document.createElement('div');
+    sec.className = 'recipe-detail-section';
+    sec.innerHTML = '<div class="recipe-detail-label">Steps</div>';
+    const ol = document.createElement('ol');
+    ol.className = 'recipe-detail-steps';
+    for (const s of (t.steps || [])) {
+      const li = document.createElement('li');
+      li.textContent = s.label || (s.path || '').replace('/api/', '');
+      if (s.when) {
+        const g = document.createElement('span');
+        g.className = 'recipe-detail-guard';
+        g.textContent = ' · conditional';
+        li.appendChild(g);
+      }
+      ol.appendChild(li);
+    }
+    sec.appendChild(ol);
+    detail.appendChild(sec);
+  }
+
+  // Fill-ins — the promoted params (component/field/pattern/event/…) with a default value.
+  const fillins = (t.params || []).filter((p: any) => p.default != null && String(p.default) !== '');
+  if (fillins.length) {
+    const sec = document.createElement('div');
+    sec.className = 'recipe-detail-section';
+    sec.innerHTML = '<div class="recipe-detail-label">Fill-ins</div>';
+    const wrap = document.createElement('div');
+    wrap.className = 'recipe-detail-fillins';
+    for (const p of fillins) {
+      const chip = document.createElement('span');
+      chip.className = 'recipe-detail-fillin';
+      chip.textContent = `${p.key}: ${p.default}`;
+      wrap.appendChild(chip);
+    }
+    sec.appendChild(wrap);
+    detail.appendChild(sec);
+  }
+
+  if (srcInfo) {
+    const src = document.createElement('div');
+    src.className = 'recipe-detail-src';
+    src.textContent = `📄 Recorded on ${srcInfo.names.length} file${srcInfo.names.length === 1 ? '' : 's'} (${srcInfo.types.join(', ')}): ${srcInfo.names.join(', ')}`;
+    detail.appendChild(src);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'recipe-detail-actions';
+  const runBtn = document.createElement('button');
+  runBtn.className = 'secondary-btn small recipe-action-run';
+  runBtn.textContent = '▶ Run…';
+  runBtn.title = 'Open the run / tweak hub — set params and replay on this log';
+  runBtn.addEventListener('click', (e) => { e.stopPropagation(); void openTemplateHub(t.name); });
+  const flowBtn = document.createElement('button');
+  flowBtn.className = 'secondary-btn small';
+  flowBtn.textContent = '⋔ See flow';
+  flowBtn.title = 'See this recipe as a visual flow';
+  flowBtn.addEventListener('click', (e) => { e.stopPropagation(); void showInvestigationWorkflow(t.name); });
+  const optBtn = document.createElement('button');
+  optBtn.className = 'secondary-btn small';
+  optBtn.textContent = '⚙ Options';
+  optBtn.title = 'Tier / requirements…';
+  optBtn.addEventListener('click', (e) => { e.stopPropagation(); showInvestigationContextMenu(e, t); });
+  const delBtn = document.createElement('button');
+  delBtn.className = 'secondary-btn small recipe-action-del';
+  delBtn.textContent = '× Delete';
+  delBtn.title = 'Delete this recipe';
+  delBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
     await window.api.deleteInvestigation(t.name);
     void loadInvestigationTemplates();
   });
-  chip.appendChild(del);
-  chip.addEventListener('contextmenu', (e) => { e.preventDefault(); showInvestigationContextMenu(e, t); });
-  return chip;
+  actions.append(runBtn, flowBtn, optBtn, delBtn);
+  detail.appendChild(actions);
+
+  const toggle = () => {
+    const open = row.classList.toggle('expanded');
+    detail.hidden = !open;
+    header.setAttribute('aria-expanded', open ? 'true' : 'false');
+    const caret = header.querySelector('.recipe-row-caret');
+    if (caret) caret.textContent = open ? '▾' : '▸';
+  };
+  header.addEventListener('click', toggle);
+  row.addEventListener('contextmenu', (e) => { e.preventDefault(); showInvestigationContextMenu(e as MouseEvent, t); });
+
+  row.appendChild(header);
+  row.appendChild(detail);
+  return row;
 }
 
 // Fetch the saved recipes, cache them, then paint the list. Called on init and whenever
@@ -8127,7 +8202,7 @@ function renderRecipeList(): void {
     }
     const body = document.createElement('div');
     body.className = 'recipe-tier-body';
-    for (const t of g.items) body.appendChild(buildRecipeChip(t, searching ? recipeMatchHint(t, terms) : undefined));
+    for (const t of g.items) body.appendChild(buildRecipeRow(t, searching ? recipeMatchHint(t, terms) : undefined));
     section.appendChild(body);
     list.appendChild(section);
   }
