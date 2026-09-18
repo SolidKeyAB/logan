@@ -7217,9 +7217,6 @@ function openBottomTab(tabId: string): void {
   if (tabId === 'trends') {
     initTrendsPanel();
   }
-  if (tabId === 'signals') {
-    initSignalsPanel();
-  }
   if (tabId === 'investigate') {
     initInvestigatePanel();
   }
@@ -9573,7 +9570,11 @@ function initTrendsPanel(): void {
 
   const btnSaveProp = trendEl<HTMLButtonElement>('btn-save-trend-prop');
 
+  const xaxisSelEl = trendEl<HTMLSelectElement>('trends-xaxis');
   const refreshAddEnabled = () => {
+    // The "Numeric overlay" cell needs no field/pattern — its signals are picked
+    // inside the cell — so Add is always available once a file is open.
+    if (cellType?.value === 'overlay') { if (btnAdd) btnAdd.disabled = false; return; }
     const hasField = !!fieldSelect?.value.trim();
     const hasPattern = !!patternInput?.value.trim();
     if (btnAdd) btnAdd.disabled = !hasField && !hasPattern;
@@ -9581,12 +9582,25 @@ function initTrendsPanel(): void {
     if (btnSaveProp) btnSaveProp.disabled = !hasPattern;
   };
 
+  // Show only the inputs that apply to the selected cell type. The overlay cell picks
+  // its signals inside the cell, so the field/pattern/x-axis/save controls are hidden.
+  const syncToolbarForType = () => {
+    const overlay = cellType?.value === 'overlay';
+    eventInput?.classList.toggle('hidden', cellType?.value !== 'correlate');
+    fieldSelect?.classList.toggle('hidden', !!overlay);
+    patternInput?.classList.toggle('hidden', !!overlay);
+    xaxisSelEl?.classList.toggle('hidden', !!overlay);
+    btnSaveProp?.classList.toggle('hidden', !!overlay);
+    refreshAddEnabled();
+  };
+
   btnDiscover?.addEventListener('click', () => { void discoverTrendFields(); });
-  btnAdd?.addEventListener('click', () => { void addTrendCell(); });
-  btnSaveProp?.addEventListener('click', () => { void saveCurrentTrendProperty(); });
-  cellType?.addEventListener('change', () => {
-    eventInput?.classList.toggle('hidden', cellType.value !== 'correlate');
+  btnAdd?.addEventListener('click', () => {
+    if (cellType?.value === 'overlay') addOverlayCell();
+    else void addTrendCell();
   });
+  btnSaveProp?.addEventListener('click', () => { void saveCurrentTrendProperty(); });
+  cellType?.addEventListener('change', syncToolbarForType);
   // Field picker is a searchable combobox (input + datalist): react to typing and
   // datalist selection, and add the cell on Enter.
   fieldSelect?.addEventListener('input', refreshAddEnabled);
@@ -9788,7 +9802,7 @@ function createTrendCellShell(type: string, label: string, byAgent = false): Tre
     const ph = results.querySelector('.placeholder');
     if (ph) ph.remove();
   }
-  const typeLabels: Record<string, string> = { series: 'over time', transitions: 'value flips', correlate: 'correlation' };
+  const typeLabels: Record<string, string> = { series: 'over time', transitions: 'value flips', correlate: 'correlation', overlay: 'signal overlay' };
   const cell = document.createElement('div');
   cell.className = 'trend-cell';
   cell.id = `trend-cell-${++trendCellSeq}`;
@@ -10070,14 +10084,12 @@ interface SignalsPanelState {
   selected: string[];           // checked signal names, in pick order
   colors: Map<string, string>;  // stable per-signal color
   result: SignalSeriesResult | null;
-  initialized: boolean;
-  wired: boolean;               // canvas handlers attached
   viewMode: 'overlay' | 'stacked'; // overlay = shared plot; stacked = per-signal bands
   hoverIdx: number;             // sample index under the cursor (-1 = none), drives the synced crosshair
   pinnedIdx: number;            // sample pinned by a click (-1 = none); keeps the value box visible after the mouse leaves
 }
 const signalsState: SignalsPanelState = {
-  fields: [], selected: [], colors: new Map(), result: null, initialized: false, wired: false,
+  fields: [], selected: [], colors: new Map(), result: null,
   viewMode: 'overlay', hoverIdx: -1, pinnedIdx: -1,
 };
 // The sample the crosshair/value-box should reflect: live hover wins, else the last clicked (pinned) sample.
@@ -10130,25 +10142,66 @@ function formatAxisNum(v: number): string {
   return v.toFixed(a < 1 ? 3 : a < 100 ? 2 : 1);
 }
 
-function initSignalsPanel(): void {
-  if (!signalsState.initialized) {
-    signalsState.initialized = true;
-    document.getElementById('btn-signals-discover')?.addEventListener('click', () => discoverSignals());
-    const search = document.getElementById('signals-search') as HTMLInputElement | null;
-    search?.addEventListener('input', () => renderSignalsList());
-    document.getElementById('signals-normalize')?.addEventListener('change', () => drawSignalsChart());
-    document.getElementById('signals-mode-overlay')?.addEventListener('click', () => setSignalsViewMode('overlay'));
-    document.getElementById('signals-mode-stacked')?.addEventListener('click', () => setSignalsViewMode('stacked'));
-    wireSignalsCanvas();
-    window.addEventListener('resize', () => { if (state.activeBottomTab === 'signals') drawSignalsChart(); });
+// The single live "Numeric overlay" cell (the multi-signal overlay was a standalone
+// Signals tab; it now lives as one persistent cell in the Trends notebook). Kept a
+// singleton because the overlay markup uses fixed element ids — one workspace is also
+// all the old panel ever offered.
+let overlayCellEl: HTMLElement | null = null;
+let overlayResizeWired = false;
+
+// Add (or re-focus) the numeric-overlay cell in the Trends notebook. Clones the overlay
+// template into a cell body, wires its controls to the (unchanged) signal-overlay engine,
+// and kicks off numeric-channel discovery.
+function addOverlayCell(): void {
+  if (!state.filePath) { showToast('Open a log file first'); return; }
+  // Only one overlay cell at a time — re-focus the existing one.
+  if (overlayCellEl && document.body.contains(overlayCellEl)) {
+    overlayCellEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    return;
   }
-  // Auto-discover the first time the tab is opened with a file loaded. Deferred to the
-  // next frame so the panel paints and is interactive immediately — the scan (already
-  // off the main thread in a worker) then fills the list a moment later.
-  if (signalsState.fields.length === 0 && state.filePath) {
-    const listEl = document.getElementById('signals-list');
-    if (listEl) listEl.innerHTML = '<p class="placeholder">Scanning for signals…</p>';
-    requestAnimationFrame(() => { if (state.activeBottomTab === 'signals') discoverSignals(); });
+  const tpl = document.getElementById('tpl-signals-cell') as HTMLTemplateElement | null;
+  if (!tpl) { showToast('Overlay template missing'); return; }
+
+  const cell = createTrendCellShell('overlay', 'Numeric signal overlay');
+  const cellRoot = cell.body.parentElement;
+  if (cellRoot) { cellRoot.classList.add('trend-cell--overlay'); overlayCellEl = cellRoot; }
+  // Fresh cell → fresh workspace state; colors persist for stable palette across re-adds.
+  signalsState.selected = [];
+  signalsState.result = null;
+  signalsState.fields = [];
+  signalsState.viewMode = 'overlay';
+  signalsState.hoverIdx = -1;
+  signalsState.pinnedIdx = -1;
+
+  cell.body.innerHTML = '';
+  cell.body.appendChild(tpl.content.cloneNode(true));
+
+  // Removing the cell tears down the singleton so a later Add rebuilds it cleanly.
+  cellRoot?.querySelector('.trend-cell-remove')?.addEventListener('click', () => {
+    overlayCellEl = null;
+    signalsState.selected = [];
+    signalsState.result = null;
+    signalsState.fields = [];
+  });
+
+  wireOverlayCell();
+  requestAnimationFrame(() => drawSignalsChart()); // paint the empty-state prompt
+  void discoverSignals();
+}
+
+// (Re)wire the current overlay cell's controls. Each Add clones fresh DOM, so we always
+// attach fresh listeners; the window-resize redraw is attached only once.
+function wireOverlayCell(): void {
+  document.getElementById('btn-signals-discover')?.addEventListener('click', () => discoverSignals());
+  const search = document.getElementById('signals-search') as HTMLInputElement | null;
+  search?.addEventListener('input', () => renderSignalsList());
+  document.getElementById('signals-normalize')?.addEventListener('change', () => drawSignalsChart());
+  document.getElementById('signals-mode-overlay')?.addEventListener('click', () => setSignalsViewMode('overlay'));
+  document.getElementById('signals-mode-stacked')?.addEventListener('click', () => setSignalsViewMode('stacked'));
+  wireSignalsCanvas();
+  if (!overlayResizeWired) {
+    overlayResizeWired = true;
+    window.addEventListener('resize', () => { if (state.activeBottomTab === 'trends' && overlayCellEl) drawSignalsChart(); });
   }
 }
 
@@ -10280,11 +10333,10 @@ function nearestSignalIndex(clientX: number): number {
 }
 
 function wireSignalsCanvas(): void {
-  if (signalsState.wired) return;
+  // The overlay cell clones fresh DOM on every Add, so always wire the current canvas.
   const canvas = document.getElementById('signals-canvas') as HTMLCanvasElement | null;
   const readout = document.getElementById('signals-readout');
   if (!canvas) return;
-  signalsState.wired = true;
   canvas.addEventListener('mousemove', (e) => {
     const r = signalsState.result;
     if (!r) return;
@@ -12748,9 +12800,13 @@ function restoreBottomPanelState(): void {
       if (data.height) {
         elements.bottomPanel.style.height = data.height;
       }
-      state.lastActiveBottomTab = data.lastActiveTab || null;
-      if (data.visible && data.activeTab) {
-        openBottomTab(data.activeTab);
+      // The Signals tab was merged into Trends (as a "Numeric overlay" cell); redirect any
+      // stale saved reference so restore doesn't land on a tab that no longer exists.
+      const remap = (t: string | null): string | null => (t === 'signals' ? 'trends' : t);
+      state.lastActiveBottomTab = remap(data.lastActiveTab || null);
+      const activeTab = remap(data.activeTab);
+      if (data.visible && activeTab) {
+        openBottomTab(activeTab);
       }
     }
   } catch (e) {
