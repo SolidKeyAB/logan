@@ -7982,6 +7982,38 @@ function groupRecipes(templates: any[], mode: 'type' | 'file' | 'flat'): RecipeG
     .filter(g => g.items.length > 0);
 }
 
+// Friendlier name for a format-adapter id (the recipe's file-template may pin one).
+function adapterLabel(id: string): string {
+  const map: Record<string, string> = {
+    vtrace: 'esotrace / vtrace', jsonl: 'JSON-lines', mf4: 'MF4 signals', text: 'plain-text',
+  };
+  return map[id] || id;
+}
+
+// Plain-language answer to "what kind of log can this recipe be applied to?".
+// Prefers the recipe's EXPLICIT file-template requirement (the hard gate LOGAN checks
+// against the open log); else falls back to a soft hint from the file type(s) it was
+// recorded on; else null — nothing meaningful to say, so the caller omits the row.
+// `strict` = there's a real gate, so the caller also shows a live ✓/✗ verdict.
+function describeRecipeApplicability(t: any): { text: string; strict: boolean } | null {
+  const ft = t?.requirements?.fileTemplate;
+  if (ft) {
+    const parts: string[] = [];
+    if (ft.adapterId) parts.push(`${adapterLabel(ft.adapterId)} format`);
+    if (ft.columnPattern && (ft.columnPattern.name || ft.columnPattern.id)) {
+      const pct = ft.columnPattern.minMatchRatio != null ? ` (≥${Math.round(ft.columnPattern.minMatchRatio * 100)}% of lines)` : '';
+      parts.push(`columns match “${ft.columnPattern.name || ft.columnPattern.id}”${pct}`);
+    }
+    if (ft.signature?.regex) parts.push(`contains a line matching /${ft.signature.regex}/`);
+    if (ft.filenameGlob) parts.push(`filename like ${ft.filenameGlob}`);
+    if (ft.note) parts.push(ft.note);
+    if (parts.length) return { text: parts.join(' · '), strict: true };
+  }
+  const src = recipeSourceFilesInfo(t);
+  if (src) return { text: `any log — no strict requirement; recorded on ${src.types.join(', ')} log${src.names.length === 1 ? '' : 's'}, so it likely fits similar logs`, strict: false };
+  return null;
+}
+
 // Build one recipe as a click-to-expand ROW (accordion): a full-width header (caret +
 // name + goal + step count + badges) that toggles an inline details panel (goal, steps,
 // fill-ins, source file, + Run / See-flow / Options / Delete). One recipe per row, so the
@@ -8008,13 +8040,14 @@ function buildRecipeRow(t: any, matchHint?: string): HTMLElement {
     + (matchHint ? `<span class="investigate-pattern-matchhint">⌕ ${escapeHtml(matchHint)}</span>` : '')
     + `<span class="investigate-pattern-count" title="${stepCount} step${stepCount === 1 ? '' : 's'}">${stepCount}</span>`;
   // Preflight badge — only when the recipe declares a requirements manifest (✓ / ✗).
+  // The one preflight call (below) fills BOTH this badge and the detail "Applies to" verdict.
+  let reqBadge: HTMLElement | null = null;
   if (t.requirements && (t.requirements.fileTemplate || (t.requirements.entities || []).length)) {
-    const badge = document.createElement('span');
-    badge.className = 'investigation-req-badge checking';
-    badge.textContent = '…';
-    badge.title = 'Checking requirements against the open log…';
-    header.appendChild(badge);
-    void refreshInvestigationBadge(t.name, badge);
+    reqBadge = document.createElement('span');
+    reqBadge.className = 'investigation-req-badge checking';
+    reqBadge.textContent = '…';
+    reqBadge.title = 'Checking requirements against the open log…';
+    header.appendChild(reqBadge);
   }
   // Tier marker only when the tier is PINNED (curated away from the smart default).
   if (pinned) {
@@ -8076,6 +8109,28 @@ function buildRecipeRow(t: any, matchHint?: string): HTMLElement {
     detail.appendChild(sec);
   }
 
+  // "Applies to" — what kind of log this recipe targets. From the recipe's explicit
+  // file-template requirement (with a live ✓/✗ verdict for the open log) or, failing
+  // that, a soft hint from the file type(s) it was recorded on.
+  let reqVerdict: HTMLElement | null = null;
+  const applies = describeRecipeApplicability(t);
+  if (applies) {
+    const sec = document.createElement('div');
+    sec.className = 'recipe-detail-section';
+    sec.innerHTML = '<div class="recipe-detail-label">Applies to</div>';
+    const txt = document.createElement('div');
+    txt.className = 'recipe-detail-applies' + (applies.strict ? ' strict' : '');
+    txt.textContent = applies.text;
+    sec.appendChild(txt);
+    if (applies.strict) {
+      reqVerdict = document.createElement('div');
+      reqVerdict.className = 'recipe-detail-verdict checking';
+      reqVerdict.textContent = 'Checking this log…';
+      sec.appendChild(reqVerdict);
+    }
+    detail.appendChild(sec);
+  }
+
   if (srcInfo) {
     const src = document.createElement('div');
     src.className = 'recipe-detail-src';
@@ -8111,6 +8166,9 @@ function buildRecipeRow(t: any, matchHint?: string): HTMLElement {
   });
   actions.append(runBtn, flowBtn, optBtn, delBtn);
   detail.appendChild(actions);
+
+  // One preflight call fills both the header ✓/✗ badge and the "Applies to" verdict line.
+  if (reqBadge) void refreshInvestigationBadge(t.name, reqBadge, reqVerdict ?? undefined);
 
   const toggle = () => {
     const open = row.classList.toggle('expanded');
@@ -8220,11 +8278,15 @@ function setRecipeSearch(q: string): void {
 }
 
 // Fetch the requirements preflight for one pattern and paint its badge ✓/✗.
-async function refreshInvestigationBadge(name: string, badge: HTMLElement): Promise<void> {
+async function refreshInvestigationBadge(name: string, badge: HTMLElement, verdict?: HTMLElement): Promise<void> {
   try {
     const res = await window.api.checkInvestigation(name);
     const report = res.requirements;
-    if (!res.success || !report) { badge.className = 'investigation-req-badge'; badge.textContent = ''; return; }
+    if (!res.success || !report) {
+      badge.className = 'investigation-req-badge'; badge.textContent = '';
+      if (verdict) { verdict.className = 'recipe-detail-verdict'; verdict.textContent = ''; }
+      return;
+    }
     if (report.blocked) {
       badge.className = 'investigation-req-badge blocked';
       badge.textContent = '✗';
@@ -8234,9 +8296,15 @@ async function refreshInvestigationBadge(name: string, badge: HTMLElement): Prom
     }
     const lines = (report.checks || []).map((c: any) => `${c.status === 'satisfied' ? '✓' : c.status === 'unsatisfied' ? '✗' : '?'} ${c.label} — ${c.detail}`);
     badge.title = `${report.summary}${lines.length ? '\n' + lines.join('\n') : ''}`;
+    if (verdict) {
+      verdict.className = 'recipe-detail-verdict ' + (report.blocked ? 'blocked' : 'ok');
+      verdict.textContent = `${report.blocked ? '✗' : '✓'} This open log — ${report.summary}`;
+      verdict.title = lines.join('\n');
+    }
   } catch {
     badge.className = 'investigation-req-badge';
     badge.textContent = '';
+    if (verdict) { verdict.className = 'recipe-detail-verdict'; verdict.textContent = ''; }
   }
 }
 

@@ -9972,6 +9972,13 @@ kbd {
   background: var(--bg-tertiary); color: var(--text-secondary);
   border-radius: 3px; padding: 1px 6px;
 }
+/* "Applies to" — what kind of log this recipe targets + the live verdict for this log. */
+.recipe-detail-applies { color: var(--text-secondary); line-height: 1.4; }
+.recipe-detail-applies.strict { color: var(--text-primary); }
+.recipe-detail-verdict { margin-top: 3px; font-size: 10.5px; line-height: 1.35; }
+.recipe-detail-verdict.ok { color: var(--accent-hover); }
+.recipe-detail-verdict.blocked { color: #e05a5a; }
+.recipe-detail-verdict.checking { color: var(--text-muted); font-style: italic; }
 .recipe-detail-src { font-size: 10px; color: var(--text-muted); margin-bottom: 9px; }
 .recipe-detail-actions { display: flex; flex-wrap: wrap; gap: 5px; }
 .recipe-action-del:hover { color: #e05a5a; border-color: #e05a5a; }
