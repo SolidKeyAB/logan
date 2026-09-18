@@ -927,6 +927,9 @@ const elements = {
   btnOpenFile: document.getElementById('btn-open-file') as HTMLButtonElement,
   btnRecentFiles: document.getElementById('btn-recent-files') as HTMLButtonElement,
   recentFilesPopup: document.getElementById('recent-files-popup') as HTMLDivElement,
+  severityPillWrapper: document.getElementById('severity-pill-wrapper') as HTMLDivElement,
+  severityPill: document.getElementById('severity-pill') as HTMLButtonElement,
+  severityPillMenu: document.getElementById('severity-pill-menu') as HTMLDivElement,
   btnOpenWelcome: document.getElementById('btn-open-welcome') as HTMLButtonElement,
   btnSearch: document.getElementById('btn-search') as HTMLButtonElement,
   btnPrevResult: document.getElementById('btn-prev-result') as HTMLButtonElement,
@@ -7667,7 +7670,7 @@ const OPTIONAL_FEATURES: OptionalFeatureDef[] = [
   { id: 'time-align', label: 'Time Align',   description: 'Align search-config results on draggable timeline lanes.',              defaultEnabled: false, bottomTab: 'time-align' },
   { id: 'history',    label: 'History',      description: 'Action history (searches, filters, runs) with replay.',                defaultEnabled: false, panel: 'history' },
   { id: 'auto-segment', label: 'Auto-composite big files', description: 'For very large files, index only the segments near the viewport (bounded RAM) instead of the whole-file line index. Experimental.', defaultEnabled: false },
-  { id: 'triage-on-open', label: 'Triage on open', description: 'When a log opens, pop a floating “Start here” card from the fast severity index — fatal / error / warning counts + one-click jump to the first problem. Cheap (no full analysis), instant, works on huge files. The full ranked briefing stays on the 📋 Full brief button.', defaultEnabled: true },
+  { id: 'triage-on-open', label: 'Triage on open', description: 'When a log opens, show a “Start here” severity pill in the tab bar from the fast severity index — fatal / error / warning counts + a ▾ pulldown with one-click jump to the first problem and any column-layout suggestion. Cheap (no full analysis), instant, works on huge files, and remembered per file so it’s instant on reopen. The full ranked briefing stays on the 📋 Full brief button.', defaultEnabled: true },
 ];
 
 const FEATURES_LS_KEY = 'logan-features';
@@ -21747,7 +21750,8 @@ let severitySeenForFile: string | null = null;
 type LayoutGuidance =
   | { kind: 'match'; layout: any }
   | { kind: 'header'; names: string[] };
-let triageSeverity: { counts: { fatal: number; error: number; warning: number }; firstFatal: number | null; firstError: number | null; capped: boolean } | null = null;
+type TriageSeverity = { counts: { fatal: number; error: number; warning: number }; firstFatal: number | null; firstError: number | null; capped: boolean };
+let triageSeverity: TriageSeverity | null = null;
 let pendingLayoutGuidance: LayoutGuidance | null = null;
 let layoutGuidanceSeenForFile: string | null = null;
 
@@ -21757,9 +21761,11 @@ function severityBucketCount(): number {
   return Math.max(100, Math.min(2000, Math.round(h)));
 }
 
-// ─── Quick-start triage ("Start here" card) ──────────────────────────────────
+// ─── Quick-start triage ("Start here" pill + pulldown) ───────────────────────
 // The analyst's first move = "where do I look first?", zero input, the instant the
-// file opens. We build the card from the SAME cheap ripgrep severity index that
+// file opens. A compact severity PILL appears in the tab bar (dot + 💥/⛔/⚠ counts +
+// ▾); clicking it drops the full brief (jump rows + column-layout row + Full brief).
+// We build it from the SAME cheap ripgrep severity index that
 // already runs on open (see prefetchSeverityIndex): the fatal/error/warning counts,
 // plus the first fatal + first error line via an O(log n) binary-search lookup on
 // the index we just built. So it is:
@@ -21771,15 +21777,24 @@ function severityBucketCount(): number {
 // heavy ranked breakdown (crashes / worst components / time gaps) stays where heavy
 // work belongs: behind the on-demand "📋 Full brief" button.
 
-function hideTriageCard(): void {
+// Hide the pill entirely and forget this file's brief (called when switching files).
+function hideSeverityPill(): void {
   triageSeverity = null;
   pendingLayoutGuidance = null;
-  document.getElementById('triage-card')?.setAttribute('hidden', '');
+  closeSeverityMenu();
+  elements.severityPillWrapper?.setAttribute('hidden', '');
 }
 
-// Render the "Start here" card from cheap severity data. firstFatal/firstError are
-// 0-based line numbers (or null) from the severity index; capped => index hit its cap.
-function showStartHereCard(
+// Close just the pulldown (the pill itself stays put in the tab bar).
+function closeSeverityMenu(): void {
+  elements.severityPillMenu?.classList.add('hidden');
+  elements.severityPill?.classList.remove('open');
+  elements.severityPill?.setAttribute('aria-expanded', 'false');
+}
+
+// Set the pill from cheap severity data. firstFatal/firstError are 0-based line
+// numbers (or null) from the severity index; capped => index hit its cap.
+function showStartHere(
   counts: { fatal: number; error: number; warning: number },
   firstFatal: number | null,
   firstError: number | null,
@@ -21787,51 +21802,77 @@ function showStartHereCard(
 ): void {
   if (counts.fatal + counts.error + counts.warning === 0) return; // nothing to look at
   triageSeverity = { counts, firstFatal, firstError, capped };
-  renderTriageCard();
+  if (state.filePath) persistBrief(state.filePath, triageSeverity); // instant on reopen
+  renderSeverityPill();
 }
 
-// Single source of truth for the "Start here" card: rebuild it from whatever cheap on-open
-// scans have resolved so far (severity and/or column-layout guidance). A full rebuild each
-// call means the two async scans never clobber each other's partial DOM.
-function renderTriageCard(): void {
-  const el = document.getElementById('triage-card');
-  if (!el) return;
+// Compact "💥5 ⛔12 ⚠3" readout for the pill / pulldown header ('' when clean).
+function severityVerdict(sevState: TriageSeverity | null): string {
+  const c = sevState?.counts;
+  if (!c || c.fatal + c.error + c.warning === 0) return '';
+  const plus = sevState?.capped ? '+' : '';
+  return [
+    c.fatal ? `💥 ${c.fatal.toLocaleString()}${plus}` : '',
+    c.error ? `⛔ ${c.error.toLocaleString()}${plus}` : '',
+    c.warning ? `⚠ ${c.warning.toLocaleString()}${plus}` : '',
+  ].filter(Boolean).join('  ');
+}
+
+function severityLevel(sevState: TriageSeverity | null): 'critical' | 'warning' | 'healthy' {
+  const c = sevState?.counts;
+  if (!c || c.fatal + c.error + c.warning === 0) return 'healthy';
+  return (c.fatal > 0 || c.error > 0) ? 'critical' : 'warning';
+}
+
+// Single source of truth for the pill: rebuild its dot + counts from whatever cheap
+// on-open scans have resolved so far (severity and/or column-layout guidance). If the
+// pulldown happens to be open, rebuild it too so a late-arriving scan shows immediately.
+function renderSeverityPill(): void {
+  const { severityPillWrapper: wrapper, severityPill: pill } = elements;
+  const dot = document.getElementById('severity-pill-dot');
+  const countsEl = document.getElementById('severity-pill-counts');
+  if (!wrapper || !pill || !dot || !countsEl) return;
   const sevState = triageSeverity;
   const guidance = pendingLayoutGuidance;
-  if (!sevState && !guidance) { el.setAttribute('hidden', ''); return; }
-  const wasHidden = el.hasAttribute('hidden');
+  if (!sevState && !guidance) { wrapper.setAttribute('hidden', ''); closeSeverityMenu(); return; }
+  const wasHidden = wrapper.hasAttribute('hidden');
 
+  const verdict = severityVerdict(sevState);
+  const sev = severityLevel(sevState);
+  dot.className = `severity-pill-dot triage-dot sev-${sev}`;
+  countsEl.textContent = verdict || (guidance ? '📐 Layout' : 'Start here');
+  pill.title = verdict
+    ? `Start here — ${verdict}. Click for the full brief.`
+    : 'Start here — click for column-layout guidance and the full brief.';
+
+  wrapper.removeAttribute('hidden');
+  if (wasHidden) trackUsage('triage:show');
+  // Keep an open pulldown in sync with late-arriving data.
+  if (elements.severityPillMenu && !elements.severityPillMenu.classList.contains('hidden')) {
+    buildSeverityMenuInto(elements.severityPillMenu);
+  }
+}
+
+// Build the pulldown body: header verdict + actionable jump rows + column-layout
+// guidance + the "📋 Full brief" footer. Same content the old floating card carried.
+function buildSeverityMenuInto(menu: HTMLElement): void {
+  const sevState = triageSeverity;
+  const guidance = pendingLayoutGuidance;
   const c = sevState?.counts;
-  const hasProblems = !!c && (c.fatal + c.error + c.warning > 0);
-  const sev = hasProblems ? ((c!.fatal > 0 || c!.error > 0) ? 'critical' : 'warning') : 'healthy';
-  const plus = sevState?.capped ? '+' : '';
-  const verdict = hasProblems ? [
-    c!.fatal ? `💥 ${c!.fatal.toLocaleString()}${plus}` : '',
-    c!.error ? `⛔ ${c!.error.toLocaleString()}${plus}` : '',
-    c!.warning ? `⚠ ${c!.warning.toLocaleString()}${plus}` : '',
-  ].filter(Boolean).join('  ') : '';
+  menu.innerHTML = '';
 
-  el.innerHTML = '';
   const header = document.createElement('div');
   header.className = 'triage-head';
-  header.innerHTML = `<span class="triage-dot sev-${sev}"></span><span class="triage-title">Start here</span>`
-    + `<span class="triage-verdict">${verdict}</span>`;
-  const brief = document.createElement('button');
-  brief.className = 'triage-brief'; brief.textContent = '📋 Full brief';
-  brief.title = 'Run the full briefing (crashes / components / time gaps) in the Analysis panel';
-  brief.addEventListener('click', () => { openBottomTab('analysis'); void showBrief(); });
-  const close = document.createElement('button');
-  close.className = 'triage-close'; close.textContent = '×'; close.title = 'Dismiss';
-  close.addEventListener('click', hideTriageCard);
-  header.appendChild(brief); header.appendChild(close);
-  el.appendChild(header);
-  enableFloatingDrag(header, el); // drag the card around by its header
+  header.innerHTML = `<span class="triage-dot sev-${severityLevel(sevState)}"></span>`
+    + `<span class="triage-title">Start here</span>`
+    + `<span class="triage-verdict">${severityVerdict(sevState)}</span>`;
+  menu.appendChild(header);
 
   // Actionable jump rows — the fast path to the first real problem.
-  if (sevState) {
+  if (sevState && c) {
     const rows: Array<{ icon: string; cls: string; text: string; line: number }> = [];
-    if (c!.fatal > 0 && sevState.firstFatal != null) rows.push({ icon: '💥', cls: 'crash', text: 'Jump to first fatal', line: sevState.firstFatal });
-    if (c!.error > 0 && sevState.firstError != null) rows.push({ icon: '⛔', cls: 'comp', text: 'Jump to first error', line: sevState.firstError });
+    if (c.fatal > 0 && sevState.firstFatal != null) rows.push({ icon: '💥', cls: 'crash', text: 'Jump to first fatal', line: sevState.firstFatal });
+    if (c.error > 0 && sevState.firstError != null) rows.push({ icon: '⛔', cls: 'comp', text: 'Jump to first error', line: sevState.firstError });
     if (rows.length) {
       const list = document.createElement('div'); list.className = 'triage-rows';
       for (const r of rows) {
@@ -21839,21 +21880,47 @@ function renderTriageCard(): void {
         row.className = `triage-row ${r.cls}`;
         row.title = `Jump to line ${(r.line + 1).toLocaleString()}`;
         row.innerHTML = `<span class="triage-row-icon">${r.icon}</span><span class="triage-row-text">${escapeHtml(r.text)}</span><span class="triage-row-line">L${(r.line + 1).toLocaleString()}</span>`;
-        row.addEventListener('click', () => { goToLine(r.line); });
+        row.addEventListener('click', () => { closeSeverityMenu(); goToLine(r.line); });
         list.appendChild(row);
       }
-      el.appendChild(list);
+      menu.appendChild(list);
     }
   }
 
   // Column-layout guidance row — apply a matching saved layout, or set up the detected header.
-  if (guidance) appendLayoutGuidanceRow(el, guidance);
+  if (guidance) appendLayoutGuidanceRow(menu, guidance);
 
-  el.removeAttribute('hidden');
-  if (wasHidden) trackUsage('triage:show');
+  // Footer — the heavy ranked briefing stays on demand behind this button.
+  const foot = document.createElement('div');
+  foot.className = 'triage-foot';
+  const brief = document.createElement('button');
+  brief.className = 'triage-brief'; brief.textContent = '📋 Full brief';
+  brief.title = 'Run the full briefing (crashes / components / time gaps) in the Analysis panel';
+  brief.addEventListener('click', () => { closeSeverityMenu(); openBottomTab('analysis'); void showBrief(); });
+  foot.appendChild(brief);
+  menu.appendChild(foot);
 }
 
-// Append the on-open column-layout guidance to the card: either "a saved layout fits — Apply"
+// Toggle the pulldown under the pill (positioned like the Recent Files popup).
+function toggleSeverityMenu(): void {
+  const menu = elements.severityPillMenu;
+  const pill = elements.severityPill;
+  if (!menu || !pill) return;
+  if (!menu.classList.contains('hidden')) { closeSeverityMenu(); return; }
+  buildSeverityMenuInto(menu);
+  const rect = pill.getBoundingClientRect();
+  menu.classList.remove('hidden'); // must be visible to measure its width
+  const menuWidth = menu.offsetWidth || 320;
+  let left = rect.right - menuWidth; // right-align under the pill
+  if (left < 6) left = 6;            // clamp to the viewport
+  menu.style.top = `${rect.bottom + 4}px`;
+  menu.style.left = `${left}px`;
+  pill.classList.add('open');
+  pill.setAttribute('aria-expanded', 'true');
+  trackUsage('triage:open');
+}
+
+// Append the on-open column-layout guidance to the pulldown: either "a saved layout fits — Apply"
 // or "header detected — set up columns" (which opens the Columns window with its accept-proposal).
 function appendLayoutGuidanceRow(el: HTMLElement, guidance: LayoutGuidance): void {
   const list = document.createElement('div');
@@ -21865,15 +21932,37 @@ function appendLayoutGuidanceRow(el: HTMLElement, guidance: LayoutGuidance): voi
     const nCols = (l.columns || []).length;
     row.title = `Apply the saved column layout “${l.name}” (${nCols} columns) to this file`;
     row.innerHTML = `<span class="triage-row-icon">📐</span><span class="triage-row-text">Layout “${escapeHtml(l.name)}” fits — Apply</span><span class="triage-row-line">${nCols} cols</span>`;
-    row.addEventListener('click', () => { hideTriageCard(); void applyMatchedLayout(l); });
+    row.addEventListener('click', () => { closeSeverityMenu(); void applyMatchedLayout(l); });
   } else {
     const preview = guidance.names.slice(0, 4).join(', ');
     row.title = 'Open the Columns window to accept the detected header row as a layout';
     row.innerHTML = `<span class="triage-row-icon">📐</span><span class="triage-row-text">Header detected${preview ? ': ' + escapeHtml(preview) + '…' : ''} — set up columns</span><span class="triage-row-line">${guidance.names.length} cols</span>`;
-    row.addEventListener('click', () => { hideTriageCard(); void showColumnsModal(); });
+    row.addEventListener('click', () => { closeSeverityMenu(); void showColumnsModal(); });
   }
   list.appendChild(row);
   el.appendChild(list);
+}
+
+// ─── Per-file brief persistence ───────────────────────────────────────────────
+// Cache the cheap severity brief per absolute path in localStorage so the pill shows
+// INSTANTLY when a file is reopened — before the fresh on-open scan resolves (which
+// then overwrites it). Renderer-only, best-effort. Layout guidance is NOT cached: it's
+// cheap to recompute and it references saved layouts that may have changed since.
+const BRIEF_STORE_PREFIX = 'logan:brief:';
+function persistBrief(filePath: string, sev: TriageSeverity | null): void {
+  try {
+    if (!filePath || !sev) return;
+    localStorage.setItem(BRIEF_STORE_PREFIX + filePath, JSON.stringify(sev));
+  } catch { /* quota / disabled — persistence is best-effort */ }
+}
+function loadPersistedBrief(filePath: string): TriageSeverity | null {
+  try {
+    const raw = localStorage.getItem(BRIEF_STORE_PREFIX + filePath);
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    if (s && s.counts && typeof s.counts.fatal === 'number') return s as TriageSeverity;
+  } catch { /* ignore malformed */ }
+  return null;
 }
 
 // Apply a saved layout straight to the viewer (no modal). Pattern layouts reuse the pattern
@@ -21945,7 +22034,7 @@ async function prefetchColumnGuidance(): Promise<void> {
       return;
     }
     layoutGuidanceSeenForFile = forFile;
-    renderTriageCard();
+    renderSeverityPill();
   } catch { /* ignore — Columns window still offers the proposal on demand */ }
 }
 
@@ -21953,9 +22042,18 @@ async function prefetchColumnGuidance(): Promise<void> {
 // surface the counts so the jump feature is discoverable. Fire-and-forget.
 async function prefetchSeverityIndex(): Promise<void> {
   severityCounts = null;
-  hideTriageCard(); // clear any prior file's "Start here" card
+  hideSeverityPill(); // clear any prior file's "Start here" pill
   const forFile = state.filePath;
   if (!forFile) return;
+  // Instant on reopen: show the last-persisted brief immediately, before the fresh
+  // scan below resolves (which then overwrites it via showStartHere).
+  if (isFeatureEnabled('triage-on-open')) {
+    const cached = loadPersistedBrief(forFile);
+    if (cached && cached.counts.fatal + cached.counts.error + cached.counts.warning > 0) {
+      triageSeverity = cached;
+      renderSeverityPill();
+    }
+  }
   try {
     const r = await window.api.getSeverityInfo(severityBucketCount());
     if (!r || !r.success || state.filePath !== forFile) return;
@@ -21965,13 +22063,13 @@ async function prefetchSeverityIndex(): Promise<void> {
     if (problems > 0 && severitySeenForFile !== forFile) {
       severitySeenForFile = forFile;
       if (isFeatureEnabled('triage-on-open')) {
-        // Cheap "Start here" card: 1-2 binary-search lookups on the index we just built.
+        // Cheap "Start here" pill: 1-2 binary-search lookups on the index we just built.
         let firstFatal: number | null = null;
         let firstError: number | null = null;
         if (c!.fatal > 0) { const f = await window.api.nextSeverityLine(-1, 1, ['fatal']); if (f?.success) firstFatal = f.line ?? null; }
         if (c!.error > 0) { const e = await window.api.nextSeverityLine(-1, 1, ['error']); if (e?.success) firstError = e.line ?? null; }
         if (state.filePath !== forFile) return; // file changed while looking up
-        showStartHereCard(c!, firstFatal, firstError, !!r.capped);
+        showStartHere(c!, firstFatal, firstError, !!r.capped);
       } else {
         // Feature off: keep the lightweight toast hint for F8 discovery.
         const bits: string[] = [];
@@ -27599,7 +27697,16 @@ function init(): void {
     e.stopPropagation();
     toggleRecentFilesPopup();
   });
+  elements.severityPill?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleSeverityMenu();
+  });
   document.addEventListener('click', (e) => {
+    if (elements.severityPillMenu && !elements.severityPillMenu.classList.contains('hidden') &&
+        !elements.severityPillMenu.contains(e.target as Node) &&
+        !elements.severityPill.contains(e.target as Node)) {
+      closeSeverityMenu();
+    }
     if (!elements.recentFilesPopup.classList.contains('hidden') &&
         !elements.recentFilesPopup.contains(e.target as Node) &&
         !elements.btnRecentFiles.contains(e.target as Node)) {
