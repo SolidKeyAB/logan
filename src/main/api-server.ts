@@ -36,7 +36,7 @@ const INVESTIGATIVE_PATHS = new Set<string>([
   '/api/search', '/api/filter', '/api/clear-filter', '/api/analyze', '/api/time-gaps',
   '/api/trend-fields', '/api/trend-series', '/api/trend-transitions', '/api/trend-correlate',
   '/api/trend-show', '/api/investigate-crashes', '/api/investigate-component',
-  '/api/investigate-timerange', '/api/triage', '/api/navigate', '/api/evidence-pack',
+  '/api/investigate-timerange', '/api/navigate', '/api/evidence-pack',
   '/api/build-conclusion', '/api/summarize', '/api/fold-regions', '/api/diff-runs',
 ]);
 const JOURNAL_CAP = 200;
@@ -70,7 +70,6 @@ function journalLabel(p: string, body: Record<string, any>): string {
   if (p === '/api/time-gaps') return `time-gaps ≥${body.thresholdSeconds ?? 30}s`;
   if (p.startsWith('/api/trend-')) return `${name} ${body.field ?? body.pattern ?? ''}`.trim();
   if (p === '/api/investigate-component') return `investigate component ${body.component ?? ''}`;
-  if (p === '/api/triage') return `triage ${body.symptom ?? ''}`.trim();
   if (p === '/api/evidence-pack') return `evidence-pack${body.baselineId ? ' (vs baseline)' : ''}`;
   if (p === '/api/build-conclusion') return 'build-conclusion';
   if (p === '/api/summarize') return `summarize${body.opts?.contains ? ` ~"${body.opts.contains}"` : ''}`;

@@ -133,8 +133,6 @@ const IPC = {
   TREND_SIGNAL_SERIES: 'trend-signal-series',
   TREND_TRANSITIONS: 'trend-transitions',
   TREND_CORRELATE: 'trend-correlate',
-  // Guided triage
-  TRIAGE_RECIPE: 'triage-recipe',
   // Semantic summary (human twin of logan_summarize)
   SUMMARIZE: 'summarize',
   SUMMARIZE_CANCEL: 'summarize-cancel',
@@ -1088,10 +1086,6 @@ const api = {
     ipcRenderer.invoke(IPC.TREND_TRANSITIONS, options),
   trendCorrelate: (options: { field: string; event: string; startLine?: number; endLine?: number; pattern?: string; patternFlags?: string }): Promise<{ success: boolean; [key: string]: any }> =>
     ipcRenderer.invoke(IPC.TREND_CORRELATE, options),
-
-  // Guided triage — run a symptom recipe and pin findings
-  triageRecipe: (options: { symptom: string; domain?: string; component?: string; sinceLine?: number; field?: string; expect?: string; baselineId?: string; maxFindings?: number; pin?: boolean }): Promise<{ success: boolean; [key: string]: any }> =>
-    ipcRenderer.invoke(IPC.TRIAGE_RECIPE, options),
 
   // Semantic summary — fold the log into distinct message templates (human twin of logan_summarize)
   summarize: (opts?: { maxTemplates?: number; maxExamples?: number; detectSeverity?: boolean; detectTimestamp?: boolean; contains?: string }, scope?: ScopeDescriptor | null): Promise<{ success: boolean; summary?: any; scope?: ScopeInfo; error?: string }> =>

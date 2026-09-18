@@ -7800,41 +7800,17 @@ async function renderSegmentReadout(el: HTMLElement, enabled: boolean): Promise<
   }
 }
 
-// ─── Investigate (Guided Triage) ─────────────────────────────────────────────
-// Symptom-first root-cause finding. Each symptom runs the shared recipe engine
-// (src/mcp-server/recipes.ts via window.api.triageRecipe) which composes existing
-// LOGAN primitives, pins findings, and returns a compact result — the SAME engine
-// the MCP agent uses, so panel and agent never diverge. Spec: docs/TRIAGE_GUIDE.md.
-
-interface SymptomDef { id: string; label: string; icon: string; hint: string; }
-const INVESTIGATE_SYMPTOMS: SymptomDef[] = [
-  { id: 'crash', label: 'It crashed', icon: '💥', hint: 'fatal errors, exceptions, stack traces' },
-  { id: 'hang', label: 'It froze', icon: '🧊', hint: 'biggest time gaps / silences' },
-  { id: 'slow', label: "It's slow", icon: '🐢', hint: 'latency / duration spikes' },
-  { id: 'error-storm', label: 'Error storm', icon: '🌩️', hint: 'failing components, error bursts' },
-  { id: 'wont-start', label: "Won't start", icon: '🚫', hint: 'config / init / startup failures' },
-  { id: 'conn-drops', label: 'Connection drops', icon: '🔌', hint: 'disconnect / retry / timeout' },
-  { id: 'flaky', label: 'Intermittent', icon: '🎲', hint: 'a value that flips (needs a field)' },
-  { id: 'wrong-value', label: 'Wrong value', icon: '❓', hint: 'where a value changed (needs a field)' },
-  { id: 'ui-state', label: 'UI looks wrong', icon: '🖼️', hint: 'expected UI state vs. actual (describe what should have happened)' },
-];
+// ─── Recipes panel ───────────────────────────────────────────────────────────
+// Saved, replayable investigations ("recipes" = InvestigationTemplate entities).
+// The agent records the steps it takes; save them as a named recipe and replay it
+// on any log — one click runs the steps and pins clickable findings. The list is a
+// searchable, groupable card gallery with a slide-in detail drawer.
 
 let investigatePanelInited = false;
 
 function initInvestigatePanel(): void {
   if (investigatePanelInited) return;
   investigatePanelInited = true;
-  const bar = document.getElementById('investigate-symptoms');
-  if (!bar) return;
-  for (const s of INVESTIGATE_SYMPTOMS) {
-    const btn = document.createElement('button');
-    btn.className = 'investigate-symptom-btn secondary-btn small';
-    btn.dataset.symptom = s.id;
-    btn.title = s.hint;
-    btn.innerHTML = `<span class="sym-icon">${s.icon}</span> ${escapeHtml(s.label)}`;
-    btn.addEventListener('click', () => { void runInvestigateRecipe(s.id); });
-    bar.appendChild(btn);
-  }
 
   // Saved investigation patterns (templates of the agent's recorded steps).
   document.getElementById('btn-save-investigation')?.addEventListener('click', () => { void saveCurrentInvestigation(); });
@@ -9085,7 +9061,7 @@ const HUB_OUTPUT_LABEL: Record<string, string> = {
   '/api/search': 'matches', '/api/filter': 'filtered view', '/api/analyze': 'level breakdown',
   '/api/time-gaps': 'time gaps', '/api/investigate-crashes': 'crash findings',
   '/api/investigate-component': 'component health', '/api/investigate-timerange': 'timerange findings',
-  '/api/triage': 'triage', '/api/build-conclusion': 'verdict', '/api/summarize': 'templates',
+  '/api/build-conclusion': 'verdict', '/api/summarize': 'templates',
   '/api/evidence-pack': 'evidence pack', '/api/diff-runs': 'run diff',
   '/api/investigation-run': 'recipe answer', // a composite step runs a saved sub-recipe
 };
@@ -9770,179 +9746,8 @@ function showRequirementsModal(patternName: string, current: any): Promise<any |
   });
 }
 
-async function runInvestigateRecipe(symptom: string, opts: { field?: string; component?: string; expect?: string } = {}): Promise<void> {
-  if (!state.filePath) { showToast('Open a log file first'); return; }
-  const results = document.getElementById('investigate-results');
-  if (results) results.innerHTML = '<p class="placeholder">Running recipe…</p>';
-  document.querySelectorAll('.investigate-symptom-btn').forEach(b => {
-    b.classList.toggle('active', (b as HTMLElement).dataset.symptom === symptom);
-  });
-  try {
-    const res = await window.api.triageRecipe({ symptom, pin: true, ...opts });
-    if (!res.success) {
-      if (results) results.innerHTML = `<p class="placeholder">${escapeHtml(res.error || 'Recipe failed')}</p>`;
-      return;
-    }
-    renderInvestigateResult(res);
-  } catch (e) {
-    if (results) results.innerHTML = `<p class="placeholder">${escapeHtml(String(e))}</p>`;
-  }
-}
-
-function renderInvestigateResult(res: any): void {
-  const container = document.getElementById('investigate-results');
-  if (!container) return;
-  const findings: any[] = res.findings || [];
-  const nextQuestions: any[] = res.nextQuestions || [];
-  const sevClass = (s: string) => s === 'error' ? 'sev-error' : s === 'warning' ? 'sev-warning' : 'sev-info';
-
-  let html = `<div class="investigate-summary">${escapeHtml(res.summary || '')} <span class="investigate-domain">domain: ${escapeHtml(res.domain || 'generic')}</span></div>`;
-
-  if (findings.length === 0) {
-    html += '<p class="placeholder">No findings for this symptom.</p>';
-    // Don't dead-end: offer the other symptoms as one-click next tries.
-    const others = INVESTIGATE_SYMPTOMS.filter(s => s.id !== res.symptom);
-    if (others.length) {
-      html += '<div class="investigate-suggest"><span class="suggest-label">Try instead:</span>'
-        + others.map(s => `<button class="investigate-suggest-btn secondary-btn small" data-symptom="${escapeHtml(s.id)}" title="${escapeHtml(s.hint)}"><span class="sym-icon">${s.icon}</span> ${escapeHtml(s.label)}</button>`).join('')
-        + '</div>';
-    }
-  } else {
-    html += '<ul class="investigate-findings">';
-    for (const f of findings) {
-      const range = f.endLine && f.endLine > f.lineNumber ? `${f.lineNumber}–${f.endLine}` : `${f.lineNumber}`;
-      const term = deriveRecurTerm(f);
-      html += `<li class="investigate-finding ${sevClass(f.severity)}" data-line="${f.lineNumber}">`
-        + '<div class="finding-row">'
-        + `<span class="finding-line">L${escapeHtml(range)}</span>`
-        + `<span class="finding-title">${escapeHtml(f.title || '')}</span>`
-        + (f.sample ? `<span class="finding-sample">${escapeHtml(f.sample)}</span>` : '')
-        + '<button class="finding-why" title="Drill down — the five whys">🔍 why?</button>'
-        + '</div>'
-        + '<div class="finding-drill" hidden>'
-        + `<button class="drill-act" data-act="before" data-line="${f.lineNumber}">⬆ What happened right before</button>`
-        + `<button class="drill-act" data-act="at" data-line="${f.lineNumber}">⊙ Context at this point</button>`
-        + (term ? `<button class="drill-act" data-act="recur" data-term="${escapeHtml(term)}">🔁 Other occurrences of “${escapeHtml(term)}”</button>` : '')
-        + '</div>'
-        + '</li>';
-    }
-    html += '</ul>';
-  }
-
-  // Surface the ONE narrowing question; field/component/expect get an inline re-run input.
-  let hasFieldInput = false;
-  for (const q of nextQuestions) {
-    if (q.id === 'field' || q.id === 'component' || q.id === 'expect') {
-      const placeholder = q.id === 'expect' ? 'describe expected UI state, Enter to run' : 'type a value, Enter to re-run';
-      // Field inputs get a datalist of discovered fields so it's pick, not guess.
-      const listAttr = q.id === 'field' ? ' list="investigate-field-list"' : '';
-      if (q.id === 'field') hasFieldInput = true;
-      html += `<div class="investigate-question"><label>${escapeHtml(q.ask)}</label>`
-        + `<input class="investigate-q-input trends-input" data-qid="${escapeHtml(q.id)}" data-symptom="${escapeHtml(res.symptom)}" type="text"${listAttr} placeholder="${placeholder}">`
-        + '</div>';
-    } else {
-      html += `<div class="investigate-question"><span class="q-text">${escapeHtml(q.ask)}</span>${q.hint ? ` <span class="q-hint">${escapeHtml(q.hint)}</span>` : ''}</div>`;
-    }
-  }
-  if (hasFieldInput) html += '<datalist id="investigate-field-list"></datalist>';
-
-  container.innerHTML = html;
-
-  // Click a finding row → jump to that line (findings are 1-based viewer lines).
-  container.querySelectorAll('.finding-row').forEach(row => {
-    row.addEventListener('click', (ev) => {
-      if ((ev.target as HTMLElement).closest('.finding-why')) return; // handled below
-      const li = (row as HTMLElement).closest('.investigate-finding') as HTMLElement | null;
-      const line1 = parseInt(li?.dataset.line || '0', 10);
-      if (line1 > 0) jumpToTrendLine(line1 - 1);
-    });
-  });
-
-  // 🔍 why? → toggle the per-finding drill-down (the five whys).
-  container.querySelectorAll('.finding-why').forEach(btn => {
-    btn.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      const drill = (btn as HTMLElement).closest('.investigate-finding')?.querySelector('.finding-drill') as HTMLElement | null;
-      if (drill) drill.hidden = !drill.hidden;
-    });
-  });
-
-  // Drill-down moves: jump before / jump to / search recurrences.
-  container.querySelectorAll('.drill-act').forEach(btn => {
-    btn.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      const el = btn as HTMLElement;
-      const act = el.dataset.act;
-      const line1 = parseInt(el.dataset.line || '0', 10);
-      if (act === 'before' && line1 > 0) jumpToTrendLine(Math.max(0, line1 - 1 - 20));
-      else if (act === 'at' && line1 > 0) jumpToTrendLine(line1 - 1);
-      else if (act === 'recur' && el.dataset.term) void searchRecurrences(el.dataset.term);
-    });
-  });
-
-  // Field/component/expect input → re-run the recipe narrowed.
-  container.querySelectorAll('.investigate-q-input').forEach(inp => {
-    inp.addEventListener('keydown', (ev) => {
-      if ((ev as KeyboardEvent).key !== 'Enter') return;
-      const el = inp as HTMLInputElement;
-      const val = el.value.trim();
-      if (!val) return;
-      const symptom = el.dataset.symptom || res.symptom;
-      const qid = el.dataset.qid;
-      const narrow = qid === 'field' ? { field: val } : qid === 'expect' ? { expect: val } : { component: val };
-      void runInvestigateRecipe(symptom, narrow);
-    });
-  });
-
-  // "Try instead" suggestions → run a different symptom.
-  container.querySelectorAll('.investigate-suggest-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const sym = (btn as HTMLElement).dataset.symptom;
-      if (sym) void runInvestigateRecipe(sym);
-    });
-  });
-
-  // Populate the field autocomplete lazily on first focus (cached after).
-  container.querySelectorAll('.investigate-q-input[data-qid="field"]').forEach(inp => {
-    inp.addEventListener('focus', () => { void populateInvestigateFieldList(); }, { once: true });
-  });
-}
-
-// Discovered field names for the Investigate field autocomplete, fetched once.
-let investigateFieldNames: string[] | null = null;
-async function populateInvestigateFieldList(): Promise<void> {
-  const list = document.getElementById('investigate-field-list');
-  if (!list) return;
-  if (!investigateFieldNames) {
-    try {
-      const res = await window.api.trendDiscoverFields();
-      investigateFieldNames = (res.success && res.fields ? res.fields : [])
-        .slice()
-        .sort((a, b) => (b.occurrences || 0) - (a.occurrences || 0))
-        .map(f => f.name);
-    } catch {
-      investigateFieldNames = [];
-    }
-  }
-  list.innerHTML = investigateFieldNames.map(n => `<option value="${escapeHtml(n)}"></option>`).join('');
-}
-
-// Derive a searchable keyword from a finding's title so "Other occurrences"
-// can re-run a real search. Only returns a term when the recipe captured a
-// concrete keyword (e.g. "Crash: FATAL" / "Flip (battery_state)"); otherwise
-// null so the recurrence button is omitted rather than searching garbage.
-function deriveRecurTerm(f: any): string | null {
-  const title: string = f.title || '';
-  const strip = (s: string) => s.trim().replace(/^["'“”]+|["'“”]+$/g, '').trim();
-  const paren = title.match(/\(([^)]{2,40})\)/);
-  if (paren) return strip(paren[1]) || null;
-  const colon = title.match(/:\s*(.{2,40})$/);
-  if (colon) return strip(colon[1]) || null;
-  return null;
-}
-
-// Drill-down "Other occurrences" → reveal the search panel and run the normal
-// search for the captured keyword (literal, case-insensitive).
+// Reveal the search panel and run a literal, case-insensitive search for `term`
+// (used by the right-click "search for selection" action in the viewer).
 async function searchRecurrences(term: string): Promise<void> {
   if (!elements.searchInput) return;
   if (elements.searchPanel) elements.searchPanel.classList.remove('hidden');
