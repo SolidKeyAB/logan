@@ -255,7 +255,7 @@ See [LOGAN-AGENT.md](LOGAN-AGENT.md) for the full API reference, example scripts
 | Ctrl++ / Ctrl+- / Ctrl+0 | Zoom in / out / reset |
 | Ctrl+R | Reload current file from disk |
 | Ctrl+1...5 | Toggle sidebar panels (Folders / Bookmarks / Highlights / Stats / History) |
-| Ctrl+6 / Ctrl+7 | Toggle Analysis / Time Gaps (bottom) |
+| Ctrl+6 / Ctrl+7 | Toggle Overview / Time Gaps (bottom) |
 | Ctrl+8 | Toggle search configs |
 | Ctrl+9 | Toggle video player |
 | Ctrl+\ | Toggle panel visibility |
