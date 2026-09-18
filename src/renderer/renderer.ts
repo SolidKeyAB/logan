@@ -7839,6 +7839,14 @@ function initInvestigatePanel(): void {
   // Saved investigation patterns (templates of the agent's recorded steps).
   document.getElementById('btn-save-investigation')?.addEventListener('click', () => { void saveCurrentInvestigation(); });
   document.getElementById('btn-compose-investigation')?.addEventListener('click', () => { void openComposePanel(); });
+  // Recipe search — filter the list live by name / goal / step contents (no refetch).
+  const searchInput = document.getElementById('investigate-recipe-search') as HTMLInputElement | null;
+  searchInput?.addEventListener('input', () => setRecipeSearch(searchInput.value));
+  searchInput?.addEventListener('keydown', (e) => { if (e.key === 'Escape' && searchInput.value) { e.stopPropagation(); setRecipeSearch(''); } });
+  document.getElementById('investigate-recipe-search-clear')?.addEventListener('click', () => { setRecipeSearch(''); searchInput?.focus(); });
+  // Group-by — re-group the list (no refetch).
+  const groupSel = document.getElementById('investigate-recipe-groupby') as HTMLSelectElement | null;
+  groupSel?.addEventListener('change', () => { recipeGroupBy = (groupSel.value as 'type' | 'file' | 'flat') || 'type'; renderRecipeList(); });
   window.api.onInvestigationTemplatesChanged(() => { void loadInvestigationTemplates(); });
   // The agent applied a saved lens entity → run the SAME dispatcher the human ▶ Apply uses
   // (set-semantics, so a re-apply is idempotent). One impl, two operators.
@@ -7888,12 +7896,96 @@ function resolveRecipeTier(t: any): 'fundamental' | 'complex' {
   return t?.composite ? 'complex' : 'fundamental';
 }
 
-// Collapse state for the two recipe tiers in the Recipes panel (session-only).
-const recipeTierCollapsed: { fundamental: boolean; complex: boolean } = { fundamental: false, complex: false };
+// Recipes-panel view state (session-only): the live search query, how to group the
+// list, and which group sections are collapsed. Search + group only re-RENDER from the
+// cached templates (renderRecipeList) — no refetch — so typing is instant.
+let recipeSearchQuery = '';
+let recipeGroupBy: 'type' | 'file' | 'flat' = 'type';
+const recipeGroupCollapsed: Record<string, boolean> = {}; // keyed `${mode}:${groupKey}`
 
-// Build one recipe card (chip). Extracted so the grouped Fundamental/Complex view can
-// place cards under their tier section.
-function buildRecipeChip(t: any): HTMLElement {
+// The two curated tiers, in plain language (self-explaining, no "fundamental/complex"
+// jargon on screen — the data values stay 'fundamental'/'complex'). Module-scope so
+// both the grouper and any tier UI share one definition.
+const RECIPE_TIERS: Array<{ tier: 'fundamental' | 'complex'; label: string; icon: string; hint: string }> = [
+  { tier: 'fundamental', label: 'Building blocks', icon: '🧱', hint: 'Single-purpose recipes — one clear goal each.' },
+  { tier: 'complex', label: 'Workflows', icon: '⋔', hint: 'Multi-step / composite recipes built from building blocks.' },
+];
+
+// Everything about a recipe that its search should look inside — its "contents":
+// name, goal (aim), description, every step's label + verb + param values, the
+// promoted fill-ins, and the file(s) it was recorded on. Lower-cased once for matching.
+function recipeSearchText(t: any): string {
+  const parts: string[] = [t.name, t.aim, t.description];
+  for (const s of (t.steps || [])) {
+    parts.push(s.label, (s.path || '').replace('/api/', ''));
+    if (s.body && typeof s.body === 'object') {
+      for (const v of Object.values(s.body)) {
+        if (typeof v === 'string' || typeof v === 'number') parts.push(String(v));
+      }
+    }
+  }
+  for (const p of (t.params || [])) {
+    parts.push(p.label, p.key);
+    if (p.default != null) parts.push(String(p.default));
+  }
+  const src = recipeSourceFilesInfo(t);
+  if (src) parts.push(...src.names, ...src.types);
+  parts.push(resolveRecipeTier(t));
+  if (t.composite) parts.push('composite', 'workflow');
+  return parts.filter(Boolean).join(' ').toLowerCase();
+}
+
+// When a search matched a recipe on something NOT visible on its face (i.e. inside a
+// step or its source file rather than the name/goal), return a short "why it matched"
+// hint so the user sees why this candidate surfaced. '' when the match is already visible.
+function recipeMatchHint(t: any, terms: string[]): string {
+  if (!terms.length) return '';
+  const visible = [t.name, t.aim, t.description].filter(Boolean).join(' ').toLowerCase();
+  const hidden = terms.filter(term => !visible.includes(term));
+  if (!hidden.length) return '';
+  for (const s of (t.steps || [])) {
+    const stepTxt = [s.label, s.path, ...Object.values(s.body || {})].map(x => String(x)).join(' ').toLowerCase();
+    if (hidden.some(term => stepTxt.includes(term))) {
+      return `matched step: ${s.label || (s.path || '').replace('/api/', '')}`;
+    }
+  }
+  const src = recipeSourceFilesInfo(t);
+  if (src && hidden.some(term => `${src.names.join(' ')} ${src.types.join(' ')}`.toLowerCase().includes(term))) {
+    return `matched file: ${src.names.join(', ')}`;
+  }
+  return '';
+}
+
+// Partition the (already search-filtered) recipes into display groups per the chosen
+// mode. 'type' = the two curated tiers; 'file' = by recorded source-file type; 'flat' =
+// one A–Z list. Empty groups are dropped by the caller.
+interface RecipeGroup { key: string; label: string; icon: string; hint: string; items: any[]; }
+function groupRecipes(templates: any[], mode: 'type' | 'file' | 'flat'): RecipeGroup[] {
+  const byName = (a: any, b: any) => String(a.name).localeCompare(String(b.name));
+  if (mode === 'flat') {
+    return [{ key: 'all', label: 'All recipes', icon: '📋', hint: 'Every saved recipe, A–Z.', items: [...templates].sort(byName) }];
+  }
+  if (mode === 'file') {
+    const map = new Map<string, any[]>();
+    for (const t of templates) {
+      const info = recipeSourceFilesInfo(t);
+      const key = info ? info.types.join(', ') : '(source not recorded)';
+      (map.get(key) || map.set(key, []).get(key)!).push(t);
+    }
+    return [...map.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([key, items]) => ({ key, label: key, icon: '📄', hint: `Recorded on ${key} file(s).`, items: items.sort(byName) }));
+  }
+  // 'type' — curated tiers
+  return RECIPE_TIERS
+    .map(def => ({ key: def.tier, label: def.label, icon: def.icon, hint: def.hint, items: templates.filter(t => resolveRecipeTier(t) === def.tier).sort(byName) }))
+    .filter(g => g.items.length > 0);
+}
+
+// Build one recipe card (chip). Extracted so the grouped view can place cards under
+// their section. `matchHint` (optional) shows WHY a search surfaced this recipe when the
+// match was inside a step rather than the name/goal.
+function buildRecipeChip(t: any, matchHint?: string): HTMLElement {
   const chip = document.createElement('span');
   chip.className = 'investigate-pattern-chip';
   const stepCount = (t.steps || []).length;
@@ -7911,6 +8003,14 @@ function buildRecipeChip(t: any): HTMLElement {
     + ` <span class="investigate-pattern-count">${stepCount}</span>`;
   run.addEventListener('click', () => { void openTemplateHub(t.name); });
   chip.appendChild(run);
+  // Why this recipe surfaced in a search, when the hit was inside a step (not its name/goal).
+  if (matchHint) {
+    const hint = document.createElement('span');
+    hint.className = 'investigate-pattern-matchhint';
+    hint.textContent = matchHint;
+    hint.title = matchHint;
+    chip.appendChild(hint);
+  }
   // Show a small tier marker only when the tier is PINNED (curated away from the default),
   // so the grouped sections carry the common case and pinned recipes are visibly curated.
   if (pinned) {
@@ -7952,43 +8052,96 @@ function buildRecipeChip(t: any): HTMLElement {
   return chip;
 }
 
+// Fetch the saved recipes, cache them, then paint the list. Called on init and whenever
+// the templates change on disk. Search/group changes call renderRecipeList() directly
+// (no refetch) so filtering is instant.
 async function loadInvestigationTemplates(): Promise<void> {
-  const list = document.getElementById('investigate-patterns-list');
-  if (!list) return;
   const res = await window.api.listInvestigations();
-  const templates = (res.success && res.templates) ? res.templates : [];
-  investigationTemplatesCache = templates;
+  investigationTemplatesCache = (res.success && res.templates) ? res.templates : [];
+  renderRecipeList();
+}
+
+// Paint the recipe list from the cache, honouring the live search query and group mode.
+// Searching flattens the grouping (a filtered result set reads better as one ranked list,
+// and empty group headers would be noise); an empty query shows the chosen grouping.
+function renderRecipeList(): void {
+  const list = document.getElementById('investigate-patterns-list');
+  const countEl = document.getElementById('investigate-recipe-count');
+  if (!list) return;
+  const templates = investigationTemplatesCache;
+  const terms = recipeSearchQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const searching = terms.length > 0;
+  const filtered = searching
+    ? templates.filter(t => { const txt = recipeSearchText(t); return terms.every(term => txt.includes(term)); })
+    : templates;
+
+  // Count / status line next to the caption.
+  if (countEl) {
+    if (templates.length === 0) countEl.textContent = '';
+    else if (searching) countEl.textContent = `${filtered.length} of ${templates.length} match`;
+    else countEl.textContent = `${templates.length} recipe${templates.length === 1 ? '' : 's'}`;
+  }
+
   list.innerHTML = '';
+
   if (templates.length === 0) {
-    list.innerHTML = '<span class="investigate-patterns-empty">no recipes yet — ask the agent to investigate, then “Save current”</span>';
+    list.innerHTML = '<span class="investigate-patterns-empty">No recipes yet — ask the agent to investigate, then “💾 Save current”. Or build one from others with “＋ Compose”.</span>';
     return;
   }
-  // Split into two tiers: 🧱 Fundamental (reusable building blocks) and ⋔ Complex
-  // (multi-step / composite workflows). A section is shown only when it has recipes.
-  const TIERS: Array<{ tier: 'fundamental' | 'complex'; label: string; icon: string; hint: string }> = [
-    { tier: 'fundamental', label: 'Fundamental', icon: '🧱', hint: 'Fundamental — reusable single-aim building blocks' },
-    { tier: 'complex', label: 'Complex', icon: '⋔', hint: 'Complex — multi-step / composite workflows built from fundamentals' },
-  ];
-  for (const def of TIERS) {
-    const items = templates.filter((t: any) => resolveRecipeTier(t) === def.tier);
-    if (items.length === 0) continue;
+  if (filtered.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'investigate-patterns-empty investigate-patterns-nomatch';
+    empty.innerHTML = `No recipe matches “${escapeHtml(recipeSearchQuery.trim())}”. `;
+    const clear = document.createElement('button');
+    clear.className = 'investigate-recipe-clear-inline';
+    clear.textContent = 'Clear search';
+    clear.addEventListener('click', () => setRecipeSearch(''));
+    empty.appendChild(clear);
+    list.appendChild(empty);
+    return;
+  }
+
+  // While searching → one flat ranked list (with match hints); otherwise → grouped.
+  const groups: RecipeGroup[] = searching
+    ? [{ key: 'results', label: `Matches`, icon: '⌕', hint: `Recipes matching “${recipeSearchQuery.trim()}”.`, items: [...filtered].sort((a, b) => String(a.name).localeCompare(String(b.name))) }]
+    : groupRecipes(filtered, recipeGroupBy);
+
+  // A single unlabelled group (flat mode, no search) doesn't need a header.
+  const showHeaders = !(groups.length === 1 && recipeGroupBy === 'flat' && !searching);
+
+  for (const g of groups) {
+    const groupKey = `${searching ? 'search' : recipeGroupBy}:${g.key}`;
+    const collapsed = !!recipeGroupCollapsed[groupKey];
     const section = document.createElement('div');
-    section.className = 'recipe-tier-section' + (recipeTierCollapsed[def.tier] ? ' collapsed' : '');
-    const header = document.createElement('button');
-    header.className = 'recipe-tier-header';
-    header.title = def.hint;
-    header.innerHTML = `<span class="recipe-tier-caret">▾</span><span class="recipe-tier-icon">${def.icon}</span><span class="recipe-tier-label">${def.label}</span><span class="recipe-tier-count">${items.length}</span>`;
+    section.className = 'recipe-tier-section' + (collapsed ? ' collapsed' : '');
+    if (showHeaders) {
+      const header = document.createElement('button');
+      header.className = 'recipe-tier-header';
+      header.title = g.hint;
+      header.innerHTML = `<span class="recipe-tier-caret">▾</span><span class="recipe-tier-icon">${g.icon}</span><span class="recipe-tier-label">${escapeHtml(g.label)}</span><span class="recipe-tier-count">${g.items.length}</span>`;
+      header.addEventListener('click', () => {
+        recipeGroupCollapsed[groupKey] = !recipeGroupCollapsed[groupKey];
+        section.classList.toggle('collapsed', recipeGroupCollapsed[groupKey]);
+      });
+      section.appendChild(header);
+    }
     const body = document.createElement('div');
     body.className = 'recipe-tier-body';
-    for (const t of items) body.appendChild(buildRecipeChip(t));
-    header.addEventListener('click', () => {
-      recipeTierCollapsed[def.tier] = !recipeTierCollapsed[def.tier];
-      section.classList.toggle('collapsed', recipeTierCollapsed[def.tier]);
-    });
-    section.appendChild(header);
+    for (const t of g.items) body.appendChild(buildRecipeChip(t, searching ? recipeMatchHint(t, terms) : undefined));
     section.appendChild(body);
     list.appendChild(section);
   }
+}
+
+// Set the recipe search query (from the input or a "clear" button) and re-render. Keeps
+// the input element, the clear-× visibility, and the rendered list in sync from one place.
+function setRecipeSearch(q: string): void {
+  recipeSearchQuery = q;
+  const input = document.getElementById('investigate-recipe-search') as HTMLInputElement | null;
+  const clear = document.getElementById('investigate-recipe-search-clear');
+  if (input && input.value !== q) input.value = q;
+  if (clear) clear.toggleAttribute('hidden', q.trim().length === 0);
+  renderRecipeList();
 }
 
 // Fetch the requirements preflight for one pattern and paint its badge ✓/✗.
