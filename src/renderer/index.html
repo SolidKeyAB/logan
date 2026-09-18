@@ -41,6 +41,15 @@
       </div>
       <div id="tabs-container" class="tabs-container"></div>
       <div class="tab-bar-right">
+        <div id="severity-pill-wrapper" class="severity-pill-wrapper" hidden>
+          <button id="severity-pill" class="severity-pill" title="Start here — severity summary for this log. Click for the full brief." aria-haspopup="true" aria-expanded="false">
+            <span id="severity-pill-dot" class="severity-pill-dot triage-dot"></span>
+            <span id="severity-pill-counts" class="severity-pill-counts"></span>
+            <span class="severity-pill-caret">▾</span>
+          </button>
+          <div id="severity-pill-menu" class="severity-pill-menu hidden"></div>
+        </div>
+        <div class="tab-bar-separator"></div>
         <button id="btn-compare" class="tab-bar-btn" title="Compare two log files (Ctrl+Shift+C)" aria-label="Compare files">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="9" height="18" rx="1"/><rect x="13" y="3" width="9" height="18" rx="1"/></svg>
         </button>
@@ -1850,7 +1859,6 @@
   <!-- Quick-start triage "Start here" card — a floating, dismissable briefing that
        auto-appears on file open (top crashes / errors / components / gaps, click to
        jump). Non-modal; toggle via Features → "Triage on open". -->
-  <div id="triage-card" class="triage-card" hidden></div>
   <script src="renderer.js"></script>
 </body>
 </html>
