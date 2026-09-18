@@ -73,20 +73,28 @@ LOGAN supports AI agent integration through its local HTTP API and MCP server. A
 | POST | /api/investigate-component | Component-specific investigation |
 | POST | /api/triage | AI-guided triage |
 
-## MCP Tools (33 tools)
+## MCP Tools (75+ tools)
 
-When connected via MCP, these tools are auto-discovered:
+When connected via MCP, these tools are auto-discovered. Highlights by area:
 
 **Core:** `logan_status`, `logan_open_file`, `logan_get_lines`, `logan_search`, `logan_analyze`, `logan_filter`, `logan_clear_filter`, `logan_navigate`
 
-**Bookmarks:** `logan_add_bookmark`, `logan_remove_bookmark`, `logan_update_bookmark`, `logan_clear_bookmarks`, `logan_bookmarks`
+**Bookmarks / highlights / annotations:** `logan_add_bookmark`, `logan_bookmarks`, `logan_highlight`, `logan_highlights`, `logan_annotate`, `logan_annotations`, `logan_report_finding`, `logan_import_findings` (+ remove/update/clear variants)
 
-**Highlights:** `logan_highlight`, `logan_remove_highlight`, `logan_update_highlight`, `logan_clear_highlights`, `logan_highlights`
+**Analysis & triage:** `logan_triage`, `logan_triage_recipe`, `logan_time_gaps`, `logan_investigate_crashes`, `logan_investigate_component`, `logan_investigate_timerange`, `logan_evidence_pack`, `logan_summarize`, `logan_fold_regions`
 
-**Analysis:** `logan_time_gaps`, `logan_triage`, `logan_investigate_crashes`, `logan_investigate_component`, `logan_investigate_timerange`
+**Trends & signals:** `logan_trend_fields`, `logan_trend_series`, `logan_trend_transitions`, `logan_trend_correlate`, `logan_trend_show`
 
-**Baselines:** `logan_baseline_save`, `logan_baseline_list`, `logan_baseline_compare`, `logan_baseline_delete`, `logan_compare_baseline`
+**Baselines & diff:** `logan_baseline_save`, `logan_baseline_list`, `logan_baseline_compare`, `logan_baseline_delete`, `logan_diff_runs`
 
-**Notes:** `logan_get_notes`, `logan_save_notes`
+**Multi-file & environment:** `logan_single_session`, `logan_context_attach`, `logan_context_read`
+
+**Entities, catalogue & investigations:** `logan_entities`, `logan_apply_entity`, `logan_export_catalog`, `logan_import_catalog`, `logan_run_investigation`, `logan_save_investigation`, `logan_compose_investigation`, `logan_fork_investigation`, `logan_check_investigation`, `logan_show_workflow`
+
+**Reports & notes:** `logan_save_report`, `logan_build_conclusion`, `logan_get_notes`, `logan_save_notes`, `logan_memory_read`, `logan_memory_write`
+
+**Decode:** `sherlog_decode`
 
 **Chat:** `logan_send_message`, `logan_wait_for_message`, `logan_get_messages`
+
+> Full, always-current reference: [CLAUDE.md](CLAUDE.md) and [LOGAN-AGENT.md](LOGAN-AGENT.md).
