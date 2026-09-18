@@ -60,29 +60,51 @@ A typical agent conversation looks like this:
 {"tool": "logan_wait_for_message", "arguments": {"timeout": 120}}
 ```
 
-### All Available MCP Tools
+### All Available MCP Tools (75+)
 
-**Chat:**
-`logan_send_message`, `logan_wait_for_message`, `logan_get_messages`
+**Chat & memory:**
+`logan_send_message`, `logan_wait_for_message`, `logan_get_messages`, `logan_memory_read`, `logan_memory_write`
 
-**Core:**
-`logan_status`, `logan_open_file`, `logan_get_lines`, `logan_search`, `logan_navigate`
+**Core & navigation:**
+`logan_status`, `logan_open_file`, `logan_get_lines`, `logan_search`, `logan_navigate`, `logan_filter`, `logan_clear_filter`
 
-**Analysis:**
-`logan_analyze`, `logan_triage`, `logan_investigate_crashes`, `logan_investigate_component`, `logan_investigate_timerange`, `logan_time_gaps`
+**Analysis & triage:**
+`logan_analyze`, `logan_triage`, `logan_triage_recipe`, `logan_investigate_crashes`, `logan_investigate_component`, `logan_investigate_timerange`, `logan_time_gaps`, `logan_evidence_pack`, `logan_summarize`, `logan_fold_regions`
 
-**Annotations:**
-`logan_add_bookmark`, `logan_bookmarks`, `logan_remove_bookmark`, `logan_update_bookmark`, `logan_clear_bookmarks`,
+**Findings, annotations & reports:**
+`logan_report_finding`, `logan_import_findings`, `logan_annotate`, `logan_annotations`, `logan_remove_annotation`, `logan_add_clue`, `logan_build_conclusion`, `logan_save_report`
+
+**Bookmarks:**
+`logan_add_bookmark`, `logan_bookmarks`, `logan_remove_bookmark`, `logan_update_bookmark`, `logan_clear_bookmarks`
+
+**Highlights:**
 `logan_highlight`, `logan_highlights`, `logan_remove_highlight`, `logan_update_highlight`, `logan_clear_highlights`
 
 **Notes:**
 `logan_get_notes`, `logan_save_notes`
 
-**Baselines:**
-`logan_baseline_save`, `logan_baseline_list`, `logan_baseline_compare`, `logan_baseline_delete`, `logan_compare_baseline`
+**Baselines & diff:**
+`logan_baseline_save`, `logan_baseline_list`, `logan_baseline_compare`, `logan_baseline_delete`, `logan_compare_baseline`, `logan_diff_runs`
 
-**Filter:**
-`logan_filter`, `logan_clear_filter`
+**Trends & signals:**
+`logan_trend_fields`, `logan_trend_series`, `logan_trend_transitions`, `logan_trend_correlate`, `logan_trend_show`
+
+**Patterns, columns & constants:**
+`logan_compile_pattern`, `logan_column_layouts`, `logan_constants`, `logan_extract`
+
+**Multi-file & environment:**
+`logan_single_session`, `logan_context_attach`, `logan_context_read`
+
+**Saved entities & catalogue:**
+`logan_entities`, `logan_apply_entity`, `logan_export_catalog`, `logan_import_catalog`
+
+**Investigation templates & workflow:**
+`logan_list_investigations`, `logan_run_investigation`, `logan_save_investigation`, `logan_save_sequence`, `logan_compose_investigation`, `logan_fork_investigation`, `logan_check_investigation`, `logan_set_investigation_requirements`, `logan_set_investigation_params`, `logan_set_investigation_answer`, `logan_set_investigation_tier`, `logan_get_investigation_log`, `logan_show_workflow`
+
+**Decode:**
+`sherlog_decode`
+
+> The full, always-current tool reference (with argument details and usage notes) lives in [CLAUDE.md](CLAUDE.md).
 
 ---
 
