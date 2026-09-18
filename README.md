@@ -35,7 +35,7 @@ npm start
 - **Start-here pill** — On open, a severity pill appears in the tab bar (fatal/error/warning counts) with a pulldown that jumps to the first problem, suggests a column layout, and opens the full brief — remembered per file
 - **Word wrap & zoom** — Toggle wrapping, adjust font size with Ctrl+/- or mouse wheel
 - **Columns panel** — Auto-detect delimited/whitespace-aligned columns; name them, show/hide/mute, freeze the header, drag-to-resize, and save reusable **column layouts** and **column patterns** (grok/regex)
-- **Summarize & fold** — Collapse repeating vertical blocks into foldable regions to compress a noisy log while keeping its meaning
+- **Fold repeats** — One-click top-bar toggle that collapses repeating blocks in the viewer into `▶ ×N` headers you click to expand — compress a noisy log while keeping its structure
 - **JSON auto-format** — Pretty-print JSON files on open
 
 ### AI Agent Integration
