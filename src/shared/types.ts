@@ -516,8 +516,6 @@ export const IPC = {
   TREND_SIGNAL_SERIES: 'trend-signal-series',
   TREND_TRANSITIONS: 'trend-transitions',
   TREND_CORRELATE: 'trend-correlate',
-  // Guided triage
-  TRIAGE_RECIPE: 'triage-recipe',
   // Semantic summary — fold the log into distinct message templates (human twin of logan_summarize)
   SUMMARIZE: 'summarize',
   SUMMARIZE_CANCEL: 'summarize-cancel',

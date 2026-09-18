@@ -18,7 +18,6 @@ const OUTPUT_LABEL_BY_PATH: Record<string, string> = {
   '/api/investigate-crashes': 'crash findings',
   '/api/investigate-component': 'component health',
   '/api/investigate-timerange': 'timerange findings',
-  '/api/triage': 'triage',
   '/api/build-conclusion': 'verdict',
   '/api/summarize': 'templates',
   '/api/evidence-pack': 'evidence pack',

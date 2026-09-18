@@ -891,9 +891,6 @@ interface Api {
   trendTransitions: (options: { field: string; startLine?: number; endLine?: number; maxTransitions?: number; pattern?: string; patternFlags?: string }) => Promise<{ success: boolean; error?: string } & Partial<TrendTransitionsResult>>;
   trendCorrelate: (options: { field: string; event: string; startLine?: number; endLine?: number; pattern?: string; patternFlags?: string }) => Promise<{ success: boolean; error?: string } & Partial<TrendCorrelateResult>>;
 
-  // Guided triage
-  triageRecipe: (options: { symptom: string; domain?: string; component?: string; sinceLine?: number; field?: string; expect?: string; baselineId?: string; maxFindings?: number; pin?: boolean }) => Promise<{ success: boolean; error?: string; [key: string]: any }>;
-
   // Semantic summary — fold the log into distinct message templates
   summarize: (opts?: { maxTemplates?: number; maxExamples?: number; detectSeverity?: boolean; detectTimestamp?: boolean; contains?: string }, scope?: ScopeDescriptor | null) => Promise<{ success: boolean; summary?: TemplateSummary; scope?: ScopeInfo; error?: string }>;
   summarizeCancel: () => Promise<{ success: boolean }>;
