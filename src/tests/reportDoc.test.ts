@@ -5,7 +5,6 @@ import {
   reportFileName,
   type ReportDocInput,
 } from '../main/reportDoc';
-import type { ConclusionReport } from '../main/conclusion';
 
 const BASE: ReportDocInput = {
   name: 'Auth token-expiry root cause',
@@ -162,38 +161,6 @@ describe('buildReportMarkdown', () => {
     expect(md).toContain('## Steps taken (2)');
     expect(md).toContain("1. search 'token expired' → 42 matches");
     expect(md).toContain('2. analyze');
-  });
-
-  it('embeds the verdict + timeline when a conclusion is supplied', () => {
-    const conclusion: ConclusionReport = {
-      generatedAt: 0,
-      sourceFilePath: '/tmp/logs/app.log',
-      fileName: 'app.log',
-      totalLines: 12345,
-      levelCounts: { error: 200 },
-      errorRate: 0.02,
-      verdict: { kind: 'error-storm', headline: 'Token expiry storm', detail: '200 auth errors', severity: 'error' },
-      firstAnomaly: { lineNumber: 4046, viewerLine: 4047, kind: 'error', label: 'first 401', severity: 'error' },
-      rootCause: { lineNumber: 8046, viewerLine: 8047, kind: 'error', label: 'token exp', severity: 'error' },
-      timeline: [
-        { lineNumber: 4046, viewerLine: 4047, kind: 'error', label: 'first 401', severity: 'error' },
-      ],
-      topComponents: [],
-    };
-    const md = buildReportMarkdown({
-      ...BASE,
-      conclusion,
-      eventLines: { 4047: 'ERROR 401 unauthorized', 8047: 'ERROR token exp<now' },
-    });
-    expect(md).toContain('## Verdict');
-    expect(md).toContain('**Token expiry storm**');
-    expect(md).toContain('**First anomaly** — first 401 (line 4047)');
-    expect(md).toContain('**Likely root cause** — token exp (line 8047)');
-    expect(md).toContain('**Evidence lines**');
-    expect(md).toContain('► 4047 | ERROR 401 unauthorized');
-    expect(md).toContain('► 8047 | ERROR token exp<now');
-    expect(md).toContain('### Timeline');
-    expect(md).toContain('- line 4047 · first 401');
   });
 
   it('renders a Components — potentially responsible section', () => {

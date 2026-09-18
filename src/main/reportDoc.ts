@@ -5,13 +5,11 @@
 // module stays trivially unit-testable (see src/tests/reportDoc.test.ts).
 //
 // This is LOGAN's universal report shape (see docs/LOGAN_REPORT_FORMAT.md):
-//   front-matter → title → aim/reason → metadata → summary → verdict →
+//   front-matter → title → aim/reason → metadata → summary →
 //   FINDINGS (each with the actual related log-line SEQUENCE + description) →
-//   timeline → steps taken.
+//   components → steps taken.
 // Every finding embeds its real log lines (the match + surrounding context) in a
 // fenced code block so the doc is self-contained and pastes cleanly into Jira.
-
-import type { ConclusionReport } from './conclusion';
 
 export const LOGAN_REPORT_FORMAT_VERSION = 1;
 
@@ -44,7 +42,7 @@ export interface ReportEnvFact {
   source?: string;            // provenance, e.g. "header line 3"
 }
 
-// A component/subsystem implicated in the conclusion — the area to investigate.
+// A component/subsystem potentially responsible for the findings — the area to investigate.
 export interface ReportComponent {
   name: string;
   reason?: string;            // why it's implicated ("38 errors / 4 warnings", or agent's reasoning)
@@ -63,10 +61,7 @@ export interface ReportDocInput {
   agentName?: string;
   findings?: ReportFinding[];
   steps?: ReportStep[];
-  conclusion?: ConclusionReport | null;
-  // viewerLine (1-based) → raw log text, for the verdict's key evidence lines.
-  eventLines?: Record<number, string>;
-  // Components/subsystems potentially responsible for the conclusion.
+  // Components/subsystems potentially responsible for the findings.
   components?: ReportComponent[];
   // Open questions / follow-ups to investigate next.
   questions?: string[];
@@ -143,7 +138,7 @@ export function buildReportMarkdown(input: ReportDocInput): string {
   const {
     name, aim, reason, ticket, body,
     sourceFilePath, totalLines, generatedAtIso, agentName,
-    findings = [], steps = [], conclusion = null, eventLines = {},
+    findings = [], steps = [],
     components = [], questions = [], envContext = [],
   } = input;
 
@@ -204,63 +199,11 @@ export function buildReportMarkdown(input: ReportDocInput): string {
     out.push('');
   }
 
-  // --- Verdict (opt-in conclusion) ---
-  if (conclusion) {
-    out.push('## Verdict');
-    out.push('');
-    out.push(`**${conclusion.verdict.headline}**`);
-    if (conclusion.verdict.detail) {
-      out.push('');
-      out.push(conclusion.verdict.detail);
-    }
-    out.push('');
-    if (conclusion.firstAnomaly) {
-      const fa = conclusion.firstAnomaly;
-      out.push(`- **First anomaly** — ${fa.label} (line ${fa.viewerLine ?? fa.lineNumber + 1})`);
-    }
-    if (conclusion.rootCause) {
-      const rc = conclusion.rootCause;
-      out.push(`- **Likely root cause** — ${rc.label} (line ${rc.viewerLine ?? rc.lineNumber + 1})`);
-    }
-    out.push('');
-
-    // The actual log lines behind the verdict, if the caller resolved them.
-    const keyLines: ReportLogLine[] = [];
-    const seen = new Set<number>();
-    for (const ev of [conclusion.firstAnomaly, conclusion.rootCause]) {
-      if (!ev) continue;
-      const vl = ev.viewerLine ?? ev.lineNumber + 1;
-      const text = eventLines[vl];
-      if (text !== undefined && !seen.has(vl)) {
-        seen.add(vl);
-        keyLines.push({ viewerLine: vl, text, isMatch: true });
-      }
-    }
-    if (keyLines.length) {
-      out.push('**Evidence lines**');
-      out.push('');
-      keyLines.sort((a, b) => a.viewerLine - b.viewerLine);
-      out.push(...renderLogSequence(keyLines));
-      out.push('');
-    }
-
-    if (conclusion.timeline && conclusion.timeline.length) {
-      out.push('### Timeline');
-      out.push('');
-      for (const e of conclusion.timeline) {
-        const vl = e.viewerLine ?? e.lineNumber + 1;
-        const detail = e.detail ? ` — ${e.detail}` : '';
-        out.push(`- line ${vl} · ${e.label}${detail}`);
-      }
-      out.push('');
-    }
-  }
-
-  // --- Components potentially responsible for the conclusion ---
+  // --- Components potentially responsible ---
   if (components.length) {
     out.push('## Components — potentially responsible');
     out.push('');
-    out.push('_The subsystems most likely behind the conclusion — the areas to investigate._');
+    out.push('_The subsystems most likely responsible — the areas to investigate._');
     out.push('');
     for (const c of components) {
       const reasonPart = c.reason ? ` — ${c.reason}` : '';

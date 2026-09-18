@@ -80,7 +80,6 @@ npm start
 - **Trends** — Discover log variables (key=value/JSON), search them by name, and chart any field over time, as value-flips, or correlated with an event; booleans chart as a 0/1 step line
 - **Signals** — Overlay multiple numeric signals (including MF4 channels) on one shared time axis with normalize toggle and click-to-line
 - **Cadence / missing-sequence** — Pick a repeating event, auto-detect its period, and flag skipped occurrences and drift with a negative-space strip and click-to-line
-- **Conclusion** — One-click native root-cause verdict: first anomaly/trigger + timeline + evidence, exportable to `.md`/`.pdf`
 - **Recipes** — Save the agent's investigation steps as named, re-runnable recipes; replay one on any log to search, trend, and pin clickable findings in one click
 
 ### Multi-file & Correlation

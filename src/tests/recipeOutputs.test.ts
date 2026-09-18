@@ -6,7 +6,6 @@ describe('outputLabelForPath', () => {
     expect(outputLabelForPath('/api/search')).toBe('matches');
     expect(outputLabelForPath('/api/investigate-crashes')).toBe('crash findings');
     expect(outputLabelForPath('/api/time-gaps')).toBe('time gaps');
-    expect(outputLabelForPath('/api/build-conclusion')).toBe('verdict');
   });
   it('maps any trend verb to "trend"', () => {
     expect(outputLabelForPath('/api/trend-series')).toBe('trend');
@@ -75,10 +74,6 @@ describe('deriveAnswerValue', () => {
   it('investigate-component → not-found is a false boolean; else mentions count', () => {
     expect(deriveAnswerValue('/api/investigate-component', { success: true, found: false })).toEqual({ kind: 'boolean', bool: false, text: 'not found' });
     expect(deriveAnswerValue('/api/investigate-component', { success: true, totalMentions: 7 })).toEqual({ kind: 'count', count: 7, bool: true });
-  });
-  it('build-conclusion → text verdict (truthy)', () => {
-    expect(deriveAnswerValue('/api/build-conclusion', { success: true, report: { verdict: { headline: 'OOM kill' } } }))
-      .toEqual({ kind: 'text', bool: true, text: 'OOM kill' });
   });
   it('evidence-pack → severity text, truthy only when it signals a problem', () => {
     expect(deriveAnswerValue('/api/evidence-pack', { success: true, pack: { severity: 'error' } })).toEqual({ kind: 'text', bool: true, text: 'error' });
