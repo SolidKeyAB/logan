@@ -60,9 +60,6 @@
         <button id="btn-filter" class="tab-bar-btn" title="Filter (Ctrl+Shift+F)" aria-label="Filter">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
         </button>
-        <button id="btn-analyze" class="tab-bar-btn" title="Analyze" aria-label="Analyze" disabled>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2"/><path d="M8.5 2h7"/></svg>
-        </button>
         <button id="btn-fold-repeats" class="tab-bar-btn" title="Fold repeating blocks in the viewer (▶ ×N — click a header to expand)" aria-label="Fold repeats" disabled>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 10 2.5-2.5L3 5"/><path d="m3 19 2.5-2.5L3 14"/><path d="M10 6h11"/><path d="M10 12h11"/><path d="M10 18h11"/></svg>
         </button>
@@ -103,8 +100,8 @@
             <span class="activity-badge" id="badge-saved"></span>
           </button>
           <div class="activity-bar-separator"></div>
-          <button class="activity-bar-btn" data-bottom-tab="analysis" title="Analysis (Ctrl+6)" aria-label="Analysis">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/></svg>
+          <button class="activity-bar-btn" data-bottom-tab="analysis" title="Overview (Ctrl+6)" aria-label="Overview">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/></svg>
             <span class="activity-badge" id="badge-analysis"></span>
           </button>
           <button class="activity-bar-btn" data-bottom-tab="time-gaps" title="Time Gaps (Ctrl+7)" aria-label="Time Gaps">
@@ -423,7 +420,7 @@
       <div id="bottom-panel-resize-handle" class="bottom-panel-resize-handle"></div>
       <div class="bottom-panel-header">
         <div class="bottom-panel-tabs">
-          <button class="bottom-tab-btn" data-bottom-tab="analysis" data-help="Log level distribution, crash detection, component breakdown, and timestamp analysis.&#10;Click Run Analysis to scan the entire file.">Analysis</button>
+          <button class="bottom-tab-btn" data-bottom-tab="analysis" data-help="Overview — your detail surface. 📋 Brief and 🩺 component health render here; future detailed views too.&#10;Analysis runs automatically in the background — no manual run needed.">Overview</button>
           <button class="bottom-tab-btn" data-bottom-tab="investigate" data-help="Recipes — saved, replayable investigations. Search &amp; run your saved recipes; each one replays its steps (search, time gaps, trends…) and pins clickable findings. Save the agent's steps as a recipe to replay on any log.&#10;No expertise needed.">Recipes</button>
           <button class="bottom-tab-btn" data-bottom-tab="trends" data-help="Trend any field over time. Click Discover to auto-find log variables (key=value, JSON), then chart a field as value-over-time, value flips, or correlation.&#10;Click a chart point to jump to that line.">Trends</button>
           <button class="bottom-tab-btn" data-bottom-tab="signals" data-help="Overlay multiple numeric signals (e.g. MF4 channels) on one shared time axis.&#10;Check signals on the left to plot them; click a point to jump to that record.">Signals</button>
@@ -456,9 +453,11 @@
       </div>
       <div class="bottom-panel-body">
         <!-- Analysis tab -->
+        <!-- Overview — a generic detail surface. 📋 Brief and 🩺 component health render
+             here; future detailed views too. (Internal tab id stays "analysis".) Analysis
+             itself runs automatically in the background — no manual "Run" button. -->
         <div class="bottom-tab-view" data-bottom-tab="analysis">
           <div class="bottom-tab-sub-header">
-            <button id="btn-run-analysis" class="secondary-btn small">Run Analysis</button>
             <button id="btn-brief" class="secondary-btn small" title="One-glance briefing: severity, levels, crashes, top failing components, time gaps, discovered fields — click any row to jump there.">📋 Brief</button>
           </div>
           <!-- Component/text health lookup — type a component name or any text and see
@@ -472,14 +471,9 @@
             </div>
             <div id="health-results" class="health-results"></div>
           </div>
-          <div id="analysis-results" class="analysis-content">
-            <p class="placeholder">Run analysis to see results</p>
-          </div>
           <div id="brief-results" class="analysis-content"></div>
-          <div id="baseline-section" class="baseline-section" style="display: none;">
-            <div class="section-divider">Baselines</div>
-            <div id="baseline-controls"></div>
-            <div id="baseline-comparison-results"></div>
+          <div id="overview-empty" class="analysis-content">
+            <p class="placeholder">Detailed views appear here — click <strong>📋 Brief</strong> above, or right-click a component → <strong>Component health</strong>. Analysis runs automatically in the background.</p>
           </div>
         </div>
         <!-- Summarize tab (semantic template fold) -->
@@ -1529,12 +1523,6 @@
               <input type="range" id="default-gap-threshold" min="1" max="60" value="5" class="settings-slider">
               <span id="default-gap-threshold-value" class="slider-value">5s</span>
             </div>
-          </div>
-          <div class="settings-group">
-            <label class="checkbox-label">
-              <input type="checkbox" id="auto-analyze"> Auto-analyze when opening files
-            </label>
-            <p class="hint">Automatically run analysis when a file is opened</p>
           </div>
           <div class="settings-group">
             <label class="checkbox-label">
