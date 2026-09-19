@@ -11358,3 +11358,14 @@ kbd {
 /* On-open column-layout suggestion row, folded under the severity rows with a hairline divider. */
 .triage-rows.triage-layout { padding-top: 4px; margin-top: 2px; border-top: 1px solid var(--border-color); }
 .triage-row.layout .triage-row-line { color: var(--info-color); }
+
+/* "Next steps" coach — context-ranked moves (label + why), folded under a divider. */
+.triage-rows.triage-nextsteps { padding-top: 4px; margin-top: 2px; border-top: 1px solid var(--border-color); }
+.triage-section-label {
+  padding: 2px 8px 4px; font-size: 10px; font-weight: 700;
+  letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted);
+}
+.triage-row.nextstep { align-items: flex-start; }
+.nextstep-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.nextstep-label { font-weight: 600; color: var(--text-primary); }
+.nextstep-why { font-size: 11px; color: var(--text-muted); white-space: normal; line-height: 1.3; }

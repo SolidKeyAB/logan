@@ -21531,6 +21531,99 @@ function renderSeverityPill(): void {
   }
 }
 
+// ─── "Next steps" coach (mirror of src/shared/nextSteps.ts — keep in sync) ───────
+// Given the cheap signals already on screen, rank the handful of moves worth making
+// now, drawn from the EXISTING recipe step vocabulary (search/filter/trend/time-gaps/
+// run-a-recipe) — no new action type. Recomputed each time the pulldown opens, so it
+// reacts as the user searches, filters and pins findings. Pure logic is tested in
+// src/tests/nextSteps.test.ts; this mirror wires each verb to its UI action.
+type NextStepVerb = 'search' | 'filter' | 'trend' | 'time-gaps' | 'recipe';
+interface NextStepContext {
+  fatal: number; error: number; warning: number;
+  matches: number; isFiltered: boolean; findings: number; savedRecipes: number;
+}
+interface NextStep { verb: NextStepVerb; reason: string; priority: number; }
+const MAX_NEXT_STEPS = 3;
+const NEXT_STEP_META: Record<NextStepVerb, { icon: string; label: string }> = {
+  search: { icon: '🔎', label: 'Search the log' },
+  filter: { icon: '▽', label: 'Filter the view' },
+  trend: { icon: '📈', label: 'Trend a field over time' },
+  'time-gaps': { icon: '⏱', label: 'Find time gaps' },
+  recipe: { icon: '▶', label: 'Saved recipes' },
+};
+function nextStepPlural(n: number, one: string, many: string): string { return n === 1 ? one : many; }
+function suggestNextSteps(ctx: NextStepContext): NextStep[] {
+  const problems = ctx.fatal + ctx.error;
+  const candidates: NextStep[] = [];
+  if (ctx.matches > 0 && !ctx.isFiltered) {
+    candidates.push({ verb: 'filter', priority: 90, reason: `Filter to your ${ctx.matches.toLocaleString()} search ${nextStepPlural(ctx.matches, 'match', 'matches')} and hide the rest.` });
+  }
+  if (problems > 0) {
+    candidates.push({ verb: 'time-gaps', priority: 80, reason: 'Check for stalls — a time gap around the failures often pins the moment it broke.' });
+  }
+  if (ctx.findings > 0) {
+    candidates.push({ verb: 'recipe', priority: 70, reason: `You've pinned ${ctx.findings.toLocaleString()} ${nextStepPlural(ctx.findings, 'finding', 'findings')} — save these steps as a recipe to replay next time.` });
+  }
+  if (problems === 0 && ctx.warning > 0) {
+    candidates.push({ verb: 'trend', priority: 60, reason: 'Only warnings here — trend a field over time to see if they’re growing or steady.' });
+  }
+  if (ctx.savedRecipes > 0) {
+    candidates.push({ verb: 'recipe', priority: 50, reason: `Run one of your ${ctx.savedRecipes.toLocaleString()} saved ${nextStepPlural(ctx.savedRecipes, 'recipe', 'recipes')} on this log.` });
+  }
+  candidates.push({ verb: 'trend', priority: 20, reason: 'Trend a field (voltage, state, counts…) over time to spot the turn.' });
+  candidates.push({ verb: 'search', priority: 10, reason: 'Search the log for a message, id, or component.' });
+  const byVerb = new Map<NextStepVerb, NextStep>();
+  for (const s of candidates) { const cur = byVerb.get(s.verb); if (!cur || s.priority > cur.priority) byVerb.set(s.verb, s); }
+  return Array.from(byVerb.values()).sort((a, b) => b.priority - a.priority).slice(0, MAX_NEXT_STEPS);
+}
+
+// Verb → the existing UI action that performs it (the whole point of reusing the
+// recipe vocabulary: these are the same moves recipes/agent run, one click away).
+const NEXT_STEP_ACTIONS: Record<NextStepVerb, () => void> = {
+  search: () => { toggleSearchPanel(); },
+  filter: () => { showFilterModal(); },
+  trend: () => { openBottomTab('trends'); void discoverTrendFields(); },
+  'time-gaps': () => { openBottomTab('time-gaps'); },
+  recipe: () => { openBottomTab('investigate'); },
+};
+
+// Read the cheap context the coach ranks on, straight from severity + live state.
+function currentNextStepContext(): NextStepContext {
+  const c = triageSeverity?.counts;
+  return {
+    fatal: c?.fatal || 0, error: c?.error || 0, warning: c?.warning || 0,
+    matches: state.searchResults.length,
+    isFiltered: !!state.isFiltered,
+    findings: state.annotations.length,
+    savedRecipes: investigationTemplatesCache.length,
+  };
+}
+
+// Render the "Next steps" section into the pulldown — one row per suggested move,
+// label + why, click runs the mapped UI action.
+function appendNextStepsRows(menu: HTMLElement): void {
+  const steps = suggestNextSteps(currentNextStepContext());
+  if (!steps.length) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'triage-rows triage-nextsteps';
+  const label = document.createElement('div');
+  label.className = 'triage-section-label';
+  label.textContent = 'Next steps';
+  wrap.appendChild(label);
+  for (const s of steps) {
+    const meta = NEXT_STEP_META[s.verb];
+    const row = document.createElement('button');
+    row.className = 'triage-row nextstep';
+    row.title = s.reason;
+    row.innerHTML = `<span class="triage-row-icon">${meta.icon}</span>`
+      + `<span class="nextstep-text"><span class="nextstep-label">${escapeHtml(meta.label)}</span>`
+      + `<span class="nextstep-why">${escapeHtml(s.reason)}</span></span>`;
+    row.addEventListener('click', () => { closeSeverityMenu(); trackUsage(`triage:next:${s.verb}`); NEXT_STEP_ACTIONS[s.verb](); });
+    wrap.appendChild(row);
+  }
+  menu.appendChild(wrap);
+}
+
 // Build the pulldown body: header verdict + actionable jump rows + column-layout
 // guidance + the "📋 Full brief" footer. Same content the old floating card carried.
 function buildSeverityMenuInto(menu: HTMLElement): void {
@@ -21564,6 +21657,9 @@ function buildSeverityMenuInto(menu: HTMLElement): void {
       menu.appendChild(list);
     }
   }
+
+  // "Next steps" coach — the handful of moves worth making now, from context.
+  appendNextStepsRows(menu);
 
   // Column-layout guidance row — apply a matching saved layout, or set up the detected header.
   if (guidance) appendLayoutGuidanceRow(menu, guidance);
