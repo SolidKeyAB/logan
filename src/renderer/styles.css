@@ -9157,6 +9157,19 @@ kbd {
 
 /* Chips */
 .ctx-chips { display: flex; flex-wrap: wrap; gap: 5px; padding: 6px 10px; flex-shrink: 0; }
+/* Self-explaining empty state (shown when no contexts are defined yet). */
+.ctx-empty { width: 100%; padding: 14px 14px; border: 1px dashed #3a4860; border-radius: 6px; background: #1c222b; }
+.ctx-empty-title { font-size: 12px; font-weight: 600; color: #c8e0f8; margin-bottom: 5px; }
+.ctx-empty-desc { font-size: 11px; line-height: 1.5; color: #93a6bd; margin-bottom: 10px; }
+.ctx-empty-desc b { color: #c8d8ea; font-weight: 600; }
+.ctx-empty-actions { display: flex; gap: 8px; margin-bottom: 8px; }
+.ctx-empty-hint { font-size: 10.5px; color: #6f8299; }
+.ctx-empty-hint b { color: #93a6bd; font-weight: 600; }
+:root.theme-paper .ctx-empty { background: #cbd4cf; border-color: #9aa8a2; }
+:root.theme-paper .ctx-empty-title { color: #223; }
+:root.theme-paper .ctx-empty-desc { color: #3a4a44; }
+:root.theme-paper .ctx-empty-desc b { color: #1a2a24; }
+:root.theme-paper .ctx-empty-hint, :root.theme-paper .ctx-empty-hint b { color: #4a5a54; }
 .ctx-chip { display: flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 4px; background: #232a35; border: 1px solid #2e3a4a; font-size: 11px; cursor: default; transition: all 0.15s; }
 .ctx-chip:hover { background: #2a3545; border-color: #3e5068; }
 .ctx-chip.disabled { opacity: 0.4; }
