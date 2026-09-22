@@ -9544,11 +9544,12 @@ async function reapplyTrendAxis(): Promise<void> {
     const field = root.dataset.trendField || '';
     const pattern = root.dataset.trendPattern || undefined;
     const patternFlags = root.dataset.trendPatternFlags || '';
+    const label = root.dataset.trendLabel || undefined;
     const body = root.querySelector<HTMLDivElement>('.trend-cell-body');
     if (!field || !body) continue;
     body.innerHTML = '<p class="placeholder">Recomputing…</p>';
     try {
-      const res = await window.api.trendSeries({ field, pattern, patternFlags, xAxis });
+      const res = await window.api.trendSeries({ field, pattern, patternFlags, label, xAxis });
       if (res.success) renderSeriesCell(body, res as TrendSeriesResult);
       else body.innerHTML = `<p class="placeholder trend-error">${escapeHtml(res.error || 'Failed')}</p>`;
     } catch (e) {
@@ -9845,13 +9846,19 @@ async function addTrendCell(override?: { field?: string; pattern?: string; patte
   const field = (override?.field ?? fieldSelect?.value.trim()) || '';
   const pattern = (override?.pattern ?? patternInput?.value.trim()) || '';
   const patternFlags = override?.patternFlags || '';
-  if (!field && !pattern) { showToast('Pick a field or enter a regex pattern'); return; }
+  if (!field && !pattern) { showToast('Pick a field, or paste a label / regex'); return; }
 
   // An explicit override (e.g. a Pattern Library lens) forces the cell kind;
   // otherwise fall back to the panel's type selector.
   const type = override?.type || cellTypeSel?.value || 'series';
-  // The engine's makeExtractor prefers `pattern` when present, so for pattern-only
-  // mode we still pass a non-empty `field` (the label) to satisfy the IPC guard.
+  // A pasted MULTI-WORD label can't be a bare key (a key=value / key:value key has no
+  // spaces), so when the field box holds more than one word and there's no explicit
+  // regex, treat it as a LABEL: LOGAN matches those words in the log and charts the
+  // value that follows — "Battery voltage" → the number in `Battery voltage: 3.7`.
+  // (Single-word entries stay keyed field lookups, unchanged.)
+  const labelOpt = (!pattern && /\s/.test(field)) ? field : undefined;
+  // The engine's makeExtractor prefers `pattern`, then `label`, so for pattern-only
+  // mode we still pass a non-empty `field` (the caption) to satisfy the IPC guard.
   const fieldArg = field || pattern;
   const label = field || `/${pattern}/`;
   const patternOpt = pattern || undefined;
@@ -9866,18 +9873,19 @@ async function addTrendCell(override?: { field?: string; pattern?: string; patte
         root.dataset.trendField = fieldArg;
         if (patternOpt) root.dataset.trendPattern = patternOpt;
         if (patternFlags) root.dataset.trendPatternFlags = patternFlags;
+        if (labelOpt) root.dataset.trendLabel = labelOpt;
       }
-      const res = await window.api.trendSeries({ field: fieldArg, pattern: patternOpt, patternFlags, xAxis: resolveTrendAxis() });
+      const res = await window.api.trendSeries({ field: fieldArg, pattern: patternOpt, patternFlags, label: labelOpt, xAxis: resolveTrendAxis() });
       if (!res.success) { cell.error(res.error || 'Failed'); return; }
       renderSeriesCell(cell.body, res as TrendSeriesResult);
     } else if (type === 'transitions') {
-      const res = await window.api.trendTransitions({ field: fieldArg, pattern: patternOpt, patternFlags });
+      const res = await window.api.trendTransitions({ field: fieldArg, pattern: patternOpt, patternFlags, label: labelOpt });
       if (!res.success) { cell.error(res.error || 'Failed'); return; }
       renderTransitionsCell(cell.body, res as TrendTransitionsResult);
     } else if (type === 'correlate') {
       const event = eventInput?.value.trim() || '';
       if (!event) { cell.error('Enter an event substring to correlate against'); return; }
-      const res = await window.api.trendCorrelate({ field: fieldArg, pattern: patternOpt, patternFlags, event });
+      const res = await window.api.trendCorrelate({ field: fieldArg, pattern: patternOpt, patternFlags, label: labelOpt, event });
       if (!res.success) { cell.error(res.error || 'Failed'); return; }
       renderCorrelateCell(cell.body, res as TrendCorrelateResult);
     }

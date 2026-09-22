@@ -2293,6 +2293,7 @@ app.whenReady().then(() => {
           maxPoints: options.maxPoints,
           pattern: options.pattern,
           patternFlags: options.patternFlags,
+          label: options.label,
         });
         return { success: true, ...result };
       } catch (error) {
@@ -2311,6 +2312,7 @@ app.whenReady().then(() => {
           maxTransitions: options.maxTransitions,
           pattern: options.pattern,
           patternFlags: options.patternFlags,
+          label: options.label,
         });
         return { success: true, ...result };
       } catch (error) {
@@ -2329,6 +2331,7 @@ app.whenReady().then(() => {
           endLine: options.endLine,
           pattern: options.pattern,
           patternFlags: options.patternFlags,
+          label: options.label,
         });
         return { success: true, ...result };
       } catch (error) {
@@ -5906,6 +5909,7 @@ ipcMain.handle(IPC.TREND_SERIES, async (_, options) => {
       maxPoints: options.maxPoints,
       pattern: options.pattern,
       patternFlags: options.patternFlags,
+      label: options.label,
       xAxis: options.xAxis,
     });
     return { success: true, ...result };
@@ -5944,6 +5948,7 @@ ipcMain.handle(IPC.TREND_TRANSITIONS, async (_, options) => {
       maxTransitions: options.maxTransitions,
       pattern: options.pattern,
       patternFlags: options.patternFlags,
+      label: options.label,
     });
     return { success: true, ...result };
   } catch (error) {
@@ -5963,6 +5968,7 @@ ipcMain.handle(IPC.TREND_CORRELATE, async (_, options) => {
       endLine: options.endLine,
       pattern: options.pattern,
       patternFlags: options.patternFlags,
+      label: options.label,
     });
     return { success: true, ...result };
   } catch (error) {

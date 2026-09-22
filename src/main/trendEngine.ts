@@ -103,16 +103,48 @@ export function extractFields(line: string): Map<string, string> {
   return out;
 }
 
-// Build a per-line value extractor. Two modes:
-//   - keyed   (simple users): pull `fieldName` out of the key=value/JSON map
-//   - pattern (advanced users): a regex with a capture group; the value is the
-//     first capture group (or the whole match if the regex has no groups).
-//     This reaches UNLABELED positional values like `... in 230ms` via /in (\d+)ms/.
+// Regex-escape a literal string so it can be embedded verbatim in a RegExp.
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Turn a human-pasted LABEL — the word(s) that sit in front of a value in the log,
+// e.g. "Battery voltage" for `Battery voltage: 3.7` — into a value-extractor regex.
+// Each word is matched literally (regex-escaped) with flexible internal whitespace
+// (so odd spacing in the paste still matches), followed by an optional ':'/'='
+// separator and the captured value token. Case-insensitive, since a pasted label
+// needn't match the log's exact casing. This is the friendly, no-regex front door
+// to makeExtractor's `pattern` path, and the way to trend a MULTI-WORD field that
+// the bare key=value / key:value discovery collapses to its last word.
+export function labelToPattern(label: string): { pattern: string; flags: string } {
+  // Drop any trailing separator the user pasted along with the label ("voltage:").
+  const cleaned = label.trim().replace(/[\s:=]+$/, '');
+  const words = cleaned.split(/\s+/).filter(Boolean).map(escapeRegExp);
+  if (words.length === 0) return { pattern: '(?!)', flags: '' }; // empty label → never matches
+  const lab = words.join('\\s+');
+  // value = the next token: quoted, a bracketed array (no inner spaces), or a bare run.
+  const value = '("[^"]*"|\'[^\']*\'|\\[[^\\]]*\\]|[^\\s,;]+)';
+  return { pattern: `${lab}\\s*[:=]?\\s*${value}`, flags: 'i' };
+}
+
+// Build a per-line value extractor. Three modes (precedence: pattern > label > field):
+//   - pattern (advanced): a regex whose first capture group (or whole match) is the value.
+//     Reaches UNLABELED positional values like `... in 230ms` via /in (\d+)ms/.
+//   - label   (paste-a-label): a plain label pasted from the log; compiled via
+//     labelToPattern into the pattern path — the multi-word-friendly front door.
+//   - keyed   (simple): pull `fieldName` out of the key=value / key:value / JSON map.
 export type ValueExtractor = (text: string) => string | undefined;
 
-export function makeExtractor(opts: { field?: string; pattern?: string; patternFlags?: string }): ValueExtractor {
-  if (opts.pattern) {
-    const re = new RegExp(opts.pattern, opts.patternFlags ?? '');
+export function makeExtractor(opts: { field?: string; pattern?: string; patternFlags?: string; label?: string }): ValueExtractor {
+  let pattern = opts.pattern;
+  let flags = opts.patternFlags;
+  if (!pattern && opts.label && opts.label.trim()) {
+    const compiled = labelToPattern(opts.label);
+    pattern = compiled.pattern;
+    flags = compiled.flags;
+  }
+  if (pattern) {
+    const re = new RegExp(pattern, flags ?? '');
     return (text: string) => {
       re.lastIndex = 0;
       const m = re.exec(text);
@@ -121,7 +153,7 @@ export function makeExtractor(opts: { field?: string; pattern?: string; patternF
     };
   }
   const field = opts.field;
-  if (!field) throw new Error('makeExtractor requires either field or pattern');
+  if (!field) throw new Error('makeExtractor requires field, pattern, or label');
   return (text: string) => extractFields(text).get(field);
 }
 
@@ -429,11 +461,11 @@ export function extractSeries(
   handler: FileHandler,
   parseTs: TsParser,
   fieldName: string,
-  opts: ScanRange & { bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string; xAxis?: AxisSpec } = {},
+  opts: ScanRange & { bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string; label?: string; xAxis?: AxisSpec } = {},
 ): SeriesResult {
   const bucketCount = Math.min(Math.max(opts.bucketCount ?? 200, 10), 2000);
   const maxPoints = opts.maxPoints ?? 5000;
-  const extract = makeExtractor({ field: fieldName, pattern: opts.pattern, patternFlags: opts.patternFlags });
+  const extract = makeExtractor({ field: fieldName, pattern: opts.pattern, patternFlags: opts.patternFlags, label: opts.label });
   // Explicit axis (from the X-axis selector) or auto: prefer wall-clock, else line.
   const explicit = opts.xAxis;
   const axisEx = explicit ? makeAxisExtractor(explicit, parseTs) : null;
@@ -746,10 +778,10 @@ export function detectTransitions(
   handler: FileHandler,
   parseTs: TsParser,
   fieldName: string,
-  opts: ScanRange & { maxTransitions?: number; pattern?: string; patternFlags?: string } = {},
+  opts: ScanRange & { maxTransitions?: number; pattern?: string; patternFlags?: string; label?: string } = {},
 ): TransitionResult {
   const maxTransitions = opts.maxTransitions ?? 2000;
-  const extract = makeExtractor({ field: fieldName, pattern: opts.pattern, patternFlags: opts.patternFlags });
+  const extract = makeExtractor({ field: fieldName, pattern: opts.pattern, patternFlags: opts.patternFlags, label: opts.label });
   const transitions: Transition[] = [];
   let type: FieldType | null = null;
   let last: string | null = null;
@@ -811,10 +843,10 @@ export function correlate(
   handler: FileHandler,
   fieldName: string,
   event: string,
-  opts: ScanRange & { pattern?: string; patternFlags?: string } = {},
+  opts: ScanRange & { pattern?: string; patternFlags?: string; label?: string } = {},
 ): CorrelateResult {
   const needle = event.toLowerCase();
-  const extract = makeExtractor({ field: fieldName, pattern: opts.pattern, patternFlags: opts.patternFlags });
+  const extract = makeExtractor({ field: fieldName, pattern: opts.pattern, patternFlags: opts.patternFlags, label: opts.label });
   const typeRef: { v: FieldType | null } = { v: null };
   let matchedLines = 0, unmatchedLines = 0;
 

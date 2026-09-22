@@ -886,10 +886,10 @@ interface Api {
   // Trends notebook
   trendDiscoverFields: (options?: { startLine?: number; endLine?: number; sampleSize?: number }) => Promise<{ success: boolean; fields?: TrendFieldSpec[]; error?: string }>;
   trendDiscoverAxes: (options?: { startLine?: number; endLine?: number; sampleSize?: number }) => Promise<{ success: boolean; axes?: AxisCandidate[]; error?: string }>;
-  trendSeries: (options: { field: string; startLine?: number; endLine?: number; bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string; xAxis?: AxisSpec }) => Promise<{ success: boolean; error?: string } & Partial<TrendSeriesResult>>;
+  trendSeries: (options: { field: string; startLine?: number; endLine?: number; bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string; label?: string; xAxis?: AxisSpec }) => Promise<{ success: boolean; error?: string } & Partial<TrendSeriesResult>>;
   signalSeries: (options: { fields: string[]; xField?: string; startLine?: number; endLine?: number; maxPoints?: number }) => Promise<{ success: boolean; error?: string } & Partial<SignalSeriesResult>>;
-  trendTransitions: (options: { field: string; startLine?: number; endLine?: number; maxTransitions?: number; pattern?: string; patternFlags?: string }) => Promise<{ success: boolean; error?: string } & Partial<TrendTransitionsResult>>;
-  trendCorrelate: (options: { field: string; event: string; startLine?: number; endLine?: number; pattern?: string; patternFlags?: string }) => Promise<{ success: boolean; error?: string } & Partial<TrendCorrelateResult>>;
+  trendTransitions: (options: { field: string; startLine?: number; endLine?: number; maxTransitions?: number; pattern?: string; patternFlags?: string; label?: string }) => Promise<{ success: boolean; error?: string } & Partial<TrendTransitionsResult>>;
+  trendCorrelate: (options: { field: string; event: string; startLine?: number; endLine?: number; pattern?: string; patternFlags?: string; label?: string }) => Promise<{ success: boolean; error?: string } & Partial<TrendCorrelateResult>>;
 
   // Semantic summary — fold the log into distinct message templates
   summarize: (opts?: { maxTemplates?: number; maxExamples?: number; detectSeverity?: boolean; detectTimestamp?: boolean; contains?: string }, scope?: ScopeDescriptor | null) => Promise<{ success: boolean; summary?: TemplateSummary; scope?: ScopeInfo; error?: string }>;
