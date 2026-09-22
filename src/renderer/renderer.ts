@@ -18080,6 +18080,27 @@ function renderContextChips(): void {
   const container = elements.ctxChips;
   container.innerHTML = '';
 
+  // Self-explaining empty state — the panel otherwise opens blank, with no hint of
+  // what a "context" is or how to start. Shown only when nothing is defined yet:
+  // a one-line purpose + a "New context" button and a one-click ready-to-run example.
+  if (state.contextDefinitions.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'ctx-empty';
+    empty.innerHTML = `
+      <div class="ctx-empty-title">Find correlated events — “when X happens, what’s nearby?”</div>
+      <div class="ctx-empty-desc">A <b>context</b> = one <b>Required</b> pattern (the anchor) + optional <b>Nearby</b> patterns that must appear within N lines of it. <b>Run</b> scans the log and lists every anchor, flagged by which nearby patterns landed close.</div>
+      <div class="ctx-empty-actions">
+        <button class="ctx-form-btn primary" id="ctx-empty-new">➕ New context</button>
+        <button class="ctx-form-btn" id="ctx-empty-example">Load example</button>
+      </div>
+      <div class="ctx-empty-hint">The example drops in <b>Required “ERROR”</b> + <b>Nearby “timeout”</b> within 10 lines — then hit <b>▶ Run</b>.</div>
+    `;
+    container.appendChild(empty);
+    empty.querySelector('#ctx-empty-new')?.addEventListener('click', () => showContextForm());
+    empty.querySelector('#ctx-empty-example')?.addEventListener('click', () => void addExampleContext());
+    return;
+  }
+
   for (const def of state.contextDefinitions) {
     const chip = document.createElement('div');
     chip.className = `ctx-chip${def.enabled ? '' : ' disabled'}`;
@@ -18140,6 +18161,32 @@ function renderContextChips(): void {
     chip.appendChild(deleteBtn);
     container.appendChild(chip);
   }
+}
+
+// Drop in a ready-to-run sample context so the panel teaches itself: "errors that
+// have a timeout nearby". Saved like any user context (editable / deletable), so the
+// next step is simply ▶ Run.
+async function addExampleContext(): Promise<void> {
+  const now = Date.now();
+  const def: ContextDefinitionDef = {
+    id: `ctx-${now}`,
+    name: 'Example: errors with a timeout nearby',
+    color: CTX_DEFAULT_COLORS[ctxColorIndex % CTX_DEFAULT_COLORS.length],
+    patterns: [
+      { id: `cp-${now}-m`, pattern: 'ERROR', isRegex: false, matchCase: false, role: 'must' },
+      { id: `cp-${now}-c`, pattern: 'timeout', isRegex: false, matchCase: false, role: 'clue' },
+    ],
+    proximityMode: 'lines',
+    defaultDistance: 10,
+    enabled: true,
+    isGlobal: false,
+    createdAt: now,
+  };
+  await window.api.contextDefinitionsSave(def);
+  state.contextDefinitions.push(def);
+  ctxColorIndex++;
+  renderContextChips();
+  showToast('Example context added — click ▶ Run to see it in action');
 }
 
 function showContextForm(existingDef?: ContextDefinitionDef): void {
