@@ -197,12 +197,13 @@ function median(xs: number[]): number | null {
 }
 
 /**
- * Push this buffer's clock deltas (epoch_ms − mono_ms) into `deltas`. Split out of
- * scanContext so a MERGED segment set can pool anchors from EVERY segment into one global
- * boot epoch — a capture shares a single monotonic boot, and later ring-buffer segments
- * often carry no clock anchor of their own (see decodeVtraceSegments).
+ * Scan once for the LoggerTime boot epoch. The official LoggerTime is UTC, so we take the
+ * type-32 system anchors and the type-20 device anchors whose index is 4 (the UTC entry of
+ * each device-clock group — its sibling index-3 entry is the same instant shifted by the
+ * local-time/DST offset, which we must NOT use). boot = median(epoch_ms − mono_ms).
  */
-function collectClockDeltas(buf: Buffer, deltas: number[]): void {
+function scanContext(buf: Buffer): DecodeContext {
+  const deltas: number[] = [];
   walkRecords(buf, (type, p, len) => {
     const end = p + len;
     if (type === TYPE_SYSCLOCK && p + 17 <= end) {
@@ -219,17 +220,6 @@ function collectClockDeltas(buf: Buffer, deltas: number[]): void {
       if (index === 4 && epochMs > 1e12) deltas.push(epochMs - monoMs);
     }
   });
-}
-
-/**
- * Scan once for the LoggerTime boot epoch. The official LoggerTime is UTC, so we take the
- * type-32 system anchors and the type-20 device anchors whose index is 4 (the UTC entry of
- * each device-clock group — its sibling index-3 entry is the same instant shifted by the
- * local-time/DST offset, which we must NOT use). boot = median(epoch_ms − mono_ms).
- */
-function scanContext(buf: Buffer): DecodeContext {
-  const deltas: number[] = [];
-  collectClockDeltas(buf, deltas);
   return { bootMs: median(deltas) };
 }
 
@@ -248,38 +238,22 @@ function resolvePath(id: number, names: Map<number, { name: string; parent: numb
 }
 
 /**
- * Running decode state carried across the records of a decode. For a MERGED segment set it
- * is also carried across the segment FILES, so an entity name or session opened in an
- * earlier segment resolves in a later one — exactly what the vendor's `*.esotrace` merge
- * does, and what a per-file decode cannot (later ring-buffer segments reference ids/clocks
- * registered only in the first segment).
+ * Decode every record in `buf` into VtraceRecords, invoking `emit` in file order — one
+ * record per OUTPUT ROW (a message with embedded newlines emits one row per line, all
+ * sharing the same packetIndex). Returns the number of rows emitted. `fileIndex` sets the
+ * PacketID prefix (0 for a standalone decode).
  */
-interface DecodeState {
-  names: Map<number, { name: string; parent: number }>;
-  sessionId: number;
-  sawData: boolean;
-  lastTraceMs: number;
-}
-
-function newDecodeState(): DecodeState {
-  return { names: new Map(), sessionId: 0, sawData: false, lastTraceMs: 0 };
-}
-
-/**
- * Walk ONE buffer's records, emitting a VtraceRecord per OUTPUT ROW (a message with
- * embedded newlines emits one row per line, all sharing the same packetIndex), while
- * mutating `st` (names/session/lastTrace) so a caller can thread the SAME state through
- * several segments. `bootMs` and `fileIndex` are supplied by the caller (global across a
- * merge). Returns the number of rows emitted.
- */
-function decodeBufferInto(
-  buf: Buffer,
-  bootMs: number | null,
-  fileIndex: number,
-  st: DecodeState,
-  emit: (rec: VtraceRecord) => void,
-): number {
+export function decodeVtrace(buf: Buffer, emit: (rec: VtraceRecord) => void, fileIndex = 0): number {
+  const ctx = scanContext(buf);
+  const bootMs = ctx.bootMs;
+  // Running entity map (id → name, parent), updated as type-3 records are reached so a
+  // record resolves against the names registered before it (ids are re-registered per
+  // session). Clock anchors already came from the scanContext pre-pass.
+  const names = new Map<number, { name: string; parent: number }>();
+  let sessionId = 0;
+  let sawData = false;
   let rows = 0;
+  let lastTraceMs = 0;
 
   walkRecords(buf, (type, p, len, index) => {
     const end = p + len;
@@ -291,7 +265,7 @@ function decodeBufferInto(
       if (nameEnd + 6 <= end) {
         const own = buf.readUInt32BE(nameEnd + 2);
         const parent = buf.readUInt32BE(end - 4);
-        st.names.set(own, { name: buf.toString('utf8', p + 4, nameEnd), parent });
+        names.set(own, { name: buf.toString('utf8', p + 4, nameEnd), parent });
       }
       return;
     }
@@ -299,19 +273,19 @@ function decodeBufferInto(
     if (type === TYPE_SESSION) {
       // A restart marker after data closes the current session and opens the next; the
       // very first identity record (before any row) just labels session #0.
-      if (st.sawData) st.sessionId++;
+      if (sawData) sessionId++;
       return;
     }
 
     if (type === TYPE_DROPPED && len >= 5) {
       // The official injects one "Dropped Data: num=N" row (N = u32 at [1:5]). Its clock
       // isn't stored in the 5-byte record, so it inherits the last known monotonic time.
-      st.sawData = true;
+      sawData = true;
       const num = buf.readUInt32BE(p + 1);
       emit({
-        packetIndex: index, sessionId: st.sessionId, fileIndex, type,
-        uptimeNs: 0, traceMs: st.lastTraceMs,
-        loggerMs: bootMs == null ? null : bootMs + st.lastTraceMs,
+        packetIndex: index, sessionId, fileIndex, type,
+        uptimeNs: 0, traceMs: lastTraceMs,
+        loggerMs: bootMs == null ? null : bootMs + lastTraceMs,
         level: null, channel: '--', source: '--', privFlag: '--',
         size: 0, message: `Dropped Data: num=${num}`, undecoded: false,
       });
@@ -320,7 +294,7 @@ function decodeBufferInto(
     }
 
     if (type !== TYPE_MESSAGE || len < 35) return;
-    st.sawData = true;
+    sawData = true;
 
     const logicalType = buf[p + 22];
     const isText = logicalType === LOGICAL_TEXT;
@@ -332,14 +306,14 @@ function decodeBufferInto(
     // TraceTime uses the coarse monotonic ms at [5:9]; the ns tail is kept only verbatim.
     const traceMs = buf.readUInt32BE(p + 5);
     const uptimeNs = tsOff + 8 <= end ? readU64BE(buf, tsOff) : 0;
-    st.lastTraceMs = traceMs;
+    lastTraceMs = traceMs;
 
     const level = buf.readUInt16BE(p + 9);
 
     // Channel/Source: hierarchical dotted paths. Source = last two segments; Channel =
     // the channel path with the common prefix it shares with the source removed.
-    const chanPath = resolvePath(buf.readUInt32BE(p + 13), st.names);
-    const srcPath = resolvePath(buf.readUInt32BE(p + 17), st.names);
+    const chanPath = resolvePath(buf.readUInt32BE(p + 13), names);
+    const srcPath = resolvePath(buf.readUInt32BE(p + 17), names);
     let common = 0;
     while (common < chanPath.length && common < srcPath.length && chanPath[common] === srcPath[common]) common++;
     const channel = chanPath.length
@@ -364,46 +338,16 @@ function decodeBufferInto(
       if (parts.length > 1 && parts[parts.length - 1] === '') parts.pop();
       for (const raw of parts) {
         const message = raw.endsWith('\r') ? raw.slice(0, -1) : raw;
-        emit({ packetIndex: index, sessionId: st.sessionId, fileIndex, type, uptimeNs, traceMs, loggerMs, level, channel, source, privFlag, size, message, undecoded: false });
+        emit({ packetIndex: index, sessionId, fileIndex, type, uptimeNs, traceMs, loggerMs, level, channel, source, privFlag, size, message, undecoded: false });
         rows++;
       }
     } else {
       const message = `UNDECODED: type=${logicalType}[${LOGICAL_TYPE_NAMES[logicalType] ?? 'null'}] size=${size}`;
-      emit({ packetIndex: index, sessionId: st.sessionId, fileIndex, type, uptimeNs, traceMs, loggerMs, level, channel, source, privFlag, size, message, undecoded: true });
+      emit({ packetIndex: index, sessionId, fileIndex, type, uptimeNs, traceMs, loggerMs, level, channel, source, privFlag, size, message, undecoded: true });
       rows++;
     }
   });
 
-  return rows;
-}
-
-/**
- * Decode a SINGLE vtrace buffer into VtraceRecords, invoking `emit` in file order — one
- * record per OUTPUT ROW. Returns the number of rows emitted. `fileIndex` sets the PacketID
- * prefix (0 for a standalone decode). Unchanged behavior: computes this buffer's own boot
- * epoch and uses a fresh name/session map.
- */
-export function decodeVtrace(buf: Buffer, emit: (rec: VtraceRecord) => void, fileIndex = 0): number {
-  const { bootMs } = scanContext(buf);
-  return decodeBufferInto(buf, bootMs, fileIndex, newDecodeState(), emit);
-}
-
-/**
- * Decode a MERGED SEGMENT SET — a rotated ring-buffer capture split across several
- * `.esotrace` files (log_0000, log_0001, …), in the given order — as ONE continuous
- * stream, the way the vendor's `vtrace_parse.py *.esotrace` merge does. The entity-name
- * map, session counter and last monotonic time are carried across segment boundaries so
- * later segments resolve the names/clock/numbering they'd otherwise lose, and the PacketID
- * prefix (`fileIndex`) increments 0,1,2,… per segment. The boot epoch is pooled from every
- * segment's clock anchors (a capture shares one monotonic boot). Returns total rows emitted.
- */
-export function decodeVtraceSegments(bufs: Buffer[], emit: (rec: VtraceRecord) => void): number {
-  const deltas: number[] = [];
-  for (const b of bufs) collectClockDeltas(b, deltas);
-  const bootMs = median(deltas);
-  const st = newDecodeState();
-  let rows = 0;
-  for (let i = 0; i < bufs.length; i++) rows += decodeBufferInto(bufs[i], bootMs, i, st, emit);
   return rows;
 }
 
@@ -525,78 +469,6 @@ export async function parseVtraceToFile(
     fs.closeSync(fd);
   }
   onProgress?.(100);
-}
-
-/**
- * Merge-decode a vtrace SEGMENT SET into one text file — the multi-file counterpart of
- * parseVtraceToFile. `filePaths` are the ordered segments (log_0000, log_0001, …); they are
- * decoded as ONE continuous stream (names/clock/session carried across, PacketID prefix
- * 0,1,2,… per segment), so later segments no longer come out with numeric channel/source,
- * a blank LoggerTime or restarted numbering — reproducing the vendor's merged `session.log`.
- * `label` names the session banners (defaults to the output file's stem).
- */
-export async function parseVtraceSegmentsToFile(
-  filePaths: string[],
-  outPath: string,
-  opts: { label?: string; onProgress?: (percent: number) => void } = {},
-): Promise<void> {
-  if (filePaths.length === 0) throw new Error('No segments to merge');
-
-  // Read + validate every segment up front (a merge is all-or-nothing: one non-vtrace file
-  // in the set means the set was mis-grouped).
-  const bufs: Buffer[] = [];
-  let totalBytes = 0;
-  for (const fp of filePaths) {
-    const buf = fs.readFileSync(fp);
-    if (!buf.includes(IDENTITY) && !looksFramed(buf)) {
-      throw new Error(`Not a vtrace file: ${path.basename(fp)}`);
-    }
-    bufs.push(buf);
-    totalBytes += buf.length;
-  }
-
-  const label = opts.label || path.basename(outPath).replace(/\.decoded\.txt$/i, '');
-  const fd = fs.openSync(outPath, 'w');
-  let started = false;
-  let pending = '';
-  const flush = (): void => { if (pending) { fs.writeSync(fd, pending); pending = ''; } };
-  const writeLine = (line: string): void => {
-    pending += started ? '\n' + line : line;
-    started = true;
-    if (pending.length >= 1 << 20) flush();
-  };
-
-  try {
-    let curSession = 0;
-    writeLine(`#----- BEGIN: ${label}: session #${curSession}`);
-    writeLine(officialHeaderRow());
-
-    const estRecords = estimatedRecords(totalBytes);
-    let seen = 0;
-    let lastPct = -1;
-    decodeVtraceSegments(bufs, (rec) => {
-      // A session restart re-brackets the output — a session can span segments, so this is
-      // driven by rec.sessionId (carried across segments), NOT by the file boundary.
-      if (rec.sessionId !== curSession) {
-        writeLine(`#----- END: ${label}: session #${curSession}`);
-        writeLine(`#----- BEGIN: ${label}: session #${rec.sessionId}`);
-        writeLine(officialHeaderRow());
-        curSession = rec.sessionId;
-      }
-      writeLine(formatRecord(rec));
-      seen++;
-      if (opts.onProgress) {
-        const pct = Math.min(99, Math.floor((seen / estRecords) * 100));
-        if (pct !== lastPct) { opts.onProgress(pct); lastPct = pct; }
-      }
-    });
-
-    writeLine(`#----- END: ${label}: session #${curSession}`);
-    flush();
-  } finally {
-    fs.closeSync(fd);
-  }
-  opts.onProgress?.(100);
 }
 
 /** Rough record-count estimate for progress (avg ~200 B/record on real captures). */

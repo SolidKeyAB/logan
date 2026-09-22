@@ -18892,15 +18892,10 @@ async function decodeEsotraceFilesInFolder(folderPath: string): Promise<void> {
     }
     const n = (result.decoded || []).length;
     const errN = (result.errors || []).length;
-    const mergedSets = result.mergedSets || 0;
     if (n === 0 && errN === 0) {
       showToast('No esotrace files found in this folder');
     } else {
-      let msg = `Decoded ${n} esotrace output${n === 1 ? '' : 's'} → *.decoded.txt`;
-      if (mergedSets) {
-        const segTotal = (result.decoded || []).reduce((s: number, d: { segments?: number }) => s + (d.segments || 0), 0);
-        msg += ` (merged ${segTotal} segment${segTotal === 1 ? '' : 's'} into ${mergedSets} set${mergedSets === 1 ? '' : 's'})`;
-      }
+      let msg = `Decoded ${n} esotrace file${n === 1 ? '' : 's'} → *.decoded.txt`;
       if (errN) msg += ` — ${errN} failed`;
       showToast(msg);
       // Surface the new .decoded.txt files in the folder tree.
