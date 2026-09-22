@@ -83,15 +83,11 @@
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l-6 6v3h9l3-3"/><path d="M22 12l-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>
             <span class="activity-badge" id="badge-highlights"></span>
           </button>
-          <button class="activity-bar-btn" data-panel="stats" title="Stats (Ctrl+4)" aria-label="Stats" data-help="File statistics: size, line count, encoding, timestamps.&#10;Quick overview of the loaded log file. Ctrl+4">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="18" y="3" width="4" height="18"></rect><rect x="10" y="8" width="4" height="13"></rect><rect x="2" y="13" width="4" height="8"></rect></svg>
-            <span class="activity-badge" id="badge-stats"></span>
-          </button>
-          <button class="activity-bar-btn" data-panel="history" title="History (Ctrl+5)" aria-label="History" data-help="Action history: searches, filters, bookmarks, analysis runs.&#10;Grouped by date, filterable by category.&#10;Undo or replay past actions. Ctrl+5">
+          <button class="activity-bar-btn" data-panel="history" title="History (Ctrl+4)" aria-label="History" data-help="Action history: searches, filters, bookmarks, analysis runs.&#10;Grouped by date, filterable by category.&#10;Undo or replay past actions. Ctrl+4">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="4.5" cy="5" r="1.5"/><path d="M6 6q2 3 2 8"/><path d="M8 14q0-5 5-5t6 5"/><line x1="8" y1="14" x2="19" y2="14"/><path d="M19 14q2-3 3-6"/><line x1="10" y1="14" x2="10" y2="20"/><line x1="17" y1="14" x2="17" y2="20"/></svg>
             <span class="activity-badge" id="badge-history"></span>
           </button>
-          <button class="activity-bar-btn" data-panel="annotations" title="AI Annotations" aria-label="AI Annotations" data-help="AI agent comments and findings, linked to specific log lines.&#10;Click an annotation to jump to the line.">
+          <button class="activity-bar-btn" data-panel="annotations" title="AI Annotations (Ctrl+5)" aria-label="AI Annotations" data-help="AI agent comments and findings, linked to specific log lines.&#10;Click an annotation to jump to the line. Ctrl+5">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="9" y1="10" x2="15" y2="10"/><line x1="9" y1="14" x2="13" y2="14"/></svg>
             <span class="activity-badge" id="badge-annotations"></span>
           </button>
@@ -208,12 +204,6 @@
             <button id="btn-add-highlight" class="add-btn">+ Add Highlight Rule</button>
           </div>
 
-          <!-- Stats Panel -->
-          <div class="panel-view" id="panel-stats" data-panel="stats">
-            <div id="file-stats" class="stats-content">
-              <p class="placeholder">No file loaded</p>
-            </div>
-          </div>
 
           <!-- History Panel -->
           <div class="panel-view" id="panel-history" data-panel="history">
@@ -1338,7 +1328,7 @@
           <div class="help-section">
             <h4>Panels</h4>
             <div class="shortcut-list">
-              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>1</kbd>...<kbd>5</kbd><span>Toggle sidebar (Folders/Bookmarks/Highlights/Stats/History)</span></div>
+              <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>1</kbd>...<kbd>5</kbd><span>Toggle sidebar (Folders/Bookmarks/Highlights/History/AI Annotations)</span></div>
               <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>6</kbd>...<kbd>7</kbd><span>Toggle bottom panel (Analysis/Time Gaps)</span></div>
               <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>8</kbd><span>Toggle search configs</span></div>
               <div class="shortcut-item"><kbd>Ctrl</kbd>+<kbd>9</kbd><span>Toggle video player</span></div>
