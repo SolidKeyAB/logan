@@ -57,7 +57,7 @@ import { compilePattern, CompileInput } from './compilePattern';
 import { parseTimestampFast } from './timestampParse';
 import { carryForwardTimestamps, buildOriginTags, formatWallClock, sortMergeEntries, type MergeEntry } from './mergeTimeline';
 import { ColumnPatternSpec } from './columnPattern';
-import { parseVtraceToFile } from './vtraceParse';
+import { parseVtraceToFile, parseVtraceSegmentsToFile } from './vtraceParse';
 import { runTrendJob, runSummarizeJob, cancelSummarizeJob, canSummarizeOffThread, runFoldRegionsJob, runColumnPreviewJob, canColumnPreviewOffThread } from './trendWorkerClient';
 import { computeColumnPreview } from './columnPreview';
 import { resolveScope, isWholeFile, scopeInfo, forEachScopeLine, ScopeResolverContext } from './scope';
@@ -7390,9 +7390,16 @@ ipcMain.handle('decode-esotrace-file', async (_, filePath: string) => {
 // esotrace files here"). Non-recursive: the folder's direct files only. Detection
 // is extension-agnostic like the single-file button — a file qualifies if it ends
 // in `.esotrace` OR carries the `traceserverIVI` magic in its head — so renamed
-// captures are caught too. Each decode is written next to the original as
-// `<name>.decoded.txt` (persistent, unlike the single-file temp). Prior outputs
-// (name contains `.decoded.`) are skipped so re-runs are idempotent.
+// captures are caught too.
+//
+// A rotated capture is SPLIT across a ring-buffer SEGMENT SET (log_0000.esotrace,
+// log_0001.esotrace, …). Those segments must be MERGE-decoded as one continuous stream —
+// the entity-name map, clock anchors and session/packet numbering live in the first
+// segment, so decoding a later one standalone yields numeric channel/source, a blank
+// LoggerTime and restarted numbering. We group candidates that share a stem + trailing
+// sequence number and fold each set into one `<stem>.decoded.txt` (the vendor's merged
+// session.log); a lone file or a non-.esotrace magic capture decodes standalone as before.
+// Prior outputs (name contains `.decoded.`) are skipped so re-runs are idempotent.
 ipcMain.handle('decode-esotrace-folder', async (_, folderPath: string) => {
   try {
     const IDENTITY = Buffer.from('traceserverIVI', 'latin1');
@@ -7422,31 +7429,80 @@ ipcMain.handle('decode-esotrace-folder', async (_, folderPath: string) => {
       if (isEso) candidates.push(full);
     }
 
-    const decoded: Array<{ original: string; decoded: string }> = [];
+    // Partition candidates into ring-buffer SEGMENT SETS vs standalone files. A set is 2+
+    // `.esotrace` files sharing a stem with a trailing sequence number (log_0000, log_0001,
+    // …) — the rotated split of ONE capture; a lone file or a non-.esotrace magic capture
+    // decodes standalone.
+    const groups = new Map<string, Array<{ path: string; seq: number }>>();
+    const singles: string[] = [];
+    for (const full of candidates) {
+      const m = /^(.*?)(\d+)\.esotrace$/i.exec(path.basename(full));
+      if (m) {
+        const arr = groups.get(m[1]) ?? [];
+        arr.push({ path: full, seq: parseInt(m[2], 10) });
+        groups.set(m[1], arr);
+      } else {
+        singles.push(full);
+      }
+    }
+    const sets: Array<{ stem: string; paths: string[] }> = [];
+    for (const [stem, members] of groups) {
+      if (members.length >= 2) {
+        members.sort((a, b) => a.seq - b.seq); // chronological: ring-buffer segment order
+        sets.push({ stem, paths: members.map((x) => x.path) });
+      } else {
+        singles.push(members[0].path); // a lone numbered segment → standalone
+      }
+    }
+    singles.sort();
+
+    const decoded: Array<{ original: string; decoded: string; merged?: boolean; segments?: number }> = [];
     const errors: Array<{ file: string; error: string }> = [];
-    for (let i = 0; i < candidates.length; i++) {
-      const src = candidates[i];
-      // Keep the original extension in the output name so `a.esotrace` and `a.bin`
-      // can't collide on the same `.decoded.txt`.
+    const units = sets.length + singles.length;
+    let done = 0;
+    // Let the event loop breathe between units so progress paints and the UI stays
+    // responsive (each decode itself runs on the main thread).
+    const breathe = (): Promise<void> => new Promise<void>((r) => setImmediate(r));
+
+    // Merge each segment set into one <stem>.decoded.txt (the vendor's merged session.log).
+    for (const set of sets) {
+      const cleanStem = set.stem.replace(/[._\-\s]+$/, '') || 'session';
+      const outPath = path.join(folderPath, `${cleanStem}.decoded.txt`);
+      mainWindow?.webContents.send('esotrace-decode-folder-progress', {
+        current: done, total: units, name: `${cleanStem} (${set.paths.length} segments)`,
+      });
+      done++;
+      try {
+        await parseVtraceSegmentsToFile(set.paths, outPath, { label: cleanStem });
+        decoded.push({ original: set.paths[0], decoded: outPath, merged: true, segments: set.paths.length });
+      } catch (e) {
+        errors.push({ file: set.paths[0], error: String(e) });
+      }
+      await breathe();
+    }
+
+    // Decode every standalone file on its own. Keep the original extension in the output
+    // name so `a.esotrace` and `a.bin` can't collide on the same `.decoded.txt`.
+    for (const src of singles) {
       const outPath = path.join(folderPath, `${path.basename(src)}.decoded.txt`);
       mainWindow?.webContents.send('esotrace-decode-folder-progress', {
-        current: i, total: candidates.length, name: path.basename(src),
+        current: done, total: units, name: path.basename(src),
       });
+      done++;
       try {
         await parseVtraceToFile(src, outPath);
         decoded.push({ original: src, decoded: outPath });
       } catch (e) {
         errors.push({ file: src, error: String(e) });
       }
-      // Let the event loop breathe between files so progress paints and the UI
-      // stays responsive (each decode itself runs on the main thread).
-      await new Promise<void>((r) => setImmediate(r));
+      await breathe();
     }
+
     mainWindow?.webContents.send('esotrace-decode-folder-progress', {
-      current: candidates.length, total: candidates.length, name: '',
+      current: units, total: units, name: '',
     });
 
-    return { success: true, folderPath, scanned: names.length, candidates: candidates.length, decoded, errors };
+    return { success: true, folderPath, scanned: names.length, candidates: candidates.length, mergedSets: sets.length, decoded, errors };
   } catch (error) {
     return { success: false, error: String(error) };
   }
