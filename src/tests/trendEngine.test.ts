@@ -8,6 +8,8 @@ import {
   extractSignalSeries,
   detectTransitions,
   correlate,
+  labelToPattern,
+  makeExtractor,
 } from '../main/trendEngine';
 
 // Minimal stand-in for FileHandler: getLines(start, count) + getTotalLines().
@@ -254,6 +256,71 @@ describe('regex pattern mode (advanced users)', () => {
     const r = detectTransitions(h, parseTs, 'state', { pattern: 'state=\\[(\\w+)\\]' });
     expect(r.totalTransitions).toBe(1);
     expect(r.transitions[0]).toMatchObject({ fromValue: 'RUNNING', toValue: 'STOPPED' });
+  });
+});
+
+describe('paste-a-label mode (multi-word fields)', () => {
+  it('labelToPattern captures the value after a multi-word label', () => {
+    const { pattern, flags } = labelToPattern('Battery voltage');
+    const re = new RegExp(pattern, flags);
+    expect(re.exec('2024-01-01 00:00:00 Battery voltage: 3.7 V')?.[1]).toBe('3.7');
+    expect(flags).toContain('i');
+  });
+
+  it('is multi-word: the bare key:value discovery keeps only the last word, the label keeps both', () => {
+    // The original bug: "Battery voltage: 3.7" is discovered as the field "voltage".
+    expect(extractFields('Battery voltage: 3.7').get('voltage')).toBe('3.7');
+    expect(extractFields('Battery voltage: 3.7').has('Battery voltage')).toBe(false);
+    // The label extractor recovers the full multi-word field.
+    const ex = makeExtractor({ field: 'ignored', label: 'Battery voltage' });
+    expect(ex('Battery voltage: 3.7 V')).toBe('3.7');
+  });
+
+  it('matches case-insensitively and tolerates odd internal whitespace', () => {
+    const ex = makeExtractor({ label: 'Battery voltage' });
+    expect(ex('battery   voltage = 4.1')).toBe('4.1'); // lowercase + '=' + extra spaces
+  });
+
+  it('strips a trailing separator the user pasted with the label', () => {
+    const ex = makeExtractor({ label: 'Cpu temperature:' });
+    expect(ex('Cpu temperature: 65')).toBe('65');
+  });
+
+  it('trends a multi-word label over time via extractSeries', () => {
+    const h = fakeHandler([
+      '2024-01-01 00:00:00 Battery voltage: 3.9',
+      '2024-01-01 00:00:01 Battery voltage: 3.7',
+      '2024-01-01 00:00:02 Battery voltage: 3.5',
+    ]);
+    const s = extractSeries(h, parseTs, 'Battery voltage', { label: 'Battery voltage', bucketCount: 10 });
+    expect(s.type).toBe('numeric');
+    expect(s.totalPoints).toBe(3);
+    expect(s.points.map((p) => p.num)).toEqual([3.9, 3.7, 3.5]);
+  });
+
+  it('flags flips of a multi-word label via detectTransitions', () => {
+    const h = fakeHandler([
+      'Connection state: CONNECTED',
+      'Connection state: CONNECTED',
+      'Connection state: DROPPED',
+    ]);
+    const r = detectTransitions(h, parseTs, 'Connection state', { label: 'Connection state' });
+    expect(r.totalTransitions).toBe(1);
+    expect(r.transitions[0]).toMatchObject({ fromValue: 'CONNECTED', toValue: 'DROPPED' });
+  });
+
+  it('a separators-only label compiles to a never-match (no false single-token grab)', () => {
+    expect(labelToPattern(':').pattern).toBe('(?!)');
+    // Even with a field present, the label (once given) drives extraction — and an
+    // empty one must never silently grab the first token off every line.
+    const ex = makeExtractor({ field: 'unused', label: ':::' });
+    expect(ex('anything: 5')).toBeUndefined();
+  });
+
+  it('an explicit regex pattern still overrides a label', () => {
+    const ex = makeExtractor({ label: 'Battery voltage', pattern: 'in (\\d+)ms' });
+    expect(ex('done in 230ms')).toBe('230');
+    expect(ex('Battery voltage: 3.7')).toBeUndefined();
   });
 });
 

@@ -452,9 +452,9 @@ export interface ApiContext {
   investigateComponent(options: { component: string; maxSamplesPerLevel?: number; includeErrorContext?: boolean; contextLines?: number }): Promise<any>;
   investigateTimerange(options: { startTime: string; endTime: string; maxSamples?: number }): Promise<any>;
   trendDiscoverFields(options: { startLine?: number; endLine?: number; sampleSize?: number }): Promise<any>;
-  trendSeries(options: { field: string; startLine?: number; endLine?: number; bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string }): Promise<any>;
-  trendTransitions(options: { field: string; startLine?: number; endLine?: number; maxTransitions?: number; pattern?: string; patternFlags?: string }): Promise<any>;
-  trendCorrelate(options: { field: string; event: string; startLine?: number; endLine?: number; pattern?: string; patternFlags?: string }): Promise<any>;
+  trendSeries(options: { field: string; startLine?: number; endLine?: number; bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string; label?: string }): Promise<any>;
+  trendTransitions(options: { field: string; startLine?: number; endLine?: number; maxTransitions?: number; pattern?: string; patternFlags?: string; label?: string }): Promise<any>;
+  trendCorrelate(options: { field: string; event: string; startLine?: number; endLine?: number; pattern?: string; patternFlags?: string; label?: string }): Promise<any>;
   // Build a "single session" composite from an ordered file-set and open it (agent parity
   // for the human 🔗 button). Shares buildComposite + autoSaveSingleSession with the human path.
   createComposite(filePaths: string[], label?: string): Promise<{ success: boolean; id?: string; info?: any; boundaries?: any[]; error?: string }>;
@@ -1948,6 +1948,7 @@ export function startApiServer(ctx: ApiContext): void {
             maxPoints: body.maxPoints,
             pattern: body.pattern,
             patternFlags: body.patternFlags,
+            label: body.label,
           });
           sendJson(res, result);
           return;
@@ -1962,6 +1963,7 @@ export function startApiServer(ctx: ApiContext): void {
             maxTransitions: body.maxTransitions,
             pattern: body.pattern,
             patternFlags: body.patternFlags,
+            label: body.label,
           });
           sendJson(res, result);
           return;
@@ -1976,6 +1978,7 @@ export function startApiServer(ctx: ApiContext): void {
             endLine: body.endLine,
             pattern: body.pattern,
             patternFlags: body.patternFlags,
+            label: body.label,
           });
           sendJson(res, result);
           return;
@@ -1985,9 +1988,9 @@ export function startApiServer(ctx: ApiContext): void {
         // can build a vertical sequence of charts alongside the user's own cells.
         if (url === '/api/trend-show') {
           const type = body.type || 'series';
-          if (!body.field && !body.pattern) return sendError(res, 'field or pattern required');
-          const field = body.field || body.pattern;
-          const common = { field, startLine: body.startLine, endLine: body.endLine, pattern: body.pattern, patternFlags: body.patternFlags };
+          if (!body.field && !body.pattern && !body.label) return sendError(res, 'field, label, or pattern required');
+          const field = body.field || body.label || body.pattern;
+          const common = { field, startLine: body.startLine, endLine: body.endLine, pattern: body.pattern, patternFlags: body.patternFlags, label: body.label };
           let result: any;
           if (type === 'transitions') {
             result = await ctx.trendTransitions({ ...common, maxTransitions: body.maxTransitions });
@@ -1997,7 +2000,8 @@ export function startApiServer(ctx: ApiContext): void {
           } else {
             result = await ctx.trendSeries({ ...common, bucketCount: body.bucketCount, maxPoints: body.maxPoints });
           }
-          const label = body.label || body.field || `/${body.pattern}/`;
+          // Cell caption: explicit title, else the field name / pasted label, else the regex.
+          const label = body.title || body.field || body.label || `/${body.pattern}/`;
           // Push the (unredacted) result to the renderer for display; the agent's
           // own text copy is redacted by the MCP layer separately.
           const win = ctx.getMainWindow();

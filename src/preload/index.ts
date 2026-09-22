@@ -1078,13 +1078,13 @@ const api = {
     ipcRenderer.invoke(IPC.TREND_DISCOVER_FIELDS, options),
   trendDiscoverAxes: (options?: { startLine?: number; endLine?: number; sampleSize?: number }): Promise<{ success: boolean; axes?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.TREND_DISCOVER_AXES, options),
-  trendSeries: (options: { field: string; startLine?: number; endLine?: number; bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string; xAxis?: any }): Promise<{ success: boolean; [key: string]: any }> =>
+  trendSeries: (options: { field: string; startLine?: number; endLine?: number; bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string; label?: string; xAxis?: any }): Promise<{ success: boolean; [key: string]: any }> =>
     ipcRenderer.invoke(IPC.TREND_SERIES, options),
   signalSeries: (options: { fields: string[]; xField?: string; startLine?: number; endLine?: number; maxPoints?: number }): Promise<{ success: boolean; [key: string]: any }> =>
     ipcRenderer.invoke(IPC.TREND_SIGNAL_SERIES, options),
-  trendTransitions: (options: { field: string; startLine?: number; endLine?: number; maxTransitions?: number; pattern?: string; patternFlags?: string }): Promise<{ success: boolean; [key: string]: any }> =>
+  trendTransitions: (options: { field: string; startLine?: number; endLine?: number; maxTransitions?: number; pattern?: string; patternFlags?: string; label?: string }): Promise<{ success: boolean; [key: string]: any }> =>
     ipcRenderer.invoke(IPC.TREND_TRANSITIONS, options),
-  trendCorrelate: (options: { field: string; event: string; startLine?: number; endLine?: number; pattern?: string; patternFlags?: string }): Promise<{ success: boolean; [key: string]: any }> =>
+  trendCorrelate: (options: { field: string; event: string; startLine?: number; endLine?: number; pattern?: string; patternFlags?: string; label?: string }): Promise<{ success: boolean; [key: string]: any }> =>
     ipcRenderer.invoke(IPC.TREND_CORRELATE, options),
 
   // Semantic summary — fold the log into distinct message templates (human twin of logan_summarize)
