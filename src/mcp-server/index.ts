@@ -716,17 +716,19 @@ server.tool(
   'logan_trend_series',
   'Trend ONE field over time. Returns adaptive time buckets (count, plus sum/min/max/avg for numeric fields, or top categorical values per bucket) and a sampled set of raw points with viewerLine for click-to-navigate. Use for "how did value X change over time" and to spot when it went bad.',
   {
-    field: z.string().describe('Field name to trend (from logan_trend_fields), or a label for the regex pattern'),
+    field: z.string().describe('Field name to trend (from logan_trend_fields), or a display name when using `label`/`pattern`'),
+    label: z.string().optional().describe('Paste a LABEL from the log to trend the value that follows it — e.g. "Battery voltage" captures the number in `Battery voltage: 3.7`. MULTI-WORD friendly (bare key:value discovery keeps only the last word before ":"). No regex needed — it is compiled to a precise, case-insensitive matcher. `pattern` still overrides this.'),
     pattern: z.string().optional().describe('ADVANCED: regex to extract an unlabeled value; the first capture group is the value (e.g. "in (\\\\d+)ms"). Overrides keyed lookup.'),
     startLine: z.number().int().min(1).optional().describe('1-based viewer line to start at (omit for whole file)'),
     endLine: z.number().int().min(1).optional().describe('1-based viewer line to end at (omit for whole file)'),
     bucketCount: z.number().int().min(10).max(2000).optional().describe('Number of time buckets (default 200)'),
     redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
   },
-  async ({ field, pattern, startLine, endLine, bucketCount, redact }) => {
+  async ({ field, label, pattern, startLine, endLine, bucketCount, redact }) => {
     try {
       const result = await apiCall('POST', '/api/trend-series', {
         field,
+        label,
         pattern,
         startLine: startLine !== undefined ? startLine - 1 : undefined,
         endLine: endLine !== undefined ? endLine - 1 : undefined,
@@ -745,17 +747,19 @@ server.tool(
   'logan_trend_transitions',
   'Detect every point where a field\'s value CHANGES (a "flip") from one occurrence to the next — works for any type (string/bool/enum/array). Returns each transition with fromValue, toValue, and viewerLine. Ideal for "what changed right before the bug" / state-machine tracking.',
   {
-    field: z.string().describe('Field name to watch for changes (from logan_trend_fields), or a label for the regex pattern'),
+    field: z.string().describe('Field name to watch for changes (from logan_trend_fields), or a display name when using `label`/`pattern`'),
+    label: z.string().optional().describe('Paste a LABEL from the log to watch the value that follows it — e.g. "Connection state" flips tracked from `Connection state: CONNECTED`. MULTI-WORD friendly. No regex needed; `pattern` overrides this.'),
     pattern: z.string().optional().describe('ADVANCED: regex to extract an unlabeled value; the first capture group is the value. Overrides keyed lookup.'),
     startLine: z.number().int().min(1).optional().describe('1-based viewer line to start at (omit for whole file)'),
     endLine: z.number().int().min(1).optional().describe('1-based viewer line to end at (omit for whole file)'),
     maxTransitions: z.number().int().min(1).max(10000).optional().describe('Cap on transitions returned (default 2000)'),
     redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
   },
-  async ({ field, pattern, startLine, endLine, maxTransitions, redact }) => {
+  async ({ field, label, pattern, startLine, endLine, maxTransitions, redact }) => {
     try {
       const result = await apiCall('POST', '/api/trend-transitions', {
         field,
+        label,
         pattern,
         startLine: startLine !== undefined ? startLine - 1 : undefined,
         endLine: endLine !== undefined ? endLine - 1 : undefined,
@@ -774,18 +778,20 @@ server.tool(
   'logan_trend_correlate',
   'Cross-tab a field against an EVENT to answer "when X happens, what is field v? when it does not, what is v?". For lines containing `event` (case-insensitive substring) vs not, summarizes the field — numeric: count/min/max/mean per group; categorical: value distribution per group. Use to find what correlates with a failure.',
   {
-    field: z.string().describe('Field whose values to compare (from logan_trend_fields), or a label for the regex pattern'),
+    field: z.string().describe('Field whose values to compare (from logan_trend_fields), or a display name when using `label`/`pattern`'),
     event: z.string().describe('Substring identifying the event line (e.g. an error message or event name)'),
+    label: z.string().optional().describe('Paste a LABEL from the log to compare the value that follows it — e.g. "Battery voltage". MULTI-WORD friendly. No regex needed; `pattern` overrides this.'),
     pattern: z.string().optional().describe('ADVANCED: regex to extract an unlabeled value; the first capture group is the value. Overrides keyed lookup.'),
     startLine: z.number().int().min(1).optional().describe('1-based viewer line to start at (omit for whole file)'),
     endLine: z.number().int().min(1).optional().describe('1-based viewer line to end at (omit for whole file)'),
     redact: z.boolean().default(true).describe('Whether to redact sensitive data'),
   },
-  async ({ field, event, pattern, startLine, endLine, redact }) => {
+  async ({ field, event, label, pattern, startLine, endLine, redact }) => {
     try {
       const result = await apiCall('POST', '/api/trend-correlate', {
         field,
         event,
+        label,
         pattern,
         startLine: startLine !== undefined ? startLine - 1 : undefined,
         endLine: endLine !== undefined ? endLine - 1 : undefined,
@@ -804,22 +810,23 @@ server.tool(
   'Compute a trend AND DISPLAY it as a chart cell in LOGAN\'s Trends panel for the user to see (and click into). Use this — not the bare logan_trend_* tools — when you want the user to SEE the trend. Call it repeatedly to build a vertical sequence of charts (e.g. show several related fields in order). Returns the same data as logan_trend_series/transitions/correlate so you can reason over it too.',
   {
     type: z.enum(['series', 'transitions', 'correlate']).default('series').describe('series = value over time (numeric/boolean as a line/step chart); transitions = every value flip; correlate = field grouped by event presence'),
-    field: z.string().describe('Field name to chart (from logan_trend_fields), or a label when using pattern'),
+    field: z.string().describe('Field name to chart (from logan_trend_fields), or a display name when using `label`/`pattern`'),
+    label: z.string().optional().describe('Paste a LABEL from the log to chart the value that follows it — e.g. "Battery voltage" charts the number in `Battery voltage: 3.7`. MULTI-WORD friendly (bare key:value discovery keeps only the last word before ":"). No regex needed. `pattern` overrides this.'),
     pattern: z.string().optional().describe('ADVANCED: regex to extract an unlabeled value; first capture group is the value. Overrides keyed lookup.'),
     event: z.string().optional().describe('Required for type=correlate: substring identifying the event line'),
-    label: z.string().optional().describe('Optional title shown on the cell (defaults to the field name)'),
+    title: z.string().optional().describe('Optional caption shown on the cell (defaults to the label / field name)'),
     startLine: z.number().int().min(1).optional().describe('1-based viewer line to start at (omit for whole file)'),
     endLine: z.number().int().min(1).optional().describe('1-based viewer line to end at (omit for whole file)'),
     bucketCount: z.number().int().min(10).max(2000).optional().describe('series only: number of time buckets (default 200)'),
     redact: z.boolean().default(true).describe('Whether to redact sensitive data in the returned text (the on-screen chart always shows real values)'),
   },
-  async ({ type, field, pattern, event, label, startLine, endLine, bucketCount, redact }) => {
+  async ({ type, field, label, pattern, event, title, startLine, endLine, bucketCount, redact }) => {
     try {
       if (type === 'correlate' && !event) {
         return { content: [{ type: 'text', text: 'Error: event is required when type="correlate"' }], isError: true };
       }
       const result = await apiCall('POST', '/api/trend-show', {
-        type, field, pattern, event, label,
+        type, field, label, pattern, event, title,
         startLine: startLine !== undefined ? startLine - 1 : undefined,
         endLine: endLine !== undefined ? endLine - 1 : undefined,
         bucketCount,
