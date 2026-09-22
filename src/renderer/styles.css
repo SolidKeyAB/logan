@@ -1839,25 +1839,6 @@ body.platform-darwin .titlebar {
   font-size: 11px;
 }
 
-.stats-content {
-  font-size: 12px;
-}
-
-.stats-content .stat-row {
-  display: flex;
-  justify-content: space-between;
-  padding: 3px 0;
-}
-
-.stats-content .stat-label {
-  color: var(--text-secondary);
-}
-
-.stats-content .stat-value {
-  color: var(--text-primary);
-  font-weight: 500;
-}
-
 /* Analysis Progress (inline, non-blocking) */
 .analysis-progress {
   padding: 8px;
