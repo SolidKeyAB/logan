@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { VtraceAdapter, pickAdapter, adapterRegistry } from '../main/sourceAdapter';
-import { decodeVtrace, parseVtraceToFile, formatRecord, VtraceRecord } from '../main/vtraceParse';
+import { decodeVtrace, decodeVtraceSegments, parseVtraceToFile, parseVtraceSegmentsToFile, formatRecord, VtraceRecord } from '../main/vtraceParse';
 
 // ── Real vtrace fixture builder ──────────────────────────────────────────────
 // An `.esotrace` stream is self-framing: a flat sequence of `[u32be len][payload]`
@@ -86,6 +86,12 @@ function tmpVtrace(buf: Buffer): string {
 function decodeAll(buf: Buffer): VtraceRecord[] {
   const out: VtraceRecord[] = [];
   decodeVtrace(buf, (r) => out.push(r));
+  return out;
+}
+
+function decodeSegs(bufs: Buffer[]): VtraceRecord[] {
+  const out: VtraceRecord[] = [];
+  decodeVtraceSegments(bufs, (r) => out.push(r));
   return out;
 }
 
@@ -313,5 +319,73 @@ describe('VtraceAdapter', () => {
     expect(caps.isBinary).toBe(true);
     expect(caps.supportsAppend).toBe(false);
     expect(caps.needsSchema).toBe(false);
+  });
+});
+
+describe('vtrace segment-set merge (ring-buffer captures)', () => {
+  // First segment of a rotated capture: registers the entities + a clock anchor, then data.
+  const SEG0 = Buffer.concat([
+    entity(CH, 'MediaChannel'),
+    entity(SRC, 'MediaSource'),
+    anchor(BOOT_MS + 89_865, 89_865),
+    msg({ tsNs: 296_000_000_000, level: 2, channel: CH, source: SRC, text: 'seg0 line' }),
+  ]);
+  // A LATER ring-buffer segment: references the entities/clock from SEG0 but re-registers
+  // nothing and carries no anchor of its own — exactly what breaks a per-file decode.
+  const SEG1 = Buffer.concat([
+    msg({ tsNs: 297_000_000_000, level: 2, channel: CH, source: SRC, text: 'seg1 line' }),
+  ]);
+
+  it('a later segment decoded STANDALONE loses names and wall-clock (the bug)', () => {
+    const rec = decodeAll(SEG1).filter(r => !r.undecoded)[0];
+    expect(rec.channel).toBe('8339');   // numeric id — the name map is empty here
+    expect(rec.source).toBe('3876');
+    expect(rec.loggerMs).toBeNull();     // no clock anchor in this segment
+  });
+
+  it('MERGED, the later segment resolves names + LoggerTime from the first segment', () => {
+    const recs = decodeSegs([SEG0, SEG1]).filter(r => !r.undecoded);
+    const seg1 = recs[recs.length - 1];
+    expect(seg1.message).toBe('seg1 line');
+    expect(seg1.channel).toBe('MediaChannel');       // carried forward from SEG0
+    expect(seg1.source).toBe('MediaSource');
+    expect(seg1.loggerMs).toBe(BOOT_MS + 297_000);    // pooled boot epoch applies
+  });
+
+  it('numbers the PacketID prefix (fileIndex) 0,1,… per segment', () => {
+    const recs = decodeSegs([SEG0, SEG1]).filter(r => !r.undecoded);
+    expect(recs[0].fileIndex).toBe(0);                          // seg0
+    expect(recs[recs.length - 1].fileIndex).toBe(1);           // seg1
+    expect(formatRecord(recs[recs.length - 1]).startsWith('1.0')).toBe(true); // record 0 of file 1
+  });
+
+  it('carries the session counter across the segment boundary (no reset to 0)', () => {
+    const s0 = Buffer.concat([
+      sessionMarker(),                                                    // labels session 0
+      msg({ tsNs: 1e9, level: 2, channel: CH, source: SRC, text: 'a' }),
+      sessionMarker(),                                                    // restart → session 1
+      msg({ tsNs: 2e9, level: 2, channel: CH, source: SRC, text: 'b' }),
+    ]);
+    const s1 = Buffer.concat([msg({ tsNs: 3e9, level: 2, channel: CH, source: SRC, text: 'c' })]);
+    // s1 has no marker → it continues session 1, it does NOT restart at 0.
+    expect(decodeSegs([s0, s1]).map(r => r.sessionId)).toEqual([0, 1, 1]);
+  });
+
+  it('parseVtraceSegmentsToFile writes ONE merged file with resolved later-segment rows', async () => {
+    const p0 = tmpVtrace(SEG0), p1 = tmpVtrace(SEG1);
+    const outPath = path.join(os.tmpdir(), `logan-vtrace-merged-${process.pid}-${Math.random().toString(36).slice(2)}.decoded.txt`);
+    try {
+      await parseVtraceSegmentsToFile([p0, p1], outPath, { label: 'log' });
+      const lines = fs.readFileSync(outPath, 'utf-8').split('\n');
+      expect(lines[0]).toBe('#----- BEGIN: log: session #0');
+      const seg1Row = lines.find(l => l.includes('seg1 line'))!;
+      expect(seg1Row).toContain('MediaChannel');    // resolved across the boundary, not '8339'
+      expect(seg1Row).toContain('MediaSource');
+      expect(seg1Row.startsWith('1.0')).toBe(true);  // fileIndex 1, record 0
+      expect(seg1Row).toMatch(/\binfo\b/);
+    } finally {
+      fs.unlinkSync(p0); fs.unlinkSync(p1);
+      if (fs.existsSync(outPath)) fs.unlinkSync(outPath);
+    }
   });
 });
