@@ -968,7 +968,6 @@ const elements = {
   btnFolderSearchCancel: document.getElementById('btn-folder-search-cancel') as HTMLButtonElement,
   btnFolderSearchClear: document.getElementById('btn-folder-search-clear') as HTMLButtonElement,
   folderSearchResults: document.getElementById('folder-search-results') as HTMLDivElement,
-  fileStats: document.getElementById('file-stats') as HTMLDivElement,
   overviewEmpty: document.getElementById('overview-empty') as HTMLDivElement,
   briefResults: document.getElementById('brief-results') as HTMLDivElement,
   btnBrief: document.getElementById('btn-brief') as HTMLButtonElement,
@@ -19762,8 +19761,6 @@ async function loadFile(filePath: string, createNewTab: boolean = true): Promise
         }
       }
 
-      updateFileStatsUI();
-
       // Display mode manager handles all mode transitions:
       // current mode deactivates itself, new mode activates itself.
       await displayManager.switchTo(filePath);
@@ -24468,29 +24465,6 @@ function updateHighlightNavPosition(highlightId: string): void {
   posEl.textContent = posText;
 }
 
-// UI Updates
-function updateFileStatsUI(): void {
-  if (!state.fileStats) {
-    elements.fileStats.innerHTML = '<p class="placeholder">No file loaded</p>';
-    return;
-  }
-
-  elements.fileStats.innerHTML = `
-    <div class="stat-row">
-      <span class="stat-label">File:</span>
-      <span class="stat-value">${getFileName(state.fileStats.path)}</span>
-    </div>
-    <div class="stat-row">
-      <span class="stat-label">Size:</span>
-      <span class="stat-value">${formatBytes(state.fileStats.size)}</span>
-    </div>
-    <div class="stat-row">
-      <span class="stat-label">Lines:</span>
-      <span class="stat-value">${state.fileStats.totalLines.toLocaleString()}</span>
-    </div>
-  `;
-}
-
 // ── 📋 Brief (native counterpart to the AI's logan_evidence_pack) ──
 // Fetches the SAME compact briefing the agent gets and renders it below the
 // analysis output, with clickable rows that jump to the referenced viewerLine.
@@ -25484,12 +25458,13 @@ function formatBytes(bytes: number): string {
 
 // Sidebar toggle
 // Panel system
-const PANEL_IDS = ['folders', 'bookmarks', 'highlights', 'stats', 'history', 'annotations'];
+// Stats panel removed — its only fields (File/Size/Lines) already live in the bottom
+// status bar. Ctrl+1..5 now map: Folders/Bookmarks/Highlights/History/AI Annotations.
+const PANEL_IDS = ['folders', 'bookmarks', 'highlights', 'history', 'annotations'];
 const PANEL_NAMES: Record<string, string> = {
   'folders': 'Folders',
   'bookmarks': 'Bookmarks',
   'highlights': 'Highlights',
-  'stats': 'Stats',
   'history': 'History',
   'annotations': 'AI Annotations',
   'saved': 'Saved',
@@ -28372,7 +28347,6 @@ function restoreTabState(tab: TabState): void {
   tab.cachedLines.forEach((line, key) => cachedLines.set(key, line));
 
   // Update UI
-  updateFileStatsUI();
   updateStatusBar();
   updateBookmarksUI();
   updateSearchUI();
@@ -28601,7 +28575,6 @@ function resetToWelcomeState(): void {
   elements.welcomeMessage.classList.remove('hidden');
   closeBottomPanel();
   updateStatusBar();
-  updateFileStatsUI();
   updateBookmarksUI();
   updateHighlightsUI();
 }
