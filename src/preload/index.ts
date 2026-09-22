@@ -456,8 +456,7 @@ const api = {
     folderPath?: string;
     scanned?: number;
     candidates?: number;
-    mergedSets?: number;
-    decoded?: Array<{ original: string; decoded: string; merged?: boolean; segments?: number }>;
+    decoded?: Array<{ original: string; decoded: string }>;
     errors?: Array<{ file: string; error: string }>;
     error?: string;
   }> =>
