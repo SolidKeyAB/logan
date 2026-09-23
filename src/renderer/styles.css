@@ -9260,8 +9260,13 @@ kbd {
 .ctx-lane-label { font-size: 11px; color: #c0b8a0; width: 90px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 5px; font-weight: 500; }
 .ctx-lane-color { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; box-shadow: 0 0 4px currentColor; }
 .ctx-lane-track { flex: 1; position: relative; height: 24px; border-radius: 3px; border: 1px solid #2e3a4a; overflow: hidden; }
-.ctx-lane-mark { position: absolute; top: 2px; bottom: 2px; width: 4px; border-radius: 1px; cursor: pointer; transition: opacity 0.15s; box-shadow: 0 0 3px currentColor; }
+.ctx-lane-mark { position: absolute; top: 2px; bottom: 2px; width: 4px; border-radius: 1px; cursor: pointer; transition: opacity 0.15s; box-shadow: 0 0 3px currentColor; z-index: 2; }
 .ctx-lane-mark:hover { opacity: 0.8; box-shadow: 0 0 8px currentColor; }
+/* ±distance coverage halo behind each mark — same tint language as the viewer band. */
+.ctx-lane-cover { position: absolute; top: 3px; bottom: 3px; min-width: 8px; transform: translateX(-50%); border-radius: 3px; z-index: 1; pointer-events: none; transition: box-shadow 0.15s; }
+/* Focused group (clicked in tree or lane): mark grows + glows, its halo brackets it. */
+.ctx-lane-mark.focused { width: 6px; box-shadow: 0 0 8px currentColor, 0 0 0 1.5px currentColor; z-index: 3; }
+.ctx-lane-cover.focused { box-shadow: inset 0 0 0 1px currentColor; }
 .ctx-group-ctx-tag { font-size: 9px; padding: 1px 5px; border-radius: 3px; color: #fff; font-weight: 500; flex-shrink: 0; opacity: 0.85; }
 .ctx-group.faded { opacity: 0.2; transition: opacity 0.2s; }
 .ctx-group.focused { opacity: 1; background: rgba(200,168,122,0.06); border-radius: 4px; box-shadow: 0 0 0 1px rgba(200,168,122,0.25); }
