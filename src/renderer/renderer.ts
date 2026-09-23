@@ -354,6 +354,16 @@ interface AppState {
   // Context search
   contextDefinitions: ContextDefinitionDef[];
   contextResults: Map<string, ContextMatchGroupDef[]>;
+  // When the user clicks an occurrence in the Contexts panel, we paint that group's
+  // coverage in the log viewer: the ±distance band, the anchor (MUST) line, and each
+  // satisfied clue line. Cleared on re-run, file switch, or the ✕ clear affordance.
+  contextFocus: {
+    anchorLine: number;
+    coverageStart: number;
+    coverageEnd: number;
+    clueLines: Set<number>;
+    color: string;
+  } | null;
   contextViewMode: 'tree' | 'lanes';
   contextGroupMode: 'separate' | 'combined';
   contextShowIncomplete: boolean;
@@ -437,6 +447,7 @@ const state: AppState = {
   comparisonReport: null,
   contextDefinitions: [],
   contextResults: new Map(),
+  contextFocus: null,
   contextViewMode: 'tree' as 'tree' | 'lanes',
   contextGroupMode: 'separate' as 'separate' | 'combined',
   contextShowIncomplete: localStorage.getItem('logan-ctx-show-incomplete') !== 'false',
@@ -3074,6 +3085,16 @@ function createLineElementPooled(line: LogLine): HTMLDivElement {
     className += ' range-selected';
   }
 
+  // Context coverage overlay: when an occurrence is clicked in the Contexts panel we
+  // tint the whole ±distance window (ctx-cover), mark the anchor (ctx-cover-anchor) and
+  // each satisfied clue line (ctx-cover-clue). Tints come from CSS vars set on the viewer.
+  const cf = state.contextFocus;
+  if (cf && line.lineNumber >= cf.coverageStart && line.lineNumber <= cf.coverageEnd) {
+    className += ' ctx-cover';
+    if (line.lineNumber === cf.anchorLine) className += ' ctx-cover-anchor';
+    else if (cf.clueLines.has(line.lineNumber)) className += ' ctx-cover-clue';
+  }
+
   // Check for bookmark and get comment
   const bookmark = state.bookmarks.find(b => b.lineNumber === line.lineNumber);
   if (bookmark) {
@@ -3212,6 +3233,14 @@ function createLineElement(line: LogLine): HTMLDivElement {
   const bookmark = state.bookmarks.find((b) => b.lineNumber === line.lineNumber);
   if (bookmark) {
     div.classList.add('bookmarked');
+  }
+
+  // Context coverage overlay (see createLineElementPooled for the rationale).
+  const cf = state.contextFocus;
+  if (cf && line.lineNumber >= cf.coverageStart && line.lineNumber <= cf.coverageEnd) {
+    div.classList.add('ctx-cover');
+    if (line.lineNumber === cf.anchorLine) div.classList.add('ctx-cover-anchor');
+    else if (cf.clueLines.has(line.lineNumber)) div.classList.add('ctx-cover-clue');
   }
 
   if (isLineMuted(line.text)) div.classList.add('muted');
@@ -18479,6 +18508,7 @@ async function runContextSearch(): Promise<void> {
 
     if (result.success && result.results) {
       state.contextResults.clear();
+      clearContextFocus(); // stale coverage overlay (old anchor lines) no longer valid
       let totalGroups = 0;
       let partialGroups = 0;
       for (const r of result.results) {
@@ -18591,6 +18621,69 @@ function renderContextResultsCombined(container: HTMLDivElement): void {
   });
 }
 
+// Paint a context group's coverage in the log viewer so clicking an occurrence in the
+// panel lights up exactly what the context matched: the ±distance band, the anchor
+// (MUST) line, and every satisfied clue line. Missing clue patterns have no line to
+// paint — they're emphasized in the card instead (see buildGroupElement).
+function focusContextGroup(def: ContextDefinitionDef, group: ContextMatchGroupDef, scrollTo?: number): void {
+  const dist = def.defaultDistance || 10;
+  const total = getTotalLines() || 1;
+  state.contextFocus = {
+    anchorLine: group.mustLine,
+    coverageStart: Math.max(0, group.mustLine - dist),
+    coverageEnd: Math.min(total - 1, group.mustLine + dist),
+    clueLines: new Set(group.clues.map(c => c.lineNumber)),
+    color: def.color,
+  };
+  if (logViewerElement) {
+    // Tints derived from the context color (6-hex + 2-hex alpha), matching the
+    // `${def.color}15` convention used by the chips and lanes.
+    logViewerElement.style.setProperty('--ctx-color', def.color);
+    logViewerElement.style.setProperty('--ctx-band', def.color + '1c');
+    logViewerElement.style.setProperty('--ctx-clue-tint', def.color + '26');
+    logViewerElement.style.setProperty('--ctx-anchor-tint', def.color + '3a');
+  }
+  goToLine(scrollTo ?? group.mustLine);
+  renderVisibleLines();
+  updateContextFocusHint();
+}
+
+function clearContextFocus(): void {
+  if (!state.contextFocus) { updateContextFocusHint(); return; }
+  state.contextFocus = null;
+  if (logViewerElement) {
+    logViewerElement.style.removeProperty('--ctx-color');
+    logViewerElement.style.removeProperty('--ctx-band');
+    logViewerElement.style.removeProperty('--ctx-clue-tint');
+    logViewerElement.style.removeProperty('--ctx-anchor-tint');
+  }
+  renderVisibleLines();
+  updateContextFocusHint();
+}
+
+// A small "coverage on Ln · ✕ clear" pill next to the results summary — visible only
+// while a coverage overlay is painted, so the highlight is discoverable and dismissable.
+let ctxFocusHintEl: HTMLButtonElement | null = null;
+function updateContextFocusHint(): void {
+  const summary = elements.ctxResultsSummary;
+  if (!summary || !summary.parentElement) return;
+  if (!ctxFocusHintEl) {
+    ctxFocusHintEl = document.createElement('button');
+    ctxFocusHintEl.className = 'ctx-focus-clear';
+    ctxFocusHintEl.title = 'Clear the coverage highlight painted in the log viewer';
+    ctxFocusHintEl.addEventListener('click', clearContextFocus);
+    summary.parentElement.insertBefore(ctxFocusHintEl, summary.nextSibling);
+  }
+  if (state.contextFocus) {
+    ctxFocusHintEl.innerHTML =
+      `<span class="ctx-focus-dot"></span>Coverage on L${state.contextFocus.anchorLine + 1} · ✕ clear`;
+    ctxFocusHintEl.style.setProperty('--ctx-focus-dot', state.contextFocus.color);
+    ctxFocusHintEl.hidden = false;
+  } else {
+    ctxFocusHintEl.hidden = true;
+  }
+}
+
 function buildGroupElement(def: ContextDefinitionDef, group: ContextMatchGroupDef, collapsed: boolean, showCtxTag: boolean): HTMLDivElement {
   const groupEl = document.createElement('div');
   groupEl.className = 'ctx-group';
@@ -18646,7 +18739,7 @@ function buildGroupElement(def: ContextDefinitionDef, group: ContextMatchGroupDe
       groupEl.classList.toggle('collapsed');
       toggle.textContent = groupEl.classList.contains('collapsed') ? '\u25B6' : '\u25BC';
     } else {
-      goToLine(group.mustLine);
+      focusContextGroup(def, group);
     }
   });
 
@@ -18656,18 +18749,26 @@ function buildGroupElement(def: ContextDefinitionDef, group: ContextMatchGroupDe
   const cluesEl = document.createElement('div');
   cluesEl.className = 'ctx-group-clues';
 
-  // For incomplete anchors, list which clue patterns are missing.
+  // For incomplete anchors, call out which clue patterns are MISSING — high emphasis
+  // (a red "✕ N missing" label + a chip per unmatched pattern) so a partial match reads
+  // as clearly incomplete rather than a faint aside.
   if (!group.complete && group.missingPatternIds.length > 0) {
-    const missNames = group.missingPatternIds.map(id => {
+    const missWrap = document.createElement('div');
+    missWrap.className = 'ctx-group-missing';
+    const missLabel = document.createElement('span');
+    missLabel.className = 'ctx-missing-label';
+    missLabel.textContent = `✕ ${group.missingPatternIds.length} missing`;
+    missWrap.appendChild(missLabel);
+    group.missingPatternIds.forEach(id => {
       const p = def.patterns.find(pt => pt.id === id);
       const label = p ? p.pattern : id;
-      return label.length > 40 ? label.slice(0, 40) + '…' : label;
+      const chip = document.createElement('span');
+      chip.className = 'ctx-missing-chip';
+      chip.textContent = label.length > 36 ? label.slice(0, 36) + '…' : label;
+      chip.title = `Clue pattern not found within ±${(p && p.distance) ?? def.defaultDistance} lines of the anchor`;
+      missWrap.appendChild(chip);
     });
-    const missEl = document.createElement('div');
-    missEl.className = 'ctx-group-missing';
-    missEl.textContent = `⚠ missing: ${missNames.join(', ')}`;
-    missEl.title = `Clue pattern${missNames.length !== 1 ? 's' : ''} not found within range`;
-    cluesEl.appendChild(missEl);
+    cluesEl.appendChild(missWrap);
   }
 
   group.clues.forEach((clue, ci) => {
@@ -18697,7 +18798,7 @@ function buildGroupElement(def: ContextDefinitionDef, group: ContextMatchGroupDe
     clueItem.appendChild(cText);
     clueItem.appendChild(dist);
 
-    clueItem.addEventListener('click', () => goToLine(clue.lineNumber));
+    clueItem.addEventListener('click', () => focusContextGroup(def, group, clue.lineNumber));
     cluesEl.appendChild(clueItem);
   });
 
@@ -18756,7 +18857,7 @@ function renderContextLanes(): void {
         mark.title = `${def.name} — L${group.mustLine + 1} (incomplete: ${group.matchedPatternCount}/${group.totalCluePatterns} clues)`;
       }
       mark.addEventListener('click', () => {
-        goToLine(group.mustLine);
+        focusContextGroup(def, group);
         // Focus matching group in tree below
         const allGroups = elements.ctxResults.querySelectorAll('.ctx-group');
         allGroups.forEach(g => {
@@ -28530,6 +28631,7 @@ async function switchToTab(tabId: string): Promise<void> {
       loadSearchConfigs();
       loadSearchConfigSessions();
       loadContextDefinitions();
+      clearContextFocus(); // coverage overlay is keyed to the previous file's line numbers
 
       // displayManager.switchTo() already called createLogViewer() via logViewerMode.activate()
 

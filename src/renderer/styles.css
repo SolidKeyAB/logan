@@ -9270,12 +9270,29 @@ kbd {
 .ctx-group.incomplete { border-left-color: rgba(224,149,58,0.5); }
 .ctx-group.incomplete .ctx-group-header { background: rgba(224,149,58,0.05); }
 .ctx-score-badge.incomplete { background: rgba(224,149,58,0.16); color: #e0953a; }
-.ctx-group-missing { margin-left: 18px; padding: 1px 6px 3px; font-size: 10px; color: #e0953a; opacity: 0.9; font-style: italic; }
+/* Missing clue patterns — high emphasis: a red label + one chip per unmatched pattern. */
+.ctx-group-missing { margin-left: 18px; padding: 3px 6px 4px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.ctx-missing-label { font-size: 10px; font-weight: 700; letter-spacing: 0.02em; color: #ff6b6b; text-transform: uppercase; }
+.ctx-missing-chip { font-size: 10px; padding: 1px 6px; border-radius: 3px; background: rgba(255,80,80,0.14); border: 1px solid rgba(255,80,80,0.45); color: #ff9c9c; font-family: var(--mono-font, monospace); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-lane-mark.incomplete { background: transparent !important; border: 1.5px solid; box-shadow: none; opacity: 0.8; }
 .ctx-lane-mark.incomplete:hover { opacity: 1; box-shadow: 0 0 6px currentColor; }
 :root.theme-paper .ctx-score-badge.incomplete { background: rgba(179,112,26,0.14); color: #b3701a; }
-:root.theme-paper .ctx-group-missing { color: #b3701a; }
+:root.theme-paper .ctx-missing-label { color: #c62828; }
+:root.theme-paper .ctx-missing-chip { background: rgba(198,40,40,0.1); border-color: rgba(198,40,40,0.4); color: #a52020; }
 :root.theme-paper .ctx-group.incomplete { border-left-color: rgba(179,112,26,0.5); }
+
+/* ── Context coverage overlay in the log viewer (click an occurrence to paint it) ── */
+/* The band tints the whole ±distance window; the inset 9999px shadow overlays a tint
+   on the anchor/clue rows so it shows over any level-color background. */
+.log-line.ctx-cover { background: var(--ctx-band, transparent); }
+.log-line.ctx-cover-clue { box-shadow: inset 2px 0 0 var(--ctx-color, #888), inset 0 0 0 9999px var(--ctx-clue-tint, transparent); }
+.log-line.ctx-cover-anchor { box-shadow: inset 4px 0 0 var(--ctx-color, #888), inset 0 0 0 9999px var(--ctx-anchor-tint, transparent); }
+
+/* "Coverage on Ln · ✕ clear" pill next to the results summary (only while a group is focused). */
+.ctx-focus-clear { display: inline-flex; align-items: center; gap: 5px; margin-left: 6px; padding: 1px 8px; font-size: 10px; border-radius: 10px; border: 1px solid #3a4658; background: #232b38; color: #c0cbe0; cursor: pointer; }
+.ctx-focus-clear:hover { background: #2c3546; border-color: #4a5870; }
+.ctx-focus-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ctx-focus-dot, #888); box-shadow: 0 0 4px var(--ctx-focus-dot, #888); }
+:root.theme-paper .ctx-focus-clear { background: #d4dad6; border-color: #a9b3ac; color: #3a463c; }
 
 /* Paper theme overrides */
 :root.theme-paper .contexts-panel-body { background: #c4cdc8; }
