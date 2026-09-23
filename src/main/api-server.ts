@@ -36,7 +36,7 @@ const INVESTIGATIVE_PATHS = new Set<string>([
   '/api/trend-fields', '/api/trend-series', '/api/trend-transitions', '/api/trend-correlate',
   '/api/trend-show', '/api/investigate-crashes', '/api/investigate-component',
   '/api/investigate-timerange', '/api/navigate', '/api/evidence-pack',
-  '/api/summarize', '/api/fold-regions', '/api/diff-runs',
+  '/api/summarize', '/api/fold-regions', '/api/diff-runs', '/api/contexts-run',
 ]);
 const JOURNAL_CAP = 200;
 // A composite recipe recurses (its steps run sub-recipes, which may themselves be composite).
@@ -455,6 +455,11 @@ export interface ApiContext {
   trendSeries(options: { field: string; startLine?: number; endLine?: number; bucketCount?: number; maxPoints?: number; pattern?: string; patternFlags?: string; label?: string }): Promise<any>;
   trendTransitions(options: { field: string; startLine?: number; endLine?: number; maxTransitions?: number; pattern?: string; patternFlags?: string; label?: string }): Promise<any>;
   trendCorrelate(options: { field: string; event: string; startLine?: number; endLine?: number; pattern?: string; patternFlags?: string; label?: string }): Promise<any>;
+  // Contexts panel (must/clue proximity correlation) — agent parity, shares the human store+engine.
+  contextsList(): Promise<any>;
+  contextsSave(input: { id?: string; name: string; color?: string; isGlobal?: boolean; defaultDistance?: number; enabled?: boolean; patterns: Array<{ id?: string; pattern: string; role: 'must' | 'clue'; isRegex?: boolean; matchCase?: boolean; distance?: number }> }): Promise<any>;
+  contextsDelete(id: string): Promise<any>;
+  contextsRun(contextIds: string[]): Promise<any>;
   // Build a "single session" composite from an ordered file-set and open it (agent parity
   // for the human 🔗 button). Shares buildComposite + autoSaveSingleSession with the human path.
   createComposite(filePaths: string[], label?: string): Promise<{ success: boolean; id?: string; info?: any; boundaries?: any[]; error?: string }>;
@@ -2009,6 +2014,26 @@ export function startApiServer(ctx: ApiContext): void {
             win.webContents.send('agent-trend-cell', { type, label, result });
           }
           sendJson(res, result);
+          return;
+        }
+
+        // Contexts panel (must/clue proximity correlation) — agent CRUD + run, sharing the
+        // human store + engine. list = global + this-file defs; save routes by isGlobal.
+        if (url === '/api/contexts-list') {
+          sendJson(res, await ctx.contextsList());
+          return;
+        }
+        if (url === '/api/contexts-save') {
+          sendJson(res, await ctx.contextsSave(body));
+          return;
+        }
+        if (url === '/api/contexts-delete') {
+          if (!body.id) return sendError(res, 'id required');
+          sendJson(res, await ctx.contextsDelete(body.id));
+          return;
+        }
+        if (url === '/api/contexts-run') {
+          sendJson(res, await ctx.contextsRun(Array.isArray(body.contextIds) ? body.contextIds : []));
           return;
         }
 
