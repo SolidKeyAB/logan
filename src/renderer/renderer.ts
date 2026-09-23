@@ -358,6 +358,7 @@ interface AppState {
   // coverage in the log viewer: the ±distance band, the anchor (MUST) line, and each
   // satisfied clue line. Cleared on re-run, file switch, or the ✕ clear affordance.
   contextFocus: {
+    contextId: string;
     anchorLine: number;
     coverageStart: number;
     coverageEnd: number;
@@ -18629,6 +18630,7 @@ function focusContextGroup(def: ContextDefinitionDef, group: ContextMatchGroupDe
   const dist = def.defaultDistance || 10;
   const total = getTotalLines() || 1;
   state.contextFocus = {
+    contextId: def.id,
     anchorLine: group.mustLine,
     coverageStart: Math.max(0, group.mustLine - dist),
     coverageEnd: Math.min(total - 1, group.mustLine + dist),
@@ -18646,6 +18648,7 @@ function focusContextGroup(def: ContextDefinitionDef, group: ContextMatchGroupDe
   goToLine(scrollTo ?? group.mustLine);
   renderVisibleLines();
   updateContextFocusHint();
+  syncContextLaneFocus();
 }
 
 function clearContextFocus(): void {
@@ -18659,6 +18662,18 @@ function clearContextFocus(): void {
   }
   renderVisibleLines();
   updateContextFocusHint();
+  syncContextLaneFocus();
+}
+
+// Cross-view consistency: the focused group's lane mark + coverage halo light up to
+// match the viewer overlay, whether the click came from a tree card or a lane mark.
+// Lightweight class toggle (no lane rebuild) keyed on the mark's data attributes.
+function syncContextLaneFocus(): void {
+  const cf = state.contextFocus;
+  elements.ctxLanes.querySelectorAll<HTMLElement>('.ctx-lane-mark, .ctx-lane-cover').forEach(el => {
+    const on = !!cf && el.dataset.ctxId === cf.contextId && Number(el.dataset.ctxLine) === cf.anchorLine;
+    el.classList.toggle('focused', on);
+  });
 }
 
 // A small "coverage on Ln · ✕ clear" pill next to the results summary — visible only
@@ -18841,11 +18856,34 @@ function renderContextLanes(): void {
     track.className = 'ctx-lane-track';
     track.style.background = `linear-gradient(to right, ${def.color}15, ${def.color}08)`;
 
+    const cf = state.contextFocus;
+    const dist = def.defaultDistance || 10;
     for (const group of groups) {
+      const isFocused = !!cf && cf.contextId === def.id && cf.anchorLine === group.mustLine;
+
+      // Coverage halo — the ±distance window drawn to scale behind the mark (same tint
+      // language as the viewer band), floored to a visible min-width for big files so a
+      // tiny span never disappears. Consistent with the viewer's painted coverage.
+      const coverStart = Math.max(0, group.mustLine - dist);
+      const coverEnd = Math.min(totalLines - 1, group.mustLine + dist);
+      const cover = document.createElement('div');
+      cover.className = 'ctx-lane-cover' + (isFocused ? ' focused' : '');
+      // Centered on the anchor (CSS translateX(-50%)) so the ±window frames the mark
+      // cleanly at any file size; min-width in CSS keeps it visible on huge files.
+      cover.style.left = `${(group.mustLine / totalLines) * 100}%`;
+      cover.style.width = `${((coverEnd - coverStart + 1) / totalLines) * 100}%`;
+      cover.style.background = def.color + '22';
+      cover.style.color = def.color;
+      cover.dataset.ctxId = def.id;
+      cover.dataset.ctxLine = String(group.mustLine);
+      track.appendChild(cover);
+
       const mark = document.createElement('div');
-      mark.className = 'ctx-lane-mark';
+      mark.className = 'ctx-lane-mark' + (isFocused ? ' focused' : '');
       mark.style.left = `${(group.mustLine / totalLines) * 100}%`;
       mark.style.color = def.color;
+      mark.dataset.ctxId = def.id;
+      mark.dataset.ctxLine = String(group.mustLine);
       if (group.complete) {
         mark.style.background = def.color;
         mark.title = `${def.name} — L${group.mustLine + 1}`;
