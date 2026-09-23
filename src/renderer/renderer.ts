@@ -18101,7 +18101,8 @@ function renderContextChips(): void {
     return;
   }
 
-  for (const def of state.contextDefinitions) {
+  // Build one chip for a context definition (× deletes just that one, in a click).
+  const buildChip = (def: ContextDefinitionDef): HTMLDivElement => {
     const chip = document.createElement('div');
     chip.className = `ctx-chip${def.enabled ? '' : ' disabled'}`;
 
@@ -18142,7 +18143,7 @@ function renderContextChips(): void {
     const deleteBtn = document.createElement('button');
     deleteBtn.className = 'ctx-chip-delete';
     deleteBtn.innerHTML = '&times;';
-    deleteBtn.title = 'Delete';
+    deleteBtn.title = 'Delete this context';
     deleteBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       if (!confirm(`Delete context "${def.name}"?`)) return;
@@ -18159,8 +18160,28 @@ function renderContextChips(): void {
     chip.appendChild(toggleBtn);
     chip.appendChild(editBtn);
     chip.appendChild(deleteBtn);
-    container.appendChild(chip);
-  }
+    return chip;
+  };
+
+  // Group by scope so GLOBAL contexts (every log) and THIS FILE's contexts are visibly
+  // separated. The "This file" group changes as you switch files; globals stay put.
+  const section = (title: string, hint: string, defs: ContextDefinitionDef[]): void => {
+    if (defs.length === 0) return;
+    const head = document.createElement('div');
+    head.className = 'ctx-group-head';
+    head.innerHTML = `<span class="ctx-group-title">${escapeHtml(title)}</span><span class="ctx-group-hint">${escapeHtml(hint)}</span>`;
+    container.appendChild(head);
+    const row = document.createElement('div');
+    row.className = 'ctx-chip-row';
+    for (const def of defs) row.appendChild(buildChip(def));
+    container.appendChild(row);
+  };
+
+  const globals = state.contextDefinitions.filter(d => d.isGlobal);
+  const locals = state.contextDefinitions.filter(d => !d.isGlobal);
+  const fileName = state.filePath ? getFileName(state.filePath) : 'this file';
+  section('Global', 'every log', globals);
+  section('This file', fileName, locals);
 }
 
 // Drop in a ready-to-run sample context so the panel teaches itself: "errors that
@@ -18224,14 +18245,15 @@ function showContextForm(existingDef?: ContextDefinitionDef): void {
   nameRow.appendChild(nameInput);
   nameRow.appendChild(colorInput);
 
-  // Global toggle
+  // Scope toggle — checked = reusable on every log; unchecked = saved to THIS file only.
   const globalLabel = document.createElement('label');
   globalLabel.style.cssText = 'font-size:10px;color:var(--text-secondary);display:flex;align-items:center;gap:3px';
+  globalLabel.title = 'Checked = Global: available on every log you open.\nUnchecked = saved to THIS file only (shows under “This file”).';
   const globalCheck = document.createElement('input');
   globalCheck.type = 'checkbox';
   globalCheck.checked = def.isGlobal;
   globalLabel.appendChild(globalCheck);
-  globalLabel.appendChild(document.createTextNode('Global'));
+  globalLabel.appendChild(document.createTextNode('Global (all logs)'));
   nameRow.appendChild(globalLabel);
   form.appendChild(nameRow);
 
