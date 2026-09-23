@@ -553,6 +553,46 @@ server.tool(
   }
 );
 
+// === Tool: logan_contexts ===
+server.tool(
+  'logan_contexts',
+  'Manage and RUN "contexts" — must/clue proximity correlations (the human Contexts panel). A context = one REQUIRED (must) pattern (the anchor) + optional NEARBY (clue) patterns that must appear within N lines of it. Actions: list (global + this-file), save (create/update; routes to global or this-file by isGlobal), run (search the open log → each anchor with which nearby patterns hit + a X/Y clue score), delete. Use to answer "when X happens, is Y nearby?" — then pin the correlated anchors with logan_report_finding.',
+  {
+    action: z.enum(['list', 'save', 'run', 'delete']).describe('list · save one · run (search the open log) · delete one'),
+    id: z.string().optional().describe('context id (for update / delete; omit on create)'),
+    name: z.string().optional().describe('context name (required for save)'),
+    patterns: z.array(z.object({
+      pattern: z.string().describe('the text or regex to match'),
+      role: z.enum(['must', 'clue']).describe('must = the anchor event; clue = a nearby co-symptom'),
+      isRegex: z.boolean().optional().describe('treat pattern as regex (default false)'),
+      matchCase: z.boolean().optional().describe('case-sensitive (default false)'),
+      distance: z.number().int().optional().describe('per-clue proximity override in lines; defaults to the context distance'),
+    })).optional().describe('required for save: at least one `must` pattern, plus any `clue` patterns'),
+    distance: z.number().int().min(0).optional().describe('save: default proximity window in lines (default 10)'),
+    isGlobal: z.boolean().optional().describe('save scope: true = reusable on every log; false/omitted = THIS file only'),
+    contextIds: z.array(z.string()).optional().describe('run: which context ids to run (omit = all enabled)'),
+    redact: z.boolean().default(true).describe('redact sensitive data in the returned text'),
+  },
+  async ({ action, id, name, patterns, distance, isGlobal, contextIds, redact }) => {
+    try {
+      let result: any;
+      if (action === 'save') {
+        result = await apiCall('POST', '/api/contexts-save', { id, name, patterns, defaultDistance: distance, isGlobal });
+      } else if (action === 'delete') {
+        result = await apiCall('POST', '/api/contexts-delete', { id });
+      } else if (action === 'run') {
+        result = await apiCall('POST', '/api/contexts-run', { contextIds });
+      } else {
+        result = await apiCall('POST', '/api/contexts-list', {});
+      }
+      const output = redact ? maybeRedact(result, true) : result;
+      return { content: [{ type: 'text', text: JSON.stringify(output, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: logan_column_layouts ===
 server.tool(
   'logan_column_layouts',
