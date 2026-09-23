@@ -9156,7 +9156,14 @@ kbd {
 .ctx-view-btn.active { background: #1a5a8a; color: #d0e8ff; border-color: #2878b0; }
 
 /* Chips */
-.ctx-chips { display: flex; flex-wrap: wrap; gap: 5px; padding: 6px 10px; flex-shrink: 0; }
+.ctx-chips { display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 6px 10px; flex-shrink: 0; }
+/* Scope groups: "Global" (every log) vs "This file". */
+.ctx-group-head { display: flex; align-items: baseline; gap: 8px; margin: 2px 0 1px; }
+.ctx-group-title { font-size: 10px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; color: #8fb0d0; }
+.ctx-group-hint { font-size: 10px; color: #667a8f; }
+.ctx-chip-row { display: flex; flex-wrap: wrap; gap: 5px; }
+:root.theme-paper .ctx-group-title { color: #2a4a5a; }
+:root.theme-paper .ctx-group-hint { color: #566; }
 /* Self-explaining empty state (shown when no contexts are defined yet). */
 .ctx-empty { width: 100%; padding: 14px 14px; border: 1px dashed #3a4860; border-radius: 6px; background: #1c222b; }
 .ctx-empty-title { font-size: 12px; font-weight: 600; color: #c8e0f8; margin-bottom: 5px; }
