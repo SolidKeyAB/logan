@@ -2338,6 +2338,49 @@ app.whenReady().then(() => {
         return { success: false, error: String(error) };
       }
     },
+    // Agent parity for the Contexts panel (must/clue proximity correlation). Shares the SAME
+    // store + engine as the human panel: list returns global + this-file defs; save routes by
+    // scope (isGlobal); run = performContextSearch; delete = removeContextDefinition.
+    contextsList: async () => {
+      return { success: true, definitions: loadContextDefinitionsForFile(currentFilePath || '') };
+    },
+    contextsSave: async (input) => {
+      try {
+        if (!input?.name || !input?.patterns?.length) return { success: false, error: 'name and patterns required' };
+        if (!input.patterns.some((p) => p.role === 'must')) return { success: false, error: 'at least one "must" (Required) pattern is needed' };
+        const now = Date.now();
+        const def: ContextDefinition = {
+          id: input.id || `ctx-${now}`,
+          name: input.name,
+          color: input.color || '#3498db',
+          patterns: input.patterns.map((p, i) => ({
+            id: p.id || `cp-${now}-${i}`,
+            pattern: p.pattern,
+            isRegex: !!p.isRegex,
+            matchCase: !!p.matchCase,
+            role: p.role === 'must' ? 'must' : 'clue',
+            distance: typeof p.distance === 'number' ? p.distance : undefined,
+          })),
+          proximityMode: 'lines',
+          defaultDistance: typeof input.defaultDistance === 'number' ? input.defaultDistance : 10,
+          enabled: input.enabled !== false,
+          isGlobal: !!input.isGlobal,
+          createdAt: now,
+        };
+        saveContextDefinition(def);
+        return { success: true, definition: def };
+      } catch (error) {
+        return { success: false, error: String(error) };
+      }
+    },
+    contextsDelete: async (id) => {
+      if (!id) return { success: false, error: 'id required' };
+      removeContextDefinition(id);
+      return { success: true };
+    },
+    contextsRun: async (contextIds) => {
+      return performContextSearch(Array.isArray(contextIds) ? contextIds : []);
+    },
     // Agent parity for the human "🔗 Single session" button: build a composite from an
     // ordered file-set and open it. Reuses the SAME primitives as the CREATE_COMPOSITE IPC
     // (buildComposite + autoSaveSingleSession), then makes it the active read target and
@@ -4973,7 +5016,9 @@ ipcMain.handle('context-definition-delete', async (_, id: string) => {
   return { success: true };
 });
 
-ipcMain.handle(IPC.CONTEXT_SEARCH, async (_, contextIds: string[]) => {
+// Run the must/clue proximity search for the given context ids (empty = all enabled).
+// Shared by the human panel (IPC.CONTEXT_SEARCH) and the agent (logan_contexts run).
+async function performContextSearch(contextIds: string[]): Promise<{ success: boolean; results?: Array<{ contextId: string; groups: ContextMatchGroup[] }>; error?: string }> {
   // getReadHandler so context search (must/clue proximity) runs over a composite /
   // segmented view too — it only reads via search()/getLines()/getFileInfo().
   const handler = getReadHandler();
@@ -5089,7 +5134,9 @@ ipcMain.handle(IPC.CONTEXT_SEARCH, async (_, contextIds: string[]) => {
   }
 
   return { success: true, results };
-});
+}
+
+ipcMain.handle(IPC.CONTEXT_SEARCH, async (_, contextIds: string[]) => performContextSearch(contextIds));
 
 // === Traceback ===
 
