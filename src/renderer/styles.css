@@ -9156,7 +9156,14 @@ kbd {
 .ctx-view-btn.active { background: #1a5a8a; color: #d0e8ff; border-color: #2878b0; }
 
 /* Chips */
-.ctx-chips { display: flex; flex-wrap: wrap; gap: 5px; padding: 6px 10px; flex-shrink: 0; }
+.ctx-chips { display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 6px 10px; flex-shrink: 0; }
+/* Scope groups: "Global" (every log) vs "This file". */
+.ctx-group-head { display: flex; align-items: baseline; gap: 8px; margin: 2px 0 1px; }
+.ctx-group-title { font-size: 10px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; color: #8fb0d0; }
+.ctx-group-hint { font-size: 10px; color: #667a8f; }
+.ctx-chip-row { display: flex; flex-wrap: wrap; gap: 5px; }
+:root.theme-paper .ctx-group-title { color: #2a4a5a; }
+:root.theme-paper .ctx-group-hint { color: #566; }
 /* Self-explaining empty state (shown when no contexts are defined yet). */
 .ctx-empty { width: 100%; padding: 14px 14px; border: 1px dashed #3a4860; border-radius: 6px; background: #1c222b; }
 .ctx-empty-title { font-size: 12px; font-weight: 600; color: #c8e0f8; margin-bottom: 5px; }
@@ -9180,8 +9187,11 @@ kbd {
 .ctx-chip-toggle:hover { color: #a8d0f0; }
 .ctx-chip-edit { background: none; border: none; color: #6888a8; cursor: pointer; font-size: 11px; padding: 0 2px; transition: color 0.15s; }
 .ctx-chip-edit:hover { color: #a8d0f0; }
-.ctx-chip-delete { background: none; border: none; color: #5a6878; cursor: pointer; font-size: 14px; padding: 0 2px; line-height: 1; transition: color 0.15s; }
-.ctx-chip-delete:hover { color: #e88080; }
+/* Delete this one context — a clear × on every pill (brighter than edit/toggle,
+   white-on-red on hover so it reads unmistakably as delete). */
+.ctx-chip-delete { background: none; border: none; color: #8a97a8; cursor: pointer; font-size: 15px; font-weight: 700; margin-left: 2px; padding: 0 5px; line-height: 1; border-radius: 50%; transition: all 0.12s; }
+.ctx-chip-delete:hover { color: #fff; background: #c0392b; }
+:root.theme-paper .ctx-chip-delete { color: #7a5a5a; }
 
 /* Form */
 .ctx-form { padding: 10px; border-bottom: 1px solid #2a3040; background: #1a2028; }
