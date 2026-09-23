@@ -1270,6 +1270,7 @@ const elements = {
   // Context search (in bottom panel)
   ctxAddBtn: document.getElementById('ctx-add-btn') as HTMLButtonElement,
   ctxRunBtn: document.getElementById('ctx-run-btn') as HTMLButtonElement,
+  ctxClearBtn: document.getElementById('ctx-clear-btn') as HTMLButtonElement,
   ctxResultsSummary: document.getElementById('ctx-results-summary') as HTMLSpanElement,
   ctxViewTree: document.getElementById('ctx-view-tree') as HTMLButtonElement,
   ctxViewLanes: document.getElementById('ctx-view-lanes') as HTMLButtonElement,
@@ -18106,6 +18107,27 @@ async function loadContextDefinitions(): Promise<void> {
   renderContextChips();
 }
 
+// Re-render whichever results surface is active (tree or lanes) — used after any change
+// that alters what should be visible without a fresh search (e.g. enable/disable toggle).
+function refreshContextResultsView(): void {
+  if (state.contextViewMode === 'lanes') renderContextLanes();
+  else renderContextResults();
+}
+
+// Close the current run: drop all cached match groups (frees memory), clear the painted
+// coverage overlay, and reset the results surface — so you can switch to another context
+// on a clean slate. The context definitions themselves are untouched; just hit Run again.
+function clearContextRun(): void {
+  const hadResults = state.contextResults.size > 0;
+  state.contextResults.clear();
+  clearContextFocus();
+  elements.ctxLanes.innerHTML = '';
+  elements.ctxLanes.classList.add('hidden');
+  renderContextChips();      // per-chip (N) counts drop away
+  renderContextResults();    // falls back to the "No context matches" placeholder
+  elements.ctxResultsSummary.textContent = hadResults ? 'Cleared — hit Run to search again' : '';
+}
+
 function renderContextChips(): void {
   const container = elements.ctxChips;
   container.innerHTML = '';
@@ -18158,7 +18180,12 @@ function renderContextChips(): void {
       e.stopPropagation();
       def.enabled = !def.enabled;
       await window.api.contextDefinitionsSave(def);
+      // If the context we just disabled owns the painted coverage, drop the overlay.
+      if (!def.enabled && state.contextFocus?.contextId === def.id) clearContextFocus();
       renderContextChips();
+      // Reflect the toggle in the results view NOW — a disabled context's groups and
+      // lane marks must disappear at once, not linger until the next Run.
+      refreshContextResultsView();
     });
 
     const editBtn = document.createElement('button');
@@ -27642,6 +27669,7 @@ function init(): void {
   // Context search panel events (inside bottom panel)
   elements.ctxAddBtn.addEventListener('click', () => showContextForm());
   elements.ctxRunBtn.addEventListener('click', () => runContextSearch());
+  elements.ctxClearBtn.addEventListener('click', () => clearContextRun());
   elements.ctxViewTree.addEventListener('click', () => toggleContextView('tree'));
   elements.ctxViewLanes.addEventListener('click', () => toggleContextView('lanes'));
   elements.ctxGroupSeparate.addEventListener('click', () => toggleContextGroupMode('separate'));
