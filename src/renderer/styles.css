@@ -9187,8 +9187,11 @@ kbd {
 .ctx-chip-toggle:hover { color: #a8d0f0; }
 .ctx-chip-edit { background: none; border: none; color: #6888a8; cursor: pointer; font-size: 11px; padding: 0 2px; transition: color 0.15s; }
 .ctx-chip-edit:hover { color: #a8d0f0; }
-.ctx-chip-delete { background: none; border: none; color: #5a6878; cursor: pointer; font-size: 14px; padding: 0 2px; line-height: 1; transition: color 0.15s; }
-.ctx-chip-delete:hover { color: #e88080; }
+/* Delete this one context — a clear × on every pill (brighter than edit/toggle,
+   white-on-red on hover so it reads unmistakably as delete). */
+.ctx-chip-delete { background: none; border: none; color: #8a97a8; cursor: pointer; font-size: 15px; font-weight: 700; margin-left: 2px; padding: 0 5px; line-height: 1; border-radius: 50%; transition: all 0.12s; }
+.ctx-chip-delete:hover { color: #fff; background: #c0392b; }
+:root.theme-paper .ctx-chip-delete { color: #7a5a5a; }
 
 /* Form */
 .ctx-form { padding: 10px; border-bottom: 1px solid #2a3040; background: #1a2028; }
