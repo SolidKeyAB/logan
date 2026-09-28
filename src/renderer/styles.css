@@ -9157,13 +9157,7 @@ kbd {
 
 /* Chips */
 .ctx-chips { display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 6px 10px; flex-shrink: 0; }
-/* Scope groups: "Global" (every log) vs "This file". */
-.ctx-group-head { display: flex; align-items: baseline; gap: 8px; margin: 2px 0 1px; }
-.ctx-group-title { font-size: 10px; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; color: #8fb0d0; }
-.ctx-group-hint { font-size: 10px; color: #667a8f; }
 .ctx-chip-row { display: flex; flex-wrap: wrap; gap: 5px; }
-:root.theme-paper .ctx-group-title { color: #2a4a5a; }
-:root.theme-paper .ctx-group-hint { color: #566; }
 /* Self-explaining empty state (shown when no contexts are defined yet). */
 .ctx-empty { width: 100%; padding: 14px 14px; border: 1px dashed #3a4860; border-radius: 6px; background: #1c222b; }
 .ctx-empty-title { font-size: 12px; font-weight: 600; color: #c8e0f8; margin-bottom: 5px; }
@@ -9181,8 +9175,15 @@ kbd {
 .ctx-chip:hover { background: #2a3545; border-color: #3e5068; }
 .ctx-chip.disabled { opacity: 0.4; }
 .ctx-chip-swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; box-shadow: 0 0 4px rgba(255,255,255,0.1); }
+/* Per-chip scope badge (🌐 global · 📄 this file) — carries the scope now that the
+   grouping headers are gone. */
+.ctx-chip-scope { font-size: 10px; opacity: 0.7; flex-shrink: 0; cursor: default; }
 .ctx-chip-name { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #b8d0e8; }
 .ctx-chip-count { font-size: 10px; color: #6888a8; padding: 0 3px; background: #1a2030; border-radius: 6px; }
+/* Per-context Run — the ▶ on each chip runs just that context. */
+.ctx-chip-run { background: none; border: none; color: #6aa06a; cursor: pointer; font-size: 10px; padding: 0 3px; line-height: 1; transition: color 0.15s; }
+.ctx-chip-run:hover { color: #86d886; }
+.ctx-chip-run:disabled { opacity: 0.3; cursor: default; }
 .ctx-chip-toggle { background: none; border: none; color: #6888a8; cursor: pointer; font-size: 14px; padding: 0 2px; line-height: 1; transition: color 0.15s; }
 .ctx-chip-toggle:hover { color: #a8d0f0; }
 .ctx-chip-edit { background: none; border: none; color: #6888a8; cursor: pointer; font-size: 11px; padding: 0 2px; transition: color 0.15s; }
@@ -9202,6 +9203,15 @@ kbd {
 .ctx-form-input:focus { border-color: #4a88c0; outline: none; box-shadow: 0 0 0 1px rgba(74,136,192,0.2); }
 .ctx-color-input { width: 28px; height: 24px; border: 1px solid #3a4860; border-radius: 4px; padding: 1px; cursor: pointer; background: #232a35; }
 .ctx-form-section { font-size: 10px; color: #5a7a98; margin: 8px 0 3px; text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; }
+/* Scope selector — segmented Global / This file toggle in the context form. */
+.ctx-scope-seg { display: inline-flex; }
+.ctx-scope-btn { background: #232a35; border: 1px solid #3a4860; color: #8aa4c0; padding: 3px 10px; cursor: pointer; font-size: 11px; transition: all 0.15s; }
+.ctx-scope-btn:first-child { border-radius: 4px 0 0 4px; }
+.ctx-scope-btn:last-child { border-radius: 0 4px 4px 0; border-left: none; }
+.ctx-scope-btn:hover { background: #2a3545; color: #c8e0f8; }
+.ctx-scope-btn.active { background: #1a5a8a; color: #d0e8ff; border-color: #2878b0; }
+:root.theme-paper .ctx-scope-btn { background: #b5c0ba; border-color: #98a5a0; color: #5a7070; }
+:root.theme-paper .ctx-scope-btn.active { background: #3d7a8a; color: #e8f4f0; border-color: #3d7a8a; }
 .ctx-pattern-help { font-size: 10px; color: var(--text-muted); margin-bottom: 6px; line-height: 1.4; }
 .ctx-pattern-help b { color: var(--text-secondary); }
 .ctx-pattern-row { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; padding: 2px 4px; border-radius: 4px; border-left: 2px solid transparent; }
