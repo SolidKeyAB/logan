@@ -18644,35 +18644,19 @@ function renderContextResultsSeparate(container: HTMLDivElement): void {
     if (!allGroups || allGroups.length === 0) continue;
     const groups = visibleContextGroups(allGroups);
     if (groups.length === 0) continue;
-    const incompleteCount = groups.reduce((n, g) => n + (g.complete ? 0 : 1), 0);
 
     const section = document.createElement('div');
     section.className = 'ctx-context-section';
 
-    const header = document.createElement('div');
-    header.className = 'ctx-context-header';
-    header.style.borderLeftColor = def.color;
-    header.style.background = `linear-gradient(to right, ${def.color}18, ${def.color}08 60%, #1c2230)`;
-    const colorBar = document.createElement('span');
-    colorBar.className = 'ctx-context-color-bar';
-    colorBar.style.backgroundColor = def.color;
-    colorBar.style.color = def.color;
-    const headerName = document.createElement('span');
-    headerName.textContent = def.name;
-    const matchCount = document.createElement('span');
-    matchCount.className = 'ctx-context-match-count';
-    matchCount.textContent = incompleteCount > 0
-      ? `${groups.length} groups · ${incompleteCount} partial`
-      : `${groups.length} groups`;
-    header.appendChild(colorBar);
-    header.appendChild(headerName);
-    header.appendChild(matchCount);
-    section.appendChild(header);
-
     const shouldCollapseAll = groups.length > 10;
 
+    // No per-context header bar. It used to be a sticky, semi-transparent strip that the
+    // rows scrolled under and showed through (the "overlap"), and it duplicated the
+    // always-visible chip (name + count) at the top of the panel. Each row now carries the
+    // context's colored name tag (showCtxTag=true), so its identity travels with the cell —
+    // per-context partial counts still show on each row's score badge, totals on the summary.
     groups.forEach((group, gi) => {
-      section.appendChild(buildGroupElement(def, group, shouldCollapseAll && gi >= 3, false));
+      section.appendChild(buildGroupElement(def, group, shouldCollapseAll && gi >= 3, true));
     });
 
     container.appendChild(section);
