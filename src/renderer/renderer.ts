@@ -19602,8 +19602,17 @@ async function patcolAutoDetect(): Promise<void> {
   patcolSetMode('paint');
   patcolSpans = autoDetectSpansLocal(line);
   patcolRenderPaint();
-  patcolPreviewSoon();
-  showToast(`Auto-detected ${patcolSpans.length} columns — rename/adjust, then Use as columns`);
+  // Apply the detected columns to the viewer right away so they are LIVE — i.e. the
+  // "selected layout" is set, so right-clicking a column offers Mute/Hide. Detection was
+  // previously preview-only, which left nothing in the viewer to act on. Validate+refine
+  // over the file first (same as "Use as columns") for the best match rate.
+  await patcolPreview(true);
+  if (patcolCompiled && patcolCompiled.fields.length) {
+    applyColumnPattern(patcolCompiled.regex, patcolCompiled.flags, patcolCompiled.fields);
+    // applyColumnPattern already toasts (with the mute hint); nothing more to say on success.
+  } else {
+    showToast(`Auto-detected ${patcolSpans.length} columns — adjust, then “▸ Use as columns”`);
+  }
 }
 
 function patcolSetMode(mode: PatcolMode): void {
@@ -20657,7 +20666,7 @@ function applyColumnPattern(
   // Segmentation changed → rebuild the rendered rows.
   if (logContentElement) { logContentElement.innerHTML = ''; lineElementPool.releaseAll(); }
   void loadVisibleLines();
-  showToast(`Applied ${fields.length}-column pattern to the viewer`);
+  showToast(`Applied ${fields.length} columns — right-click a column to mute or hide it`);
 }
 
 // Popup picker of saved constants ("tags"): drop a saved value into Search or the Filter's
