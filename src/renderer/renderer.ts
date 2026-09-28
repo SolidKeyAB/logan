@@ -1269,7 +1269,6 @@ const elements = {
   btnScCancel: document.getElementById('btn-sc-cancel') as HTMLButtonElement,
   // Context search (in bottom panel)
   ctxAddBtn: document.getElementById('ctx-add-btn') as HTMLButtonElement,
-  ctxRunBtn: document.getElementById('ctx-run-btn') as HTMLButtonElement,
   ctxClearBtn: document.getElementById('ctx-clear-btn') as HTMLButtonElement,
   ctxResultsSummary: document.getElementById('ctx-results-summary') as HTMLSpanElement,
   ctxViewTree: document.getElementById('ctx-view-tree') as HTMLButtonElement,
@@ -18140,12 +18139,12 @@ function renderContextChips(): void {
     empty.className = 'ctx-empty';
     empty.innerHTML = `
       <div class="ctx-empty-title">Find correlated events — “when X happens, what’s nearby?”</div>
-      <div class="ctx-empty-desc">A <b>context</b> = one <b>Required</b> pattern (the anchor) + optional <b>Nearby</b> patterns that must appear within N lines of it. <b>Run</b> scans the log and lists every anchor, flagged by which nearby patterns landed close.</div>
+      <div class="ctx-empty-desc">A <b>context</b> = one <b>Required</b> pattern (the anchor) + optional <b>Nearby</b> patterns that must appear within N lines of it. Each context has its own <b>▶ Run</b> that scans the log and lists every anchor, flagged by which nearby patterns landed close.</div>
       <div class="ctx-empty-actions">
         <button class="ctx-form-btn primary" id="ctx-empty-new">➕ New context</button>
         <button class="ctx-form-btn" id="ctx-empty-example">Load example</button>
       </div>
-      <div class="ctx-empty-hint">The example drops in <b>Required “ERROR”</b> + <b>Nearby “timeout”</b> within 10 lines — then hit <b>▶ Run</b>.</div>
+      <div class="ctx-empty-hint">The example drops in <b>Required “ERROR”</b> + <b>Nearby “timeout”</b> within 10 lines — then click the <b>▶</b> on its chip.</div>
     `;
     container.appendChild(empty);
     empty.querySelector('#ctx-empty-new')?.addEventListener('click', () => showContextForm());
@@ -18162,6 +18161,13 @@ function renderContextChips(): void {
     swatch.className = 'ctx-chip-swatch';
     swatch.style.backgroundColor = def.color;
 
+    // Scope badge — replaces the old grouping headers: each chip now carries its own
+    // scope indicator (🌐 global = every log · 📄 this file only).
+    const scope = document.createElement('span');
+    scope.className = 'ctx-chip-scope';
+    scope.textContent = def.isGlobal ? '🌐' : '📄';
+    scope.title = def.isGlobal ? 'Global — available on every log' : 'Saved to this file only';
+
     const name = document.createElement('span');
     name.className = 'ctx-chip-name';
     name.textContent = def.name;
@@ -18171,6 +18177,18 @@ function renderContextChips(): void {
     count.className = 'ctx-chip-count';
     const groups = state.contextResults.get(def.id);
     count.textContent = groups ? `(${groups.length})` : '';
+
+    // Per-context Run — scans the log for just THIS context (no longer a single
+    // "run everything" button in the toolbar).
+    const runBtn = document.createElement('button');
+    runBtn.className = 'ctx-chip-run';
+    runBtn.innerHTML = '&#9654;'; // ▶
+    runBtn.title = `Run “${def.name}”`;
+    runBtn.disabled = !def.enabled;
+    runBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await runContextSearch([def.id]);
+    });
 
     const toggleBtn = document.createElement('button');
     toggleBtn.className = 'ctx-chip-toggle';
@@ -18212,33 +18230,26 @@ function renderContextChips(): void {
     });
 
     chip.appendChild(swatch);
+    chip.appendChild(scope);
     chip.appendChild(name);
     chip.appendChild(count);
+    chip.appendChild(runBtn);
     chip.appendChild(toggleBtn);
     chip.appendChild(editBtn);
     chip.appendChild(deleteBtn);
     return chip;
   };
 
-  // Group by scope so GLOBAL contexts (every log) and THIS FILE's contexts are visibly
-  // separated. The "This file" group changes as you switch files; globals stay put.
-  const section = (title: string, hint: string, defs: ContextDefinitionDef[]): void => {
-    if (defs.length === 0) return;
-    const head = document.createElement('div');
-    head.className = 'ctx-group-head';
-    head.innerHTML = `<span class="ctx-group-title">${escapeHtml(title)}</span><span class="ctx-group-hint">${escapeHtml(hint)}</span>`;
-    container.appendChild(head);
-    const row = document.createElement('div');
-    row.className = 'ctx-chip-row';
-    for (const def of defs) row.appendChild(buildChip(def));
-    container.appendChild(row);
-  };
-
-  const globals = state.contextDefinitions.filter(d => d.isGlobal);
-  const locals = state.contextDefinitions.filter(d => !d.isGlobal);
-  const fileName = state.filePath ? getFileName(state.filePath) : 'this file';
-  section('Global', 'every log', globals);
-  section('This file', fileName, locals);
+  // One flat list (no more grouping headers). Scope is shown per-chip via its badge;
+  // globals are listed first, then this file's contexts, for a stable order.
+  const row = document.createElement('div');
+  row.className = 'ctx-chip-row';
+  const ordered = [
+    ...state.contextDefinitions.filter(d => d.isGlobal),
+    ...state.contextDefinitions.filter(d => !d.isGlobal),
+  ];
+  for (const def of ordered) row.appendChild(buildChip(def));
+  container.appendChild(row);
 }
 
 // Drop in a ready-to-run sample context so the panel teaches itself: "errors that
@@ -18264,7 +18275,7 @@ async function addExampleContext(): Promise<void> {
   state.contextDefinitions.push(def);
   ctxColorIndex++;
   renderContextChips();
-  showToast('Example context added — click ▶ Run to see it in action');
+  showToast('Example context added — click the ▶ on its chip to run it');
 }
 
 function showContextForm(existingDef?: ContextDefinitionDef): void {
@@ -18301,18 +18312,37 @@ function showContextForm(existingDef?: ContextDefinitionDef): void {
   colorInput.value = def.color;
   nameRow.appendChild(nameInput);
   nameRow.appendChild(colorInput);
-
-  // Scope toggle — checked = reusable on every log; unchecked = saved to THIS file only.
-  const globalLabel = document.createElement('label');
-  globalLabel.style.cssText = 'font-size:10px;color:var(--text-secondary);display:flex;align-items:center;gap:3px';
-  globalLabel.title = 'Checked = Global: available on every log you open.\nUnchecked = saved to THIS file only (shows under “This file”).';
-  const globalCheck = document.createElement('input');
-  globalCheck.type = 'checkbox';
-  globalCheck.checked = def.isGlobal;
-  globalLabel.appendChild(globalCheck);
-  globalLabel.appendChild(document.createTextNode('Global (all logs)'));
-  nameRow.appendChild(globalLabel);
   form.appendChild(nameRow);
+
+  // Scope selector — a prominent, labeled segmented control (replaces the old easy-to-miss
+  // "Global" checkbox). Pick where this context is saved: Global = reusable on every log;
+  // This file = saved to this log only.
+  let scopeIsGlobal = def.isGlobal;
+  const scopeRow = document.createElement('div');
+  scopeRow.className = 'ctx-form-row ctx-scope-row';
+  const scopeLabel = document.createElement('label');
+  scopeLabel.textContent = 'Scope';
+  scopeRow.appendChild(scopeLabel);
+  const scopeSeg = document.createElement('div');
+  scopeSeg.className = 'ctx-scope-seg';
+  const scopeFileName = state.filePath ? getFileName(state.filePath) : 'this file';
+  const mkScopeBtn = (isGlobal: boolean, label: string, title: string): HTMLButtonElement => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ctx-scope-btn' + (scopeIsGlobal === isGlobal ? ' active' : '');
+    b.textContent = label;
+    b.title = title;
+    b.addEventListener('click', () => {
+      scopeIsGlobal = isGlobal;
+      scopeSeg.querySelectorAll('.ctx-scope-btn').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+    });
+    return b;
+  };
+  scopeSeg.appendChild(mkScopeBtn(true, '🌐 Global', 'Available on every log you open'));
+  scopeSeg.appendChild(mkScopeBtn(false, '📄 This file', `Saved to ${scopeFileName} only`));
+  scopeRow.appendChild(scopeSeg);
+  form.appendChild(scopeRow);
 
   // Patterns section
   const patSection = document.createElement('div');
@@ -18479,7 +18509,7 @@ function showContextForm(existingDef?: ContextDefinitionDef): void {
       proximityMode: 'lines',
       defaultDistance: parseInt(distGlobal.value, 10) || 10,
       enabled: true,
-      isGlobal: globalCheck.checked,
+      isGlobal: scopeIsGlobal,
       createdAt: existingDef?.createdAt || Date.now(),
     };
 
@@ -18506,7 +18536,10 @@ function showContextForm(existingDef?: ContextDefinitionDef): void {
   nameInput.focus();
 }
 
-async function runContextSearch(): Promise<void> {
+// Run context search. With no ids, runs every enabled context (legacy "run all").
+// With ids, runs JUST those contexts (the per-chip ▶ button) and merges their results
+// into the existing set instead of wiping the others.
+async function runContextSearch(contextIds: string[] = []): Promise<void> {
   if (!state.filePath) {
     elements.ctxResultsSummary.textContent = 'No file open';
     return;
@@ -18515,9 +18548,12 @@ async function runContextSearch(): Promise<void> {
   // Always reload definitions from disk before searching
   await loadContextDefinitions();
 
-  const enabled = state.contextDefinitions.filter(d => d.enabled);
-  if (enabled.length === 0) {
-    elements.ctxResultsSummary.textContent = 'No enabled contexts';
+  const subset = contextIds.length > 0;
+  const targeted = subset
+    ? state.contextDefinitions.filter(d => contextIds.includes(d.id) && d.enabled)
+    : state.contextDefinitions.filter(d => d.enabled);
+  if (targeted.length === 0) {
+    elements.ctxResultsSummary.textContent = subset ? 'Context is disabled' : 'No enabled contexts';
     return;
   }
 
@@ -18530,19 +18566,32 @@ async function runContextSearch(): Promise<void> {
   });
 
   try {
-    const result = await window.api.contextSearch([]);
+    const result = await window.api.contextSearch(contextIds);
     cleanupProgress();
     hideProgress();
 
     if (result.success && result.results) {
-      state.contextResults.clear();
-      clearContextFocus(); // stale coverage overlay (old anchor lines) no longer valid
-      let totalGroups = 0;
-      let partialGroups = 0;
+      if (subset) {
+        // Replace only the re-run contexts; keep everything else. Drop the coverage
+        // overlay only if it belonged to a context we just re-ran (anchors may move).
+        for (const id of contextIds) state.contextResults.delete(id);
+        if (state.contextFocus && contextIds.includes(state.contextFocus.contextId)) clearContextFocus();
+      } else {
+        state.contextResults.clear();
+        clearContextFocus(); // stale coverage overlay (old anchor lines) no longer valid
+      }
       for (const r of result.results) {
         state.contextResults.set(r.contextId, r.groups);
-        totalGroups += r.groups.length;
-        partialGroups += r.groups.reduce((n, g) => n + (g.complete ? 0 : 1), 0);
+      }
+
+      // Summary rolls up all enabled contexts' current results (not just this run).
+      const enabledIds = new Set(state.contextDefinitions.filter(d => d.enabled).map(d => d.id));
+      let totalGroups = 0;
+      let partialGroups = 0;
+      for (const [id, groups] of state.contextResults) {
+        if (!enabledIds.has(id)) continue;
+        totalGroups += groups.length;
+        partialGroups += groups.reduce((n, g) => n + (g.complete ? 0 : 1), 0);
       }
       elements.ctxResultsSummary.textContent = partialGroups > 0
         ? `${totalGroups} group${totalGroups !== 1 ? 's' : ''} · ${partialGroups} partial`
@@ -27668,7 +27717,6 @@ function init(): void {
 
   // Context search panel events (inside bottom panel)
   elements.ctxAddBtn.addEventListener('click', () => showContextForm());
-  elements.ctxRunBtn.addEventListener('click', () => runContextSearch());
   elements.ctxClearBtn.addEventListener('click', () => clearContextRun());
   elements.ctxViewTree.addEventListener('click', () => toggleContextView('tree'));
   elements.ctxViewLanes.addEventListener('click', () => toggleContextView('lanes'));
