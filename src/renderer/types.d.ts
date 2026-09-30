@@ -544,6 +544,29 @@ interface FileHandlerResult {
   level?: 'info' | 'error';
 }
 
+// Jira downloader plugin (mirrors src/shared/types.ts).
+interface JiraPluginConfig {
+  command: string;
+  argsTemplate: string;
+  downloadDir: string;
+  timeoutSec: number;
+  autoOpen: boolean;
+  openWhich: 'newest' | 'folder';
+}
+
+interface JiraFetchResult {
+  success: boolean;
+  ticket: string;
+  files: string[];
+  newestFile?: string;
+  folder?: string;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  durationMs?: number;
+  error?: string;
+}
+
 interface Api {
   // File operations
   openFileDialog: () => Promise<string | null>;
@@ -829,6 +852,11 @@ interface Api {
   // Device discovery
   serialListPorts: () => Promise<{ success: boolean; ports?: Array<{ path: string; manufacturer?: string; vendorId?: string; productId?: string }>; error?: string }>;
   logcatListDevices: () => Promise<{ success: boolean; devices?: Array<{ id: string; state: string; model?: string }>; error?: string }>;
+
+  // Jira downloader plugin
+  jiraConfigGet: () => Promise<{ success: boolean; config?: JiraPluginConfig; error?: string }>;
+  jiraConfigSet: (config: Partial<JiraPluginConfig>) => Promise<{ success: boolean; config?: JiraPluginConfig; error?: string }>;
+  jiraFetch: (ticket: string) => Promise<JiraFetchResult & { opened?: string; info?: unknown }>;
 
   // SSH profiles & SFTP
   sshParseConfig: () => Promise<{ success: boolean; hosts?: SshHostEntry[]; error?: string }>;

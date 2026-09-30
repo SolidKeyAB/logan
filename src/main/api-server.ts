@@ -398,6 +398,10 @@ export interface ApiContext {
   getHighlights(): Map<string, Highlight>;
   openFile(filePath: string): Promise<any>;
   openFolder(folderPath: string): Promise<any>;
+  // Jira downloader plugin: run the user's external download command for a ticket
+  // key and (by default) open the resulting log. Shares jiraFetch.ts + config with
+  // the human 🎫 button. Returns { success, files, newestFile, opened?, info?, ... }.
+  fetchTicket(ticket: string, opts?: { open?: boolean }): Promise<any>;
   getLines(startLine: number, count: number): any;
   search(options: SearchOptions & { scope?: ScopeDescriptor }): Promise<any>;
   analyze(analyzerName?: string, scope?: ScopeDescriptor): Promise<any>;
@@ -1243,6 +1247,13 @@ export function startApiServer(ctx: ApiContext): void {
           if (!body.folderPath) return sendError(res, 'folderPath required');
           const result = await ctx.openFolder(body.folderPath);
           if (!result?.success) return sendError(res, result?.error || 'Failed to open folder');
+          sendJson(res, result);
+          return;
+        }
+
+        if (url === '/api/fetch-ticket') {
+          if (!body.ticket) return sendError(res, 'ticket required');
+          const result = await ctx.fetchTicket(String(body.ticket), { open: body.open });
           sendJson(res, result);
           return;
         }

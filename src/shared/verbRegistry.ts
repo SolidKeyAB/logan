@@ -37,6 +37,7 @@ export interface VerbFeature {
 // work; listing them here now keeps this the single canonical table.
 export const VERB_REGISTRY: VerbFeature[] = [
   { feature: 'open-file',            display: 'Open file',            humanActions: ['file_opened'],      aiSlugs: ['open-file'] },
+  { feature: 'fetch-ticket',         display: 'Download from Jira',   humanActions: ['jira_fetch'],       aiSlugs: ['fetch-ticket'] },
   { feature: 'get-lines',            display: 'Read lines',           humanActions: [],                   aiSlugs: ['get-lines'] },
   { feature: 'search',               display: 'Search',               humanActions: ['search'],           aiSlugs: ['search'] },
   { feature: 'analyze',              display: 'Analyze',              humanActions: ['analysis_run'],     aiSlugs: ['analyze'] },

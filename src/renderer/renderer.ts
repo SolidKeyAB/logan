@@ -9427,6 +9427,114 @@ async function editInvestigationRequirements(t: any, fromFile = false): Promise<
   void loadInvestigationTemplates();
 }
 
+// 🎫 Jira downloader plugin — type a ticket key, LOGAN runs the user's own
+// download script (saved keys, no login) and opens the result. The command +
+// download folder are configured inline (persisted to ~/.logan/jira-plugin.json)
+// so the feature is self-explaining and works with any script.
+async function showJiraFetchModal(): Promise<void> {
+  const res = await window.api.jiraConfigGet();
+  const cfg: JiraPluginConfig = res.config || { command: '', argsTemplate: '{ticket}', downloadDir: '', timeoutSec: 120, autoOpen: true, openWhich: 'newest' };
+  const needsSetup = !cfg.command || !cfg.command.trim();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal';
+  overlay.style.cssText = 'display:flex;align-items:center;justify-content:center;';
+  overlay.innerHTML = `
+    <div class="modal-content" style="width:560px;">
+      <div class="modal-header"><h3>🎫 Download from Jira</h3></div>
+      <div class="modal-body">
+        <p class="req-modal-hint">Type a ticket key and LOGAN runs <em>your</em> download script, then opens the log it saves. LOGAN never logs in — your script handles the saved keys.</p>
+        <div class="filter-group">
+          <label>Ticket key</label>
+          <input type="text" class="modal-input" data-jira="ticket" placeholder="e.g. SUS-1234" autocomplete="off">
+        </div>
+        <div class="jira-err" data-jira="err" style="display:none;color:var(--error-color,#e06c75);font-size:12px;margin:4px 0 8px;white-space:pre-wrap;"></div>
+        <details class="jira-settings" ${needsSetup ? 'open' : ''} style="margin-top:8px;border-top:1px solid var(--border-color,#333);padding-top:8px;">
+          <summary style="cursor:pointer;user-select:none;font-size:12px;opacity:.85;">⚙ Download command &amp; folder${needsSetup ? ' — set this up once' : ''}</summary>
+          <div style="margin-top:8px;">
+            <div class="filter-group"><label>Command <span class="req-hint">(the executable, e.g. <code>python3</code> or a runnable script)</span></label><input type="text" class="modal-input" data-jira="command" placeholder="python3"></div>
+            <div class="filter-group"><label>Arguments <span class="req-hint">(<code>{ticket}</code> &amp; <code>{downloadDir}</code> are substituted; quote paths with spaces)</span></label><input type="text" class="modal-input" data-jira="argsTemplate" placeholder="/path/to/jira_download.py {ticket} --out {downloadDir}"></div>
+            <div class="filter-group"><label>Download folder <span class="req-hint">(where your script saves — LOGAN opens what appears here)</span></label><input type="text" class="modal-input" data-jira="downloadDir" placeholder="/Users/you/jira-logs"></div>
+            <div class="filter-group" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+              <label style="margin:0;">Timeout (s) <input type="number" class="modal-input" data-jira="timeoutSec" min="1" style="width:72px;display:inline-block;"></label>
+              <label style="margin:0;display:inline-flex;align-items:center;gap:4px;"><input type="checkbox" data-jira="autoOpen"> Auto-open result</label>
+              <label style="margin:0;">Open <select class="modal-input" data-jira="openWhich" style="width:auto;display:inline-block;"><option value="newest">newest file</option><option value="folder">the folder</option></select></label>
+            </div>
+            <div style="text-align:right;"><button class="secondary-btn" data-action="save-settings" title="Save these settings without downloading">Save settings</button></div>
+          </div>
+        </details>
+      </div>
+      <div class="modal-footer">
+        <span style="flex:1"></span>
+        <button class="secondary-btn" data-action="cancel">Cancel</button>
+        <button class="primary-btn" data-action="fetch">Download &amp; open</button>
+      </div>
+    </div>`;
+
+  const q = (sel: string) => overlay.querySelector(`[data-jira="${sel}"]`) as HTMLInputElement;
+  q('command').value = cfg.command || '';
+  q('argsTemplate').value = cfg.argsTemplate || '{ticket}';
+  q('downloadDir').value = cfg.downloadDir || '';
+  q('timeoutSec').value = String(cfg.timeoutSec || 120);
+  (q('autoOpen') as HTMLInputElement).checked = cfg.autoOpen !== false;
+  (q('openWhich') as unknown as HTMLSelectElement).value = cfg.openWhich || 'newest';
+
+  const errBox = overlay.querySelector('[data-jira="err"]') as HTMLElement;
+  const showErr = (msg: string) => { errBox.textContent = msg; errBox.style.display = msg ? 'block' : 'none'; };
+
+  const readConfig = (): Partial<JiraPluginConfig> => ({
+    command: q('command').value.trim(),
+    argsTemplate: q('argsTemplate').value.trim() || '{ticket}',
+    downloadDir: q('downloadDir').value.trim(),
+    timeoutSec: Math.max(1, parseInt(q('timeoutSec').value, 10) || 120),
+    autoOpen: (q('autoOpen') as HTMLInputElement).checked,
+    openWhich: ((q('openWhich') as unknown as HTMLSelectElement).value === 'folder' ? 'folder' : 'newest'),
+  });
+
+  const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') close(); };
+  const close = () => { document.removeEventListener('keydown', onKey); overlay.remove(); };
+
+  overlay.querySelector('[data-action="cancel"]')!.addEventListener('click', close);
+  overlay.querySelector('[data-action="save-settings"]')!.addEventListener('click', async () => {
+    const r = await window.api.jiraConfigSet(readConfig());
+    showToast(r.success ? 'Jira settings saved' : `Save failed: ${r.error || 'unknown'}`);
+  });
+
+  const fetchBtn = overlay.querySelector('[data-action="fetch"]') as HTMLButtonElement;
+  fetchBtn.addEventListener('click', async () => {
+    const ticket = q('ticket').value.trim();
+    if (!ticket) { showErr('Enter a ticket key first.'); q('ticket').focus(); return; }
+    showErr('');
+    // Persist the current settings so this run (and the agent) use them, then fetch.
+    await window.api.jiraConfigSet(readConfig());
+    const prevLabel = fetchBtn.textContent;
+    fetchBtn.disabled = true;
+    fetchBtn.textContent = 'Downloading…';
+    try {
+      const result = await window.api.jiraFetch(ticket);
+      if (result.success) {
+        const opened = result.opened;
+        if (opened) showToast(`Downloaded ${opened.split('/').pop()} — opened`);
+        else showToast(`Downloaded ${result.files.length} file(s) to ${result.folder || 'the download folder'}`);
+        close();
+      } else {
+        showErr(result.error || 'Download failed.');
+      }
+    } catch (e) {
+      showErr(String(e));
+    } finally {
+      fetchBtn.disabled = false;
+      fetchBtn.textContent = prevLabel;
+    }
+  });
+
+  overlay.addEventListener('mousedown', (ev) => { if (ev.target === overlay) close(); });
+  document.addEventListener('keydown', onKey);
+  q('ticket').addEventListener('keydown', (ev) => { if ((ev as KeyboardEvent).key === 'Enter') fetchBtn.click(); });
+  document.body.appendChild(overlay);
+  q('ticket').focus();
+}
+
 // Multi-field editor for a requirements manifest. Returns the manifest (or {} to clear),
 // or null if cancelled. Focuses the file-template gate (the human-authored precondition).
 function showRequirementsModal(patternName: string, current: any): Promise<any | null> {
@@ -27749,6 +27857,7 @@ function init(): void {
   elements.btnLiveSshManage.addEventListener('click', () => showSshProfileManager());
   elements.btnOpenSshFolder.addEventListener('click', () => openSshFolder());
   document.getElementById('btn-reveal-active-file')?.addEventListener('click', () => void revealActiveFileInTree());
+  document.getElementById('btn-jira-fetch')?.addEventListener('click', () => void showJiraFetchModal());
 
   // Unified live connection event listeners (register once)
   setupLiveEventListeners();
