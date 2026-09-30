@@ -6,6 +6,7 @@ import { Worker } from 'worker_threads';
 import * as protobuf from 'protobufjs';
 import { FileInfo } from '../shared/types';
 import { isVtrace } from './vtraceParse';
+import { isDlt } from './dltParse';
 
 /**
  * Format-adapter layer (Phase 1).
@@ -527,11 +528,76 @@ export class VtraceAdapter implements SourceAdapter {
   }
 }
 
+/**
+ * DLT (AUTOSAR/COVESA "Diagnostic Log and Trace"). normalize() decodes the binary
+ * `.dlt`/`.dlt1` stream to a Time · ECU · APID · CTID · Type · Level · Payload table
+ * (see dltParse.ts) in a worker thread, mirroring the vtrace adapter.
+ */
+export class DltAdapter implements SourceAdapter {
+  readonly id = 'dlt';
+  readonly decoderVersion = 1;
+  readonly label = 'DLT (AUTOSAR/COVESA)';
+  readonly capabilities: AdapterCapabilities = {
+    isBinary: true,
+    supportsAppend: false,
+    needsSchema: false,
+    supportsColumnFilter: false,
+  };
+
+  detect(filePath: string, headBytes: Buffer): boolean {
+    return isDlt(filePath, headBytes);
+  }
+
+  async normalize(
+    filePath: string,
+    onProgress?: (percent: number) => void
+  ): Promise<NormalizedSource> {
+    const outPath = path.join(
+      os.tmpdir(),
+      `logan-dlt-${process.pid}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}.norm`
+    );
+
+    // Decode in a worker thread so the heavy byte-scan never blocks the UI loop.
+    await new Promise<void>((resolve, reject) => {
+      const worker = new Worker(path.join(__dirname, 'dltWorker.js'), {
+        workerData: { filePath, outPath },
+      });
+      let settled = false;
+      const finish = (err?: Error): void => {
+        if (settled) return;
+        settled = true;
+        worker.terminate();
+        if (err) {
+          try { fs.unlinkSync(outPath); } catch { /* nothing written yet */ }
+          reject(err);
+        } else {
+          resolve();
+        }
+      };
+      worker.on('message', (msg: { type: string; percent?: number; message?: string }) => {
+        if (msg?.type === 'progress') onProgress?.(msg.percent ?? 0);
+        else if (msg?.type === 'done') finish();
+        else if (msg?.type === 'error') finish(new Error(msg.message || 'dlt worker error'));
+      });
+      worker.on('error', (err) => finish(err instanceof Error ? err : new Error(String(err))));
+      worker.on('exit', (code) => { if (code !== 0) finish(new Error(`dlt worker exited with code ${code}`)); });
+    });
+
+    onProgress?.(100);
+    return {
+      path: outPath,
+      capabilities: this.capabilities,
+      cleanup: () => { try { fs.unlinkSync(outPath); } catch { /* already gone */ } },
+    };
+  }
+}
+
 const textAdapter = new TextAdapter();
 const jsonlAdapter = new JsonlAdapter();
 const protobufAdapter = new ProtobufAdapter();
 const mf4Adapter = new Mf4Adapter();
 const vtraceAdapter = new VtraceAdapter();
+const dltAdapter = new DltAdapter();
 
 /**
  * Adapters in priority order, most-specific first; TextAdapter is the final
@@ -543,6 +609,7 @@ export const adapterRegistry: SourceAdapter[] = [
   protobufAdapter,
   mf4Adapter,
   vtraceAdapter,
+  dltAdapter,
   textAdapter,
 ];
 
