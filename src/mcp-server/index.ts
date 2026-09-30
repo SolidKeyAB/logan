@@ -235,6 +235,32 @@ server.tool(
   }
 );
 
+// === Tool: logan_fetch_ticket ===
+// Jira downloader plugin: run the user's pre-configured external download command
+// for a ticket key and open the resulting log. LOGAN doesn't talk to Jira — it
+// drives a script the user set up (with saved keys). The command + download folder
+// are configured by the human in the 🎫 dialog (~/.logan/jira-plugin.json); this
+// tool just triggers a fetch. Returns the downloaded file paths + which one opened.
+server.tool(
+  'logan_fetch_ticket',
+  "Download a ticket's log via the user's configured Jira download script and open it in LOGAN. " +
+    'Requires the human to have set up the download command + folder first (🎫 dialog). ' +
+    'Returns { success, files, newestFile, opened?, stdout, error? }. If it reports "No Jira download ' +
+    'command configured", ask the user to configure it in the 🎫 Download-from-Jira dialog.',
+  {
+    ticket: z.string().describe('The Jira ticket key, e.g. "SUS-1234"'),
+    open: z.boolean().optional().describe('Open the downloaded log in the viewer (default: the plugin\'s autoOpen setting)'),
+  },
+  async ({ ticket, open }) => {
+    try {
+      const result = await apiCall('POST', '/api/fetch-ticket', { ticket, open });
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+    } catch (err: any) {
+      return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+    }
+  }
+);
+
 // === Tool: sherlog_decode ===
 // Expand sherlog tokenized `@LOG <id> {json}` lines into readable text using a
 // token DB. Pure + local (no running LOGAN required) — same decoder core the
