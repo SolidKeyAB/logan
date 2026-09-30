@@ -455,6 +455,10 @@ export const IPC = {
   // Portable catalogue — export/import the reusable global entity stores as a .logan-pack
   CATALOG_EXPORT: 'catalog-export',
   CATALOG_IMPORT: 'catalog-import',
+  // Jira ticket downloader plugin
+  JIRA_CONFIG_GET: 'jira-config-get',
+  JIRA_CONFIG_SET: 'jira-config-set',
+  JIRA_FETCH: 'jira-fetch',
   // Device discovery (kept per-source)
   SERIAL_LIST_PORTS: 'serial-list-ports',
   LOGCAT_LIST_DEVICES: 'logcat-list-devices',
@@ -584,4 +588,40 @@ export interface ScopeInfo {
   startLine?: number; // 1-based, ranges only (for display)
   endLine?: number;   // 1-based, ranges only
   warning?: string;
+}
+
+// ─── Jira ticket downloader plugin ──────────────────────────────────────────
+// LOGAN drives an external download command the user owns (e.g. a Python script
+// with saved keys) and opens whatever it drops into `downloadDir`. See
+// src/main/jiraFetch.ts.
+export interface JiraPluginConfig {
+  /** Executable to run — "python3", or a directly-runnable script path. */
+  command: string;
+  /** Space-separated args; {ticket} and {downloadDir} are substituted. */
+  argsTemplate: string;
+  /** Folder the script writes into; LOGAN diffs it to find the result. */
+  downloadDir: string;
+  /** Kill the command after this many seconds (default 120). */
+  timeoutSec: number;
+  /** Auto-open the downloaded result in the viewer when the fetch succeeds. */
+  autoOpen: boolean;
+  /** What to open on success: the newest downloaded file, or the folder. */
+  openWhich: 'newest' | 'folder';
+}
+
+// Result of a single fetch run (shared by IPC, /api/fetch-ticket, MCP tool).
+export interface JiraFetchResult {
+  success: boolean;
+  ticket: string;
+  /** Downloaded/changed files under downloadDir, newest first. */
+  files: string[];
+  /** files[0] — the file LOGAN would open. */
+  newestFile?: string;
+  /** The folder the result landed in (downloadDir or the newest file's dir). */
+  folder?: string;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  durationMs?: number;
+  error?: string;
 }

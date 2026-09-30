@@ -77,6 +77,9 @@ const IPC = {
   ENTITIES_LIST: 'entities-list',
   CATALOG_EXPORT: 'catalog-export',
   CATALOG_IMPORT: 'catalog-import',
+  JIRA_CONFIG_GET: 'jira-config-get',
+  JIRA_CONFIG_SET: 'jira-config-set',
+  JIRA_FETCH: 'jira-fetch',
   SERIAL_LIST_PORTS: 'serial-list-ports',
   LOGCAT_LIST_DEVICES: 'logcat-list-devices',
   SSH_PARSE_CONFIG: 'ssh-parse-config',
@@ -974,6 +977,14 @@ const api = {
 
   logcatListDevices: (): Promise<{ success: boolean; devices?: any[]; error?: string }> =>
     ipcRenderer.invoke(IPC.LOGCAT_LIST_DEVICES),
+
+  // Jira downloader plugin
+  jiraConfigGet: (): Promise<{ success: boolean; config?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.JIRA_CONFIG_GET),
+  jiraConfigSet: (config: any): Promise<{ success: boolean; config?: any; error?: string }> =>
+    ipcRenderer.invoke(IPC.JIRA_CONFIG_SET, config),
+  jiraFetch: (ticket: string): Promise<any> =>
+    ipcRenderer.invoke(IPC.JIRA_FETCH, ticket),
 
   // SSH profiles & SFTP
   sshParseConfig: (): Promise<{ success: boolean; hosts?: any[]; error?: string }> =>

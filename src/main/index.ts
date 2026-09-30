@@ -31,6 +31,7 @@ import { getRipgrepPath } from './ripgrepPath';
 import { openWithAdapter, NormalizedSource, isTextPassthrough } from './sourceAdapter';
 import { resolveFileHandlers, runFileHandler, FileHandlerQuery } from './fileHandlers';
 import { scanFolderShallow } from './folderScan';
+import { loadJiraConfig, saveJiraConfig, runJiraFetch } from './jiraFetch';
 import { extractBodyLine, extractHeaderLine } from '../shared/extractFormat';
 import { IPC, SearchOptions, Bookmark, Highlight, HighlightGroup, SearchConfig, SearchConfigSession, SingleSessionEntry, ActivityEntry, LocalFileData, ContextDefinition, ContextMatchGroup, Annotation, PatternProperty, SavedPattern, ScopeDescriptor, ResolvedScope, FileInfo } from '../shared/types';
 import * as Diff from 'diff';
@@ -92,6 +93,7 @@ if (process.platform !== 'linux') {
 }
 try { LogcatHandler = require('./logcatHandler').LogcatHandler; } catch { console.warn('logcatHandler not available'); }
 import { SshProfile, SavedConnection } from '../shared/types';
+import { JiraPluginConfig } from '../shared/types';
 
 // Tell Electron + GTK that we're a dark-themed app so native dialogs match
 nativeTheme.themeSource = 'dark';
@@ -1302,6 +1304,17 @@ app.whenReady().then(() => {
       contextFolder = folderPath;
       mainWindow?.webContents.send('open-folder-from-cli', folderPath);
       return { success: true, folderPath };
+    },
+    fetchTicket: async (ticket: string, opts?: { open?: boolean }) => {
+      // Run the user's external Jira download command and (by default) open the
+      // result. Shares the engine + config with the human 🎫 button.
+      const result = await runJiraFetch(ticket);
+      const wantOpen = opts?.open ?? loadJiraConfig().autoOpen;
+      if (result.success && wantOpen && result.newestFile) {
+        const info = await openFileAsCurrent(result.newestFile);
+        return { ...result, opened: result.newestFile, info };
+      }
+      return result;
     },
     getLines: (startLine: number, count: number) => {
       const handler = getReadHandler();
@@ -2638,6 +2651,40 @@ ipcMain.handle('sherlog-pick-token-db', async (): Promise<{ path: string | null 
   } catch {
     return { path: null };
   }
+});
+
+// === Jira ticket downloader plugin ===
+// Drives the user's external download command and opens the result. Config lives
+// in ~/.logan/jira-plugin.json; the engine (jiraFetch.ts) is shared with the
+// agent path (/api/fetch-ticket).
+
+ipcMain.handle(IPC.JIRA_CONFIG_GET, async () => {
+  try {
+    return { success: true, config: loadJiraConfig() };
+  } catch (error) {
+    return { success: false, error: String(error) };
+  }
+});
+
+ipcMain.handle(IPC.JIRA_CONFIG_SET, async (_, config: Partial<JiraPluginConfig>) => {
+  return saveJiraConfig(config || {});
+});
+
+ipcMain.handle(IPC.JIRA_FETCH, async (_, ticket: string) => {
+  const result = await runJiraFetch(ticket);
+  if (result.success) {
+    const cfg = loadJiraConfig();
+    if (cfg.autoOpen) {
+      if (cfg.openWhich === 'folder' && result.folder) {
+        contextFolder = result.folder;
+        mainWindow?.webContents.send('open-folder-from-cli', result.folder);
+      } else if (result.newestFile) {
+        const info = await openFileAsCurrent(result.newestFile);
+        return { ...result, opened: result.newestFile, info };
+      }
+    }
+  }
+  return result;
 });
 
 // === Device Discovery (per-source) ===
