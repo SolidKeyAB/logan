@@ -58,7 +58,6 @@ import { compilePattern, CompileInput } from './compilePattern';
 import { parseTimestampFast } from './timestampParse';
 import { carryForwardTimestamps, buildOriginTags, formatWallClock, sortMergeEntries, type MergeEntry } from './mergeTimeline';
 import { ColumnPatternSpec } from './columnPattern';
-import { parseVtraceToFile } from './vtraceParse';
 import { runTrendJob, runSummarizeJob, cancelSummarizeJob, canSummarizeOffThread, runFoldRegionsJob, runColumnPreviewJob, canColumnPreviewOffThread } from './trendWorkerClient';
 import { computeColumnPreview } from './columnPreview';
 import { resolveScope, isWholeFile, scopeInfo, forEachScopeLine, ScopeResolverContext } from './scope';
@@ -3332,7 +3331,7 @@ interface ColumnAnalysis {
 // detectDelimiter(), findHeaderRow(), isCommentOrBanner() and the header-keyword set now live
 // in ../shared/columnDetect (pure + unit-tested). They understand whitespace-ALIGNED formats
 // (\s{2,} columns) and locate the header among the first rows, not just row 0 — so a leading
-// "#----- BEGIN:" banner no longer masquerades as the header (see esotrace 11-column exports).
+// "#----- BEGIN:" banner no longer masquerades as the header (as seen in whitespace-aligned exports).
 
 ipcMain.handle('analyze-columns', async () => {
   // getReadHandler (not getFileHandler) so column detection works over an active single-session
@@ -3353,7 +3352,7 @@ ipcMain.handle('analyze-columns', async () => {
       return { success: false, error: 'No content to analyze' };
     }
 
-    // Drop banner/comment lines (e.g. the esotrace "#----- BEGIN:" header) so they don't skew
+    // Drop banner/comment lines (e.g. a "#----- BEGIN:" header) so they don't skew
     // delimiter detection or pose as the header row. Fall back to the raw lines if stripping
     // would leave us with almost nothing to analyze.
     const stripped = rawLines.filter(l => !isCommentOrBanner(l));
@@ -7454,103 +7453,11 @@ ipcMain.handle('format-json-file', async (_, filePath: string) => {
   }
 });
 
-// Manually decode a binary esotrace/vtrace file to normalized text, on demand.
-// This is the explicit counterpart to the auto-detecting VtraceAdapter, which only
-// fires when a file BOTH ends in `.esotrace` AND carries the `traceserverIVI` magic
-// in its first 4 KB. The button force-runs the SAME decoder (parseVtraceToFile) on
-// the current file regardless of extension, so a renamed capture — or a file whose
-// magic sits past the detection head — still decodes. parseVtraceToFile throws when
-// the file has no traceserverIVI record anywhere, which surfaces as a clean error.
-ipcMain.handle('decode-esotrace-file', async (_, filePath: string) => {
-  try {
-    const baseName = path.basename(filePath, path.extname(filePath));
-    // Write to a temp `.txt` so it indexes as plain text and does NOT re-trigger the
-    // vtrace adapter (which needs a `.esotrace` extension). The `.decoded.` marker in
-    // the name tells the renderer to keep the "decoded" toggle active across reload.
-    const decodedPath = path.join(
-      os.tmpdir(),
-      `${baseName}.decoded.${process.pid}-${Date.now().toString(36)}.txt`
-    );
-    await parseVtraceToFile(filePath, decodedPath, (percent) => {
-      mainWindow?.webContents.send('esotrace-decode-progress', { percent });
-    });
-    return { success: true, decodedPath };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-});
-
-// Batch-decode every esotrace/vtrace file in a folder (right-click → "Decode
-// esotrace files here"). Non-recursive: the folder's direct files only. Detection
-// is extension-agnostic like the single-file button — a file qualifies if it ends
-// in `.esotrace` OR carries the `traceserverIVI` magic in its head — so renamed
-// captures are caught too. Each decode is written next to the original as
-// `<name>.decoded.txt` (persistent, unlike the single-file temp). Prior outputs
-// (name contains `.decoded.`) are skipped so re-runs are idempotent.
-ipcMain.handle('decode-esotrace-folder', async (_, folderPath: string) => {
-  try {
-    const IDENTITY = Buffer.from('traceserverIVI', 'latin1');
-    const names = await fs.promises.readdir(folderPath);
-
-    // Find candidate esotrace files (by extension or magic bytes).
-    const candidates: string[] = [];
-    for (const name of names) {
-      if (name.startsWith('.')) continue;
-      if (name.includes('.decoded.')) continue; // don't re-decode our own output
-      const full = path.join(folderPath, name);
-      let st: fs.Stats;
-      try { st = fs.statSync(full); } catch { continue; }
-      if (!st.isFile()) continue;
-      let isEso = /\.esotrace$/i.test(name);
-      if (!isEso && st.size > 0) {
-        // Sniff the head for the identity marker so non-.esotrace captures qualify.
-        let fd: number | null = null;
-        try {
-          fd = fs.openSync(full, 'r');
-          const len = Math.min(4096, st.size);
-          const head = Buffer.alloc(len);
-          fs.readSync(fd, head, 0, len, 0);
-          isEso = head.includes(IDENTITY);
-        } catch { isEso = false; } finally { if (fd !== null) fs.closeSync(fd); }
-      }
-      if (isEso) candidates.push(full);
-    }
-
-    const decoded: Array<{ original: string; decoded: string }> = [];
-    const errors: Array<{ file: string; error: string }> = [];
-    for (let i = 0; i < candidates.length; i++) {
-      const src = candidates[i];
-      // Keep the original extension in the output name so `a.esotrace` and `a.bin`
-      // can't collide on the same `.decoded.txt`.
-      const outPath = path.join(folderPath, `${path.basename(src)}.decoded.txt`);
-      mainWindow?.webContents.send('esotrace-decode-folder-progress', {
-        current: i, total: candidates.length, name: path.basename(src),
-      });
-      try {
-        await parseVtraceToFile(src, outPath);
-        decoded.push({ original: src, decoded: outPath });
-      } catch (e) {
-        errors.push({ file: src, error: String(e) });
-      }
-      // Let the event loop breathe between files so progress paints and the UI
-      // stays responsive (each decode itself runs on the main thread).
-      await new Promise<void>((r) => setImmediate(r));
-    }
-    mainWindow?.webContents.send('esotrace-decode-folder-progress', {
-      current: candidates.length, total: candidates.length, name: '',
-    });
-
-    return { success: true, folderPath, scanned: names.length, candidates: candidates.length, decoded, errors };
-  } catch (error) {
-    return { success: false, error: String(error) };
-  }
-});
-
 // ── Multi-file time-sync (merge N logs onto one wall-clock timeline) ──────────
 // Deterministic, no AI: read each file's per-line timestamp with the SAME
 // parseTimestampFast the rest of LOGAN uses, keep only lines that carry a
 // wall-clock timestamp (the sync key), and merge-sort every file's lines by epoch
-// ms. Binary companions (.esotrace/.mf4) are opened through openWithAdapter so they
+// ms. Binary companions (.mf4) are opened through openWithAdapter so they
 // decode to timestamped text first. Returns per-file coverage stats + a bounded,
 // time-ordered (or evenly time-sampled) row set the renderer paints as one stream.
 ipcMain.handle('time-sync-merge', async (_, filePaths: string[], opts?: { maxRows?: number }) => {

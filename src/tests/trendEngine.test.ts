@@ -153,7 +153,7 @@ describe('extractSeries', () => {
   });
 
   it('charts against a leading relative-seconds prefix when asked (xAxis relative)', () => {
-    // decoded ".esotrace"-style lines: "<seconds> LEVEL msg field=value"
+    // decoded uptime-style lines: "<seconds> LEVEL msg field=value"
     const h = fakeHandler([
       '10.0 INFO speed=5',
       '20.0 INFO speed=9',
@@ -194,7 +194,7 @@ describe('discoverAxes', () => {
     expect(axes.some(a => a.id === 'line')).toBe(true);
   });
 
-  it('detects a leading relative-seconds axis (the .esotrace case)', () => {
+  it('detects a leading relative-seconds axis (the uptime case)', () => {
     const h = fakeHandler([
       '10.0 INFO frame=1',
       '20.0 INFO frame=2',

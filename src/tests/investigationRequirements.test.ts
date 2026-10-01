@@ -77,7 +77,7 @@ describe('evaluateRequirements — adapter gate', () => {
   });
 
   it('blocks when adapter differs', () => {
-    const m: RequirementsManifest = { fileTemplate: { adapterId: 'vtrace' } };
+    const m: RequirementsManifest = { fileTemplate: { adapterId: 'dlt' } };
     const r = evaluateRequirements(m, ctx({ adapterId: 'text' }));
     expect(r.blocked).toBe(true);
     expect(r.checks[0].status).toBe('unsatisfied');
@@ -97,7 +97,7 @@ describe('evaluateRequirements — filename glob', () => {
   });
 
   it('blocks a non-matching glob', () => {
-    const m: RequirementsManifest = { fileTemplate: { filenameGlob: '*.esotrace' } };
+    const m: RequirementsManifest = { fileTemplate: { filenameGlob: '*.dlt' } };
     expect(evaluateRequirements(m, ctx()).blocked).toBe(true);
   });
 });
@@ -173,9 +173,9 @@ describe('evaluateRequirements — entities are informational (never block)', ()
 
 describe('suggestRequirements', () => {
   it('suggests a non-text adapter + filename glob', () => {
-    const r = suggestRequirements({ filePath: '/logs/dump.esotrace', adapterId: 'vtrace' });
-    expect(r.fileTemplate?.adapterId).toBe('vtrace');
-    expect(r.fileTemplate?.filenameGlob).toBe('*.esotrace');
+    const r = suggestRequirements({ filePath: '/logs/dump.dlt', adapterId: 'dlt' });
+    expect(r.fileTemplate?.adapterId).toBe('dlt');
+    expect(r.fileTemplate?.filenameGlob).toBe('*.dlt');
   });
 
   it('does not gate on a plain-text adapter', () => {
@@ -201,17 +201,17 @@ describe('mergeRequirements', () => {
 
   it('preserves explicit entities while merging suggested fileTemplate', () => {
     const explicit: RequirementsManifest = { entities: [{ kind: 'search', name: 's' }] };
-    const suggested: RequirementsManifest = { fileTemplate: { adapterId: 'vtrace' } };
+    const suggested: RequirementsManifest = { fileTemplate: { adapterId: 'dlt' } };
     const r = mergeRequirements(explicit, suggested);
     expect(r.entities).toHaveLength(1);
-    expect(r.fileTemplate?.adapterId).toBe('vtrace');
+    expect(r.fileTemplate?.adapterId).toBe('dlt');
   });
 });
 
 describe('evaluateRequirements — combined gate', () => {
   it('blocks if ANY file-template sub-check fails', () => {
     const m: RequirementsManifest = {
-      fileTemplate: { adapterId: 'text', signature: { regex: 'auth token expired' }, filenameGlob: '*.esotrace' },
+      fileTemplate: { adapterId: 'text', signature: { regex: 'auth token expired' }, filenameGlob: '*.dlt' },
     };
     const r = evaluateRequirements(m, ctx());
     // adapter ok + signature ok, but glob fails → blocked

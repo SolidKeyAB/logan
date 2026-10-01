@@ -6,7 +6,7 @@ const { extOf } = __testables;
 describe('fileHandlers — extOf', () => {
   it('extracts lower-case extension without the dot', () => {
     expect(extOf('/a/b/App.LOG')).toBe('log');
-    expect(extOf('C:\\logs\\trace.esotrace')).toBe('esotrace');
+    expect(extOf('C:\\logs\\trace.BIN')).toBe('bin');
   });
   it('returns empty string for dotfiles and no-extension files', () => {
     expect(extOf('/a/.gitignore')).toBe('');

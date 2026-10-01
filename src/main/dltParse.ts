@@ -1,7 +1,7 @@
 // DLT (AUTOSAR / COVESA "Diagnostic Log and Trace") decoder.
 //
 // Turns a binary `.dlt` capture into normalized, newline-delimited text LOGAN can
-// index/search â the same shape the vtrace/mf4 adapters produce. One decoded line
+// index/search â the same shape the mf4 adapter produces. One decoded line
 // per DLT message, columns: Time Â· Cnt Â· ECU Â· APID Â· CTID Â· Type Â· Level Â· Payload.
 //
 // Wire format (offline file = a run of these, each optionally prefixed by a
@@ -271,7 +271,7 @@ export function formatDltRecord(rec: DltRecord): string {
 
 /**
  * Decode a `.dlt` file to a normalized text file (banner + column header + one line
- * per message). Reads the whole file into memory (parity with the vtrace decoder);
+ * per message). Reads the whole file into memory (parity with the mf4 decoder);
  * streaming is a later optimization.
  */
 export async function parseDltToFile(

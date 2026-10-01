@@ -31,7 +31,7 @@ export const MAX_CRASHES = 50;
 const LOGCAT_LEVEL_LETTER: Record<string, string> = {
   V: 'verbose', D: 'debug', I: 'info', W: 'warning', E: 'error', F: 'fatal', A: 'fatal',
 };
-// Optional esotrace/capture host stamp prefixed to each line, e.g. "[21:10:44.413] ".
+// Optional capture host stamp prefixed to each line, e.g. "[21:10:44.413] ".
 const LOGCAT_HOST_PREFIX = /^\s*(?:\[[0-9:.]+\]\s+)?/;
 const LOGCAT_THREADTIME = /^\d{2}-\d{2}\s+\d{1,2}:\d{2}:\d{2}\.\d+\s+\d+\s+\d+\s+([VDIWEFA])\s+([^:\s][^:]*?):\s?(.*)$/;
 const LOGCAT_BRIEF = /^\d{2}-\d{2}\s+\d{1,2}:\d{2}:\d{2}\.\d+\s+([VDIWEFA])\/([^(]+?)\(\s*\d+\):\s?(.*)$/;
