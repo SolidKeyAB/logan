@@ -76,7 +76,7 @@ The right edge becomes pure *view control for the current log*:
 
 - **Primary (always visible):** ↩ Word Wrap · ▥ Minimap · ◫ Split · ◳ Overlays
   (Notes / Terminal / Annotations chooser)
-- **⋯ Overflow:** Format JSON · Decode esotrace · Columns · Datadog
+- **⋯ Overflow:** Format JSON · Columns · Datadog
 - **Moved out:** Settings & Help → rail utility zone.
 
 ---

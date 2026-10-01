@@ -3,7 +3,7 @@ import { parseDltToFile } from './dltParse';
 
 /**
  * Worker-thread entry for DLT decoding. Runs the byte-scan decode off the Electron
- * main/UI event loop. Messages back to the parent mirror the vtrace/mf4 workers:
+ * main/UI event loop. Messages back to the parent mirror the mf4 worker:
  *   { type: 'progress', percent }  — periodic progress
  *   { type: 'done' }               — finished, output written to outPath
  *   { type: 'error', message }     — fatal

@@ -5,7 +5,7 @@ import {
   AnalysisAccumulator,
 } from '../main/analyzers/lineClassify';
 
-// Real-world shape: esotrace-wrapped Android logcat (a "[host-time]" capture
+// Real-world shape: host-wrapped Android logcat (a "[host-time]" capture
 // stamp prepended to each standard threadtime line). The tag ("AndroidRuntime")
 // is the component that component-scoped views must be able to see.
 const FATAL = '[21:10:44.413] 02-16 22:01:14.968  7637  7637 E AndroidRuntime: FATAL EXCEPTION: main';
@@ -23,7 +23,7 @@ describe('parseLogcatLine', () => {
     });
   });
 
-  it('works without the esotrace host stamp', () => {
+  it('works without the host stamp', () => {
     expect(parseLogcatLine('02-16 22:01:14.968  7637  7637 E AndroidRuntime: FATAL EXCEPTION: main'))
       .toMatchObject({ level: 'error', component: 'AndroidRuntime' });
   });

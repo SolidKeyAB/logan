@@ -5,7 +5,6 @@ import * as readline from 'readline';
 import { Worker } from 'worker_threads';
 import * as protobuf from 'protobufjs';
 import { FileInfo } from '../shared/types';
-import { isVtrace } from './vtraceParse';
 import { isDlt } from './dltParse';
 
 /**
@@ -450,88 +449,9 @@ export class Mf4Adapter implements SourceAdapter {
 }
 
 /**
- * ── vtrace: automotive IVI binary trace (.esotrace) ──────────────────────────
- * `vtrace` is a neutral codename for the binary trace stream produced by the trace
- * server on some automotive IVI head units (files use the `.esotrace` extension and
- * open with a `traceserverIVI` identity record — both intrinsic markers of the
- * input, matched only by detect()). Self-framing (no schema needed): a flat stream of
- * length-prefixed records, each carrying a ns timestamp, level, channel/source and a
- * message. The decoder lives in vtraceParse.ts and runs in a WORKER THREAD
- * (vtraceWorker.ts) so the decode never blocks the main/UI loop — same shape as
- * Mf4Adapter. normalize() reproduces the vendor's official 11-column export
- * (PacketID · SessionID · Label · LoggerTime · TraceTime · Channel · Source · Level ·
- * PrivFlag · Size · Message) so LOGAN's decode matches the official `.log` output.
- */
-export class VtraceAdapter implements SourceAdapter {
-  readonly id = 'vtrace';
-  // v2: record-index PacketID, per-session SessionID + banners, PrivFlag bitmask, newline
-  // splitting, dropped-data rows, hierarchical channel/source names, corrected level table,
-  // coarse-ms TraceTime — a full re-calibration against the official export.
-  readonly decoderVersion = 2;
-  readonly label = 'IVI binary trace (.esotrace)';
-  readonly capabilities: AdapterCapabilities = {
-    isBinary: true,
-    supportsAppend: false,
-    needsSchema: false,
-    supportsColumnFilter: false,
-  };
-
-  detect(filePath: string, headBytes: Buffer): boolean {
-    // `.esotrace` extension + either the `traceserverIVI` identity string or a valid
-    // self-framed first record. The identity string can sit hundreds of KB into the
-    // stream (it's message content, not a file header), so structural framing is the
-    // reliable signal for auto-detection.
-    return isVtrace(filePath, headBytes);
-  }
-
-  async normalize(
-    filePath: string,
-    onProgress?: (percent: number) => void
-  ): Promise<NormalizedSource> {
-    const outPath = path.join(
-      os.tmpdir(),
-      `logan-vtrace-${process.pid}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}.norm`
-    );
-
-    // Decode in a worker thread so the heavy byte-scan never blocks the UI loop.
-    await new Promise<void>((resolve, reject) => {
-      const worker = new Worker(path.join(__dirname, 'vtraceWorker.js'), {
-        workerData: { filePath, outPath },
-      });
-      let settled = false;
-      const finish = (err?: Error): void => {
-        if (settled) return;
-        settled = true;
-        worker.terminate();
-        if (err) {
-          try { fs.unlinkSync(outPath); } catch { /* nothing written yet */ }
-          reject(err);
-        } else {
-          resolve();
-        }
-      };
-      worker.on('message', (msg: { type: string; percent?: number; message?: string }) => {
-        if (msg?.type === 'progress') onProgress?.(msg.percent ?? 0);
-        else if (msg?.type === 'done') finish();
-        else if (msg?.type === 'error') finish(new Error(msg.message || 'vtrace worker error'));
-      });
-      worker.on('error', (err) => finish(err instanceof Error ? err : new Error(String(err))));
-      worker.on('exit', (code) => { if (code !== 0) finish(new Error(`vtrace worker exited with code ${code}`)); });
-    });
-
-    onProgress?.(100);
-    return {
-      path: outPath,
-      capabilities: this.capabilities,
-      cleanup: () => { try { fs.unlinkSync(outPath); } catch { /* already gone */ } },
-    };
-  }
-}
-
-/**
  * DLT (AUTOSAR/COVESA "Diagnostic Log and Trace"). normalize() decodes the binary
  * `.dlt`/`.dlt1` stream to a Time · ECU · APID · CTID · Type · Level · Payload table
- * (see dltParse.ts) in a worker thread, mirroring the vtrace adapter.
+ * (see dltParse.ts) in a worker thread, mirroring the mf4 adapter.
  */
 export class DltAdapter implements SourceAdapter {
   readonly id = 'dlt';
@@ -596,7 +516,6 @@ const textAdapter = new TextAdapter();
 const jsonlAdapter = new JsonlAdapter();
 const protobufAdapter = new ProtobufAdapter();
 const mf4Adapter = new Mf4Adapter();
-const vtraceAdapter = new VtraceAdapter();
 const dltAdapter = new DltAdapter();
 
 /**
@@ -608,7 +527,6 @@ export const adapterRegistry: SourceAdapter[] = [
   jsonlAdapter,
   protobufAdapter,
   mf4Adapter,
-  vtraceAdapter,
   dltAdapter,
   textAdapter,
 ];

@@ -10,7 +10,7 @@
 // image, previously an if/else in the renderer) into the registry with ZERO
 // behaviour change: matching reuses the fileType already sniffed during the
 // folder scan (see sniffFileType in index.ts), so nothing is re-classified.
-// New handlers (markdown viewer, archive extraction, esotrace file/folder
+// New handlers (markdown viewer, archive extraction, binary-format file/folder
 // conversion, user-declared handlers) are added by appending to the registry.
 
 export type FileHandlerKind = 'open-log' | 'viewer' | 'transform' | 'folder' | 'external';
