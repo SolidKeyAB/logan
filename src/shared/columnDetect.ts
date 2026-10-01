@@ -5,7 +5,7 @@
 // Two jobs:
 //   1. detectDelimiter()  — pick how a line splits into columns. Beyond the single-char
 //      delimiters (tab/comma/pipe/…) it also distinguishes SINGLE-space (\s+) from
-//      MULTI-space / whitespace-ALIGNED (\s{2,}) columns. Fixed-width & esotrace-style
+//      MULTI-space / whitespace-ALIGNED (\s{2,}) columns. Fixed-width & whitespace-aligned
 //      exports only yield a stable column count under \s{2,}, because a "date time" pair
 //      and a free-text trailing field contain single spaces that must stay INSIDE a cell.
 //   2. findHeaderRow()    — locate the column-title row among the first few rows (not just
@@ -20,7 +20,7 @@ export const MULTISPACE_DELIM = '  ';
 
 // Recognizable column-header words (normalized: lowercase, alnum only). A row carrying
 // >=2 of these is almost certainly a header — this is what lets us auto-propose a named
-// layout (incl. esotrace "PacketID SessionID Label LoggerTime … Channel Source Level").
+// layout from a whitespace-aligned multi-column export.
 export const HEADER_WORDS = new Set([
   'packetid', 'sessionid', 'session', 'timestamp', 'time', 'date', 'datetime', 'loggertime',
   'tracetime', 'uptime', 'level', 'severity', 'loglevel', 'priority', 'message', 'msg', 'text',
@@ -31,7 +31,7 @@ export const HEADER_WORDS = new Set([
 ]);
 
 // A leading banner / comment / rule line that shouldn't skew delimiter detection or pose as
-// the header. Covers esotrace "#----- BEGIN:" / "#----- END:", "# comment", "// comment",
+// the header. Covers "#----- BEGIN:" / "#----- END:" banners, "# comment", "// comment",
 // ";" ini-style, and pure separator rules ("======", "------").
 export function isCommentOrBanner(line: string): boolean {
   const t = line.trim();

@@ -2,7 +2,7 @@
 
 **Status:** binding gate — must be satisfied before any Phase-2 file handler ships.
 **Applies to:** the file-handler registry (`src/main/fileHandlers.ts`) Phase-2
-handlers — user-declared shell handlers, archive extraction, esotrace
+handlers — user-declared shell handlers, archive extraction, binary-format
 file/folder conversion, and the markdown viewer.
 
 Phase 1 (image / video / open-log) does no IO beyond opening a path and is safe.

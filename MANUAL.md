@@ -287,7 +287,6 @@ Save a named **column layout** (per-file or as a generic template). On open, LOG
 
 ## Decoding Binary & Tokenized Logs
 
-- **Esotrace / vtrace decode** — A toolbar button force-runs the vtrace decoder on any file, producing the official byte-identical 11-column format. Recognized files also decode automatically on open.
 - **Sherlog token decode** — Expand `@LOG <id> {json}` tokenized lines back into readable text. LOGAN looks for a token database next to the log, then a remembered pick, then `~/.logan/sherlog-tokens.json`; if none is found it offers a file picker. It reports how many lines it decoded so a no-op is never silent.
 
 ---

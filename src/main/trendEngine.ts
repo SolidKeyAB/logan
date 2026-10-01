@@ -188,8 +188,8 @@ function seriesNum(raw: string): number | null {
 
 // ── X-axis selection ─────────────────────────────────────────────────────────
 // What a series (and an overlay) plots against. 'time' is wall-clock (epoch ms);
-// 'relative' is the leading seconds prefix logs like the decoded .esotrace stream
-// carry; 'field' uses another field's value; 'line' is the always-available
+// 'relative' is the leading seconds prefix some logs carry (e.g. a decoded uptime
+// stream); 'field' uses another field's value; 'line' is the always-available
 // record-order fallback.
 export type AxisSpec =
   | { kind: 'line' }
@@ -201,7 +201,7 @@ export type AxisSpec =
 // into whether it reads as a clock ('time') or a plain number.
 export type XKind = 'time' | 'line' | 'relative' | 'number';
 
-// Leading relative-seconds prefix, e.g. the decoded ".esotrace" line
+// Leading relative-seconds prefix, e.g. a decoded uptime line
 // "296.041591 WARNING …". Anchored at line start so it never grabs a mid-line number.
 const REL_SECONDS_RE = /^\s*(\d+(?:\.\d+)?)(?=\s)/;
 

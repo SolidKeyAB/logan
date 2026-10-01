@@ -935,13 +935,13 @@ server.tool(
           name: z.string().optional().describe('Name of a saved Column Layout the log must match'),
           minMatchRatio: z.number().optional().describe('Fraction of sampled lines that must match (0..1, default 0.6)'),
         }).optional().describe('Require the log to match a saved column layout/pattern'),
-        adapterId: z.string().optional().describe("Required format adapter id: 'vtrace' | 'jsonl' | 'mf4' | 'text'"),
+        adapterId: z.string().optional().describe("Required format adapter id: 'jsonl' | 'mf4' | 'dlt' | 'text'"),
         signature: z.object({
           regex: z.string(),
           flags: z.string().optional(),
           scanLines: z.number().optional(),
         }).optional().describe('A regex that must appear in the first N lines'),
-        filenameGlob: z.string().optional().describe("Filename hint, e.g. '*.esotrace'"),
+        filenameGlob: z.string().optional().describe("Filename hint, e.g. '*.dlt'"),
         note: z.string().optional(),
       }).optional().describe('The HARD gate: how the log file must look (mismatch blocks replay)'),
       entities: z.array(z.object({

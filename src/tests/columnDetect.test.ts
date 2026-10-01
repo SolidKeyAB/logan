@@ -4,8 +4,8 @@ import { splitLineIntoColumns } from '../main/fileHandler';
 
 // A synthetic 11-column whitespace-aligned export (banner + header + aligned data rows) —
 // the exact shape that was failing before this fix.
-const ESOTRACE = [
-  '#----- BEGIN: sample_capture.esotrace: session #0',
+const ALIGNED_EXPORT = [
+  '#----- BEGIN: sample_capture.trace: session #0',
   'PacketID  SessionID  Label  LoggerTime               TraceTime                Channel                    Source            Level     PrivFlag    Size  Message',
   '0.10001   0   --     01.01.2000 00:00:00.100  01.01.1970 00:00:00.010  Reader.metrics.1000         tracesource       info      --          82    [1000:1:2000:0] boot timer 1069997[us',
   '0.10002   0   --     01.01.2000 00:00:00.100  01.01.1970 00:00:00.010  Reader.metrics.1000         tracesource       info      --          37    [1000:1:2000:1] 78162[us]: stage one done',
@@ -13,8 +13,8 @@ const ESOTRACE = [
 ];
 
 describe('isCommentOrBanner', () => {
-  it('flags the esotrace banner, comment markers, blanks and rule lines', () => {
-    expect(isCommentOrBanner('#----- BEGIN: foo.esotrace: session #0')).toBe(true);
+  it('flags banner, comment markers, blanks and rule lines', () => {
+    expect(isCommentOrBanner('#----- BEGIN: foo.trace: session #0')).toBe(true);
     expect(isCommentOrBanner('// a comment')).toBe(true);
     expect(isCommentOrBanner('; ini comment')).toBe(true);
     expect(isCommentOrBanner('==========')).toBe(true);
@@ -27,8 +27,8 @@ describe('isCommentOrBanner', () => {
 });
 
 describe('detectDelimiter', () => {
-  it('picks whitespace-aligned for the esotrace format (single-space over-splits)', () => {
-    const lines = ESOTRACE.filter(l => !isCommentOrBanner(l));
+  it('picks whitespace-aligned for a space-aligned export (single-space over-splits)', () => {
+    const lines = ALIGNED_EXPORT.filter(l => !isCommentOrBanner(l));
     expect(detectDelimiter(lines).delimiter).toBe(MULTISPACE_DELIM);
   });
   it('still picks single Space for ordinary single-space logs', () => {
@@ -50,8 +50,8 @@ describe('detectDelimiter', () => {
 });
 
 describe('findHeaderRow', () => {
-  it('finds the esotrace header even though row 0 is a banner', () => {
-    const lines = ESOTRACE.filter(l => !isCommentOrBanner(l));
+  it('finds the header even though row 0 is a banner', () => {
+    const lines = ALIGNED_EXPORT.filter(l => !isCommentOrBanner(l));
     const split = lines.map(l => splitLineIntoColumns(l, MULTISPACE_DELIM));
     const r = findHeaderRow(split);
     expect(r.headerIndex).toBe(0); // banner already stripped → header is now first
@@ -59,7 +59,7 @@ describe('findHeaderRow', () => {
     expect(r.names.slice(0, 4)).toEqual(['PacketID', 'SessionID', 'Label', 'LoggerTime']);
   });
   it('locates a header at index > 0 via type contrast when a banner is NOT stripped', () => {
-    const split = ESOTRACE.map(l => splitLineIntoColumns(l, MULTISPACE_DELIM));
+    const split = ALIGNED_EXPORT.map(l => splitLineIntoColumns(l, MULTISPACE_DELIM));
     const r = findHeaderRow(split);
     expect(r.headerIndex).toBe(1); // the real header row, past the banner
     expect(r.names[0]).toBe('PacketID');

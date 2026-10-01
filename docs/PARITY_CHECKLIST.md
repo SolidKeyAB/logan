@@ -183,9 +183,6 @@ when each is next touched):
 - **Cadence** (missing-sequence) analysis — native panel; no MCP tool yet.
 - **Time Sync** and **merge-to-file** — the latter *is* the L2 "merge-timeline"
   verb and should get an `/api/merge-timeline` + MCP tool.
-- **Esotrace manual / folder decode** — IPC-only; part of the file-handler
-  Phase-2 work, which must land behind a written security gate (see
-  `docs/FILE_HANDLER_SECURITY.md`) before its verbs are exposed to the AI.
 - **Saved panel — APPLY / REVEAL a saved entity** (Entity Registry step 3) — the Saved
   panel rows now dispatch to each entity's *existing* per-kind apply function
   (`runInvestigationTemplate`, `applyHighlightGroup`, `selectSearchConfigSession`) and to
