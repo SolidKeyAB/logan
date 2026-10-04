@@ -40,11 +40,11 @@ export interface FileTemplateReq {
   // A saved column layout/pattern (by id or name) whose compiled regex must match at
   // least `minMatchRatio` (0..1, default 0.6) of the sampled non-blank lines.
   columnPattern?: { id?: string; name?: string; minMatchRatio?: number };
-  // The file's decode/format adapter id, e.g. 'vtrace' | 'jsonl' | 'mf4' | 'text'.
+  // The file's decode/format adapter id, e.g. 'jsonl' | 'mf4' | 'dlt' | 'text'.
   adapterId?: string;
   // A raw regex that must appear within the first `scanLines` lines (default: all sampled).
   signature?: { regex: string; flags?: string; scanLines?: number };
-  // Optional filename glob hint, e.g. '*.esotrace' or 'device-*.log'.
+  // Optional filename glob hint, e.g. '*.dlt' or 'device-*.log'.
   filenameGlob?: string;
   // Human note describing the expected format (informational).
   note?: string;

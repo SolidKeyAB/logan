@@ -89,7 +89,6 @@ npm start
 - **Compare & baseline** — Side-by-side diff view, plus fingerprint baselines to catch regressions across runs
 
 ### Decoding & Formats
-- **Esotrace / vtrace decode** — Byte-identical decode of binary vtrace logs into the official 11-column format, on demand from the toolbar or auto-detected on open
 - **Sherlog token decode** — Expand `@LOG <id> {json}` tokenized lines back into readable text using a discoverable token database
 - **Column patterns** — Grok (`%{name}`) / paint-tokens / raw-regex → a compiled named-capture regex that drives live columns over any format
 

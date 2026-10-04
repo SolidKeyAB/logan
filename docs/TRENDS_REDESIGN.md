@@ -9,7 +9,7 @@ Two problems, one root cause.
 1. **The Trends panel shows tables, not trends.** A series cell only draws a chart
    when every line has a *parseable timestamp*. The parser (`timestampParse.ts`)
    knows only 3 full-date formats, so logs with time-only, epoch, or relative-second
-   stamps (e.g. the decoded `.esotrace` prefix `296.004`) get **no time axis** and
+   stamps (e.g. a decoded uptime prefix `296.004`) get **no time axis** and
    each cell silently degrades to a table of value rows. That is the "tables instead
    of charts" symptom.
 2. **Trends and Signals look redundant.** Both chart values over time. Users ask
@@ -55,7 +55,7 @@ but as a collapsible detail under the chart — never *instead* of it.
 ## 3. Detecting time — find them all, rank, never guess blindly
 
 A single log line can carry several time-ish values that mean different things. Real
-example from a decoded `.esotrace` line:
+example from a decoded uptime-stamped line:
 
 ```
 296.004313 ERROR [4532:5990:1310123] ... timestamp: 1782366781500, monotonicTimestamp: 295999947593 ...
@@ -83,7 +83,7 @@ offset it matched so callers know *which* candidate it is:
 - ISO **with sub-second** (`…:SS.mmm`) — currently truncated,
 - **time-only** `HH:MM:SS[.mmm]` (no date; anchor on today or leave date-less),
 - **epoch** seconds / millis / micros / nanos (by magnitude),
-- **leading relative seconds** (`^\d+\.\d+` — the `.esotrace` prefix),
+- **leading relative seconds** (`^\d+\.\d+` — an uptime prefix),
 - keep European / syslog.
 
 Detection stays best-effort by nature — which is exactly why the **Line-number

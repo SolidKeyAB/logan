@@ -67,15 +67,15 @@ describe('scanFolderShallow', () => {
     write('log.txt', 'plain text');
     write('shot.png', PNG);
     write('junk.bin', NUL); // arbitrary binary → dropped
-    write('capture.esotrace', NUL); // binary bytes but openable extension → kept
+    write('capture.mf4', NUL); // binary bytes but openable extension → kept
 
     const entries = await scanFolderShallow(root);
     const byName = Object.fromEntries(entries.map((e) => [e.name, e]));
     expect(byName['log.txt'].fileType).toBe('text');
     expect(byName['shot.png'].fileType).toBe('image');
     expect(byName['junk.bin']).toBeUndefined();
-    expect(byName['capture.esotrace']).toBeDefined();
-    expect(byName['capture.esotrace'].fileType).toBe('binary');
+    expect(byName['capture.mf4']).toBeDefined();
+    expect(byName['capture.mf4'].fileType).toBe('binary');
   });
 
   it('populates mtimeMs / birthtimeMs for both files and directories', async () => {

@@ -21,8 +21,8 @@ const FOLDER_SCAN_PARALLEL = 16; // concurrent file sniff / dir peek operations
 // (they decode to text on open), so the tree must show them by extension —
 // sniffFileType() only sees NUL bytes and would otherwise class them 'binary'.
 // Keep this in sync with the binary adapters' detect() extensions
-// (VtraceAdapter → .esotrace, Mf4Adapter → .mf4/.mdf).
-const BINARY_OPENABLE_EXTENSIONS = new Set(['.esotrace', '.mf4', '.mdf']);
+// (Mf4Adapter → .mf4/.mdf).
+const BINARY_OPENABLE_EXTENSIONS = new Set(['.mf4', '.mdf']);
 
 export interface FolderEntry {
   name: string;
@@ -141,7 +141,7 @@ export async function scanFolderShallow(folderPath: string): Promise<FolderEntry
   }
 
   // Files — sniff type + size in parallel batches; drop arbitrary binaries but keep the
-  // openable ones (.esotrace/.mf4/.mdf) by extension.
+  // openable ones (.mf4/.mdf) by extension.
   const fileEntries = dirEntries.filter((e) => !e.name.startsWith('.') && e.isFile());
   for (let i = 0; i < fileEntries.length; i += FOLDER_SCAN_PARALLEL) {
     const batch = fileEntries.slice(i, i + FOLDER_SCAN_PARALLEL);
