@@ -2350,6 +2350,17 @@ function createLogViewer(): void {
   minimapCanvasElement = document.createElement('canvas');
   minimapCanvasElement.className = 'minimap-canvas';
   minimapElement.appendChild(minimapCanvasElement);
+
+  // Legend cap — three swatches keyed to the severity lanes (activity · warnings ·
+  // errors). Fades in on hover so it never permanently occludes the top of the file.
+  const minimapLegend = document.createElement('div');
+  minimapLegend.className = 'minimap-legend-cap';
+  minimapLegend.title = 'Severity lanes — left: activity · middle: warnings · right: errors/fatals';
+  minimapLegend.innerHTML =
+    '<span class="mm-leg-swatch mm-leg-act"></span>' +
+    '<span class="mm-leg-swatch mm-leg-warn"></span>' +
+    '<span class="mm-leg-swatch mm-leg-err"></span>';
+  minimapElement.appendChild(minimapLegend);
   // keep minimapContentElement pointing at a hidden div so legacy calls don't crash
   minimapContentElement = document.createElement('div');
   minimapContentElement.style.display = 'none';
@@ -3866,7 +3877,7 @@ function tryRegExp(pattern: string, flags?: string): RegExp | null {
 
 // ─── Minimap ─────────────────────────────────────────────────────────────
 
-// Severity rank used for worst-case sampling and density strip coloring.
+// Severity rank used for worst-case minimap sampling and click-to-line snapping.
 const LEVEL_SEVERITY: Record<string, number> = {
   fatal: 7, error: 6, warning: 5, warn: 5, info: 4, debug: 3, verbose: 2, trace: 1,
 };
@@ -3911,7 +3922,7 @@ function handleMinimapClick(event: MouseEvent): void {
   let targetLine = proportionalLine;
 
   // Snap to the actual worst-severity line stored in the nearest minimap sample.
-  // This ensures clicking a red/orange heatmap zone lands on the real error line,
+  // This ensures clicking a red/amber severity lane lands on the real error line,
   // not an adjacent info/debug line that happened to be the proportional position.
   if (minimapData.length > 0) {
     const sampleIdx = Math.min(minimapData.length - 1, Math.floor((clickY / minimapHeight) * minimapData.length));
@@ -3968,7 +3979,29 @@ function handleMinimapTooltip(event: MouseEvent): void {
   const sampleIdx = Math.min(minimapData.length - 1, Math.floor((hoverY / minimapHeight) * minimapData.length));
   const level = minimapData[sampleIdx]?.level;
 
-  tooltip.textContent = `Line ${(targetLine + 1).toLocaleString()}`;
+  // Deep legend: show the severity counts in the bucket range under the cursor,
+  // so the lanes' encoding explains itself on hover (self-explaining UI rule).
+  let countsLabel = '';
+  const density = state.analysisResult?.density;
+  if (density && density.buckets > 0) {
+    const b0 = Math.min(density.buckets - 1, Math.floor((hoverY / minimapHeight) * density.buckets));
+    const b1 = Math.min(density.buckets, b0 + Math.max(1, Math.ceil(density.buckets / minimapHeight)));
+    let f = 0, e = 0, w = 0, inf = 0;
+    for (let b = b0; b < b1; b++) {
+      f += density.fatal?.[b] || 0;
+      e += density.error[b] || 0;
+      w += density.warning[b] || 0;
+      inf += density.info[b] || 0;
+    }
+    const parts: string[] = [];
+    if (f > 0) parts.push(`${f.toLocaleString()} fatal`);
+    if (e > 0) parts.push(`${e.toLocaleString()} err`);
+    if (w > 0) parts.push(`${w.toLocaleString()} warn`);
+    if (inf > 0) parts.push(`${inf.toLocaleString()} info`);
+    if (parts.length > 0) countsLabel = ` · ${parts.join(' · ')}`;
+  }
+
+  tooltip.textContent = `Line ${(targetLine + 1).toLocaleString()}${countsLabel}`;
   tooltip.className = `minimap-tooltip${level ? ` level-${level}` : ''}`;
 
   const tipH = 16;
@@ -4092,11 +4125,26 @@ function renderMinimap(): void {
 
   if (minimapContentElement) minimapContentElement.innerHTML = '';
   renderMinimapCanvas();
-  renderMinimapDensityStrip();
   renderMinimapMarkers();
   updateMinimapViewport();
 }
 
+// ── Severity Lanes ────────────────────────────────────────────────────────
+// The minimap's severity overview. Instead of additively blending level colours
+// per row (which produced muddy, undecodable mixtures where abundant info washed
+// out the errors you actually care about), severity is encoded by horizontal
+// POSITION and magnitude by bar LENGTH:
+//
+//   x 0–24  activity ghost  — total line volume, dim neutral grey (info/debug
+//                             retire here; they get presence, never colour)
+//   x 24–40 warning lane    — amber bar, right-anchored at x=40, grows left
+//   x 40–64 error lane      — red bar, right-anchored at the column edge
+//   full-w  fatal flare     — magenta rule across the whole column
+//
+// A quiet file is genuinely dark, so one 3px red tick pops pre-attentively, and
+// severity is readable from position alone (colour-blind safe). Each pixel row
+// AGGREGATES its whole bucket range (max for severities, sum for activity) so a
+// lone fatal can never be skipped by unlucky per-pixel sampling.
 function renderMinimapCanvas(): void {
   if (!minimapCanvasElement || !minimapElement) return;
   const density = state.analysisResult?.density;
@@ -4121,120 +4169,102 @@ function renderMinimapCanvas(): void {
 
   const { buckets, fatal: fatalArr, error, warning, info } = density;
   const fatalData = fatalArr || [];
+  const debugData = density.debug || [];
+  const verboseData = density.verbose || [];
 
-  // Global max for brightness normalisation
-  let globalMax = 1;
-  for (let i = 0; i < buckets; i++) {
-    const t = (fatalData[i] || 0) + error[i] + warning[i] + info[i];
-    if (t > globalMax) globalMax = t;
+  // Pass 1 — per pixel-row aggregation over the row's full bucket range.
+  // Severities take the MAX (a lone fatal/error in the range must survive);
+  // activity takes the SUM (total volume through the row).
+  const rowAct = new Float64Array(ch);
+  const rowErr = new Float64Array(ch);
+  const rowWarn = new Float64Array(ch);
+  const rowFatal = new Float64Array(ch);
+  let actMax = 1, errMax = 1, warnMax = 1;
+  for (let py = 0; py < ch; py++) {
+    const b0 = Math.floor((py / ch) * buckets);
+    const b1 = Math.max(b0 + 1, Math.floor(((py + 1) / ch) * buckets));
+    let act = 0, eM = 0, wM = 0, fM = 0;
+    for (let b = b0; b < b1 && b < buckets; b++) {
+      const f = fatalData[b] || 0, e = error[b] || 0, w = warning[b] || 0;
+      act += f + e + w + (info[b] || 0) + (debugData[b] || 0) + (verboseData[b] || 0);
+      if (e > eM) eM = e;
+      if (w > wM) wM = w;
+      if (f > fM) fM = f;
+    }
+    rowAct[py] = act; rowErr[py] = eM; rowWarn[py] = wM; rowFatal[py] = fM;
+    if (act > actMax) actMax = act;
+    if (eM > errMax) errMax = eM;
+    if (wM > warnMax) warnMax = wM;
   }
 
+  // Lane geometry (logical px → device px). Column is 64px: ghost 0–24,
+  // warning 24–40, error 40–64.
+  const xGhostEnd = Math.round(24 * dpr);
+  const xWarnEdge = Math.round(40 * dpr);   // warning bar right edge (grows left)
+  const xErrEdge = cw;                      // error bar right edge = column edge
+  const minBar = Math.max(1, Math.round(3 * dpr));
+  const warnSpan = xWarnEdge - Math.round(24 * dpr);
+  const errSpan = xErrEdge - Math.round(40 * dpr);
+
+  // Colours pre-blended against the flat background BG=(20,20,26) so we can keep
+  // the fast opaque-ImageData path (lanes never overlap horizontally).
+  const BG = [20, 20, 26];
+  const GHOST = [37, 43, 47];     // rgba(125,135,155,0.16) over BG
+  const WARN = [167, 139, 5];     // #cca700 @ 0.80
+  const ERR = [230, 74, 74];      // #f14c4c @ 0.95
+  const FATAL = [214, 81, 244];   // rgba(224,84,255,0.95)
+  const SEP = [31, 34, 40];       // rgba(255,255,255,0.04) lane hairline
+
+  const logActMax = Math.log1p(actMax);
+  const logErrMax = Math.log1p(errMax);
+  const logWarnMax = Math.log1p(warnMax);
+
   const pixels = new Uint8ClampedArray(cw * ch * 4);
+  const fill = (rowBase: number, xs: number, xe: number, c: number[]): void => {
+    const s = Math.max(0, xs), e = Math.min(cw, xe);
+    for (let px = s; px < e; px++) {
+      const i = (rowBase + px) << 2;
+      pixels[i] = c[0]; pixels[i + 1] = c[1]; pixels[i + 2] = c[2]; pixels[i + 3] = 255;
+    }
+  };
 
   for (let py = 0; py < ch; py++) {
-    const bi = Math.min(buckets - 1, Math.floor((py / ch) * buckets));
-    const f = fatalData[bi] || 0;
-    const e = error[bi] || 0;
-    const w = warning[bi] || 0;
-    const inf = info[bi] || 0;
-    const total = f + e + w + inf;
-
-    // Base: very dark
-    let r = 18, g = 18, b = 26;
-
-    if (total > 0) {
-      // Log scale + 35% floor ensures sparse data stays visible
-      const brightness = 0.35 + 0.65 * (Math.log1p(total) / Math.log1p(globalMax));
-      const denom = Math.max(total, 1);
-      // Fatal: magenta (highest priority — drawn first, overrides error)
-      const fr = (f / denom) * brightness;
-      r = Math.min(255, r + fr * 230);
-      g = Math.min(255, g + fr * 20);
-      b = Math.min(255, b + fr * 255);
-      // Error: crimson
-      const er = (e / denom) * brightness;
-      r = Math.min(255, r + er * 220);
-      g = Math.min(255, g + er * 32);
-      b = Math.min(255, b + er * 28);
-      // Warning: amber
-      const wr = (w / denom) * brightness;
-      r = Math.min(255, r + wr * 185);
-      g = Math.min(255, g + wr * 110);
-      // Info: steel blue — more visible than before
-      const ir = (inf / denom) * brightness;
-      g = Math.min(255, g + ir * 90);
-      b = Math.min(255, b + ir * 170);
-    }
-
     const rowBase = py * cw;
-    for (let px = 0; px < cw; px++) {
-      const i = (rowBase + px) << 2;
-      pixels[i]     = r;
-      pixels[i + 1] = g;
-      pixels[i + 2] = b;
-      pixels[i + 3] = 255;
+    // 1. background + lane hairlines
+    fill(rowBase, 0, cw, BG);
+    fill(rowBase, xGhostEnd, xGhostEnd + Math.max(1, Math.round(dpr)), SEP);
+    fill(rowBase, xWarnEdge, xWarnEdge + Math.max(1, Math.round(dpr)), SEP);
+    // 2. activity ghost — left-anchored, width ∝ log(volume)
+    const act = rowAct[py];
+    if (act > 0 && logActMax > 0) {
+      const gw = Math.max(1, Math.round(xGhostEnd * (Math.log1p(act) / logActMax)));
+      fill(rowBase, 0, gw, GHOST);
+    }
+    // 3. warning bar — right-anchored at x=40, grows left
+    const w = rowWarn[py];
+    if (w > 0) {
+      const ww = Math.min(warnSpan, Math.max(minBar, Math.round(minBar + (warnSpan - minBar) * (Math.log1p(w) / logWarnMax))));
+      fill(rowBase, xWarnEdge - ww, xWarnEdge, WARN);
+    }
+    // 4. error bar — right-anchored at the column edge, grows left
+    const e = rowErr[py];
+    if (e > 0) {
+      const ew = Math.min(errSpan, Math.max(minBar, Math.round(minBar + (errSpan - minBar) * (Math.log1p(e) / logErrMax))));
+      fill(rowBase, xErrEdge - ew, xErrEdge, ERR);
+    }
+    // 5. fatal flare — full width, dilated to ≥2px tall so a single fatal is unmissable
+    if (rowFatal[py] > 0 || (py > 0 && rowFatal[py - 1] > 0)) {
+      fill(rowBase, 0, cw, FATAL);
     }
   }
 
   ctx.putImageData(new ImageData(pixels, cw, ch), 0, 0);
 }
 
-function renderMinimapDensityStrip(): void {
-  if (!minimapElement || minimapData.length === 0) return;
-
-  minimapElement.querySelectorAll('.minimap-density-strip-seg').forEach(el => el.remove());
-
-  const minimapHeight = minimapElement.clientHeight ||
-    logViewerWrapper?.clientHeight ||
-    logViewerElement?.clientHeight ||
-    400;
-
-  const SEGMENTS = Math.min(120, minimapData.length);
-  const segSize = minimapData.length / SEGMENTS;
-  const segHeight = minimapHeight / SEGMENTS;
-  const frag = document.createDocumentFragment();
-
-  for (let s = 0; s < SEGMENTS; s++) {
-    const start = Math.floor(s * segSize);
-    const end = Math.min(minimapData.length - 1, Math.floor((s + 1) * segSize) - 1);
-    const total = end - start + 1;
-
-    let errorCount = 0, warnCount = 0, infoCount = 0;
-    for (let i = start; i <= end; i++) {
-      const sev = LEVEL_SEVERITY[minimapData[i].level || ''] ?? 0;
-      if (sev >= 5) errorCount++;
-      else if (sev === 4) warnCount++;
-      else if (sev === 3) infoCount++;
-    }
-
-    let color: string;
-    if (errorCount > 0) {
-      const intensity = Math.min(0.92, 0.4 + (errorCount / total) * 0.52);
-      color = `rgba(210,50,50,${intensity})`;
-    } else if (warnCount > 0) {
-      const intensity = Math.min(0.65, 0.22 + (warnCount / total) * 0.43);
-      color = `rgba(200,140,30,${intensity})`;
-    } else if (infoCount > 0) {
-      color = `rgba(70,130,210,0.14)`;
-    } else {
-      continue; // debug/trace/default — transparent
-    }
-
-    const el = document.createElement('div');
-    el.className = 'minimap-density-strip-seg';
-    el.style.top = `${s * segHeight}px`;
-    el.style.height = `${Math.ceil(segHeight) + 1}px`;
-    el.style.backgroundColor = color;
-    frag.appendChild(el);
-  }
-
-  minimapElement.appendChild(frag);
-}
-
 function renderMinimapMarkers(): void {
   if (!minimapElement) return;
 
-  // Remove existing markers (density strip is handled separately in renderMinimapDensityStrip)
+  // Remove existing point markers (the severity lanes live on the canvas, drawn separately)
   minimapElement.querySelectorAll('.minimap-bookmark, .minimap-search-marker, .minimap-notes-marker, .minimap-sc-marker, .minimap-annotation-marker, .minimap-density-bucket, .minimap-current-line').forEach(el => el.remove());
 
   const totalLines = getTotalLines();
