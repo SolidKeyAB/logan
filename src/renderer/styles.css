@@ -3743,14 +3743,34 @@ body.col-resizing * {
 }
 .compare-close-btn:hover { color: var(--text-primary); background: rgba(255,255,255,0.08); }
 
-/* ── Heatmap: full-width continuous severity zones ────────────────────── */
-.minimap-density-strip-seg {
+/* ── Severity-lanes legend cap ────────────────────────────────────────── */
+/* Fades in on minimap hover; keys the three lanes without permanently
+   occluding the top of the file overview. */
+.minimap-legend-cap {
   position: absolute;
+  top: 0;
   left: 0;
   right: 0;
+  height: 12px;
+  background: rgba(20, 20, 26, 0.75);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   pointer-events: none;
-  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  z-index: 9;
 }
+.minimap:hover .minimap-legend-cap { opacity: 1; }
+.minimap-legend-cap .mm-leg-swatch {
+  position: absolute;
+  top: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+}
+/* Swatch x-centres match lane centres: activity 12px, warnings 32px, errors 52px */
+.minimap-legend-cap .mm-leg-act  { left: 9px;  background: rgba(125, 135, 155, 0.9); }
+.minimap-legend-cap .mm-leg-warn { left: 29px; background: #cca700; }
+.minimap-legend-cap .mm-leg-err  { left: 49px; background: #f14c4c; }
 
 .minimap-viewport {
   position: absolute;
