@@ -12615,6 +12615,10 @@ function getAnnColor(sev: string | undefined) {
   return ANN_COLORS[sev || 'info'] || ANN_COLORS.info;
 }
 
+// Which multi-finding cluster (if any) is expanded, keyed by its first member's
+// annotation id. Survives re-renders so an open cluster stays open.
+let expandedClusterId: string | null = null;
+
 function renderAnnotationBar(): void {
   if (!annotationBarElement) return;
 
@@ -12640,60 +12644,213 @@ function renderAnnotationBar(): void {
     .filter((a) => barLine(a) >= 0)
     .sort((a, b) => barLine(a) - barLine(b));
 
-  // Compact tick height: 14px fixed. MIN_GAP ensures no two ticks overlap.
-  // We work in px against the bar's clientHeight; fall back to 600 if not yet laid out.
   const barH = annotationBarElement.clientHeight || 600;
   const TICK_H = 14;
-  const MIN_GAP = TICK_H + 2; // px between tick tops
+  const MIN_GAP = TICK_H + 2;  // px between chip tops before they'd overlap
+  const CHIP_X = 20;           // chip left edge (keep in sync with .ann-bar-tick left)
+  const ANCHOR_X = 5;          // anchor-dot centre x (near the minimap seam)
+  const sevRank = (s: string): number => (s === 'error' ? 3 : s === 'warning' ? 2 : 1);
 
-  const posPx: number[] = [];
-  let prevBottom = -MIN_GAP;
-  for (const ann of sorted) {
-    const ideal = (barLine(ann) / totalLines) * barH;
-    const top = Math.max(ideal, prevBottom + MIN_GAP);
-    posPx.push(top);
+  // TRUE proportional y of each finding — the same fraction-of-file→height
+  // mapping the minimap uses, so every anchor dot sits beside its minimap colour.
+  const anchorY = sorted.map((ann) => (barLine(ann) / totalLines) * barH);
+
+  // ── Cluster findings whose chips would overlap ─────────────────────────────
+  // Chips now sit ON their true minimap y (no stacking). Where dots crowd closer
+  // than a chip is tall they'd land on top of each other — so a maximal run of
+  // such neighbours collapses into one "+N" chip at the run's centroid, expanded
+  // on click. Sparse findings stay as individual aligned chips.
+  type Cluster = { members: number[]; y: number; top: number };
+  const clusters: Cluster[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    if (clusters.length && anchorY[i] - anchorY[i - 1] < MIN_GAP) {
+      clusters[clusters.length - 1].members.push(i);
+    } else {
+      clusters.push({ members: [i], y: 0, top: 0 });
+    }
+  }
+  // Representative y = centroid of members. Because a cluster boundary only falls
+  // where the gap already exceeds MIN_GAP, neighbouring centroids stay ≥ MIN_GAP
+  // apart — so aligned cluster chips don't overlap without any stacking.
+  for (const c of clusters) {
+    c.y = c.members.reduce((s, i) => s + anchorY[i], 0) / c.members.length;
+  }
+  // Place each chip centred on its y, nudging only to keep it inside the bar and
+  // clear of its neighbour; a final shift pulls the tail back in if it overruns.
+  let prevBottom = -Infinity;
+  for (const c of clusters) {
+    const top = Math.max(c.y - TICK_H / 2, prevBottom + 2);
+    c.top = top;
     prevBottom = top + TICK_H;
   }
+  const overrun = prevBottom - (barH - 2);
+  if (overrun > 0) for (const c of clusters) c.top = Math.max(2, c.top - overrun);
 
-  const frag = document.createDocumentFragment();
+  // Keep the popover pointing at a still-valid cluster; auto-open the cluster
+  // holding the active annotation (replaces the old scroll-into-view).
+  const clusterIdOf = (c: Cluster): string => sorted[c.members[0]].id;
+  if (expandedClusterId !== null &&
+      !clusters.some((c) => c.members.length > 1 && clusterIdOf(c) === expandedClusterId)) {
+    expandedClusterId = null;
+  }
+  if (activeAnnotationId) {
+    const ac = clusters.find((c) => c.members.length > 1 &&
+      c.members.some((i) => sorted[i].id === activeAnnotationId));
+    if (ac) expandedClusterId = clusterIdOf(ac);
+  }
+
+  // ── Fixed MAP layer: range stripes + per-finding anchor dots at true y ──────
+  const mapLayer = document.createElement('div');
+  mapLayer.className = 'ann-bar-map';
 
   sorted.forEach((ann, i) => {
     const sev = ann.severity || 'info';
     const colors = getAnnColor(sev);
     const isActive = ann.id === activeAnnotationId;
 
-    // Range stripe (thin color band showing the span)
+    // Range stripe (true span) — lives in the fixed map layer so it stays put.
     if (ann.endLine !== undefined && ann.endLine > ann.lineNumber) {
       const endBarLine = state.isFiltered ? getFilteredDisplayIndex(ann.endLine) : ann.endLine;
-      const stripeTop = (barLine(ann) / totalLines) * barH;
+      const stripeTop = anchorY[i];
       const stripeBot = ((endBarLine >= 0 ? endBarLine : barLine(ann)) / totalLines) * barH;
       const stripe = document.createElement('div');
       stripe.className = 'ann-bar-stripe';
       stripe.style.cssText = `top:${stripeTop.toFixed(1)}px;height:${Math.max(3, stripeBot - stripeTop).toFixed(1)}px;background:${isActive ? colors.active : colors.stripe};border-left:2px solid ${colors.tick};`;
-      stripe.style.pointerEvents = 'none';
-      frag.appendChild(stripe);
+      mapLayer.appendChild(stripe);
     }
 
-    // Tick label — compact single-line chip
-    const tick = document.createElement('div');
-    tick.className = `ann-bar-tick severity-${sev}${isActive ? ' active' : ''}`;
-    tick.dataset.annId = ann.id;
-    tick.style.top = `${posPx[i].toFixed(1)}px`;
-
-    const lineLabel = ann.endLine !== undefined && ann.endLine > ann.lineNumber
-      ? `L${ann.lineNumber + 1}–${ann.endLine + 1}`
-      : `L${ann.lineNumber + 1}`;
-    const firstLine = ann.text.split('\n')[0];
-    const truncated = firstLine.length > 52 ? firstLine.slice(0, 50) + '…' : firstLine;
-    tick.title = `${lineLabel} — ${ann.agentName}: ${ann.text}`;
-    tick.innerHTML = `<span class="ann-tick-dot"></span><span class="ann-tick-text">${escapeHtml(truncated)}</span>`;
-
-    tick.addEventListener('click', (e) => { e.stopPropagation(); navigateToAnnotation(ann); });
-    frag.appendChild(tick);
+    // Anchor dot — the "correct point on the line map", at the minimap seam.
+    const dot = document.createElement('div');
+    dot.className = `ann-bar-anchor severity-${sev}${isActive ? ' active' : ''}`;
+    dot.style.top = `${(anchorY[i] - 3).toFixed(1)}px`;
+    mapLayer.appendChild(dot);
   });
 
+  // ── Chip layer (non-scrolling: clustering guarantees the chips fit) ─────────
+  const chipLayer = document.createElement('div');
+  chipLayer.className = 'ann-bar-chips';
+
+  clusters.forEach((c) => {
+    if (c.members.length === 1) {
+      const ann = sorted[c.members[0]];
+      const sev = ann.severity || 'info';
+      const isActive = ann.id === activeAnnotationId;
+      const tick = document.createElement('div');
+      tick.className = `ann-bar-tick severity-${sev}${isActive ? ' active' : ''}`;
+      tick.dataset.annId = ann.id;
+      tick.style.top = `${c.top.toFixed(1)}px`;
+      const lineLabel = ann.endLine !== undefined && ann.endLine > ann.lineNumber
+        ? `L${ann.lineNumber + 1}–${ann.endLine + 1}`
+        : `L${ann.lineNumber + 1}`;
+      const firstLine = ann.text.split('\n')[0];
+      const truncated = firstLine.length > 52 ? firstLine.slice(0, 50) + '…' : firstLine;
+      tick.title = `${lineLabel} — ${ann.agentName}: ${ann.text}`;
+      tick.innerHTML = `<span class="ann-tick-dot"></span><span class="ann-tick-text">${escapeHtml(truncated)}</span>`;
+      tick.addEventListener('click', (e) => { e.stopPropagation(); expandedClusterId = null; navigateToAnnotation(ann); });
+      chipLayer.appendChild(tick);
+      return;
+    }
+
+    // Multi-member → collapsed "+N" cluster chip (click toggles the popover).
+    const clusterId = clusterIdOf(c);
+    const topSev = c.members
+      .map((i) => sorted[i].severity || 'info')
+      .sort((a, b) => sevRank(b) - sevRank(a))[0];
+    const hasActive = c.members.some((i) => sorted[i].id === activeAnnotationId);
+    const firstLn = sorted[c.members[0]].lineNumber + 1;
+    const lastLn = sorted[c.members[c.members.length - 1]].lineNumber + 1;
+    const isOpen = expandedClusterId === clusterId;
+    const chip = document.createElement('div');
+    chip.className = `ann-bar-tick ann-bar-cluster severity-${topSev}${hasActive ? ' active' : ''}${isOpen ? ' open' : ''}`;
+    chip.dataset.clusterId = clusterId;
+    chip.style.top = `${c.top.toFixed(1)}px`;
+    chip.title = `${c.members.length} findings · L${firstLn}–${lastLn} (click to expand)`;
+    chip.innerHTML = `<span class="ann-tick-dot"></span><span class="ann-tick-text">${c.members.length} findings</span><span class="ann-cluster-caret">${isOpen ? '▾' : '▸'}</span>`;
+    chip.addEventListener('click', (e) => {
+      e.stopPropagation();
+      expandedClusterId = isOpen ? null : clusterId;
+      renderAnnotationBar();
+    });
+    chipLayer.appendChild(chip);
+  });
+
+  // ── SVG connector layer: flexible leader from each chip → its anchor(s) ─────
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('class', 'ann-bar-connectors');
+  const midX = (ANCHOR_X + CHIP_X) / 2;
+  const addPath = (ay: number, chipY: number, sev: string, active: boolean, faint = false): void => {
+    // Curved leader: eases horizontally out of the anchor and into the chip, so a
+    // large vertical offset still reads as one smooth "flexible" line.
+    const d = `M ${ANCHOR_X} ${ay.toFixed(1)} C ${midX} ${ay.toFixed(1)}, ${midX} ${chipY.toFixed(1)}, ${CHIP_X} ${chipY.toFixed(1)}`;
+    const path = document.createElementNS(svgNS, 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('class', `ann-conn severity-${sev}${active ? ' active' : ''}${faint ? ' faint' : ''}`);
+    svg.appendChild(path);
+  };
+  clusters.forEach((c) => {
+    const chipY = c.top + TICK_H / 2;
+    if (c.members.length === 1) {
+      const ann = sorted[c.members[0]];
+      addPath(anchorY[c.members[0]], chipY, ann.severity || 'info', ann.id === activeAnnotationId);
+      return;
+    }
+    // Faint leaders bracket the cluster's extent (first + last dot) so the chip
+    // visibly owns a spread of minimap points; a solid one runs to the centroid.
+    const sev = c.members.map((i) => sorted[i].severity || 'info').sort((a, b) => sevRank(b) - sevRank(a))[0];
+    const active = c.members.some((i) => sorted[i].id === activeAnnotationId);
+    addPath(anchorY[c.members[0]], chipY, sev, false, true);
+    addPath(anchorY[c.members[c.members.length - 1]], chipY, sev, false, true);
+    addPath(c.y, chipY, sev, active);
+  });
+
+  // Assemble — stacking order: map (bottom) < connectors < chips (top).
   annotationBarElement.innerHTML = '';
-  annotationBarElement.appendChild(frag);
+  annotationBarElement.appendChild(mapLayer);
+  annotationBarElement.appendChild(svg);
+  annotationBarElement.appendChild(chipLayer);
+
+  // A click on empty bar space collapses any open cluster.
+  annotationBarElement.onclick = () => {
+    if (expandedClusterId !== null) { expandedClusterId = null; renderAnnotationBar(); }
+  };
+
+  // ── Expanded-cluster popover: floats in-bar over the chips, lists members ───
+  if (expandedClusterId !== null) {
+    const c = clusters.find((cl) => cl.members.length > 1 && clusterIdOf(cl) === expandedClusterId);
+    if (c) {
+      const pop = document.createElement('div');
+      pop.className = 'ann-cluster-pop';
+      const desiredTop = Math.max(2, Math.min(c.top, barH - 40));
+      pop.style.top = `${desiredTop.toFixed(1)}px`;
+      pop.style.maxHeight = `${Math.max(40, barH - desiredTop - 4).toFixed(1)}px`;
+      pop.addEventListener('click', (e) => e.stopPropagation());
+
+      const head = document.createElement('div');
+      head.className = 'ann-cluster-pop-head';
+      head.innerHTML = `<span>${c.members.length} findings</span><span class="ann-cluster-pop-close">✕</span>`;
+      head.addEventListener('click', (e) => { e.stopPropagation(); expandedClusterId = null; renderAnnotationBar(); });
+      pop.appendChild(head);
+
+      c.members.forEach((i) => {
+        const ann = sorted[i];
+        const sev = ann.severity || 'info';
+        const isActive = ann.id === activeAnnotationId;
+        const row = document.createElement('div');
+        row.className = `ann-cluster-row severity-${sev}${isActive ? ' active' : ''}`;
+        const lineLabel = ann.endLine !== undefined && ann.endLine > ann.lineNumber
+          ? `L${ann.lineNumber + 1}–${ann.endLine + 1}`
+          : `L${ann.lineNumber + 1}`;
+        const firstLine = ann.text.split('\n')[0];
+        const truncated = firstLine.length > 60 ? firstLine.slice(0, 58) + '…' : firstLine;
+        row.title = `${lineLabel} — ${ann.agentName}: ${ann.text}`;
+        row.innerHTML = `<span class="ann-cluster-row-ln">${escapeHtml(lineLabel)}</span><span class="ann-cluster-row-tx">${escapeHtml(truncated)}</span>`;
+        row.addEventListener('click', (e) => { e.stopPropagation(); navigateToAnnotation(ann); });
+        pop.appendChild(row);
+      });
+      annotationBarElement.appendChild(pop);
+    }
+  }
 }
 
 function renderAnnotationsPanel(): void {
